@@ -1,7 +1,7 @@
 from distutils.core import setup
 required=[ 'requests',
            'six',
-           'docloud>=1.0.95']
+           'docloud>=1.0.132']
 import sys
 if ((sys.version_info[0]) < 3) or ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
     required.append('futures')
@@ -26,7 +26,7 @@ setup(
                 'docplex.mp.params',
                 'docplex.mp.worker',
 				'docplex.util'],
-    version = '1.0.557',  # replaced at build time
+    version = '1.0.565',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

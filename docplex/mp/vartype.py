@@ -244,17 +244,11 @@ class IntegerVarType(VarType):
 
     def compute_ub(self, candidate_ub):
         iub = min(candidate_ub, self._plus_infinity)
-        if int(iub) != iub:
-            return float(math.floor(iub))
-        else:
-            return float(iub)
+        return int(math.floor(iub))
 
     def compute_lb(self, candidate_lb):
         ilb = max(candidate_lb, -self._plus_infinity)
-        if int(ilb) != ilb:
-            return float(math.ceil(ilb))
-        else:
-            return float(ilb)
+        return int(math.ceil(ilb))
 
     def is_discrete(self):
         """  Checks if this is a discrete type.

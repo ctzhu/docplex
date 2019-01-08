@@ -6,6 +6,7 @@
 
 
 # gendoc: ignore
+from docplex.mp.compat23 import izip
 
 import logging
 import os
@@ -15,8 +16,9 @@ import threading
 import time
 
 from six import itervalues
+from six import PY2 as six_py2
 
-from docplex.mp.compat23 import Queue, StringIO, has_unicode_type
+from docplex.mp.compat23 import Queue, StringIO
 
 
 __int_types = {int}
@@ -33,27 +35,29 @@ except NameError:  # pragma: no cover
     pass  # pragma: no cover
 
 try:
-    from numpy import int32, float32, int64, float64, int16, uint16, uint32, uint64, float32, int_, float_, bool_
-
+    import numpy
     _numpy_is_available = True
-    __int_types.add(int64)
-    __int_types.add(int32)
-    __int_types.add(int16)
-    __int_types.add(uint64)
-    __int_types.add(uint32)
-    __int_types.add(uint16)
-    __int_types.add(int_)
-    __int_types.add(bool_)
-    __float_types.add(float64)
-    __float_types.add(float32)
-    __float_types.add(float_)
+
+    def numpy_is_numeric(t):
+        # returns True if the specified type is numeric
+        try:
+            return numpy.issubdtype(t, numpy.number)
+        except TypeError:
+            return False
+
+    def numpy_is_integer(t):
+        # returns True if the specified type is integer
+        try:
+            return numpy.issubdtype(t, numpy.integer)
+        except TypeError:
+            return False
 
     from numpy import ndarray
-    import numpy as npcplex
-
     __numpy_ndslot_type = ndarray
 except ImportError:  # pragma: no cover
     _numpy_is_available = False  # pragma: no cover
+    numpy_is_numeric = None
+    numpy_is_integer = None
 
 try:
     from pandas import Series
@@ -65,14 +69,14 @@ except ImportError:
 
 def is_int(s):
     type_of_s = type(s)
-    return type_of_s in __int_types
+    return type_of_s in __int_types or (_numpy_is_available and numpy_is_integer(type(s)))
+    #return type_of_s in __int_types
 
-
-__all_num_types = __float_types.union(__int_types)
-
+__all_python_num_types = __float_types.union(__int_types)
 
 def is_number(s):
-    return type(s) in __all_num_types or (_numpy_is_available and _is_numpy_ndslot(s))
+    s_type = type(s)
+    return s_type in __all_python_num_types or (_numpy_is_available and (numpy_is_numeric(s_type) or _is_numpy_ndslot(s)))
 
 
 def _is_numpy_ndslot(s):
@@ -83,7 +87,11 @@ def _is_numpy_ndslot(s):
     # 2. type is ndarray
     # 3. shape is () empty tuple
     # 4. wrapped type in ndarray is numeric.
-    return type(s) is __numpy_ndslot_type and s.shape == () and s.dtype.type in __all_num_types
+    try:
+        retval = is_numpy_ndarray(s) and s.shape == () and (s.dtype.type in __all_python_num_types or numpy_is_numeric(s.dtype))
+        return retval
+    except AttributeError:  # if s is not a numpy type, s.dtype triggers this
+        return False
 
 
 def is_pandas_series(s):
@@ -93,17 +101,15 @@ def is_pandas_series(s):
 def is_numpy_ndarray(s):
     return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
 
-
 def is_string(e):
     if e is None:
         return False
     elif isinstance(e, str):
         return True
-    elif has_unicode_type():
+    elif six_py2:
         return isinstance(e, unicode)
     else:
         return False
-
 
 def has_len(e):
     try:
@@ -574,3 +580,90 @@ class ThreadedCyclicLoop(object):
         self.event_queue.close()
         for t in self.threads:
             t.stop()
+
+
+class _SymbolGenerator(object):
+    """
+    INTERNAL class
+    """
+
+    def __init__(self, pattern, offset=1):
+        ''' Initialize the counter and the pattern.
+            Fixes the pattern by suffixing '%d' if necessary.
+        '''
+        self.__pattern = pattern
+        # add offset to counter.
+        self.__offset = offset
+        self._last_index = -1
+        self._set_pattern(pattern)
+
+    def _set_pattern(self, pattern):
+        if pattern.endswith('%d'):
+            self.__pattern = pattern
+        else:
+            self.__pattern = pattern + '%d'
+
+    def _get_pattern(self):
+        return self.__pattern
+
+    pattern = property(_get_pattern, _set_pattern)
+
+    def reset(self):
+        self._last_index = -1
+
+    def notify_new_index(self, new_index):
+        # INTERNAL
+        if new_index > self._last_index:
+            self._last_index = new_index
+
+    def new_symbol(self):
+        """
+        Generates and returns a new symbol.
+        Guess a new (yet) unallocated index, then use the pattern.
+        Note that we use the offset of 1 to generate the name so x1 has index 0, x3 has index 2, etc.
+        :return: A symbol string, suposedly not yet allocated.
+        """
+        guessed_index = self._last_index + 1
+        coined_symbol = self.__pattern % (guessed_index + self.__offset)
+        self.notify_new_index(guessed_index)
+        return coined_symbol
+
+
+class _IndexScope(_SymbolGenerator):
+    # INTERNAL: full scope of indices.
+
+    def __init__(self, obj_iter, pattern, offset=1):
+        _SymbolGenerator.__init__(self, pattern, offset)
+        self._obj_iter = obj_iter
+        self._index_map = None
+
+    def _make_index_map(self):
+        return {m.get_index(): m for m in self._obj_iter()}
+
+    def get_object_by_index(self, idx):
+        if self._index_map is None:
+            self._index_map = self._make_index_map()
+        # do not raise when not found, return None.
+        return self._index_map.get(idx)
+
+    def reset(self):
+        _SymbolGenerator.reset(self)
+        self._index_map = None
+
+    def notify_obj_index(self, obj, index):
+        _SymbolGenerator.notify_new_index(self, index)
+        if self._index_map is not None:
+            self._index_map[index] = obj
+
+    def notify_obj_indices(self, objs, indices):
+        # take the last one??
+        if indices:
+            _SymbolGenerator.notify_new_index(self, max(indices))
+            idxmap = self._index_map
+            if idxmap is not None:
+                for obj, idx in izip(objs, indices):
+                    idxmap[idx] = obj
+
+    def update_indices(self):
+        if self._index_map is not None:
+            self._index_map = self._make_index_map()

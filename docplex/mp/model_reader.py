@@ -329,11 +329,6 @@ class ModelReader(object):
             # 4. upload objective
             cpx_obj = cpx.objective
             cpx_sense = cpx_obj.get_sense()
-            obj_expr = mdl.linear_expr()
-            # for v in range(nb_vars):
-            #     if v in idx_to_var_map:
-            #         obj_coef = cpx_obj.get_linear(v)
-            #         obj_expr._add_term(idx_to_var_map[v], obj_coef)
 
             cpx_all_obj_coeffs = cpx_obj.get_linear()
             all_obj_vars  = []

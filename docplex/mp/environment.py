@@ -9,6 +9,9 @@ import os
 import sys
 
 
+def env_is_64_bit():
+    return sys.maxsize > 2**32
+
 # noinspection PyPep8
 class Environment(object):
     """ This class detects and contains information regarding other modules of interest, such as

@@ -853,17 +853,12 @@ class Model(object):
         self._quadexpr_instance_counter = 0
         self._quadexpr_clone_counter = 0
 
-
-
         # all the following must be placed after an engine has been set.
-        self._default_objective_expr = self._lfactory.constant_expr(cst=1)
+        self._default_objective_expr = self._lfactory.constant_expr(cst=0)
         self.__objective_expr = self._default_objective_expr
         self.__objective_sense = ObjectiveSense.default_sense()
 
-
-
         # parameters
-
         self_cplex_parameters_version = self.context.cplex_parameters.cplex_version
 
         if self_env.has_cplex:
@@ -2838,7 +2833,7 @@ class Model(object):
     def remove_objective(self):
         """ Clears the current objective.
 
-        This is equivalent to setting "minimize 1".
+        This is equivalent to setting "minimize 0".
         Any subsequent solve will look only for a feasible solution.
         You can detect this state by calling :func:`has_objective` on the model.
 

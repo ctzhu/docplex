@@ -26,7 +26,7 @@ setup(
                 'docplex.mp.params',
                 'docplex.mp.worker',
 				'docplex.util'],
-    version = '1.0.565',  # replaced at build time
+    version = '1.0.572',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

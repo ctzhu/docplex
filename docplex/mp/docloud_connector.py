@@ -174,6 +174,11 @@ class DOcloudConnector(object):
                 self.log("docloud execution has finished")
                 # get job status. Do this before any time out handling
                 self.jobInfo = client.get_job(jobid)
+
+                if self.docloud_context.fire_last_progress and info_callback:
+                    progress_data = self.map_job_info_to_progress_data(self.jobInfo)
+                    info_callback({'progress': progress_data})
+
                 if timedout:
                     self._hasSolution = False
                     self.log("Solve timed out after {waittime} sec".format(waittime=self.docloud_context.waittime))

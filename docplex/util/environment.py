@@ -7,15 +7,15 @@
 """
 Representation of the DOcplex solving environment.
 
-This module handles the different elements that allow to execute the same
-optimization program independently from the solving environment.
+This module handles the various elements that allow an
+optimization program to run independently from the solving environment.
 This environment may be:
 
- * on premise, using a local version of CPLEX Optimization Studio,
- * on DOcplexcloud, the python program running inside the Python Worker,
+ * on premise, using a local version of CPLEX Optimization Studio to solve MP problems, or
+ * on DOcplexcloud, with the Python program running inside the Python Worker.
 
-As far as possible, the adaptation to the execution environment is done
-automatically. Functions that are presented here are useful to handle
+As much as possible, the adaptation to the solving environment is
+automatic. The functions that are presented here are useful for handling
 very specific use cases.
 
 The following code is a program that sums its input (``sum.py``)::
@@ -37,19 +37,19 @@ Let's put some data in a ``data.txt`` file::
     4 7 8
     19
 
-When you run ``sum.py`` with your python interpreter, it opens the ``data.txt`` file and sums all integers
-in that file. The result is saved as a json fragment in file ``solution.json``::
+When you run ``sum.py`` with a Python interpreter, it opens the ``data.txt`` file and sums all of the integers
+in that file. The result is saved as a JSON fragment in file ``solution.json``::
 
     $ python sum.py
     $ more solution.json
     {"result": 38}
 
-To submit that program to DOcplexcloud service, we write a ``submit.py`` program that uses
+To submit the program to the DOcplexcloud service, we write a ``submit.py`` program that uses
 the `DOcplexcloud Python API <https://developer.ibm.com/docloud/documentation/docloud/python-api/>`_
-to create and submit a job. That jobs has two attachments:
+to create and submit a job. That job has two attachments:
 
-- ``sum.py``, the program to execute
-- ``data.txt``, the data expected by ``sum.py``
+- ``sum.py``, the program to execute and
+- ``data.txt``, the data expected by ``sum.py``.
 
 After the solve is completed, the result of the program is downloaded and saved as ``solution.json``::
 
@@ -70,73 +70,74 @@ import tempfile
 
 
 class Environment(object):
-    """ Methods allowing to interact with execution environment.
+    """ Methods for interacting with the execution environment.
 
-    The ``docplex`` package internally provides the appropriate implementation
+    Internally, the ``docplex`` package provides the appropriate implementation
     according to the actual execution environment.
     The correct instance of this class is returned by the method :meth:`docplex.util.environment.get_environment`
-    provided in this module
+    that is provided in this module.
     """
 
     def get_input_stream(self, name):
-        """ Get an input of the program as a stream (file like object).
+        """ Get an input of the program as a stream (file-like object).
 
-        An input of the program is a file available in the working directory.
+        An input of the program is a file that is available in the working directory.
 
-        When run on DOcplexcloud, all input attachments are copied in the working directory before
-        the program is run. ``get_input_stream`` allows you to open input attachments of the job.
+        When run on DOcplexcloud, all input attachments are copied to the working directory before
+        the program is run. ``get_input_stream`` lets you open the input attachments of the job.
 
         Args:
-            name: Name of the input object
+            name: Name of the input object.
         Returns:
             A file object to read the input from.
         """
         return None
 
     def get_output_stream(self, name):
-        """ Get a file-like object to write an output of the program.
+        """ Get a file-like object to write the output of the program.
 
         The file is recorded as being part of the program output.
         This method can be called multiple times if the program contains multiple output objects.
 
-        When run on premise, output of the program are written as files in the working directory.
-        When run on DOcplexcloud, the files are attached as output attachment.
+        When run on premise, the output of the program is written as files in the working directory.
+        When run on DOcplexcloud, the files are attached as output attachments.
 
         Args:
-            name: Name of the output object
+            name: Name of the output object.
         Returns:
             A file object to write the output to.
         """
         return None
 
     def get_available_core_count(self):
-        """ Returns the number of cores available for the processing.
+        """ Returns the number of cores available for processing if the environment
+        sets a limit.
 
         This number is used in the solving engine as the number of threads.
 
         Returns:
-            The available number of cores.
+            The available number of cores or ``None`` if the environment does not
+            limit the number of cores.
         """
-        return 0
+        return None
 
     def get_parameter(self, name):
         """ Returns a parameter of the program.
 
-        On DOcplexcloud, this method returns return the job parameter which name is specified.
+        On DOcplexcloud, this method returns the job parameter whose name is specified.
 
         Args:
-            name: The name of the parameter
+            name: The name of the parameter.
         Returns:
-            The parameter which name is specified
+            The parameter whose name is specified.
         """
         return None
 
-    def update_solve_details(self, details):
+
+    def notify_start_solve(self, solve_details):
         #===============================================================================
-        #         """Update the solve details.
-        # 
-        #         You use this method to send solve details to the DOcplexcloud service.
-        # 
+        #         """Notify the solving environment that a solve is starting.
+        #
         #         If ``context.solver.auto_publish.solve_details`` is set, the underlying solver will automatically
         #         send details. If you want to craft and send your own solve details, you can use the following
         #         keys (non exaustive list):
@@ -151,6 +152,22 @@ class Environment(object):
         #             - MODEL_DETAIL_CONSTRAINTS : Number of constraints
         #             - MODEL_DETAIL_LINEAR_CONSTRAINTS : Number of linear constraints
         #             - MODEL_DETAIL_QUADRATIC_CONSTRAINTS : Number of quadratic constraints
+        #
+        #         Args:
+        #             solve_details: A ``dict`` with solve details as key/value pairs
+        #         See:
+        #             :attr:`.Context.solver.auto_publish.solve_details`
+        #         """
+        #===============================================================================
+        pass
+
+    def update_solve_details(self, details):
+        #===============================================================================
+        #         """Update the solve details.
+        # 
+        #         You use this method to send solve details to the DOcplexcloud service.
+        #         If ``context.solver.auto_publish.solve_details`` is set, the underlying solver will automatically
+        #         update solve details.
         # 
         #         Args:
         #             details: A ``dict`` with solve details as key/value pairs.
@@ -161,26 +178,38 @@ class Environment(object):
         #===============================================================================
         pass
 
+    def notify_end_solve(self, status):
+        #===============================================================================
+        #         """Notify the solving environment that the solve as ended.
+        # 
+        #         The ``status`` can be a docloud.status.JobSolveStatus enum or an integer.
+        # 
+        #         When ``status`` is an integer, it is converted with the following conversion table:
+        # 
+        #             0 - UNKNOWN: The algorithm has no information about the solution.
+        #             1 - FEASIBLE_SOLUTION: The algorithm found a feasible solution.
+        #             2 - OPTIMAL_SOLUTION: The algorithm found an optimal solution.
+        #             3 - INFEASIBLE_SOLUTION: The algorithm proved that the model is infeasible.
+        #             4 - UNBOUNDED_SOLUTION: The algorithm proved the model unbounded.
+        #             5 - INFEASIBLE_OR_UNBOUNDED_SOLUTION: The model is infeasible or unbounded.
+        # 
+        #         Args:
+        #             status: The solve status
+        #         """
+        #===============================================================================
+        pass
+
 
 class LocalEnvironment(Environment):
     # The environment solving environment using all local input and outputs.
     def __init__(self):
         super(LocalEnvironment, self).__init__()
 
-    def get_available_core_count(self):
-        return None  # none !
-
     def get_input_stream(self, name):
         return open(name, "rb")
 
     def get_output_stream(self, name):
         return open(name, "wb")
-
-    def get_parameter(self, name):
-        return None
-
-    def update_solve_details(self, details):
-        pass
 
 
 class OutputFileWrapper(object):
@@ -237,13 +266,30 @@ class WorkerEnvironment(Environment):
     def update_solve_details(self, details):
         self.solve_hook.update_solve_details(details)
 
+    def notify_start_solve(self, solve_details):
+        self.solve_hook.notify_start_solve(None, # model
+                                           solve_details)
+
+    def notify_end_solve(self, status):
+        try:
+            from docloud.status import JobSolveStatus
+            engine_status = JobSolveStatus(status)
+            self.solve_hook.notify_end_solve(None, #model, unused
+                                             None, # has_solution, unused
+                                             engine_status,
+                                             None, # reported_obj, unused
+                                             None, # var_value_dict, unused
+                                             )
+        except ImportError:
+            raise RuntimeError("This should have been called only when in a worker environment")
+
 
 def get_environment():
     """ Returns the Environment object that represents the actual execution environment.
 
     Returns:
         An instance of the :class:`.Environment` class that implements methods corresponding
-        to actuel execution environment
+        to actual execution environment.
     """
     try:
         import docplex.worker.solvehook as worker_env

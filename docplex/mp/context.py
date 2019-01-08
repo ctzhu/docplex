@@ -604,6 +604,9 @@ class DOcloudContext(object):
         self._progress_poll_interval = None
         self.ignored_keys = "ENTER YOUR KEY HERE"
         self.ignored_urls = "ENTER YOUR URL HERE"
+        # if true, download job info after solve() has finished and fire
+        # the last details as a progress_info. Mostly for debug.
+        self.fire_last_progress = False
 
 
     # This maps "old property names" to the corresponding new qualified name.

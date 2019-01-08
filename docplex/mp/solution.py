@@ -542,9 +542,17 @@ class SolveSolution(object):
                 fp.close()
 
     def export_as_string(self, format="json"):
-        oss = StringIO()
+        if format == "json":
+            from io import BytesIO
+            oss = BytesIO()
+        else:
+            oss = StringIO()
         self.export(oss, format=format)
-        return oss.getvalue()
+        if format == "json":
+            r = oss.getvalue().decode('utf-8')
+        else:
+            r = oss.getvalue()
+        return r
 
 
     def check_as_mip_start(self, error_handler=None):
@@ -756,7 +764,7 @@ class SolutionJSONPrinter(object):
 
     @classmethod
     def print_one_solution(cls, sol, out, indent=None):
-        out.write(json.dumps(sol, cls=SolutionJSONEncoder, indent=indent))
+        out.write(json.dumps(sol, cls=SolutionJSONEncoder, indent=indent).encode())
 
     @classmethod
     def print_many_solutions(cls, sol_seq, out, indent=None):

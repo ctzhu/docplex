@@ -394,7 +394,7 @@ def _group_cpxparam_params(pgroup):
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
                 randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201502031, min_value=0.0, max_value=2100000000),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
-                threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=8),
+                threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
                 timelimit=NumParameter(pgroup, "timelimit", "CPX_PARAM_TILIM", 1039, "time limit in seconds", default_value=1e+75, min_value=0.0, max_value=1e+75),
                 workdir=StrParameter(pgroup, "workdir", "CPX_PARAM_WORKDIR", 1064, "directory for CPLEX working files", default_value="."),
                 workmem=NumParameter(pgroup, "workmem", "CPX_PARAM_WORKMEM", 1065, "memory available for working storage (in megabytes)", default_value=2048.0, min_value=0.0, max_value=1e+75)

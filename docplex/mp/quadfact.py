@@ -3,6 +3,8 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
+
+# gendoc: ignore
 from docplex.mp.mfactory import _AbstractModelFactory
 
 from docplex.mp.quad import QuadExpr, VarPair

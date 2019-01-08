@@ -245,6 +245,12 @@ from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
 import sys, socket, os, platform, traceback
 
+try:
+    import docplex.util.environment as runenv
+    ENVIRONMENT_PRESENT = True
+except:
+    ENVIRONMENT_PRESENT = False
+
 EXE_EXTENSION = ".exe" if platform.system() == 'Windows' else ""
 
 
@@ -319,11 +325,8 @@ context.solver.enable_undocumented_params = False
 
 # Max number of threads allowed for model solving
 context.solver.max_threads = None
-try:
-    import docplex.util.environment as runenv
+if ENVIRONMENT_PRESENT:
     context.solver.max_threads = runenv.get_environment().get_available_core_count()
-except:
-    pass
 
 # Indicate to add solver log to the solution
 context.solver.add_log_to_solution = True
@@ -440,6 +443,8 @@ def set_default(ctx):
 # Attribute values denoting a default value
 DEFAULT_VALUES = ("ENTER YOUR KEY HERE", "ENTER YOUR URL HERE", "default")
 
+def _is_defined(arg, kwargs):
+    return (arg in kwargs) and kwargs[arg] and (kwargs[arg] not in DEFAULT_VALUES)
 
 def _get_effective_context(**kwargs):
     """ Build a effective context from a variable list of arguments that may specify changes to default.
@@ -452,9 +457,7 @@ def _get_effective_context(**kwargs):
         Updated (cloned) context
     """
     # If 'url' and 'key' are defined, force agent to be docloud
-    if ('url' in kwargs) and kwargs['url'] and (kwargs['url'] not in DEFAULT_VALUES) and \
-            ('key' in kwargs) and kwargs['key'] and (kwargs['key'] not in DEFAULT_VALUES) and \
-            ('agent' not in kwargs):
+    if ('agent' not in kwargs) and _is_defined('url', kwargs) and _is_defined('key', kwargs) and not ENVIRONMENT_PRESENT:
         kwargs['agent'] = 'docloud'
 
     # Determine source context

@@ -205,7 +205,7 @@ class BinaryConstraint(AbstractConstraint):
         # INTERNAL
         right_cst = self._right_expr.get_constant()
         left_cst = self._left_expr.get_constant()
-        return right_cst - left_cst
+        return float(right_cst - left_cst)
 
     def __repr__(self):
         classname = self.__class__.__name__
@@ -771,7 +771,10 @@ class RangeConstraint(AbstractConstraint):
 
     def cplex_num_rhs(self):
         # INTERNAL
-        return self._lb - self._expr.get_constant()
+        return float(self._lb - self._expr.get_constant())
+
+    def cpx_range_value(self):
+        return float(self._lb - self._ub) # negative
 
     def copy(self, target_model, var_map):
         copied_expr = self.expr.copy(target_model, var_map)

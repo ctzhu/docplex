@@ -22,15 +22,15 @@ The following code is a program that sums its input (``sum.py``)::
 
     import json
     from docplex.util.environment import get_environment
-    if __name__ == "__main__":
-        sum = 0
-        # open program input named "data.txt" and sum the contents
-        with get_environment().get_input_stream("data.txt") as input:
-            for i in input.read().split():
-                sum += int(i)
-        # write the result as a simple json in program output "solution.json"
-        with get_environment().get_output_stream("solution.json") as output:
-            output.write(json.dumps({'result': sum}))
+
+    sum = 0
+    # open program input named "data.txt" and sum the contents
+    with get_environment().get_input_stream("data.txt") as input:
+        for i in input.read().split():
+            sum += int(i)
+    # write the result as a simple json in program output "solution.json"
+    with get_environment().get_output_stream("solution.json") as output:
+        output.write(json.dumps({'result': sum}))
 
 Let's put some data in a ``data.txt`` file::
 
@@ -54,11 +54,11 @@ to create and submit a job. That job has two attachments:
 After the solve is completed, the result of the program is downloaded and saved as ``solution.json``::
 
     from docloud.job import JobClient
-    if __name__ == "__main__":
-        url = "ENTER_YOUR_URL_HERE"
-        key = "ENTER_YOUR_KEY_HERE"
-        client = JobClient(url, key)
-        client.execute(input=["sum.py", "data.txt"], output="solution.json")
+
+    url = "ENTER_YOUR_URL_HERE"
+    key = "ENTER_YOUR_KEY_HERE"
+    client = JobClient(url, key)
+    client.execute(input=["sum.py", "data.txt"], output="solution.json")
 
 Then you run ``submit.py``::
 
@@ -97,10 +97,14 @@ class Environment(object):
         """ Get a file-like object to write the output of the program.
 
         The file is recorded as being part of the program output.
-        This method can be called multiple times if the program contains multiple output objects.
+        This method can be called multiple times if the program contains
+        multiple output objects.
 
-        When run on premise, the output of the program is written as files in the working directory.
-        When run on DOcplexcloud, the files are attached as output attachments.
+        When run on premise, the output of the program is written as files in
+        the working directory. When run on DOcplexcloud, the files are attached
+        as output attachments.
+
+        The stream is opened in binary mode, and will accept 8 bits data.
 
         Args:
             name: Name of the output object.
@@ -162,20 +166,16 @@ class Environment(object):
         pass
 
     def update_solve_details(self, details):
-        #===============================================================================
-        #         """Update the solve details.
-        # 
-        #         You use this method to send solve details to the DOcplexcloud service.
-        #         If ``context.solver.auto_publish.solve_details`` is set, the underlying solver will automatically
-        #         update solve details.
-        # 
-        #         Args:
-        #             details: A ``dict`` with solve details as key/value pairs.
-        # 
-        #         See:
-        #             :attr:`.Context.solver.auto_publish.solve_details`
-        #         """
-        #===============================================================================
+        '''Update the solve details.
+
+        You use this method to send solve details to the DOcplexcloud service.
+        If ``context.solver.auto_publish`` is set, the underlying
+        solver will automatically update solve details once the solve has
+        finished.
+
+        Args:
+            details: A ``dict`` with solve details as key/value pairs.
+        '''
         pass
 
     def notify_end_solve(self, status):
@@ -199,6 +199,26 @@ class Environment(object):
         #===============================================================================
         pass
 
+    def set_stop_callback(self, cb):
+        '''Sets a callback that is called when the script is run on
+        DOcplexcloud and a job abort operation is requested.
+
+        You can also use the ``stop_callback`` property to set the callback.
+
+        Args:
+            cb: The callback function
+        '''
+        pass
+
+    def get_stop_callback(self):
+        '''Returns the stop callback that is called when the script is run on
+        DOcplexcloud and a job abort operation is requested.
+
+        You can also use the ``stop_callback`` property to get the callback.
+        '''
+        return None
+
+    stop_callback = property(get_stop_callback, set_stop_callback)
 
 class LocalEnvironment(Environment):
     # The environment solving environment using all local input and outputs.
@@ -282,6 +302,18 @@ class WorkerEnvironment(Environment):
                                              )
         except ImportError:
             raise RuntimeError("This should have been called only when in a worker environment")
+
+    def set_stop_callback(self, cb):
+        self.solve_hook.set_stop_callback(cb)
+
+    def get_stop_callback(self):
+        try:
+            # todo: access the property until the get_stop_callback() makes
+            # it to docloud prod (we know the stop_callback property is there
+            # in the worker 
+            return self.solve_hook.stop_callback
+        except AttributeError:
+            return self.solve_hook.get_stop_callback()
 
 
 def get_environment():

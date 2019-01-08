@@ -561,7 +561,7 @@ class CplexEngine(DummyEngine):
         block_size = len(linct_seq)
         # need to force float() for numpy num types will crash CPLEX
         # noinspection PyPep8
-        cpx_rhss = [float(ct.cplex_num_rhs()) for ct in linct_seq]
+        cpx_rhss = [ct.cplex_num_rhs() for ct in linct_seq]
         cpx_senses = [ct.cplex_code() for ct in linct_seq]
         cpx_names = [ct._get_safe_name() for ct in linct_seq]
         cpx_linexprs = [self.linear_ct_to_cplex(ct) for ct in linct_seq]
@@ -581,15 +581,14 @@ class CplexEngine(DummyEngine):
         linearcts = self._cplex.linear_constraints
         expr = range_ct.expr
 
-        lhs = range_ct.lb
-        rhs = range_ct.ub
-        cpx_lin_expr2 = self.make_cpx_linear_from_one_expr(expr)
 
-        cpx_lin_expr2 = [cpx_lin_expr2] if cpx_lin_expr2 else []
+        cpx_linexpr = self.make_cpx_linear_from_one_expr(expr)
+
+        cpx_lin_expr2 = [cpx_linexpr] if cpx_linexpr else []
         offset = expr.get_constant()
-        cpx_rhs = [rhs - offset]
-        cpx_range_values = [lhs - rhs]  # should be negative ???
-        ctname = range_ct.name
+        cpx_rhs = [float(range_ct._ub - offset)]
+        cpx_range_values = [range_ct.cpx_range_value()]
+        ctname = range_ct.get_name()
         cpxnames = [ctname] if ctname else []
         ret_add = linearcts.add(lin_expr=cpx_lin_expr2,
                                 senses=range_ct.cplex_code(), rhs=cpx_rhs,
@@ -670,7 +669,7 @@ class CplexEngine(DummyEngine):
         self._resync_if_needed()
         # ---
         self_cplex = self._cplex
-        float_rhs = float(qct.cplex_num_rhs())  # if not a float, cplex crashes baaaadly
+        float_rhs = qct.cplex_num_rhs()
         cpx_sense = qct.cplex_code()
         # see RTC-31772, None is accepted from 12.6.3.R0 onward. use get_name() when dropping compat for 12.6.2
         qctname = qct._get_safe_name()

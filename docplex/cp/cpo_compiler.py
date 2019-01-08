@@ -24,6 +24,7 @@ import sys
 # Map of CPO names for each array type
 _ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
                 Type_IntExprArray: 'intExprArray', Type_FloatExprArray: 'floatExprArray',
+                Type_CumulExprArray: 'cumulExprArray',
                 Type_IntervalVarArray: 'intervalVarArray', Type_SequenceVarArray: 'sequenceVarArray',
                 Type_CumulAtomArray: '_cumulAtomArray'}
 

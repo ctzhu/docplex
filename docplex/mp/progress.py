@@ -7,7 +7,8 @@
 # gendoc: ignore
 
 from docplex.mp.solution import SolveSolution
-
+from six import iteritems
+from docplex.util.environment import get_environment
 
 class ProgressData(object):
     """ A container class to hold data retrived from progress callbacks.
@@ -350,3 +351,41 @@ class SolutionListener(ProgressListener):
         """
         return self._current_solution
 
+
+class KpiRecordings(list):
+    def __init__(self):
+        super(KpiRecordings, self).__init__()
+
+    def __as_df__(self, **kwargs):
+        try:
+            import pandas
+            c = set()
+            for thing in self:
+                for key in thing.keys():
+                    c.add(key)
+            df = pandas.DataFrame(columns=c)
+            for index, thing in enumerate(self):
+                dfi = pandas.DataFrame(thing, index=[index])
+                df = df.append(dfi)
+            return df
+        except ImportError:
+            raise RuntimeError("convert as DataFrame: This feature requires pandas")
+
+
+class KpiRecorder(SolutionListener):
+    # used to publish kpis on worker
+    def __init__(self, model, publish_kpi=False):
+        super(KpiRecorder, self).__init__(model)
+        self._kpis = KpiRecordings()
+        self.publish_kpi = publish_kpi
+
+    def notify_solution(self, incumbents):
+        super(KpiRecorder, self).notify_solution(incumbents)
+
+        k = self._model.kpis_as_dict(self.current_solution)
+        name_values = {u.name: v for u, v in iteritems(k)}
+        name_values.update({'PROGRESS_CURRENT_OBJECTIVE': self.current_solution.objective_value})
+        if self.publish_kpi:
+            env = get_environment()
+            env.update_solve_details(name_values)
+        self._kpis.append(name_values)

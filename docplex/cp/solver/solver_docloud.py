@@ -10,7 +10,7 @@ This module allows to solve a model expressed as a CPO file using DOcplexcloud s
 """
 
 import docplex.cp.solution as solution
-from docplex.cp.solution import CpoProcessInfos, CpoSolverInfos, CpoSolveResult
+from docplex.cp.solution import CpoProcessInfos, CpoSolverInfos, CpoSolveResult, CpoRefineConflictResult
 from docplex.cp.solver.docloud_client import JobClient
 from docplex.cp.utils import CpoException, is_number
 import docplex.cp.solver.solver as solver
@@ -59,6 +59,58 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
          * 4: REST requests and response codes
 
         Returns:
+            Model solve result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        Raises:
+            CpoException if error occurs
+        """
+        return self._submit_job('Solve', CpoSolveResult)
+
+
+    def refine_conflict(self):
+        """ This method identifies a minimal conflict for the infeasibility of the current model.
+
+        See documentation of CpoSolver.refine_conflict() for details.
+
+        Returns:
+            Conflict result,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
+        """
+        self._raise_not_supported() # Temporarily unsupported
+
+        # Force all constraints to be named
+        self.context.model.name_all_constraints = True
+
+        return self._submit_job('RefineConflict', CpoRefineConflictResult)
+
+
+    def propagate(self):
+        """ This method invokes the propagation on the current model.
+
+        See documentation of CpoSolver.propagate() for details.
+
+        Returns:
+            Propagation result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        """
+        self._raise_not_supported() # Temporarily unsupported
+        return self._submit_job('Propagate', CpoSolveResult)
+
+
+    def _submit_job(self, cmd, rclass):
+        """ Submit a solving job with given command.
+
+        According to the value of the context parameter 'verbose', the following information is logged
+        if the log output is set:
+         * 1: Total time spent to solve the model
+         * 2: Calls to DOcplexcloud solving
+         * 3: Detailed DOcplexcloud job information
+         * 4: REST requests and response codes
+
+        Args:
+            cmd:    Solving command, in (Solve, RefineConflict, Propagate)
+            rclass: Result object class
+        Returns:
             Model solve result (object of class CpoSolveResult)
         Raises:
             CpoException if error occurs
@@ -84,7 +136,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         try:
             # Create job and start execution
             stime = time.time()
-            client.create_job(name, cpostr)
+            client.create_cpo_job(name, cpostr, cmd)
             self.process_infos[CpoProcessInfos.MODEL_SEND_TIME] = time.time() - stime
 
             # Start execution
@@ -102,7 +154,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
                 ctx.log(3, "Job info:")
                 for k in jinfo.keys():
                     ctx.log(3, k, " : ", jinfo[k])
-                
+
             # Check failure
             fail = jinfo.get('failure', None)
             if fail is not None:
@@ -125,9 +177,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             else:
                 jsol = None
 
-
             # Create solution structure
-            msol = self._create_result_object(CpoSolveResult, jsol)
+            msol = self._create_result_object(rclass, jsol)
             if not jsol:
                 msol.solve_status = ssts
             sinfos = msol.solver_infos

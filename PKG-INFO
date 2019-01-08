@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.1.28
+Version: 2.2.34
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,8 +244,30 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        New in 2.1.28:
-        ``````````````
+        Changed in 2.2.34:
+        ``````````````````
+        * Methods ``docplex.cp.model.export_model()`` and ``docplex.cp.model.import_model()``
+          have been added to respectively generate or parse a model in CPO format.
+        * Methods ``docplex.cp.model.minimize()`` and ``docplex.cp.model.maximize()``
+          have been added to directly indicate an objective at model level.
+        * Notebook example ``scheduling_tuto.ipynb`` contains an extensive tutorial
+          to solve scheduling problems with CP.
+        * Modeling methof sum() now supports sum of cumul expressions.
+        * Methods ``docplex.cp.model.start_search()`` allows to start a new 
+          search sequence directly from the model object.
+        * When setting ``context.solver.auto_publish`` is set, and using the CPLEX
+          engine, KPIs and current objective are automatically published when the
+          script is run on DOcplexcloud Python worker.
+        * When setting ``context.solver.auto_publish`` is set, and using the CP
+          engine, current objective is automatically published when the
+          script is run on DOcplexcloud Python worker.
+        * ``docplex.util.environment.Environment.set_stop_callback`` and
+          ``docplex.util.environment.Environment.get_stop_callback`` are added so that
+          you can add a callback when the DOcplexcloud job is aborted.
+        
+        Changed in 2.1.28:
+        ``````````````````
+        
         * New methods ``Model.logical_or()`` and ``Model.logical_and()`` handle
           logical operations on binary variables.
         * DOcplex now supports CPLEX 12.7.1 and Benders decomposition. Set annotations
@@ -265,9 +287,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         * Bug fixes when editing an existing model.
         * Bug fix in the relaxation mechanism when using docplexcloud.
         
-        
-        New in 2.0.15:
-        ``````````````
+        Changed in 2.0.15:
+        ``````````````````
         
         * Piecewise linear (PWL) functions are now supported. An API is now available
           on ``docplex.mp.model`` to create PWL functions and to create constraints using these PWL functions.
@@ -286,8 +307,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         * Known incompatibility: class ``docplex.mp.model.AbstractModel`` moved to ``docplex.mp.absmodel.AbstractModel``. 
           Samples using this class have been updated.
         
-        New in 1.0.630:
-        ```````````````
+        Changed in 1.0.630:
+        ```````````````````
         
         * Added support for CPLEX 12.7 and Python 3.5.
         * Upgraded the DOcplexcloud client to version 1.0.202.

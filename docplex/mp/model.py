@@ -21,8 +21,9 @@ from docplex.mp.constants import SOSType
 from docplex.mp.constants import SolveAttribute, ObjectiveSense
 from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstraint, \
     IndicatorConstraint, QuadraticConstraint, PwlConstraint
-from docplex.mp.context import Context, is_key_ignored, is_url_ignored, is_auto_publishing_solve_details, \
-    is_auto_publishing_json_solution, has_credentials
+from docplex.mp.context import Context, is_key_ignored, is_url_ignored, \
+    is_auto_publishing_solve_details, is_auto_publishing_json_solution, \
+    is_auto_publishing, has_credentials
 from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
@@ -42,7 +43,10 @@ from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType,
 from docplex.util.environment import get_environment
 from docplex.mp.xcounter import FastOrderedDict, ExprCounter
 
-from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
+from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials,\
+    is_in_docplex_worker
+
+from docplex.mp.progress import KpiRecorder
 
 try:
     from docplex.worker.solvehook import get_solve_hook
@@ -2944,6 +2948,11 @@ class Model(object):
                 self._add_solve_hook(wk_hook)
         else:
             wk_hook = None
+
+        if is_in_docplex_worker and is_auto_publishing(context):
+            # publish kpi automatically
+            self.kpi_recorder = KpiRecorder(self, publish_kpi=True)
+            self.add_progress_listener(self.kpi_recorder)
 
         # connect progress listeners (if any) if problem is mip
         self._connect_progress_listeners()

@@ -67,24 +67,35 @@ class JobClient(object):
             requests.packages.urllib3.disable_warnings()
 
 
-    def create_job(self, name, cpodata):
+    def create_job(self, attachments, parameters={}):
         """ Create a new model solving job. JobId is stored in this object.
         Args:
-            name:    Job name
-            cpodata: Model to be solved in CPO format, already encoded in UTF8
+            attachments: List of attachments. Each attachment is a tuple (name, content)
+            parameters:  Optional map of parameters
         """
-        # Create attachment name
-        name = _normalize_job_name(name)
         # Create job
-        args = {'attachments': [{'name': name}]}
+        args = {'attachments': [{'name': name} for name, content in attachments],
+                'parameters': parameters}
         rsp = self._request('post', self.ctx.url + "/jobs", [201], data=json.dumps(args))
         self.jobid = rsp.headers['location'].rsplit("/", 1)[1]
         self.ctx.log(2, "Job created: ", self.jobid)
         # Upload attachments
         hdrs = self.headers.copy()
         hdrs['Content-Type'] = 'application/octet-stream'
-        self._request('put', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + name + "/blob", [204], data=cpodata, headers=hdrs)
-        self.ctx.log(2, "Model data '", name, "' uploaded (", len(cpodata), " bytes)")
+        for name, content in attachments:
+            self._request('put', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + name + "/blob", [204], data=content, headers=hdrs)
+            self.ctx.log(2, "Attachment '", name, "' uploaded (", len(content), " bytes)")
+
+
+    def create_cpo_job(self, name, cpodata, cmd='Solve'):
+        """ Create a new model solving job. JobId is stored in this object.
+        Args:
+            name:    Job name
+            cpodata: Model to be solved in CPO format, already encoded in UTF8
+            cmd:     Command name
+        """
+        # Create job
+        self.create_job([(normalize_job_name(name) + ".cpo", cpodata)], {'oaas.cpo.command': cmd})
 
 
     def execute_job(self):
@@ -261,7 +272,6 @@ class JobClient(object):
             mth:     HTTP method name
             url:     Target url
             astc:    List of expected status codes
-            headers: Extra headers
             kwargs:  Arguments to pass to request
         Returns:
             Request response
@@ -311,8 +321,11 @@ class JobClient(object):
         raise DocloudException("Job " + str(self.jobid) + " error: " + msg)
 
 
-def _normalize_job_name(name):
-    """ Normalize job name by replacing unallowed characters by '_'
+def normalize_job_name(name):
+    """ Normalize a job name by replacing unallowed characters by '_'
+
+    If the name is empty, a name is generated with current time.
+
     Args:
         name:  Name to normalize
     Returns:
@@ -325,4 +338,6 @@ def _normalize_job_name(name):
         name = ''.join([c if is_symbol_char(c) else '_' for c in name])
         if not name[0].isalpha():
             name = "Job_" + name
-    return name + ".cpo"
+    return name
+
+

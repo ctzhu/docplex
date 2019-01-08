@@ -559,7 +559,7 @@ class CpoModelSolution(object):
         """ Add a json solution to this solution descriptor
 
         Args:
-            jsol: JSON document representing solution, or string containing its JSON representation.
+            jsol: JSON document representing solution.
         """
         # Add objectives
         ovals = jsol.get('objectives', None)
@@ -690,6 +690,15 @@ class CpoRunResult(object):
         return self.solverLog
 
 
+    def get_process_infos(self):
+        """ Gets the set of informations provided by the Python API converning the solving of the model.
+
+        Returns:
+            Object of class :class:`CpoProcessInfos` that contains general information on model processing.
+        """
+        return self.process_infos
+
+
 class CpoSolveResult(CpoRunResult):
     """ This class represents the result of a call to the solve of a model.
 
@@ -800,6 +809,15 @@ class CpoSolveResult(CpoRunResult):
         return self.solve_status is SOLVE_STATUS_OPTIMAL
 
 
+    def get_solution(self):
+        """ Get the model solution
+
+        Returns:
+            Model solution, object of class CpoModelSolution.
+        """
+        return self.solution
+
+
     def get_objective_values(self):
         """ Gets the numeric values of all objectives.
 
@@ -860,15 +878,6 @@ class CpoSolveResult(CpoRunResult):
             Information attribute value, None if not found.
         """
         return self.solver_infos.get(name, default)
-
-
-    def get_process_infos(self):
-        """ Gets the set of informations provided by the Python API converning the solving of the model.
-
-        Returns:
-            Object of class :class:`CpoProcessInfos` that contains general information on model processing.
-        """
-        return self.process_infos
 
 
     def _set_model_attributes(self, nbintvars=0, nbitvvars=0, nbseqvars=0, nbctrs=0):
@@ -946,7 +955,7 @@ class CpoSolveResult(CpoRunResult):
         """ Add a json solution to this solution descriptor
 
         Args:
-            jsol:   JSON document representing solution, or string containing its JSON representation.
+            jsol:   JSON document representing solution.
         """
         # Add solver status
         status = jsol.get('solutionStatus', ())
@@ -1080,10 +1089,11 @@ class CpoRefineConflictResult(CpoRunResult):
         # """
         super(CpoRefineConflictResult, self).__init__()
         self.model = model
-        self.member_constraints = []    # List of member constraints
-        self.possible_constraints = []  # List of possible member constraints
-        self.member_variables = []      # List of member variables
-        self.possible_variables = []    # List of possible member variables
+        self.member_constraints = []         # List of member constraints
+        self.possible_constraints = []       # List of possible member constraints
+        self.member_variables = []           # List of member variables
+        self.possible_variables = []         # List of possible member variables
+        self.solver_infos = CpoSolverInfos() # Solving information
 
 
     def get_all_member_constraints(self):
@@ -1217,7 +1227,7 @@ class CpoRefineConflictResult(CpoRunResult):
         """
         out.write("Conflict refiner result:\n")
         if not self.is_conflict():
-            out.write("   None\n")
+            out.write("   No conflict\n")
             return
         # Print constraints in the conflict
         lc = self.get_all_member_constraints()

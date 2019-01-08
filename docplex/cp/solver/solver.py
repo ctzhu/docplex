@@ -41,7 +41,7 @@ Except :meth:`solve`, these functions are only available with a local solver wit
 When a method is not available, an exception *CpoNotSupportedException* is raised.
 
 If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
-the :class:`CpoSolver` object can acts as an iterator. All solutions can be retrieved using a loop like:
+the :class:`CpoSolver` object acts as an iterator. All solutions are retrieved using a loop like:
 ::
 
    solver = CpoSolver(mdl)
@@ -340,7 +340,7 @@ class CpoSolver(object):
     """
     __slots__ = ('model',     # Model to solve
                  'context',   # Solving context
-                 'solver',    # Solver agent
+                 'agent',     # Solver agent
                  'status',    # Current solver status
                  'last_sol',  # Last returned solution
                 )
@@ -358,7 +358,7 @@ class CpoSolver(object):
             (others):  All other context parameters that can be changed.
         """
         super(CpoSolver, self).__init__()
-        self.solver = None
+        self.agent = None
         self.last_sol = None
         self.status = STATUS_IDLE
 
@@ -379,7 +379,7 @@ class CpoSolver(object):
         self.context = context
 
         # Determine appropriate solver agent
-        self.solver = self._get_solver_agent()
+        self.agent = self._get_solver_agent()
 
 
     def __iter__(self):
@@ -415,7 +415,7 @@ class CpoSolver(object):
         # Solve model
         stime = time.time()
         self.status = STATUS_SOLVING
-        msol = self.solver.solve()
+        msol = self.agent.solve()
         self.status = STATUS_IDLE
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
@@ -448,7 +448,7 @@ class CpoSolver(object):
         """
         # Initiate search if needed
         if self.status == STATUS_IDLE:
-            self.solver.start_search()
+            self.agent.start_search()
             self.status = STATUS_SEARCH_WAITING
         else:
             self._check_status(STATUS_SEARCH_WAITING)
@@ -459,7 +459,7 @@ class CpoSolver(object):
         # Solve model
         stime = time.time()
         self.status = STATUS_SEARCH_RUNNING
-        msol = self.solver.search_next()
+        msol = self.agent.search_next()
         self.status = STATUS_SEARCH_WAITING
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")
@@ -470,7 +470,7 @@ class CpoSolver(object):
 
         # End search if needed
         if not msol:
-            self.solver.end_search()
+            self.agent.end_search()
             self.status = STATUS_IDLE
 
         # Store last solution
@@ -495,7 +495,7 @@ class CpoSolver(object):
             CpoNotSupportedException: if method not available in the solver agent.
         """
         self._check_status(STATUS_SEARCH_WAITING)
-        msol = self.solver.end_search()
+        msol = self.agent.end_search()
         self.status = STATUS_IDLE
         return msol
 
@@ -525,8 +525,6 @@ class CpoSolver(object):
         Note that the general *TimeLimit* parameter is used as a limiter for each conflict refiner iteration, but the
         global limitation in time must be set using *ConflictRefinerTimeLimit* that is infinite by default.
 
-
-
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
@@ -537,7 +535,7 @@ class CpoSolver(object):
         """
         self._check_status(STATUS_IDLE)
         self.status = STATUS_REFINING_CONFLICT
-        msol = self.solver.refine_conflict()
+        msol = self.agent.refine_conflict()
         self.status = STATUS_IDLE
         return msol
 
@@ -565,7 +563,7 @@ class CpoSolver(object):
         """
         self._check_status(STATUS_IDLE)
         self.status = STATUS_PROPAGATING
-        psol = self.solver.propagate()
+        psol = self.agent.propagate()
         self.status = STATUS_IDLE
         return psol
 
@@ -581,9 +579,9 @@ class CpoSolver(object):
 
     def end(self):
         # End this solver and release associated resources
-        if (self.solver is not None) and (self.status != STATUS_RELEASED):
-            self.solver.end()
-            self.solver = None
+        if (self.agent is not None) and (self.status != STATUS_RELEASED):
+            self.agent.end()
+            self.agent = None
             self.status = STATUS_RELEASED
 
 

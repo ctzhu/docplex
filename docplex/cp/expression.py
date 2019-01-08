@@ -1876,7 +1876,7 @@ def _get_cpo_array_type(val):
         if ncet is None:
             # Check special case of couple of int mixed with ints
             if cet is Type_Int:
-                if (nt is Type_IntArray) and is_interval_tuple(v):
+                if (nt is Type_IntArray) and _is_cpo_int_interval(v):
                     ncet = Type_Int
                 else:
                     return None
@@ -1891,7 +1891,7 @@ def _get_cpo_array_type(val):
 
     # Determine array type for result element type
     if cet is Type_IntArray:
-        if all(is_interval_tuple(v) for v in val):
+        if all(_is_cpo_int_interval(v) for v in val):
             return Type_IntArray
         else:
             return Type_TupleSet
@@ -1985,6 +1985,36 @@ _PYTHON_TO_CPO_TYPE[CpoTupleSet]         = Type_TupleSet
 _PYTHON_TO_CPO_TYPE[CpoStateFunction]    = Type_StateFunction
 
 
+def _is_cpo_int(arg):
+    """ Check that a value is a valid integer for cpo
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a valid CPO integer, False otherwise
+    """
+    return is_int(arg) and (INT_MIN <= arg <= INT_MAX)
+
+
+def _is_cpo_int_interval(val):
+    """ Check if a value represents an interval of CPO integers
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a tuple representing an interval of integers
+    """
+    return isinstance(val, tuple) and (len(val) == 2) and _is_cpo_int(val[0]) and _is_cpo_int(val[1]) and (val[1] >= val[0])
+
+
+def _is_cpo_interval_value(arg):
+    """ Check that a value is a valid value for an interval
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a valid interval, False otherwise
+    """
+    return is_int(arg) and (INTERVAL_MIN <= arg <= INTERVAL_MAX)
+
+
 def _check_arg_boolean(arg, name):
     """ Check that an argument is a boolean and raise error if wrong
     Args:
@@ -1995,7 +2025,21 @@ def _check_arg_boolean(arg, name):
     Raises:
         Exception if argument has the wrong format
     """
-    assert is_bool(arg), "Argument '" + name + "' should be a boolean"
+    assert is_bool(arg), "Argument '{}' should be a boolean".format(name)
+    return arg
+
+
+def _check_arg_integer(arg, name):
+    """ Check that an argument is an valid integer value and raises error if wrong
+    Args:
+        arg:  Argument value
+        name: Argument name
+    Returns:
+        Integer to be set
+    Raises:
+        Exception if argument has the wrong format
+    """
+    assert is_int(arg) and (INT_MIN <= arg <= INT_MAX), "Argument '{}' should be an integer in [INT_MIN , INT_MAX]".format(name)
     return arg
 
 
@@ -2010,13 +2054,20 @@ def _check_arg_interval(arg, name):
         Exception if argument has the wrong format
     """
     if is_int(arg):
+        assert INTERVAL_MIN <= arg <= INTERVAL_MAX, "Argument '{}' should be in [INTERVAL_MIN , INTERVAL_MAX]".format(name)
         return (arg, arg)
-    assert isinstance(arg, (list, tuple)) and is_int(arg[0]) and is_int(arg[1]), "Argument '" + name + "' should be an integer or an interval expressed as a tuple"
+
+    assert isinstance(arg, (list, tuple)) and len(arg) == 2, "Argument '" + name + "' should be an integer or an interval expressed as a tuple of two integers"
+    lb = arg[0]
+    ub = arg[1]
+    assert _is_cpo_interval_value(lb) and (INTERVAL_MIN <= lb <= INTERVAL_MAX, "Lower bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name))
+    assert _is_cpo_interval_value(ub) and (INTERVAL_MIN <= ub <= INTERVAL_MAX, "Upper bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name))
+    assert lb <= ub, "Lower bound or argument '{}' should be lower or equal to upper bound".format(name)
     return arg
 
 
 def _build_int_var_domain(min, max, domain):
-    """ Create/check integer variable domain from parameters min and max
+    """ Create/check integer variable domain from integer variable creation parameters
     Args:
         min:    Domain min value, None if extensive list.
         max:    Domain max value, None if extensive list.
@@ -2026,24 +2077,32 @@ def _build_int_var_domain(min, max, domain):
     Raises:
         Exception if argument has the wrong format
     """
-
     # Domain not given extensively
     if domain is None:
-        # Test for ascending compatibility
-        if (max is None) and is_array(min):
-            domain = min
-            min = None
-        else:
-            if min is None:
-                min = INT_MIN
+        if min is None:
             if max is None:
-                max = INT_MAX
-            return ((min, max),)
+                return ((INT_MIN, INT_MAX),)
+            _check_arg_integer(max, "max")
+            return ((INT_MIN, max),)
+        else:
+            if max is None:
+                # Test that first argument is directly a domain (ascending compatibility)
+                if is_array(min):
+                    domain = min
+                    min = None
+                else:
+                    _check_arg_integer(min, "min")
+                    return ((min, INT_MAX),)
+            else:
+                _check_arg_integer(min, "min")
+                _check_arg_integer(max, "max")
+                assert min <= max, "Argument 'min' should be lower or equal to 'max'"
+                return ((min, max),)
 
     # Domain given extensively
     assert (min is None) and (max is None), "If domain is given extensively in 'domain', 'min' and/or 'max' should not be given"
     assert is_array(domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
-    assert all(is_int(v) or is_interval_tuple(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
+    assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
     return domain
 
 
@@ -2094,7 +2153,7 @@ def _check_and_expand_interval_tuples(name, arr):
             if res:
                 res.append(v)
         else:
-            assert is_interval_tuple(v), "Argument '{}' (type {}) should be a list of integers or intervals".format(name, type(arr))
+            assert _is_cpo_int_interval(v), "Argument '{}' (type {}) should be a list of integers or intervals".format(name, type(arr))
             if not res:
                 res = list(arr[:i])
             res.extend(range(v[0], v[1] + 1))

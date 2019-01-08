@@ -560,20 +560,27 @@ def sum_of(x):
     """ Returns the sum of all expressions in an array of expressions.
 
     The function *sum_of* computes the sum of *x*.
-    Depending on the type of *x* the result is an integer or a floating-point expression.
+    Depending on the type of *x* the result is an integer, floating-point or cumul expression.
 
 
     Args:
-        x: An array of integer or floating-point expressions.
+        x: An array of integer, floating-point or cumul expressions.
     Returns:
-        An integer or float expression depending on the type of argument.
+        An integer, float or cumul expression depending on the type of argument.
     """
     # Build model expression
     arr = build_cpo_expr(x)
     if arr.is_kind_of(Type_IntExprArray):
         return CpoFunctionCall(Oper_sum, Type_IntExpr, (arr,))
-    assert arr.is_kind_of(Type_FloatExprArray), "Argument should be an array of integer or float expressions"
-    return CpoFunctionCall(Oper_sum, Type_FloatExpr, (arr,))
+    if arr.is_kind_of(Type_FloatExprArray):
+        return CpoFunctionCall(Oper_sum, Type_FloatExpr, (arr,))
+    assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
+
+    # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
+    res = x[0]
+    for v in x[1:]:
+        res = res + v
+    return res
 
 
 def sum(*args):
@@ -2291,7 +2298,10 @@ def no_overlap(sequence, distanceMatrix=None, isDirect=None):
     Args:
         sequence: A sequence variable, or an array of interval variables.
         distanceMatrix: An optional transition matrix defining the transition distance between consecutive interval variables.
-        isDirect: A boolean flag stating whether the distance specified in the transition matrix distanceMatrix holds between direct bs (isDirect=1) or also between indirect bs (isDirect=None, default).
+                        Transition matrix is an object of class :class:`~docplex.cp.expression.CpoTransitionMatrix` created with
+                        method :meth:`~docplex.cp.expression.transition_matrix`.
+        isDirect: A boolean flag stating whether the distance specified in the transition matrix distanceMatrix holds between
+                  direct bs (isDirect=1) or also between indirect bs (isDirect=None, default).
     Returns:
         Constraint expression
     """
@@ -3283,8 +3293,10 @@ def search_phase(vars=None, varchooser=None, valuechooser=None):
         vars: (Optional) Array of integer, interval or sequence variables.
         varchooser: (Optional) Chooser of integer variable.
                     Used only if *vars* is undefined or contains an array of integer variables.
+                    Must be defined if a *valuechooser* is defined.
         valuechooser: (Optional) Chooser of integer value
                     Used only if *vars* is undefined or contains an array of integer variables.
+                    Must be defined if a *varchooser* is defined.
     Returns:
         A search phase expression
     """

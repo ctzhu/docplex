@@ -115,6 +115,13 @@ def is_url_ignored(context, url):
     return is_ignored(context.solver.docloud.ignored_urls, url)
 
 
+def is_auto_publishing(context):
+    try:
+        return context.solver.auto_publish == True
+    except AttributeError:
+        return False
+
+
 def is_auto_publishing_solve_details(context):
     if get_solve_hook == None:
         return False  # not in a worker
@@ -224,9 +231,7 @@ class SolverContext(BaseContext):
         super(SolverContext, self).__init__(**kwargs)
         self.log_output = False
         self.max_threads = get_environment().get_available_core_count()
-        self.auto_publish = BaseContext()
-        self.auto_publish.solve_details = True
-        self.auto_publish.json_solution = True
+        self.auto_publish = True
 
     def __deepcopy__(self, memo):
         # We override deepcopy here just to make sure that we don't deepcopy
@@ -286,14 +291,6 @@ class Context(BaseContext):
         solver.auto_publish: If ``True``, a model being solved will automatically
             publish all publishable items (``solve_details``,
             ``json_solution``).
-        solver.auto_publish.solve_details: If ``True``, solve details are
-            automatically published when :meth:`docplex.mp.model.Model.solve` is called.
-            The default value is ``True``.
-        solver.auto_publish.json_solution: If ``True``, the solution is automatically
-            published when :meth:`docplex.mp.model.Model.solve` is called.
-            The solution is saved as an output attachment whose name is
-            ``solution.json``. The default value is ``False``, unless the Python script is run on the
-            DOcplexcloud service.
         solver.log_output: This attribute can have the following values:
 
             * True: When True, logs are printed to sys.out.

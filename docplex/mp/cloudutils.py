@@ -59,15 +59,32 @@ def get_url_in_kwargs(__context, kwargs_dict):
     return url
 
 
-def context_must_use_docloud(__context, **kwargs):
-    # NOTE: the argument CANNOT be named 'context' here as kwargs may well contain a 'context' key
+def is_in_docplex_worker():
+    try:
+        import docplex.worker.solvehook as worker_env
+        hook = worker_env.get_solve_hook()
+        if hook:
+            return True
+    except ImportError:
+        pass
+    return False
 
+
+def context_must_use_docloud(__context, **kwargs):
+    # NOTE: the argument CANNOT be named 'context' here as kwargs may well
+    # contain a 'context' key
+    #
     # returns True if context + kwargs require an execution on cloud
     # this happens in the following cases:
     # (i)  kwargs contains a "docloud_context" key (compat??)
     # (ii) both an explicit url and api_key appear in kwargs
     # (iv) the context's "solver.agent" is "docloud"
     # (v)  kwargs override agent to be "docloud"
+    #
+    # Always return false when in docplex worker to ignore url/keys/docloud
+    # agent override in the worker
+    if is_in_docplex_worker():
+        return False
     docloud_agent_name = "docloud"  # this might change
     have_docloud_context = kwargs.get('docloud_context') is not None
     have_api_key = get_key_in_kwargs(__context, kwargs)

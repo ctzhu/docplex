@@ -13,7 +13,7 @@ from docplex.cp.cpo_tokenizer import *
 from docplex.cp.expression import *
 from docplex.cp.expression import _create_operation
 from docplex.cp.function import *
-from docplex.cp.model import CpoModel
+import docplex.cp.model
 from docplex.cp.catalog import *
 from docplex.cp.solution import *
 
@@ -93,11 +93,14 @@ class CpoParser(object):
                  'pushtoken',      # Pushed token
                  )
     
-    def __init__(self):
-        """ Create a new CPO format parser 
+    def __init__(self, mdl=None):
+        """ Create a new CPO format parser
+
+        Args:
+            mdl:  Model to fill, None (default) to create a new one.
         """
         super(CpoParser, self).__init__()
-        self.model = CpoModel()
+        self.model = mdl if mdl is not None else docplex.cp.model.CpoModel()
         self.source_file = None
         self.tokenizer = None
         self.token = None

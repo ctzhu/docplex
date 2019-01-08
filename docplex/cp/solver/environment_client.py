@@ -143,7 +143,7 @@ def _publish_solution(solver):
         return
 
     # Write JSON solution as output
-    json = solver.solver._get_last_json_result_string()
+    json = solver.agent._get_last_json_result_string()
     if json is not None:
         with env.get_output_stream("solution.json") as fp:
             fp.write(json.encode('utf-8'))

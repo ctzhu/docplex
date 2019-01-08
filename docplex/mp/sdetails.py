@@ -107,7 +107,8 @@ class SolveDetails(object):
                     ("_linear_nonzeros", "MODEL_DETAIL_NON_ZEROS", int, 0),
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),
                     ('_best_bound', 'PROGRESS_BEST_OBJECTIVE', float, _NO_BEST_BOUND),
-                    ("_md5", "cplex.model.md5", str, "")
+                    ("_md5", "cplex.model.md5", str, ""),
+                    ('_n_iterations', 'cplex.itcount', int, 0)
                     )
 
     @staticmethod

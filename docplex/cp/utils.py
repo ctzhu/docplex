@@ -1064,15 +1064,16 @@ def open_utf8(file, mode='r'):
     return io.open(file, mode=mode, encoding=encd)
 
 
-def list_module_public_functions(mod):
+def list_module_public_functions(mod, excepted=()):
     """ Build the list of all public functions of a module.
 
     Args:
         mod:  Module to parse
+        excepted:  List of function names to not include. Default is none.
     Returns:
         List of public functions declared in this module
     """
-    return [t[1] for t in inspect.getmembers(mod, inspect.isfunction) if not t[0].startswith('_') and inspect.getmodule(t[1]) == mod]
+    return [t[1] for t in inspect.getmembers(mod, inspect.isfunction) if not t[0].startswith('_') and inspect.getmodule(t[1]) == mod and not t[0] in excepted]
 
 
 #-----------------------------------------------------------------------------
@@ -1283,17 +1284,6 @@ def is_array_of_type(val, typ):
         True if value is an array with all elements with expected type
     """
     return is_array(val) and (all(isinstance(x, typ) for x in val))
-
-
-def is_interval_tuple(val):
-    """ Check if a value is a tuple representing an integer interval
-
-    Args:
-        val:  Value to check
-    Returns:
-        True if value is a tuple representing an interval
-    """
-    return isinstance(val, tuple) and (len(val) == 2) and is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])
 
 
 #-----------------------------------------------------------------------------

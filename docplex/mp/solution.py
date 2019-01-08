@@ -675,7 +675,8 @@ class SolveSolution(object):
         Args:
             name (string): The string to be matched.
 
-            match_case (boolean): If True, looks for a case-exact match, else ignores case. Default is False.
+            match_case (boolean): If True, looks for a case-exact match, else
+               ignores case. Default is False.
 
         Returns:
             The value of the KPI, evaluated in the solution.
@@ -683,7 +684,7 @@ class SolveSolution(object):
         Note:
             This method raises an error when the string does not match any KPI in the model.
 
-        See Also:
+        See:
             :func: `docplex.mp.model.kpi_by_name`
         '''
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=False)

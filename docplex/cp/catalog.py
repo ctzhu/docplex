@@ -41,7 +41,8 @@ Type_IntervalArray         = CpoType("IntervalArray")
 Type_FloatArray            = CpoType("FloatArray", htyps=(Type_FloatExprArray,), eltyp=Type_Float)
 Type_IntArray              = CpoType("IntArray", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
 Type_SequenceVarArray      = CpoType("SequenceVarArray", eltyp=Type_SequenceVar)
-Type_CumulAtomArray        = CpoType("CumulAtomArray", eltyp=Type_CumulAtom)
+Type_CumulExprArray        = CpoType("CumulExprArray", eltyp=Type_CumulExpr)
+Type_CumulAtomArray        = CpoType("CumulAtomArray", htyps=(Type_CumulExprArray,), eltyp=Type_CumulAtom)
 Type_Objective             = CpoType("Objective")
 Type_TupleSet              = CpoType("TupleSet", iscst=True)
 Type_IntValueEval          = CpoType("IntValueEval")
@@ -61,7 +62,7 @@ Type_Identifier            = CpoType("Identifier", isvar=True)
 Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
 Type_Bool                  = CpoType("Bool", iscst=True, htyps=(Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
 
-ALL_TYPES = (Type_Bool, Type_BoolExpr, Type_BoolExprArray, Type_BoolInt, Type_Constraint, Type_CumulAtom, Type_CumulAtomArray, Type_CumulExpr, Type_CumulFunction, Type_Float, Type_FloatArray, Type_FloatExpr, Type_FloatExprArray, Type_FloatVar, Type_Identifier, Type_Int, Type_IntArray, Type_IntExpr, Type_IntExprArray, Type_IntValueChooser, Type_IntValueEval, Type_IntValueSelector, Type_IntValueSelectorArray, Type_IntVar, Type_IntVarArray, Type_IntVarChooser, Type_IntVarEval, Type_IntVarSelector, Type_IntVarSelectorArray, Type_IntervalArray, Type_IntervalVar, Type_IntervalVarArray, Type_Objective, Type_PositiveInt, Type_Python, Type_SearchPhase, Type_SegmentedFunction, Type_SequenceVar, Type_SequenceVarArray, Type_StateFunction, Type_StepFunction, Type_TimeInt, Type_TransitionMatrix, Type_TupleSet, Type_Unknown)
+ALL_TYPES = (Type_Bool, Type_BoolExpr, Type_BoolExprArray, Type_BoolInt, Type_Constraint, Type_CumulAtom, Type_CumulAtomArray, Type_CumulExprArray, Type_CumulExpr, Type_CumulFunction, Type_Float, Type_FloatArray, Type_FloatExpr, Type_FloatExprArray, Type_FloatVar, Type_Identifier, Type_Int, Type_IntArray, Type_IntExpr, Type_IntExprArray, Type_IntValueChooser, Type_IntValueEval, Type_IntValueSelector, Type_IntValueSelectorArray, Type_IntVar, Type_IntVarArray, Type_IntVarChooser, Type_IntVarEval, Type_IntVarSelector, Type_IntVarSelectorArray, Type_IntervalArray, Type_IntervalVar, Type_IntervalVarArray, Type_Objective, Type_PositiveInt, Type_Python, Type_SearchPhase, Type_SegmentedFunction, Type_SequenceVar, Type_SequenceVarArray, Type_StateFunction, Type_StepFunction, Type_TimeInt, Type_TransitionMatrix, Type_TupleSet, Type_Unknown)
 compute_all_type_links(ALL_TYPES)
 
 # ----------------------------------------------------------------------------

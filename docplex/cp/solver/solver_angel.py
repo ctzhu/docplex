@@ -152,7 +152,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
          * 5: Messages sent/receive to/from process
 
         Returns:
-            Model solve result (object of class CpoSolveResult)
+            Model solve result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
 
         # Start solve
@@ -213,9 +214,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         See documentation of CpoSolver.refine_conflict() for details.
 
         Returns:
-            Conflict result (object of class CpoRefineConflictResult)
-        Raises:
-            CpoNotSupportedException: method not available in this solver agent.
+            Conflict result,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
         # Ensure cpo model string has been generated with all constraints named
         if not self.model._ensure_all_root_constraints_named():
@@ -249,9 +249,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         See documentation of CpoSolver.propagate() for details.
 
         Returns:
-            Conflict result (object of class CpoRefineConflictResult)
-        Raises:
-            CpoNotSupportedException: method not available in this solver agent.
+            Propagation result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
         # Request propagation
         self._write_message(CMD_PROPAGATE)
@@ -272,6 +271,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
             except:
                 pass
             time.sleep(0.300)
+            self.pout.close()
+            self.pin.close()
             self.process.kill()
             self.process = None
             super(CpoSolverAngel, self).end()
@@ -296,16 +297,17 @@ class CpoSolverAngel(solver.CpoSolverAgent):
             if evt == xevt:
                 return data
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
-                if self.log_enabled:
+                if self.log_enabled and data:
                     self._add_log_data(data.decode('utf-8'))
             elif evt == EVT_SOLVER_ERR_STREAM:
-                ldata = data.decode('utf-8')
-                if firsterror is None:
-                    firsterror = ldata.replace('\n', '')
-                out = self.log_output if self.log_output is not None else sys.stdout
-                out.write("ERROR: ")
-                out.write(ldata)
-                out.flush()
+                if data:
+                    ldata = data.decode('utf-8')
+                    if firsterror is None:
+                        firsterror = ldata.replace('\n', '')
+                    out = self.log_output if self.log_output is not None else sys.stdout
+                    out.write("ERROR: ")
+                    out.write(ldata)
+                    out.flush()
             elif evt == EVT_TRACE:
                 self.context.log(4, data.decode('utf-8'))
             elif evt == EVT_ERROR:
@@ -383,6 +385,7 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Read message header
         frame = self._read_frame(6)
         if (frame[0] != 0xCA) or (frame[1] != 0xFE):
+            # print("Wrong input: {}{}".format(frame, self._read_frame(150)))
             self.end()
             raise AngelException("Invalid message header '{}'. Probable wrong destination or desynchronization of stream.".format(frame))
 

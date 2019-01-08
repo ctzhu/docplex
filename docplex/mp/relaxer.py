@@ -267,25 +267,19 @@ class Relaxer(object):
            :class:`docplex.mp.basic.Priority`
 
     '''
-    _default_precision = 1e-5
+    default_precision = 1e-5
 
     _default_mode = RelaxationMode.OptSum
 
-    def __init__(self, prioritizer='all', **kwargs):
+    def __init__(self, prioritizer='all', verbose=False, precision=default_precision,
+                 override=False):
 
-        self._precision = kwargs.get('precision', self._default_precision)
+        self._precision = precision
         # ---
-        override = kwargs.get('override', False)
         if isinstance(prioritizer, IConstraintPrioritizer):
             self._prioritizer = prioritizer
         elif prioritizer == 'match':
-            priority_unnamed = kwargs.get('priority_unnamed', Priority.MANDATORY)
-            priority_non_matches = kwargs.get('priority_non_matches', Priority.MANDATORY)
-            case_sensitive = kwargs.get('case_sensitive', False)
-            self._prioritizer = MatchNamePrioritizer(priority_for_unnamed=priority_unnamed,
-                                                     priority_for_non_matches=priority_non_matches,
-                                                     case_sensitive=case_sensitive,
-                                                     override=override)
+            self._prioritizer = MatchNamePrioritizer(override=override)
         elif isinstance(prioritizer, dict):
             self._prioritizer = MappingPrioritizer(priority_mapping=prioritizer, override=override)
         # elif prioritizer == 'named':
@@ -298,8 +292,7 @@ class Relaxer(object):
             print("Cannot deduce a prioritizer from: {0!r} - expecting \"name\"|\"default\"| dict", prioritizer)
             raise TypeError
 
-        # self._ordered_priorities = Priority.all_sorted()
-        self._cumulative = kwargs.get('cumulative', True)
+        self._cumulative = True
         self._listeners = []
 
         # result data
@@ -308,7 +301,7 @@ class Relaxer(object):
         self._last_successful_relaxed_priority = Priority.MANDATORY
         self._last_relaxation_details = SolveDetails.make_dummy()
         self._relaxations = {}
-        self._verbose = kwargs.get('verbose', False)
+        self._verbose = verbose
         self._verbose_listener = VerboseRelaxationListener()
 
         if self._verbose:

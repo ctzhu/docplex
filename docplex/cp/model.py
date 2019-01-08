@@ -20,6 +20,40 @@ The different model expressions and elements are created using services provided
  * :mod:`docplex.cp.expression` for the simple expression elements,
  * :mod:`docplex.cp.modeler` to build complex expressions and constraints using the specialized CP Optimizer functions.
 
+The solving of the model is handled by an object of class :class:`~docplex.cp.solver.solver.CpoSolver` that takes
+this model as parameter.
+However, most important solving functions are callable directly from this model to avoid explicit
+creation of the *CpoSolver* object:
+
+ * :meth:`~CpoModel.solve` solves the model and returns an object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+ * :meth:`~CpoModel.start_search` creates a solver that can iterate over multiple solutions of the model.
+ * :meth:`~CpoModel.refine_conflict` identifies a minimal conflict for the infeasibility and return it as an object
+   of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
+ * :meth:`~CpoModel.propagate` invokes the propagation on the current model and returns a partial solution in an object
+   of class :class:`~docplex.cp.solution.CpoSolveResult`.
+
+All these methods are taking a variable number of optional parameters that allow to modify the solving context.
+The list of arguments is not limited. Each named argument is used to replace the leaf attribute that has
+the same name in the global *context* structure initialized in the module :mod:`docplex.cp.config` and its
+customizations.
+
+The most important of these parameters are:
+
+ * **context** sets a complete customized context to be used instead of the default one defined in the module :mod:`docplex.cp.config`,
+ * **params** overwrites the solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+   that are defined in the *context* object,
+ * **url** and **key** modify access to *DOcplexcloud* (if it is the selected solving agent),
+ * **agent** forces the selection of a particular solving agent,
+ * **trace_cpo** activates the printing of the model in CPO format before its solve,
+ * any CP Optimizer solving parameter, as defined in module :mod:`docplex.cp.parameters`, such as:
+
+    * **TimeLimit** indicates a limit in seconds in the time spent in the solve,
+      or **ConflictRefinerTimeLimit** that does the same for conflict refiner,
+    * **LogVerbosity**, with values in ['Quiet', 'Terse', 'Normal', 'Verbose'],
+    * **Workers** specifies the number of threads assigned to solve the model (default value is the number of cores),
+    * **SearchType**, with value in ['DepthFirst', 'Restart', 'MultiPoint', 'Auto'], to select a particular solving algorithm,
+    * **RandomSeed** changes the seed of the random generator,
+    * and so on.
 
 Detailed description
 --------------------
@@ -36,6 +70,7 @@ import docplex.cp.expression as expression
 import docplex.cp.modeler as modeler
 from docplex.cp.solver.solver import CpoSolver
 from docplex.cp.cpo_compiler import CpoCompiler
+import docplex.cp.cpo_parser as cpo_parser
 import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
@@ -48,7 +83,8 @@ import time
 ###############################################################################
 
 # List of all modeler public functions
-_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler)
+_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler, ('maximize', 'minimize'))
+
 
 ###############################################################################
 ##  Public classes
@@ -74,6 +110,7 @@ class CpoModel(object):
         self.parameters       = None     # Solving parameters
         self.search_phases    = []       # List of search phases
         self.starting_point   = None     # Starting point
+        self.objective        = None     # Objective function
         self.nb_expr_nodes    = 0        # Number of expression nodes
         self.all_expr_set     = set()    # Set of all expression ids already in the model
         self.map_expr         = {}       # Map of expressions by name
@@ -172,8 +209,15 @@ class CpoModel(object):
                 if self.name_constraints and not expr.name:
                     expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
                 self.expr_list.append((expr, loc))
-            elif etyp == Type_SearchPhase:
+            elif etyp is Type_SearchPhase:
                 self.search_phases.append((expr, loc))
+            elif etyp is Type_Objective:
+                if self.objective:
+                    if self.objective is expr:
+                        return
+                    raise CpoException("Only one objective function can be added to the model.")
+                self.objective = expr
+                self.expr_list.append((expr, loc))
             else:
                 self.expr_list.append((expr, loc))
 
@@ -195,21 +239,71 @@ class CpoModel(object):
         Returns:
             True if expression has been removed, False if not found
         """
-        for ix, (x, l) in enumerate(self.expr_list):
-            if x is expr:
-                del self.expr_list[ix]
-                if expr.name:
-                    del self.map_expr[expr.name]
-                return True
-        return False
+        etyp = expr.type
+
+        # Process case of search phase
+        if etyp is Type_SearchPhase:
+            return self._remove_from_expr_list(expr, self.search_phases)
+
+        # Check if it is current objective expression
+        if expr is self.objective:
+            self.objective = None
+
+        # Remove from list of expressions
+        return self._remove_from_expr_list(expr, self.expr_list)
+
+
+    def minimize(self, expr):
+        """ Add an objective expression to minimize.
+
+        Calling this method is equivalent to add(minimize(expr)) except that, if exist,
+        the previously defined objective expression is removed to be replaced by this new one.
+
+        Args:
+            expr: Expression to minimize.
+        Returns:
+            Minimization expression that has been added
+        """
+
+        # Check if an objective expression is already defined
+        if self.objective is not None:
+            self.remove(self.objective)
+
+        # Add new maximization expression
+        res = minimize(expr)
+        self.add(res)
+
+        return res
+
+
+    def maximize(self, expr):
+        """ Add an objective expression to maximize.
+
+        Calling this method is equivalent to add(maximize(expr)) except that, if exist,
+        the previously defined objective expression is removed to be replaced by this new one.
+
+        Args:
+            expr: Expression to maximize.
+        Returns:
+            Maximization expression that has been added
+        """
+
+        # Check if an objective expression is already defined
+        if self.objective is not None:
+            self.remove(self.objective)
+
+        # Add new maximization expression
+        res = maximize(expr)
+        self.add(res)
+
+        return res
 
 
     def set_parameters(self, params):
         """ Set the solving parameters associated to this model.
 
         Args:
-            params: Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`,
-            or None.
+            params: Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`, or None.
         """
         assert isinstance(params, CpoParameters), "argument 'params' should be an object of class CpoParameters"
         self.parameters = params
@@ -288,7 +382,7 @@ class CpoModel(object):
         Starting point is available for CPO solver release greater or equal to 12.7.0.
 
         Args:
-            stpoint: Starting point, object of class CpoModelSolution
+            stpoint: Starting point, object of class :class:`~docplex.cp.solution.CpoModelSolution`
         """
         assert (stpoint is None) or isinstance(stpoint, CpoModelSolution), "Argument 'stpoint' should be None or an object of class CpoModelSolution"
         self.starting_point = stpoint
@@ -436,29 +530,69 @@ class CpoModel(object):
     def solve(self, **kwargs):
         """ Solves the model.
 
-        This method solves the model using the appropriate solver according to the optional parameters
-        and/or configuration attributes.
+        This method solves the model using the appropriate :class:`~docplex.cp.solver.solver.CpoSolver`
+        created according to default solving context, possibly modified by the parameters of this method.
 
-        This method creates a new CpoSolver with given arguments, and then calls its method *solve()*.
-
-        The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
+        The class :class:`~docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
         but also some others functions allowing to invoke more specialized functions. An advanced programming may
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
 
         Args:
-            context:   Complete solving context. If not given, context is the default context that is set in config.py.
-            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (others):  All other context parameters that can be changed.
+            context:   (Optional) Complete solving context.
+                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
+            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                       that overwrite those in the solving context.
+            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others):  (Optional) Any leaf attribute with the same name in the solving context
+                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
-            Model solve result (object of class CpoSolveResult).
+            Model solve result (object of class :class:`~docplex.cp.solution.CpoSolveResult`).
         Raises:
-            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = CpoSolver(self, **kwargs)
         return solver.solve()
+
+
+    def start_search(self, **kwargs):
+        """ Start a new search sequence to retrieve multiple solutions of the model.
+
+        This method returns a new :class:`~docplex.cp.solver.solver.CpoSolver` object
+        that acts as an iterator of the different solutions of the model.
+        All solutions can be retrieved using a loop like:
+        ::
+
+           lsols = mdl.start_search()
+           for sol in lsols:
+               sol.print_solution()
+
+        A such solution iteration can be interrupted at any time by calling :meth:`~docplex.cp.solver.solver.CpoSolver.end_search`
+        that returns a fail solution including the last solve status.
+
+        Note that, to be sure to retrieve all solutions and only once each,
+        recommended parameters are *start_search(SearchType='DepthFirst', Workers=1)*
+
+        Args:
+            context:   (Optional) Complete solving context.
+                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
+            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                       that overwrite those in the solving context.
+            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others):  (Optional) Any leaf attribute with the same name in the solving context
+                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+        Returns:
+            Object of class :class:`~docplex.cp.solver.solver.CpoSolver` allowing to iterate over the different solutions.
+        Raises:
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
+        """
+        return CpoSolver(self, **kwargs)
 
 
     def refine_conflict(self, **kwargs):
@@ -473,7 +607,7 @@ class CpoModel(object):
         There may be other conflicts in the model; consequently, repair of a given conflict
         does not guarantee feasibility of the remaining model.
 
-        Conflict refiner is controled by the following parameters (that can be set at CpoSolver creation):
+        Conflict refiner is controlled by the following parameters, that can be set as parameters of this method:
 
          * ConflictRefinerBranchLimit
          * ConflictRefinerFailLimit
@@ -486,9 +620,9 @@ class CpoModel(object):
         Note that the general *TimeLimit* parameter is used as a limiter for each conflict refiner iteration, but the
         global limitation in time must be set using *ConflictRefinerTimeLimit* that is infinite by default.
 
-        This method creates a new CpoSolver with given arguments, and then call its method *refine_conflict*.
-
-        The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
+        This method creates a new :class:`~docplex.cp.solver.solver.CpoSolver` with given arguments, and then call
+        its method :meth:`~docplex.cp.solver.solver.CpoSolver.refine_conflict`.
+        The class :class:`~docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
         but also some others functions allowing to invoke more specialized functions. An advanced programming may
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
@@ -496,16 +630,21 @@ class CpoModel(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
-            context:   Complete solving context. If not given, context is the default context that is set in config.py.
-            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (others):  All other context parameters that can be changed.
+            context:   (Optional) Complete solving context.
+                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
+            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                       that overwrite those in the solving context.
+            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others):  (Optional) Any leaf attribute with the same name in the solving context
+                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
-            List of constraints that cause the conflict (object of class CpoRefineConflictResult)
+            List of constraints that cause the conflict (object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`)
         Raises:
-            :class:`docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
-            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
+            :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = CpoSolver(self, **kwargs)
         return solver.refine_conflict()
@@ -522,12 +661,13 @@ class CpoModel(object):
         and a failure occurs.
         An empty domain during the initial constraint propagation means that the model has no solution.
 
-        The result is a object of class CpoSolveResult, the same than the one returned by solve() method.
+        The result is a object of class :class:`~docplex.cp.solution.CpoSolveResult`, the same than the one
+        returned by the method :meth:`solve`.
         However, variable domains may not be completely defined.
 
-        This method creates a new CpoSolver with given arguments, and then call its method *propagate*.
-
-        The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
+        This method creates a new :class:`~docplex.cp.solver.solver.CpoSolver` with given arguments, and then call
+        its method :meth:`~docplex.cp.solver.solver.CpoSolver.propagate`.
+        The class :class:`~docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
         but also some others functions allowing to invoke more specialized functions. An advanced programming may
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
@@ -535,35 +675,55 @@ class CpoModel(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
-            context:   Complete solving context. If not given, context is the default context that is set in config.py.
-            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (others):  All other context parameters that can be changed.
+            context:   (Optional) Complete solving context.
+                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
+            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                       that overwrite those in the solving context.
+            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others):  (Optional) Any leaf attribute with the same name in the solving context
+                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
-            Propagation result (object of class CpoSolveResult)
+            Propagation result (object of class :class:`~docplex.cp.solution.CpoSolveResult`)
         Raises:
-            :class:`docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
-            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
+            :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = CpoSolver(self, **kwargs)
         return solver.propagate()
 
 
-
-    def export_as_cpo(self, out=None, **kwargs):
+    def export_model(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
         Args:
-            out:    Target output, stream or file name. Default is sys.stdout.
-        Optional args:
-            context:             Global solving context. If not given, context is the default context that is set in config.py.
-            params:              Solving parameters (CpoParameters) that overwrites those in solving context
-            add_source_location: Add source location into generated text
-            length_for_alias:    Minimum name length to use shorter alias instead
-            (others):            All other context parameters that can be changed
+            out:                 (Optional) Target output, stream or file name. Default is sys.stdout.
+            context:             (Optional) Global solving context.
+                                 If not given, context is the default context that is set in config.py.
+            params:              (Optional) Solving parameters (CpoParameters) that overwrites those in solving context
+            add_source_location: (Optional) Add source location into generated text
+            length_for_alias:    (Optional) Minimum name length to use shorter alias instead
+            (others):            (Optional) All other context parameters that can be changed
         """
         CpoCompiler(self, **kwargs).print_model(out)
+
+
+    def import_model(self, file):
+        """ Import a model from a file containing a model expressed in CPO file format.
+
+        Args:
+            file:   Input file
+        """
+        prs = cpo_parser.CpoParser(self)
+        prs.parse(file)
+
+
+    def export_as_cpo(self, out=None, **kwargs):
+        """ Deprecated form of method :meth:`export_model`.
+        """
+        self.export_model(out, **kwargs)
 
 
     def get_cpo_string(self, **kwargs):
@@ -742,6 +902,23 @@ class CpoModel(object):
                 expr.set_name(name)
                 self._add_named_expr(expr)
         self.name_constraints = True
+        return False
+
+
+    def _remove_from_expr_list(self, expr, elist):
+        """ Remove an expression from a list of expressions (and map of names)
+        Args:
+            expr:  Expression to remove.
+            elist: List of expressions where search
+        Returns:
+            True if expression has been removed, False if not found
+        """
+        for ix, (x, l) in enumerate(elist):
+            if x is expr:
+                del elist[ix]
+                if expr.name:
+                    del self.map_expr[expr.name]
+                return True
         return False
 
 

@@ -1,7 +1,7 @@
 Changelog
 ---------
 
-Changed in 2.2.34:
+Changed in 2.2.36:
 ``````````````````
 * Methods ``docplex.cp.model.export_model()`` and ``docplex.cp.model.import_model()``
   have been added to respectively generate or parse a model in CPO format.

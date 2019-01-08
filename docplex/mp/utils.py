@@ -28,6 +28,7 @@ __numpy_ndslot_type = None
 __numpy_matrix_type = None
 __pandas_series_type = None
 __pandas_dataframe_type = None
+__spark_dataframe_type = None
 
 try:
     type(long)
@@ -81,6 +82,20 @@ try:
 except ImportError:
     __pandas_series_type = None
     __pandas_dataframe_type = None
+
+# 'findspark' must be executed if running in Windows environment, before importing Spark
+try:
+    import findspark
+    findspark.init()
+except (ImportError, IndexError):
+    pass
+
+try:
+    import pyspark
+
+    __spark_dataframe_type = pyspark.sql.dataframe.DataFrame
+except ImportError:
+    __spark_dataframe_type = None
 
 __int_types = frozenset(__int_types)
 
@@ -171,14 +186,22 @@ def is_number(s):
 def is_pandas_series(s):
     return __pandas_series_type is not None and type(s) is __pandas_series_type
 
+
 def is_pandas_dataframe(s):
     return __pandas_dataframe_type and isinstance(s, __pandas_dataframe_type)
+
 
 def is_numpy_ndarray(s):
     return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
 
+
 def is_numpy_matrix(s):
     return __numpy_matrix_type and type(s) is __numpy_matrix_type
+
+
+def is_spark_dataframe(s):
+    return __spark_dataframe_type and isinstance(s, __spark_dataframe_type)
+
 
 string_types = {str}
 if SIX_PY2:
@@ -541,8 +564,10 @@ def write_kpis_table(env, context, model, solution):
     kpis_table = []
     for k in model.iter_kpis():
         kpis_table.append([k.name, k.compute(solution)])
-    for name in names:
-        write_kpis(env, kpis_table, name)
+    if kpis_table:
+        # do not create the kpi tables if there are no kpis to be written
+        for name in names:
+            write_kpis(env, kpis_table, name)
 
 
 class CyclicLoop(object):
@@ -802,10 +827,11 @@ class _AutomaticSymbolGenerator(_SymbolGenerator):
 class _IndexScope(_AutomaticSymbolGenerator):
     # INTERNAL: full scope of indices.
 
-    def __init__(self, obj_iter, pattern, offset=1):
+    def __init__(self, obj_iter, pattern, cplex_scope=None, offset=1):
         _AutomaticSymbolGenerator.__init__(self, pattern, offset)
         self._obj_iter = obj_iter
         self._index_map = None
+        self.cplex_scope = cplex_scope
 
     def _make_index_map(self):
         return {m.get_index(): m for m in self._obj_iter()}
@@ -814,7 +840,15 @@ class _IndexScope(_AutomaticSymbolGenerator):
     def iter(self):
         return self._obj_iter()
 
-    def get_object_by_index(self, idx):
+    def __call__(self, idx):
+        return self._object_by_index(idx)
+
+    def get_object_by_index(self, idx, checker=None):
+        if checker:
+            checker.typecheck_valid_index(idx)
+        return self._object_by_index(idx)
+
+    def _object_by_index(self, idx):
         if self._index_map is None:
             self._index_map = self._make_index_map()
         # do not raise when not found, return None.

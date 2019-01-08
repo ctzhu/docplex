@@ -278,3 +278,5 @@ class SilentErrorHandler(AbstractErrorHandler):
 
     def flush(self):
         pass
+
+

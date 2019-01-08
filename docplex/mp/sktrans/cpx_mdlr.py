@@ -3,6 +3,7 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
+# gendoc: ignore
 
 from cplex import Cplex
 
@@ -12,9 +13,13 @@ from docplex.mp.constants import ComparisonType
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.cplex_engine import fast_add_linear, static_fast_set_linear_obj
 from docplex.mp.sktrans.pd_utils import make_solution
+from cplex._internal._procedural import setintparam
 
 
 class CpxModeler(object):
+
+    def __init__(self):
+        pass
 
     @classmethod
     def create_cplex(cls, verbose=False):
@@ -25,6 +30,10 @@ class CpxModeler(object):
             cpx.set_results_stream(None)
             cpx.set_error_stream(None)
             cpx.set_warning_stream(None)
+
+        # disable datacheck
+        cpx_datacheck_id = 1056
+        setintparam(cpx._env._e, cpx_datacheck_id, 0)
         return cpx
 
     @classmethod
@@ -79,21 +88,31 @@ class CpxModeler(object):
                                             var_types, var_names,
                                             cts_mat, rhs,
                                             objsense, costs,
+                                            cast_to_float,
+                                            solution_maker=make_solution,
                                             **transform_params):
         cpx = cls.create_cplex()
+        if cast_to_float:
+            print("-- all numbers will be cast to float")
+        else:
+            print("-- no cast to float is performed")
         cls.create_column_vars(cpx, var_count, var_lbs, var_ubs, var_types, var_names)
         var_indices = list(range(var_count))
         gen_rows = ModelAggregator.generate_rows(cts_mat)
         cpx_rows = []
-        for row in gen_rows:
-            # need this step as cplex may crash with np types.
-            frow = [float(k) for k in row]
-            cpx_rows.append([var_indices, frow])
+        if cast_to_float:
+            for row in gen_rows:
+                # need this step as cplex may crash with np types.
+                frow = [float(k) for k in row]
+                cpx_rows.append([var_indices, frow])
+        else:
+            cpx_rows = [[var_indices, row] for row in gen_rows]
+
         nb_rows = len(cpx_rows)
         if nb_rows:
             ctsense = ComparisonType.parse(transform_params.get('sense', 'le'))
             cpx_senses = ctsense.cplex_code * nb_rows
-            cpx_rhss = [float(r) for r in rhs]
+            cpx_rhss = [float(r) for r in rhs] if cast_to_float else rhs
             fast_add_linear(cpx, cpx_rows, cpx_senses, cpx_rhss, names=[])
         if costs is not None:
             # set linear objective for all variables.
@@ -101,10 +120,10 @@ class CpxModeler(object):
             static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
-        return cls._solve(cpx, var_names)
+        return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)
 
     @classmethod
-    def _solve(cls, cpx, colnames, **params):
+    def _solve(cls, cpx, colnames, solution_maker=make_solution, **params):
         # --- lp export
         lp_export = params.pop('lp_export', False)
         lp_base = params.pop('lp_basename', None)
@@ -122,13 +141,14 @@ class CpxModeler(object):
                 all_values = cpx.solution.get_values()
             except:
                 pass
-        return make_solution(all_values, colnames, keep_zeros)
+        return solution_maker(all_values, colnames, keep_zeros)
 
     @classmethod
     def build_sparse_linear_model_and_solve(cls, nb_vars, var_lbs, var_ubs,
                                             var_types, var_names,
                                             nb_rows, cts_sparse_coefs,
                                             objsense, costs,
+                                            solution_maker=make_solution,
                                             **transform_params):
         cpx = cls.create_cplex()
         # varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
@@ -156,13 +176,15 @@ class CpxModeler(object):
             static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
-        return cls._solve(cpx, var_names, **transform_params)
+        return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)
 
     @classmethod
     def build_matrix_range_model_and_solve(cls, var_count, var_lbs, var_ubs,
                                            var_types, var_names,
                                            cts_mat, range_mins, range_maxs,
                                            objsense, costs,
+                                           cast_to_float,
+                                           solution_maker=make_solution,
                                            **transform_params):
         cpx = cls.create_cplex()
         # varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
@@ -172,11 +194,11 @@ class CpxModeler(object):
         cpx_rows = []
         for row in gen_rows:
             # need this step as cplex may crash with np types.
-            frow = [float(k) for k in row]
+            frow = [float(k) for k in row] if cast_to_float else row
             cpx_rows.append([var_indices, frow])
         nb_rows = len(cpx_rows)
         if nb_rows:
-            ctsense = ComparisonType.parse(transform_params.get('sense', 'le'))
+            #ctsense = ComparisonType.parse(transform_params.get('sense', 'le'))
             cpx_senses = 'R' * nb_rows
             cpx_ranges = [float(rmin - rmax) for rmin, rmax in izip(range_mins, range_maxs)]
             # rhs is UB
@@ -188,4 +210,4 @@ class CpxModeler(object):
             static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
-        return cls._solve(cpx, var_names, **transform_params)
+        return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)

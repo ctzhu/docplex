@@ -747,13 +747,13 @@ class CpoSolver(object):
 
 
     def next(self):
-        """ For solution iteration, get the next available solution.
-
-        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
-
-        Returns:
-            Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
-        """
+        # """ For solution iteration, get the next available solution.
+        #
+        # This function is available only with local CPO solver with release number greater or equal to 12.7.0.
+        #
+        # Returns:
+        #     Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        # """
         # Get next solution
         msol = self.search_next()
         if msol:
@@ -763,13 +763,13 @@ class CpoSolver(object):
 
 
     def __next__(self):
-        """ Get the next available solution (same as next() for compatibility with Python 3)
-
-        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
-
-        Returns:
-            Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
-        """
+        # """ Get the next available solution (same as next() for compatibility with Python 3)
+        #
+        # This function is available only with local CPO solver with release number greater or equal to 12.7.0.
+        #
+        # Returns:
+        #     Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        # """
         return self.next()
 
 

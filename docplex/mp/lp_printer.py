@@ -148,8 +148,7 @@ class LPModelPrinter(TextModelPrinter):
             logical_symbol = '<->' if is_eq else '->'
             self._print_constraint_label(wrapper, ct, name_map=self._lc_name_map)
             self._print_logical_ct(wrapper, num_printer, var_name_map, ct,
-                                   logical_symbol=logical_symbol,
-                                   # avoid printing active value for equivalence with active=1
+                                   logical_symbol=logical_symbol
                                    )
         elif isinstance(ct, QuadraticConstraint):
             self._print_constraint_label(wrapper, ct, name_map=self._qc_name_map)
@@ -402,8 +401,8 @@ class LPModelPrinter(TextModelPrinter):
 
         # add ranged cts vars
         for rng in model.iter_range_constraints():
-            (varname, _, ub) = self._rangeData[rng]
-            self._print_var_bounds(out, self_num_printer, varname, 0, ub)
+            (varname, _, rngval) = self._rangeData[rng]
+            self._print_var_bounds(out, self_num_printer, varname, rngval, 0)
 
         iter_semis = chain(model.iter_semicontinuous_vars(), model.iter_semiinteger_vars())
 

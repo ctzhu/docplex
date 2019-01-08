@@ -1151,8 +1151,8 @@ class CpoModel(object):
     def import_model(self, file):
         """ Import a model from a file containing a model expressed in CPO or FZN format.
 
-        FZN format is sipported with restrictions to integer expressions.
-        The full list of supported predicates is given in the documentation of module :mod:`~docplex.cp.fzn_parser`.
+        FZN format is supported with restrictions to integer expressions.
+        The full list of supported predicates is given in the documentation of module :mod:`~docplex.cp.fzn.fzn_parser`.
 
         Args:
             file: Input file, with extension ".cpo" of ".fzn".
@@ -1163,7 +1163,7 @@ class CpoModel(object):
             prs = cpo_parser.CpoParser(self)
             prs.parse(file)
         elif ext == ".fzn":
-            import docplex.cp.fzn_parser as fzn_parser
+            import docplex.cp.fzn.fzn_parser as fzn_parser
             prs = fzn_parser.FznParser(self)
             prs.parse(file)
             prs.get_model()

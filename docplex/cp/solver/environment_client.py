@@ -70,10 +70,15 @@ class EnvSolverListener(CpoSolverListener):
         # Check if calling environment is DODS (Decision Optimization for Data Science)
         env = _get_environment()
         if env is not None:
-            # Check if solve must be transformed in start/next
-            value = os.environ.get("IS_DODS")
-            if str(value).lower() == "true":
+            # Check if running in DODS
+            if env.is_dods():
+                # Force solve() method to proceed with start()/next()
                 solver.context.solver.solve_with_start_next = True
+            # Check if debug mode is required
+            if env.is_debug_mode():
+                # Force more debug information
+                solver.context.params.WarningLevel = 3
+                solver.context.params.PrintModelDetailsInMessages = "On"
 
 
     def start_solve(self, solver):

@@ -243,7 +243,7 @@ class CpoParser(object):
 
         elif name == "line":
             # Skip line
-            self.tokenizer.get_line_reminder()
+            self.tokenizer._skip_to_end_of_line()
         else:
             self._raise_exception("Unknown directive '" + name + "'")
 
@@ -380,12 +380,12 @@ class CpoParser(object):
         # Read first sub-expression
         expr = self._read_sub_expression()
         tok = self.token
-        if tok.type is not TOKEN_OPERATOR:
+        if tok.type is not TOKEN_TYPE_OPERATOR:
             return expr
 
         # Initialize elements stack
         stack = [expr]
-        while tok.type is TOKEN_OPERATOR:
+        while tok.type is TOKEN_TYPE_OPERATOR:
             op = self._get_and_check_operator(tok)
             self._next_token()
             expr = self._read_sub_expression()
@@ -420,12 +420,12 @@ class CpoParser(object):
         tok = self.token
 
         # Check int constant
-        if tok.type == TOKEN_INTEGER:
+        if tok.type is TOKEN_TYPE_INTEGER:
             self._next_token()
             return int(tok.value)
         
         # Check float constant
-        if tok.type == TOKEN_FLOAT:
+        if tok.type is TOKEN_TYPE_FLOAT:
             self._next_token()
             return float(tok.value)
 
@@ -435,7 +435,7 @@ class CpoParser(object):
             return _KNOWN_IDENTIFIERS[tok.value]
 
         # Check unary operator
-        if tok.type is TOKEN_OPERATOR:
+        if tok.type is TOKEN_TYPE_OPERATOR:
             # Retrieve operation descriptor
             op = self._get_and_check_operator(tok)
             # Read next expression
@@ -444,7 +444,7 @@ class CpoParser(object):
             return self._create_operation_expression(op, (expr,))
         
         # Check symbol
-        if tok.type == TOKEN_SYMBOL:
+        if tok.type is TOKEN_TYPE_SYMBOL:
             ntok = self._next_token()
             if ntok is TOKEN_PARENT_OPEN:
                 # Read function arguments
@@ -518,7 +518,7 @@ class CpoParser(object):
             return expr
             
         # Check reference to a model expression or variable
-        if tok.type is TOKEN_STRING:
+        if tok.type is TOKEN_TYPE_STRING:
             self._next_token()
             return self._get_identifier_value(tok.get_string())
                 
@@ -558,7 +558,7 @@ class CpoParser(object):
         lxpr = []
         self._next_token()
         while self.token is not etok:
-            if self.token.type is TOKEN_SYMBOL:
+            if self.token.type is TOKEN_TYPE_SYMBOL:
                 name = self.token
                 if self._next_token() is TOKEN_ASSIGN:
                     self._next_token()
@@ -729,9 +729,9 @@ class CpoParser(object):
         Returns:
             String value of the token            
         """
-        if tok.type is TOKEN_SYMBOL:
+        if tok.type is TOKEN_TYPE_SYMBOL:
             return tok.value
-        if tok.type is TOKEN_STRING:
+        if tok.type is TOKEN_TYPE_STRING:
             return tok.get_string()
         self._raise_exception("String expected")
 
@@ -743,7 +743,7 @@ class CpoParser(object):
         Returns:
             integer value of the token
         """
-        if tok.type is TOKEN_INTEGER:
+        if tok.type is TOKEN_TYPE_INTEGER:
             return int(tok.value)
         if tok.value in _KNOWN_IDENTIFIERS:
             return _KNOWN_IDENTIFIERS[tok.value]

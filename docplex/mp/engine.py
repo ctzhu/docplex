@@ -8,7 +8,9 @@
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException
-from docloud.status import JobSolveStatus
+from docplex.util.status import JobSolveStatus
+
+
 # gendoc: ignore
 
 
@@ -26,7 +28,6 @@ class ISolver(object):
     def register_callback(self, cb):
         raise NotImplementedError  # pragma: no cover
 
-
     def connect_progress_listeners(self, listeners):
         """
         Connects progress listeners
@@ -35,9 +36,9 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         ''' Redefine this method for the real solve.
-            Returns True if model is well-formed and a solution has been found.
+            Returns a solution object or None.
         '''
         raise NotImplementedError  # pragma: no cover
 
@@ -116,7 +117,6 @@ class ISolver(object):
         return False
 
 
-
 # noinspection PyAbstractClass
 class IEngine(ISolver):
     """ interface for all engine facades
@@ -191,7 +191,7 @@ class IEngine(ISolver):
     def end(self):
         raise NotImplementedError  # pragma: no cover
 
-    def notify_trace_output(self, out):
+    def set_streams(self, out):
         raise NotImplementedError  # pragma: no cover
 
     def set_var_lb(self, var, lb):
@@ -224,6 +224,7 @@ class IEngine(ISolver):
     def check_constraint_indices(self, cts):
         raise NotImplementedError  # pragma: no cover
 
+
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
     def create_range_constraint(self, rangect):
@@ -241,7 +242,7 @@ class DummyEngine(IEngine):
     def create_pwl_constraint(self, pwl_ct):
         return -1  # pragma: no cover
 
-    def notify_trace_output(self, out):
+    def set_streams(self, out):
         pass  # pragma: no cover
 
     def get_infinity(self):
@@ -315,7 +316,7 @@ class DummyEngine(IEngine):
     def can_solve(self):
         return False  # pragma: no cover
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         return None  # pragma: no cover
 
     def get_solve_status(self):
@@ -326,9 +327,6 @@ class DummyEngine(IEngine):
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
         raise None  # pragma: no cover
-
-    def get_solve_attribute(self, attr_name, indices):
-        return {}  # pragma: no cover
 
     def get_cplex(self):
         raise DOcplexException("No CPLEX is available.")  # pragma: no cover
@@ -345,7 +343,7 @@ class DummyEngine(IEngine):
         pass  # pragma: no cover
 
     def update_quadratic_constraint(self, qct, event, *args):
-        pass # pragma: no cover
+        pass  # pragma: no cover
 
     def update_logical_constraint(self, logct, event, *args):
         pass  # pragma: no cover
@@ -361,6 +359,7 @@ class DummyEngine(IEngine):
 
     def check_constraint_indices(self, cts):
         pass
+
 
 # noinspection PyAbstractClass,PyUnusedLocal
 class IndexerEngine(DummyEngine):
@@ -431,8 +430,13 @@ class IndexerEngine(DummyEngine):
     def create_pwl_constraint(self, pwl_ct):
         return self._create_one_ct()
 
-    def get_solve_attributes(self, attr_name, indices):
-        # return empty dict
+    def get_all_reduced_costs(self, mdl):
+        return {}
+
+    def get_all_dual_values(self, mdl):
+        return {}
+
+    def get_all_slack_values(self, mdl):
         return {}
 
     def dump(self, path):
@@ -483,7 +487,7 @@ class NoSolveEngine(IndexerEngine):
     def can_solve(self):
         return False
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         """
         This solver cannot solve. never ever.
         """
@@ -537,7 +541,7 @@ class ZeroSolveEngine(IndexerEngine):
     def get_var_zero_solution(self, dvar):
         return max(0, dvar.lb)
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)
@@ -580,7 +584,7 @@ class FakeFailEngine(IndexerEngine):
     def get_name(self):
         return "no_solution_solve"  # pragma: no cover
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         # solve fails equivalent to returning None
         return None  # pragma: no cover
 
@@ -612,7 +616,7 @@ class TerminatedEngine(IndexerEngine):
     def name(self):
         return "exception"  # pragma: no cover
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         # solve fails equivalent to returning None
         self.terminate()
         return None  # pragma: no cover
@@ -649,7 +653,7 @@ class RaiseErrorEngine(IndexerEngine):
     def get_name(self):
         return "raise"  # pragma: no cover
 
-    def solve(self, mdl, parameters):
+    def solve(self, mdl, parameters, lex_mipstart=None):
         # solve fails equivalent to returning None
         self._simulate_error()
         return None  # pragma: no cover

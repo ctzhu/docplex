@@ -68,7 +68,7 @@ class IDocplexTypeChecker(object):
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts, ctype=None):
+    def typecheck_constraint_seq(self, cts, check_linear=False):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
@@ -217,12 +217,13 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             if not isinstance(obj, LinearConstraint):
                 self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
 
-    def typecheck_constraint_seq(self, cts, ctype=None):
+    def typecheck_constraint_seq(self, cts, check_linear=False):
         checked_cts_list = list(cts)
-        expected_type = ctype or AbstractConstraint
         for i, ct in enumerate(checked_cts_list):
-            if not isinstance(ct, expected_type):
+            if not isinstance(ct, AbstractConstraint):
                 self.fatal("Expecting sequence of constraints, got: {0!r} at position {1}", ct, i)
+            if check_linear and not ct.is_linear():
+                self.fatal("Expecting sequence of linear constraints, got: {0!r} at position {1}", ct, i)
         return checked_cts_list
 
     def typecheck_zero_or_one(self, arg):
@@ -423,7 +424,7 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
         pass  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts, ctype=None):
+    def typecheck_constraint_seq(self, cts, check_linear=False):
         # must return sequence unchanged
         return cts  # pragma: no cover
 

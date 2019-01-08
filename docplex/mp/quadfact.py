@@ -12,6 +12,7 @@ from docplex.mp.utils import is_number
 from docplex.mp.xcounter import update_dict_from_item_value
 from docplex.mp.quad import QuadExpr, VarPair
 from docplex.mp.linear import Var, MonomialExpr, LinearExpr, ZeroExpr, AbstractLinearExpr
+from docplex.mp.functional import FunctionalExpr
 from docplex.mp.constr import QuadraticConstraint
 
 
@@ -78,6 +79,9 @@ class QuadFactory(IQuadFactory):
             linexpr_k = linexpr.constant
             quad_linexpr = linexpr_k * var if linexpr_k else None
             return self.new_quad(quad_args, quad_linexpr, safe=True)
+
+        elif isinstance(other, FunctionalExpr):
+            return self.new_quad(quads=(var, other.as_var, 1), safe=True)
 
         else:
             self._unexpected_product_error(var, other)

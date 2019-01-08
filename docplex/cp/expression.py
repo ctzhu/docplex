@@ -651,8 +651,7 @@ class CpoIntVar(CpoVariable):
         Returns:
             Domain lower bound.
         """
-        v = self.domain[0]
-        return v[0] if isinstance(v, tuple) else v
+        return _domain_min(self.domain)
 
     def get_domain_max(self):
         """ Gets the domain upper bound.
@@ -660,8 +659,7 @@ class CpoIntVar(CpoVariable):
         Returns:
             Domain upper bound.
         """
-        v = self.domain[-1]
-        return v[-1] if isinstance(v, tuple) else v
+        return _domain_max(self.domain)
 
     def domain_iterator(self):
         """ Iterator on the individual values of an integer variable domain.
@@ -768,6 +766,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mn: Min value of the start of the interval.
         """
+        assert _is_cpo_interval_value(mn), "Interval min should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mn <= self.start[1], "Interval min should be lower or equal to interval max"
         self.start = (mn, self.start[1])
 
     def set_start_max(self, mx):
@@ -776,6 +776,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mx: Max value of the start of the interval.
         """
+        assert _is_cpo_interval_value(mx), "Interval max should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mx >= self.start[0], "Interval max should be lower or equal to interval max"
         self.start = (self.start[0], mx)
 
     def set_end(self, intv):
@@ -800,6 +802,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mn: Min value of the end of the interval.
         """
+        assert _is_cpo_interval_value(mn), "Interval min should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mn <= self.end[1], "Interval min should be lower or equal to interval max"
         self.end = (mn, self.end[1])
 
     def set_end_max(self, mx):
@@ -808,7 +812,9 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mx: Max value of the end of the interval.
         """
-        self.end =(self.end[0], mx)
+        assert _is_cpo_interval_value(mx), "Interval min should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mx >= self.end[0], "Interval max should be lower or equal to interval max"
+        self.end = (self.end[0], mx)
 
     def set_length(self, intv):
         """ Sets the length interval.
@@ -832,6 +838,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mn: Min value of the length of the interval min value.
         """
+        assert _is_cpo_interval_value(mn), "Interval min should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mn <= self.length[1], "Interval min should be lower or equal to interval max"
         self.length = (mn, self.length[1])
 
     def set_length_max(self, mx):
@@ -840,6 +848,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mx: Max value of the length of the interval.
         """
+        assert _is_cpo_interval_value(mx), "Interval max should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mx >= self.length[0], "Interval max should be lower or equal to interval max"
         self.length = (self.length[0], mx)
 
     def set_size(self, intv):
@@ -864,6 +874,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mn: Min value of the size of the interval.
         """
+        assert _is_cpo_interval_value(mn), "Interval min should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mn <= self.size[1], "Interval min should be lower or equal to interval max"
         self.size = (mn, self.size[1])
 
     def set_size_max(self, mx):
@@ -872,6 +884,8 @@ class CpoIntervalVar(CpoVariable):
         Args:
             mx: Max value of the size of the interval.
         """
+        assert _is_cpo_interval_value(mx), "Interval max should be an integer in [INTERVAL_MIN , INTERVAL_MAX]"
+        assert mx >= self.size[0], "Interval max should be lower or equal to interval max"
         self.size = (self.size[0], mx)
 
     def set_present(self):
@@ -1847,18 +1861,12 @@ def _create_cpo_array_expr(val):
     """ Create a new CP expression from a given array Python value
 
     Args:
-        val: Origin value, supposedly NOT already CPO
+        val: Origin value, as a _CacheKeyTuple(val)
     Returns:
         New expression
     Raises:
         CpoException if it is not possible.
     """
-    # Value is any type of array. Force it as a tuple
-    try:
-        val = tuple(val)
-    except TypeError:
-       raise CpoException("Impossible to build a CPO expression with value '" + to_string(val) + "'")
-
     # Determine type
     typ = _get_cpo_array_type(val)
     if typ is None:
@@ -1870,30 +1878,6 @@ def _create_cpo_array_expr(val):
 
     # Default
     return CpoValue(val, typ)
-
-
-def _create_cpo_expr(val):
-    """ Create a new CP expression from a given Python value
-
-    Args:
-        val: Origin value, supposedly NOT already CPO
-    Returns:
-        New expression
-    Raises:
-        CpoException if it is not possible.
-    """
-    #  Check atom types
-    vtyp = type(val)
-    ctyp = _PYTHON_TO_CPO_TYPE.get(vtyp)
-    if ctyp:
-        return CpoValue(val, ctyp)
-
-    # Check numpy Array Scalars (special case when called from overloaded operator)
-    if vtyp is NUMPY_NDARRAY and not val.shape:
-        return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type))
-
-    # Value is any type of array.
-    return _create_cpo_array_expr(val)
 
 
 def _get_cpo_array_type(val):
@@ -2112,10 +2096,9 @@ def _check_arg_interval(arg, name):
         return arg, arg
 
     assert isinstance(arg, (list, tuple)) and len(arg) == 2, "Argument '" + name + "' should be an integer or an interval expressed as a tuple of two integers"
-    lb = arg[0]
-    ub = arg[1]
-    assert _is_cpo_interval_value(lb) and (INTERVAL_MIN <= lb <= INTERVAL_MAX, "Lower bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name))
-    assert _is_cpo_interval_value(ub) and (INTERVAL_MIN <= ub <= INTERVAL_MAX, "Upper bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name))
+    lb, ub = arg
+    assert _is_cpo_interval_value(lb), "Lower bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name)
+    assert _is_cpo_interval_value(ub), "Upper bound of argument '{}' should be an integer in [INTERVAL_MIN , INTERVAL_MAX]".format(name)
     assert lb <= ub, "Lower bound or argument '{}' should be lower or equal to upper bound".format(name)
     return arg
 
@@ -2348,6 +2331,30 @@ def _is_equal_values(v1, v2):
         return isinstance(v2, dict) and (len(v1) == len(v2)) and all(_is_equal_values(v1[k], v2[k]) for k in v1)
     # Check finally basic equality
     return v1 == v2
+
+
+def _domain_min(d):
+    """ Retrieves the lower bound of a domain
+
+    Args:
+        d: Domain
+    Returns:
+        Domain lower bound
+    """
+    v = d[0]
+    return v[0] if isinstance(v, tuple) else v
+
+
+def _domain_max(d):
+    """ Retrieves the upper bound of a domain
+
+    Args:
+        d: Domain
+    Returns:
+        Domain upper bound
+    """
+    v = d[-1]
+    return v[-1] if isinstance(v, tuple) else v
 
 
 def _domain_iterator(d):

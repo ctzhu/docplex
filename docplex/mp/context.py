@@ -9,6 +9,7 @@ import os
 from copy import deepcopy
 import six
 from six import iteritems
+import shlex
 import socket
 import sys
 import warnings
@@ -92,8 +93,6 @@ class open_filename_universal(object):
 
 
 def is_auto_publishing_solve_details(context):
-    if get_solve_hook is None:
-        return False  # not in a worker
     try:
         auto_publish_details = context.solver.auto_publish.solve_details
     except AttributeError:
@@ -105,8 +104,6 @@ def is_auto_publishing_solve_details(context):
 
 
 def get_auto_publish_names(context, prop_name, default_name):
-    if get_solve_hook is None:
-        return None  # not in a worker
     # comparing auto_publish to boolean values because it can be a non-boolean
     if context.solver.auto_publish is True:
         return [default_name]
@@ -217,6 +214,7 @@ class BaseContext(dict):
             raise AttributeError
         res = self.get(name, default)
         return res
+
 
 class SolverContext(BaseContext):
     # for internal use
@@ -391,6 +389,16 @@ class Context(BaseContext):
         context = Context()
         context.read_settings(file_list=file_list, logger=logger)
         context.update(kwargs)
+        if 'DOCPLEX_CONTEXT' in os.environ:
+            values_pairs = []
+            for v in shlex.split(os.environ['DOCPLEX_CONTEXT']):
+                s = v.split('=', 1)  # max 1 split
+                # convert values to bool if relevant
+                value = _BOOLEAN_STATES.get(s[1].strip().lower(), s[1])
+                values_pairs.append((s[0], value))
+                if logger:
+                    logger.info('Setting context value %s to %s (from DOCPLEX_CONTEXT env)' % (s[0], value))
+            context.update_from_list(values_pairs, logger=logger)
         return context
 
     def copy(self):
@@ -605,7 +613,8 @@ def create_default_auto_publish_context(defaults=True):
     auto_publish = BaseContext()
     # in a future version, we might want to be able to set individual
     # default values with a dict => that's why we compare to True and False
-    if defaults is True:
+    if defaults is True and get_solve_hook:
+        # Set default values when in a worker
         auto_publish.solve_details = True
         auto_publish.result_output = 'solution.json'
         auto_publish.kpis_output = 'kpis.csv'

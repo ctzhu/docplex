@@ -278,6 +278,9 @@ context.model.version = '12.7.0.0'
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
 
+# Flag to generate short model output (internal)
+context.model.short_output = False
+
 # Expression cache
 context.model.cache = Context()
 context.model.cache.size = 10000

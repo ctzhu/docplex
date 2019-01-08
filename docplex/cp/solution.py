@@ -565,7 +565,7 @@ class CpoModelSolution(object):
     def get_objective_gaps(self):
         """ Gets the numeric values of the gap between objective value and objective bound.
 
-        For a single objective, gap is calculated as gap = |value - bound| / max(1e-10, |value|)
+        For a single objective, gap is calculated as *gap = abs(value - bound) / max(1e-10, abs(value))*
 
         For multiple objectives, each gap is the gap between corresponding value and bound.
         However, after the first gap whose value is not within optimality tolerance specified by

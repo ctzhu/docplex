@@ -4,13 +4,23 @@
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
 
-
-from sklearn.base import TransformerMixin, BaseEstimator
-
+try:
+    from sklearn.base import TransformerMixin, BaseEstimator
+except ImportError:
+    # if sklearn is not available, just use some mock classes
+    class TransformerMixin(object):
+        pass
+    class BaseEstimator(object):
+        pass
+    
 from docplex.mp.constants import ObjectiveSense
 from docplex.mp.sktrans.modeler import make_modeler
 from docplex.mp.utils import *
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 class CplexTransformerBase(BaseEstimator, TransformerMixin):
     """ Root class for CPLEX transformers
@@ -32,7 +42,7 @@ class CplexTransformerBase(BaseEstimator, TransformerMixin):
         :param params: optional keyword arguments to pass additional parameters.
 
         :return: a pandas dataframe with two columns: name and value containing the values
-        of the columns.
+            of the columns.
         """
         # look for upper, lower bound columns in keyword args
         var_lbs = params.get("lbs", None)
@@ -64,22 +74,24 @@ class CplexTransformerBase(BaseEstimator, TransformerMixin):
 
     def build_matrix_linear_model_and_solve(self, var_count, var_lbs, var_ubs, var_types, var_names,
                                             cts_mat, rhs,
-                                            objsense, costs,
+                                            objsense, costs, cast_to_float,
                                             **params):
         return self.modeler.build_matrix_linear_model_and_solve(var_count, var_lbs, var_ubs,
                                                                 var_types, var_names,
                                                                 cts_mat, rhs,
-                                                                objsense, costs, **params)
+                                                                objsense, costs,
+                                                                cast_to_float, **params)
 
     def build_matrix_range_model_and_solve(self, var_count, var_lbs, var_ubs,
                                            var_types, var_names,
                                            cts_mat, range_mins, range_maxs,
-                                           objsense, costs,
+                                           objsense, costs, cast_to_float,
                                            **params):
         return self.modeler.build_matrix_range_model_and_solve(var_count, var_lbs, var_ubs,
                                                                var_types, var_names,
                                                                cts_mat, range_mins, range_maxs,
                                                                objsense, costs,
+                                                               cast_to_float,
                                                                **params)
 
     def build_sparse_linear_model_and_solve(self, nb_vars, var_lbs, var_ubs, var_types, var_names,
@@ -97,9 +109,9 @@ class CplexTransformer(CplexTransformerBase):
     """ A Scikit-learn transformer class to solve linear problems.
 
     This transformer class solves LP problems of
-    type
-            Ax <= B
+    type::
 
+            Ax <= B
 
     """
 
@@ -154,10 +166,14 @@ class CplexTransformer(CplexTransformerBase):
         nb_vars = xc - 1
         X_cts = [r[:-1] for r in X]
         rhs = [r[-1] for r in X]
+        # no cast to float except if requested
+        cast_to_float = params.pop("cast_to_float", False)
         return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,
                                                         colnames,
                                                         X_cts, rhs,
-                                                        objsense=self.objsense, costs=y, **params)
+                                                        objsense=self.objsense, costs=y,
+                                                        cast_to_float=cast_to_float,
+                                                        **params)
 
     def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         # matrix is nrows x (ncols + 2)
@@ -172,9 +188,12 @@ class CplexTransformer(CplexTransformerBase):
         nb_vars = nc - 1
         X_cts = X[:, :-1]
         rhs = X[:, -1].A1
+        # to cast or not to cast?
+        cast_to_float = (X.dtype == np.int64) or params.pop("cast-to_float", False)
         return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,colnames,
                                                         X_cts, rhs,
-                                                        objsense=self.objsense, costs=y, **params)
+                                                        objsense=self.objsense, costs=y,
+                                                        cast_to_float=cast_to_float, **params)
 
     def _transform_from_sparse(self, X, y, var_lbs, var_ubs, var_types, **params):
         assert is_scipy_sparse(X)
@@ -254,6 +273,7 @@ class CplexRangeTransformer(CplexTransformerBase):
                                                        cts_mat=X_new,
                                                        range_mins=row_mins, range_maxs=row_maxs,
                                                        objsense=self.objsense, costs=y,
+                                                       cast_to_float=True,
                                                        **params)
 
     def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
@@ -269,9 +289,11 @@ class CplexRangeTransformer(CplexTransformerBase):
         X_cts = X[:, :-2]
         row_mins = X[:, -2]
         row_maxs = X[:, -1]
+        cast_to_float = (X.dtype == np.int64) or params.pop("cast_to_float", False)
         return self.build_matrix_range_model_and_solve(nb_vars, var_lbs, var_ubs,
                                                        var_types, colnames,
                                                        cts_mat=X_cts,
                                                        range_mins=row_mins, range_maxs=row_maxs,
                                                        objsense=self.objsense, costs=y,
+                                                       cast_to_float=cast_to_float,
                                                        **params)

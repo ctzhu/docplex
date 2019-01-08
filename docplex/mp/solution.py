@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover
 from six import iteritems, iterkeys
 
 from docplex.mp.compat23 import StringIO, izip
-from docplex.mp.constants import SolveAttribute
+from docplex.mp.constants import CplexScope
 from docplex.mp.utils import is_iterable, is_number, is_string, str_holo, OutputStreamAdapter
 from docplex.mp.utils import make_output_path2, DOcplexException
 from docplex.mp.linear import Var
@@ -38,8 +38,6 @@ class SolveSolution(object):
 
     # a symbolic value for no objective ?
     NO_OBJECTIVE_VALUE = -1e+75
-
-    INFEAS_KEY = 'infeasibities'
 
     @staticmethod
     def _is_discrete_value(v):
@@ -76,7 +74,10 @@ class SolveSolution(object):
         self._objective = self.NO_OBJECTIVE_VALUE if obj is None else obj
         self._solved_by = solved_by
         self.__var_value_map = {}
-        self._attribute_map = defaultdict(dict)
+        self._reduced_costs = None
+        self._dual_values = None
+        self._slack_values = None
+        self._infeasibilities = {}
         self.__round_discrete = rounding
         self._solve_status = None
         self._keep_zeros = keep_zeros
@@ -105,19 +106,6 @@ class SolveSolution(object):
             sol._set_solve_status(job_solve_status)
         return sol
 
-    @classmethod
-    def make_solution_from_values_objective(cls, mdl, values, objective, name=None, rounding=True, keep_zeros=False):
-        # values is a list of var values one for each variables
-        if len(values) != mdl.number_of_variables:
-            mdl.fatal("Sequence of variable values must have len {0}, a sequence of len {1} as passed"
-                      .format(mdl.number_of_variables, len(values)))
-        else:
-            sol = SolveSolution(mdl, var_value_map={}, obj=objective,
-                                rounding=rounding, keep_zeros=keep_zeros, name=name)
-            for dvar, val in izip(mdl.iter_variables(), values):
-                sol._set_var_value_internal(dvar, val, rounding=rounding)
-            return sol
-
     def _get_var_by_name(self, varname):
         return self.__model.get_var_by_name(varname)
 
@@ -128,7 +116,10 @@ class SolveSolution(object):
         """
         self.__var_value_map = {}
         self._objective = self.NO_OBJECTIVE_VALUE
-        self._attribute_map = {}
+        self._reduced_costs = None
+        self._dual_values = None
+        self._slack_values = None
+        self._infeasibilities = {}
         self._solve_status = None
 
     def is_empty(self):
@@ -179,19 +170,21 @@ class SolveSolution(object):
         # INTERNAL: accepts either strings or variable objects
         # returns a variable or None
         if isinstance(var_key, Var):
-            var = var_key
+            return var_key
         elif is_string(var_key):
             var = self._get_var_by_name(var_key)
             # var might be None here if the name is unknown
-        else:
-            var = None
-        # --
-        if var is None:
-            if do_raise:
-                self.model.fatal("Expecting variable or name, got: {0!r}", var_key)
+            if var is not None:
+                return var
+            # var is None hereafter
+            elif do_raise:
+                self.model.fatal("No variable with named {0}", var_key)
             else:
-                self.model.warning("Expecting variable or name, got: {0!r} - ignored", var_key)
-        return var
+                self.model.warning("No variable with named {0}", var_key)
+                return None
+
+        else:  #  pragma: no cover
+            self.model.fatal("Expecting variable or name, got: {0!r}", var_key)
 
     def _typecheck_var_key_value(self, var_key, value, caller):
         # INTERNAL
@@ -234,9 +227,6 @@ class SolveSolution(object):
 
         self.__var_value_map[var] = stored_value
 
-    def is_attributes_fetched(self, attr_name):
-        return attr_name and attr_name in self._attribute_map
-
     @property
     def model(self):
         """
@@ -261,9 +251,9 @@ class SolveSolution(object):
         """
         return self._solve_details
 
-    @property
-    def error_handler(self):
-        return self.__model.error_handler
+    # @property
+    # def error_handler(self):
+    #     return self.__model.error_handler
 
     def get_objective_value(self):
         """
@@ -294,9 +284,6 @@ class SolveSolution(object):
         """
         return self._objective != self.NO_OBJECTIVE_VALUE
 
-    def _has_problem_objective(self):
-        return self.model.has_objective()
-
     @property
     def objective_value(self):
         """ This property is used to get or set the objective valueof the solution.
@@ -325,24 +312,26 @@ class SolveSolution(object):
             # need to check var_keys and values
             self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding)
 
-    def store_infeasibilities(self, infeasibilities, infeas_key=INFEAS_KEY):
+    def store_infeasibilities(self, infeasibilities):
         assert isinstance(infeasibilities, dict)
-        self._attribute_map[infeas_key] = infeasibilities
+        self._infeasibilities = infeasibilities
 
-    def _store_attribute_result(self, attr_name, attr_idx_map, obj_mapper):
-        attr_obj_map = {obj_mapper(idx): attr_val
-                        for idx, attr_val in iteritems(attr_idx_map)
-                        if attr_val and obj_mapper(idx) is not None}
-        self._attribute_map[attr_name] = attr_obj_map
+    @staticmethod
+    def _resolve_attribute_index_map(attr_idx_map, obj_mapper):
+        return {obj_mapper(idx): attr_val
+                for idx, attr_val in iteritems(attr_idx_map)
+                if attr_val and obj_mapper(idx) is not None}
 
     def store_reduced_costs(self, rcs, mapper):
-        self._store_attribute_result(SolveAttribute.reduced_costs.name, rcs, obj_mapper=mapper)
+        self._reduced_costs = self._resolve_attribute_index_map(rcs, mapper)
 
     def store_dual_values(self, duals, mapper):
-        self._store_attribute_result(SolveAttribute.duals.name, duals, obj_mapper=mapper)
+        self._dual_values = self._resolve_attribute_index_map(duals, mapper)
 
     def store_slack_values(self, slacks, mapper):
-        self._store_attribute_result(SolveAttribute.slacks.name, slacks, obj_mapper=mapper)
+        resolved_linear_slacks = self._resolve_attribute_index_map(slacks, mapper)
+        self._slack_values = defaultdict(dict)
+        self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
 
     def iter_var_values(self):
         """Iterates over the (variable, value) pairs in the solution.
@@ -448,6 +437,20 @@ class SolveSolution(object):
         return [self_value_map.get(dv, 0) for dv in m.iter_variables()]
 
     def get_value_dict(self, var_dict, keep_zeros=True, precision=1e-6):
+        """ Converts a dictionary of variables to a dictionary of solutions
+
+        Assuming `var_dict` is a dictionary of variables
+        (for example, as returned by `Model.integer_var_dict()`,
+        returns a dictionary with the same keys and as values the solution values of the
+        variables.
+
+        :param var_dict: a dictionary of decision variables.
+        :param keep_zeros: an optional flag to keep zero values (default is True)
+        :param precision: an optional precision, used when filtering out zero values. The default is 1e-6.
+            When keep_zeros is False, all values smaller than this value are left out.
+
+        :return: A dictionary from variable keys to solution values (floats).
+        """
         # assume var_dict is a key-> variable dictionary
         if keep_zeros:
             return {k: self._get_var_value(v) for k, v in iteritems(var_dict)}
@@ -527,30 +530,40 @@ class SolveSolution(object):
 
         return True
 
-    def get_attribute(self, mobjs, attr, default_attr_value=0):
-        assert is_iterable(mobjs)
+    def ensure_reduced_costs(self, model, engine):
+        if self._reduced_costs is None:
+            self._reduced_costs = engine.get_all_reduced_costs(model)
 
-        if attr not in self._attribute_map:
-            # warn
-            return [0] * len(mobjs)
-        else:
-            attr_map = self._attribute_map[attr]
-            return [attr_map.get(mobj, default_attr_value) for mobj in mobjs]
+    def ensure_dual_values(self, model, engine):
+        if self._dual_values is None:
+            self._dual_values = engine.get_all_dual_values(model)
 
-    def get_slack(self, ct):
-        return self._attribute_map[SolveAttribute.slacks.name].get(ct, 0)
+    def ensure_slack_values(self, model, engine):
+        if self._slack_values is None:
+            self._slack_values = engine.get_all_slack_values(model)
 
-    def get_infeasibility(self, ct, infeas_key=INFEAS_KEY):
-        return self._attribute_map[infeas_key].get(ct, 0)
+    def get_reduced_costs(self, dvars):
+        rcs = self._reduced_costs
+        assert rcs is not None
+        return [rcs.get(dv, 0) for dv in dvars]
+
+    def get_dual_values(self, lcts):
+        duals = self._dual_values
+        assert duals is not None
+        return [duals.get(lc, 0) for lc in lcts]
+
+    def get_slacks(self, cts):
+        all_slacks = self._slack_values
+        assert all_slacks is not None
+        # first get cplex_scope, then fetch the slack: two indirections
+        return [all_slacks[ct.cplex_scope()].get(ct, 0) for ct in cts]
+
+
+    def get_infeasibility(self, ct):
+        return self._infeasibilities.get(ct, 0)
 
     def display_attributes(self):
-        for attr_key in self._attribute_map:
-            attr_value_map = self._attribute_map[attr_key]
-
-            print("#{0}={1:d}".format(attr_key, len(attr_value_map)))
-            for obj, attr_val in iteritems(attr_value_map):
-                obj_qualifier = obj.name if obj.has_username() else str(obj)
-                print(" {0}.{1} = {2}".format(obj_qualifier, attr_key, attr_val))
+        pass
 
     def display(self,
                 print_zeros=True,

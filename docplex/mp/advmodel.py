@@ -16,11 +16,26 @@ from docplex.mp.constants import ComparisonType
 from docplex.mp.compat23 import izip
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.xcounter import update_dict_from_item_value
-
+from docplex.mp.sttck import StaticTypeChecker
 
 class AdvAggregator(ModelAggregator):
     def __init__(self, linear_factory, quad_factory, counter_type):
         ModelAggregator.__init__(self, linear_factory, quad_factory, counter_type)
+
+    def _scal_prod_f(self, var_map, coef_fn):
+        # var_map is a dictionary of variables.
+        # coef_fn is a function accepting dictionary keys
+        lcc_type = self.counter_type
+        lcc = lcc_type()
+        lcc_setitem = lcc_type.__setitem__
+        number_validation_fn = self._checker.get_number_validation_fn()
+        for k, dvar in iteritems(var_map):
+            coeff = coef_fn(k)
+            safe_coeff = number_validation_fn(coeff) if number_validation_fn else coeff
+            if safe_coeff:
+                lcc_setitem(lcc, dvar, safe_coeff)
+
+        return self._to_expr(qcc=None, lcc=lcc)
 
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
@@ -72,6 +87,7 @@ class AdvAggregator(ModelAggregator):
             used_right = generate_constant(right_terms, count_max=None)
 
         if used_coefs is not coefs and used_left is not left_terms and used_right is not right_terms:
+            # LOOK
             return left_terms * right_terms * coefs
 
         return self._scal_prod_triple(coefs=used_coefs, left_terms=used_left, right_terms=used_right)
@@ -307,6 +323,14 @@ class AdvModel(Model):
         var_seq = self._checker.typecheck_var_seq_all_different(terms)
         return self._aggregator._scal_prod_vars_all_different(var_seq, coefs)
 
+    def scal_prod_functional(self, var_dict, coef_fn):
+        StaticTypeChecker.typecheck_callable(self, coef_fn,
+                                             "Functional scalar product requires a function taking variable keys as argument. A non-callable was passed: {0!r}".format(
+                                                 coef_fn))
+        return self._aggregator._scal_prod_f(var_dict, coef_fn)
+
+    dotf = scal_prod_functional
+
     def quad_matrix_sum(self, matrix, dvars, symmetric=False):
         """
         Creates a quadratic expression equal to the quadratic form of a list of decision variables and
@@ -466,7 +490,7 @@ class AdvModel(Model):
 
         Example:
 
-            If A is a matrix of coefficients with 2 rows and 3 columns:
+            If A is a matrix of coefficients with 2 rows and 3 columns::
 
                     A = [[1, 2, 3],
                          [4, 5, 6]],
@@ -474,7 +498,7 @@ class AdvModel(Model):
 
                     B = [100, 200], a sequence of numbers (size 2),
 
-            then:
+            then::
 
                 `mdl.matrix_constraint(A, X, B, 'GE')` returns a list of two constraints
                 [(x + 2y+3z <= 100), (4x + 5y +6z <= 200)].
@@ -552,7 +576,7 @@ class AdvModel(Model):
 
         :returns: A list of range constraints.
 
-        Example:
+        Example::
 
             If A is a matrix of coefficients with 2 rows and 3 columns:
 
@@ -563,7 +587,7 @@ class AdvModel(Model):
                     L = [101. 102], a sequence of numbers (size 2),
                     U = [201, 202]
 
-            then:
+            then::
 
                 `mdl.range_constraints(A, X, L, U)` returns a list of two ranges
                 [(101 <= x + 2y+3z <= 102), (201 <= 4x + 5y +6z <= 202)].

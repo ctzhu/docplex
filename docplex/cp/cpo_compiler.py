@@ -52,6 +52,7 @@ class CpoCompiler(object):
                  'is_format_12_8',        # Indicates that format version is at least 12.8
                  'name_all_constraints',  # Indicator to fore a name on each constraint (for conflict refiner)
                  'min_length_for_alias',  # Minimum variable name length to replace it by an alias
+                 'verbose_output',        # Verbose output (not short_output)
                  'id_printable_strings',  # Dictionary of printable string for each identifier
                  'last_location',         # Last source location (file, line)
                  'list_consts',           # List of constants
@@ -96,12 +97,14 @@ class CpoCompiler(object):
         self.min_length_for_alias = None
         self.id_printable_strings = {}
         self.name_all_constraints = False
+        self.verbose_output = False
 
         # Set model parameters
         mctx = context.model
         if mctx is not None:
             self.min_length_for_alias = mctx.length_for_alias
             self.name_all_constraints = mctx.name_all_constraints
+            self.verbose_output = not mctx.short_output
 
         # Determine format version
         self.format_version = None if model is None else model.get_format_version()
@@ -111,12 +114,15 @@ class CpoCompiler(object):
         self.is_format_12_8 = self.format_version and self.format_version >= '12.8'
 
         # Initialize source location
-        if (self.parameters is not None) and (self.parameters.UseFileLocations is not None):
-            self.add_source_location = (self.parameters.UseFileLocations in ('On', True))
-        elif (mctx is not None) and (mctx.add_source_location is not None):
-            self.add_source_location = mctx.add_source_location
+        if self.verbose_output:
+            if (self.parameters is not None) and (self.parameters.UseFileLocations is not None):
+                self.add_source_location = (self.parameters.UseFileLocations in ('On', True))
+            elif (mctx is not None) and (mctx.add_source_location is not None):
+                self.add_source_location = mctx.add_source_location
+            else:
+                self.add_source_location = True
         else:
-            self.add_source_location = True
+            self.add_source_location = False
         self.last_location = None
 
         # Initialize expression dictionaries
@@ -198,29 +204,30 @@ class CpoCompiler(object):
         self.last_location = None
 
         # Write header
-        banner = u"/" * 79 + "\n"
-        mname = model.get_name()
-        sfile = model.get_source_file()
-        out.write(banner)
-        datestr = datetime.datetime.now().strftime("%Y.%m.%d-%H:%M:%S")
-        if mname:
-            out.write(u"// CPO file generated at {} for model: {}\n".format(datestr, mname))
-        else:
-            out.write(u"// CPO file generated at {} for anonymous model\n".format(datestr))
-        if sfile:
-            out.write(u"// Source file: {}\n".format(sfile))
-        out.write(banner)
+        if self.verbose_output:
+            banner = u"/" * 79 + "\n"
+            mname = model.get_name()
+            sfile = model.get_source_file()
+            out.write(banner)
+            datestr = datetime.datetime.now().strftime("%Y.%m.%d-%H:%M:%S")
+            if mname:
+                out.write(u"// CPO file generated at {} for model: {}\n".format(datestr, mname))
+            else:
+                out.write(u"// CPO file generated at {} for anonymous model\n".format(datestr))
+            if sfile:
+                out.write(u"// Source file: {}\n".format(sfile))
+            out.write(banner)
 
-        # Write version if any
-        if self.format_version is not None:
-            out.write(u"\n//--- Internals ---\n")
-            out.write(u"internals {\n")
-            out.write(u"   version({});\n".format(self.format_version))
-            out.write(u"}\n")
+            # Write version if any
+            if self.format_version is not None:
+                out.write(u"\n//--- Internals ---\n")
+                out.write(u"internals {\n")
+                out.write(u"   version({});\n".format(self.format_version))
+                out.write(u"}\n")
 
         # Print renamed variables as comment
         snm = self.alias_name_map
-        if snm:
+        if snm and self.verbose_output:
             out.write(u"\n//--- Aliases ---\n")
             out.write(u"// To reduce CPO file size, the following aliases have been used to replace names longer than {}\n".format(self.min_length_for_alias))
             lvars = sorted(snm.keys(), key=functools.cmp_to_key(lambda v1, v2: compare_natural(v1, v2)))
@@ -228,24 +235,28 @@ class CpoCompiler(object):
                 out.write(u"// {} = {}\n".format(v, snm[v]))
 
         # Write constants
-        out.write(u"\n//--- Constants ---\n")
+        if self.verbose_output:
+            out.write(u"\n//--- Constants ---\n")
         for lx in self.list_consts:
             self._write_expression(out, lx)
 
         # Write variables
-        out.write(u"\n//--- Variables ---\n")
+        if self.verbose_output:
+            out.write(u"\n//--- Variables ---\n")
         for lx in self.list_vars:
             self._write_expression(out, lx)
 
         # Write expressions
-        out.write(u"\n//--- Expressions ---\n")
+        if self.verbose_output:
+            out.write(u"\n//--- Expressions ---\n")
         self.last_location = None
         for lx in self.list_exprs:
             self._write_expression(out, lx)
 
         # Write search phases 
         if self.list_phases:
-            out.write(u"\n//--- Search phases ---\n")
+            if self.verbose_output:
+                out.write(u"\n//--- Search phases ---\n")
             out.write(u"search {\n")
             for lx in self.list_phases:
                 self._write_expression(out, lx)
@@ -254,7 +265,8 @@ class CpoCompiler(object):
         # Write starting point
         spoint = model.get_starting_point()
         if spoint is not None:
-            out.write(u"\n//--- Starting point ---\n")
+            if self.verbose_output:
+                out.write(u"\n//--- Starting point ---\n")
             if self.last_location is not None:
                 out.write(u"#line off\n")
             out.write(u"startingPoint {\n")
@@ -263,16 +275,22 @@ class CpoCompiler(object):
             out.write(u"}\n")
 
         # Write parameters
-        if self.parameters and (len(self.parameters) > 0):
-            out.write(u"\n//--- Parameters ---\n")
-            if self.last_location is not None:
-                out.write(u"#line off\n")
-            out.write(u"parameters {\n")
+        if self.parameters:
+            # Build list of valid parameters
+            params = []
             for k in sorted(self.parameters.keys()):
                 v = self.parameters[k]
                 if v is not None:
+                    params.append((k, v))
+            if len(params) > 0:
+                if self.verbose_output:
+                    out.write(u"\n//--- Parameters ---\n")
+                if self.last_location is not None:
+                    out.write(u"#line off\n")
+                out.write(u"parameters {\n")
+                for k, v in params:
                     out.write(u"   {} = {};\n".format(k, v))
-            out.write(u"}\n")
+                out.write(u"}\n")
 
         # Flush stream (required on Linux rhel6.7)
         out.flush()
@@ -912,7 +930,7 @@ def expr_to_string(expr):
 
 _NUMBER_CONSTANTS = {INT_MIN: "intmin", INT_MAX: "intmax",
                      INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax",
-                     INFINITY: "inf", -INFINITY: "-inf", }
+                     INFINITY: "inf", -INFINITY: "-inf", True: "1", False: "0"}
 
 def _number_value_string(val):
     """ Build the string representing a number value

@@ -3,6 +3,8 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
+# gendoc: ignore
+
 from docplex.mp.utils import is_string
 
 from docplex.mp.sktrans.docplex_mdlr import DOcplexModeler

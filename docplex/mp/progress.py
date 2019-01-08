@@ -161,16 +161,11 @@ class _ProgressFilterAcceptAll(_IProgressFilter):
 class _ProgressFilter(object):
     # INTERNAL: used to filter calls from CPLEX
 
-    def __init__(self, wait_first_incumbent=True,
-                 node_diff=1e+20,
-                 relative_diff=1e-2,
-                 abs_diff=0.1):
+    def __init__(self, node_diff=1e+20, relative_diff=1e-2, abs_diff=0.1):
         """ Builds a filter for progress listeners.
 
         A filter accepts calls from the callback according to the parameters below:
 
-        :param wait_first_incumbent: A boolean indicating whether we skip or not any callback info until the first
-            incumbent solution is found.
         :param node_diff: An integer. Accepts the call whenver the increment in the number of visited nodes
             exceeds this limit.
         :param relative_diff: A floating number, used to determine whether the objective or best bound have changed.
@@ -178,7 +173,6 @@ class _ProgressFilter(object):
         :param abs_diff: A floating number, used to determine whether the objective or best bound have changed.
             if the bsolite  difference between the last recorded value and the new value is greater than this value, the call is accepted.
         """
-        self._wait_first_incumbent = wait_first_incumbent
         self._relative_change = relative_diff
         self._abs_change = abs_diff
         self._node_diff = node_diff
@@ -196,12 +190,10 @@ class _ProgressFilter(object):
 
     @staticmethod
     def make_from_kwargs(kwargs):
-        wait_first_incumbent = kwargs.get("wait_first_incumbent", True)
         node_diff = kwargs.get("node_diff", 1e+20)
         relative_diff = kwargs.get("relative_diff", 1e-2)
         abs_diff = kwargs.get("abs_diff", 0.1)
-        return _ProgressFilter(wait_first_incumbent=wait_first_incumbent,
-                               node_diff=node_diff,
+        return _ProgressFilter(node_diff=node_diff,
                                relative_diff=relative_diff,
                                abs_diff=abs_diff)
 
@@ -210,10 +202,11 @@ class _ProgressFilter(object):
 
     def accept(self, pdata):
         accept = False
-        if self._wait_first_incumbent and self._incumbent_count == 0 and not pdata.has_incumbent:
+        if self._incumbent_count == 0 and not pdata.has_incumbent:
             return False
 
         if pdata.has_incumbent:
+            self._incumbent_count += 1
             if (self._last_incumbent_obj is None) or self._is_significant_change(self._last_incumbent_obj,
                                                                                  pdata.current_objective):
                 self._last_incumbent_obj = pdata.current_objective

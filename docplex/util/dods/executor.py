@@ -101,11 +101,9 @@ class Executor(object):
             override_env = _WorkerEnvironmentOverride(get_environment())
 
         with OverrideEnvironment(override_env):
-            saved_is_dods = get_environment().is_dods
             saved_environ = os.environ.copy()
             try:
                 if is_dods:
-                    get_environment().is_dods = True
                     os.environ['IS_DODS'] = 'True'
 
                 with self.handler.get_input_stream(model, scenario, 'model.py') as m:
@@ -137,5 +135,4 @@ class Executor(object):
                         raise InterpreterError(imsg)
                 return variables['outputs']
             finally:
-                get_environment().is_dods = saved_is_dods
                 os.environ = saved_environ

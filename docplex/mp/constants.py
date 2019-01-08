@@ -209,7 +209,7 @@ class SolveAttribute(Enum):
         obj = object.__new__(cls)
         # predefined
         obj._value_ = code
-        obj.requires_vars = is_for_vars
+        obj.is_var_attribute = is_for_vars
         obj.requires_solve = requires_solve
         return obj
 
@@ -340,9 +340,6 @@ class CplexScope(Enum):
     QUAD_CT_SCOPE = 3, 'qc', 'quadratic constraints'
     PWL_CT_SCOPE = 4, 'pwl', 'piecewise constraints'
     SOS_SCOPE = 5, 'sos', 'SOS'
-
-    def is_logical(self):
-        return self.value in {2, 4, 5}
 
 
 class QualityMetric(Enum):

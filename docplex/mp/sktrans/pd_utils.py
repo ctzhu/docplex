@@ -3,7 +3,13 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
-from pandas import DataFrame
+
+# gendoc: ignore
+
+try:
+    from pandas import DataFrame
+except ImportError:
+    DataFrame = None
 
 
 def new_empty_dataframe():

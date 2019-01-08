@@ -105,17 +105,23 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def is_quadratic(self):
         return False
 
+    def cplex_scope(self):
+        return self._get_index_scope().cplex_scope
+
+    def _get_index_scope(self):
+        raise NotImplementedError
+
     def is_logical(self):
-        return self.cplex_scope().is_logical()
+        return False
 
     def _get_slack_value(self):
-        return self._model._slack_value1(ct=self)
+        return self._model._slack_value1(self)
 
     def _get_dual_value(self):
         # INTERNAL
         # Note that dual values are only available for LP problems,
         # so can be calle donly on linear or range constraints.
-        return self._model._dual_value1(ct=self)
+        return self._model._dual_value1(self)
 
     def notify_expr_modified(self, expr, event):
         # INTERNAL
@@ -596,7 +602,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         See Also:
             `func:docplex.mp.model.Model.slack_values()`
         """
-        return self._model._slack_value1(ct=self)
+        return self._model._slack_value1(self)
 
     def generate_ordered_vars(self):
         # INTERNAL
@@ -620,9 +626,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
             return self._generate_expr_opposite_linear_coefs(right_expr)
         else:
             return self._generate_net_linear_coefs2_sorted(left_expr, right_expr)
-
-    def cplex_scope(self):
-        return CplexScope.LINEAR_CT_SCOPE
 
     def _get_status_var(self):
         # this call does -not- create the variable. Returns None if not present.
@@ -898,7 +901,7 @@ class RangeConstraint(AbstractConstraint):
         Note:
             This method will raise an exception if the model has not been solved successfully.
         """
-        return self._model.slack_values(cts=self)
+        return self._model._slack_value1(self)
 
     def iter_variables(self):
         """Iterates over all the variables of the range constraint.
@@ -911,12 +914,18 @@ class RangeConstraint(AbstractConstraint):
     def iter_exprs(self):
         yield self._expr
 
-    def cplex_range_lb(self):
-        # INTERNAL
-        return float(self._lb - self._expr.get_constant())
+    def cplex_range_value(self, do_raise=True):
+        return self.static_cplex_range_value(self, self._lb, self._ub, lambda : "Range has infeasible domain: {0!s}".format(self),
+                                             do_raise=do_raise)
 
-    def cplex_range_value(self):
-        return float(self._lb - self._ub)  # negative
+    @classmethod
+    def static_cplex_range_value(cls, logger, lbval, ubval, msg_fun, do_raise=True):
+        rangeval = float(lbval - ubval)
+        # this should be negative, otherwise fails....
+        # no way to model infeasible ranges with cplex rngval.
+        if rangeval >= 1e-6 and do_raise:
+            logger.fatal(msg_fun())
+        return rangeval
 
     def cplex_num_rhs(self):
         # force conversion to float for numpy, etc...
@@ -954,8 +963,6 @@ class RangeConstraint(AbstractConstraint):
         return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".\
             format(printable_name, self.lb, self._expr, self.ub)
 
-    def cplex_scope(self):
-        return CplexScope.LINEAR_CT_SCOPE
 
     def resolve(self):
         self._expr.resolve()
@@ -1014,9 +1021,6 @@ class LogicalConstraint(AbstractConstraint):
 
     def is_equivalence(self):
         raise NotImplementedError  # pragma: no cover
-
-    def cplex_scope(self):
-        return CplexScope.IND_CT_SCOPE
 
     @property
     def active_value(self):
@@ -1134,6 +1138,9 @@ class IndicatorConstraint(LogicalConstraint):
     def is_equivalence(self):
         return False
 
+    def is_logical(self):
+        return True
+
     def invalidate(self):
         """
         Sets the binary variable to the opposite of its active value.
@@ -1190,6 +1197,9 @@ class EquivalenceConstraint(LogicalConstraint):
     def is_equivalence(self):
         return True
 
+    def is_logical(self):
+        return True
+
     def is_satisfied(self, solution, tolerance=1e-6):
         is_ct_satisfied = self._linear_ct.is_satisfied(solution, tolerance)
         binary_value = solution.get_value(self._binary_var)
@@ -1233,9 +1243,7 @@ class QuadraticConstraint(BinaryConstraint):
     def _get_index_scope(self):
         return self._model._quadct_scope
 
-    # noinspection PyMethodMayBeStatic
-    def cplex_scope(self):
-        return CplexScope.QUAD_CT_SCOPE
+
 
     __slots__ = ()
 
@@ -1306,7 +1314,7 @@ class QuadraticConstraint(BinaryConstraint):
         Note:
             This method will raise an exception if the model has not been solved successfully.
         """
-        return self._model.slack_values(cts=self)
+        return self._model._slack_value1(self)
 
     @property
     def sense(self):
@@ -1372,9 +1380,6 @@ class PwlConstraint(AbstractConstraint):
         computed_f_expr_value = self._pwl_func.evaluate(expr_value)
         return ComparisonType.almost_equal(y_value, computed_f_expr_value, tolerance)
 
-    # noinspection PyMethodMayBeStatic
-    def cplex_scope(self):
-        return CplexScope.PWL_CT_SCOPE
 
     @property
     def expr(self):

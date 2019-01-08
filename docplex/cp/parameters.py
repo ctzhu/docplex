@@ -222,7 +222,7 @@ class CpoParameters(Context):
            myparams = CpoParameters(TimeLimit=20, LogPeriod=5000))
 
         Args:
-            (param): (Optional) Any individual parameter as defined in this class.
+            kwargs: (Optional) Any individual parameter as defined in this class.
         """
         super(CpoParameters, self).__init__()
         for k, v in kwargs.items():

@@ -52,13 +52,13 @@ class ModelCallbackMixin(object):
             var_value_dict = {}
         return self.model.new_solution(var_value_dict)
 
-    def make_solution_from_values(self, keep_zeros=False, name=None):
-        # build a solution object from array of solution values
-        # noinspection PyUnresolvedReferences
-        var_values = super(ModelCallbackMixin, self).get_values()
-        obj = super(ModelCallbackMixin, self).get_objective_value()
-        # assume same length
-        return SolveSolution.make_solution_from_values_objective(var_values, obj, keep_zeros=keep_zeros, name=name)
+    # def make_solution_from_values(self, keep_zeros=False, name=None):
+    #     # build a solution object from array of solution values
+    #     # noinspection PyUnresolvedReferences
+    #     var_values = super(ModelCallbackMixin, self).get_values()
+    #     obj = super(ModelCallbackMixin, self).get_objective_value()
+    #     # assume same length
+    #     return SolveSolution.make_solution_from_values_objective(var_values, obj, keep_zeros=keep_zeros, name=name)
 
 
 class ConstraintCallbackMixin(ModelCallbackMixin):
@@ -119,6 +119,8 @@ def print_called(prompt_msg=None):
     Use this decorator function to decorate __call__() methods of custom callbacks.
 
     Example:
+
+    ::
 
         class MyCallback: LazyConstraintCallback():
 

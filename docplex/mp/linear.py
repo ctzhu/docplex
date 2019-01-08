@@ -945,7 +945,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         elif isinstance(e, LinearExpr):
             # note that transient is not kept.
-            self._constant = e.constant
+            self._constant = e.get_constant()
             self.__terms = self._new_terms_dict(model, e._get_terms_dict())  # make a copy
 
         elif isinstance(e, tuple):
@@ -1367,6 +1367,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(e, ZeroExpr):
             event = None
         elif isinstance(e, Expr) and e.is_quad_expr():
+            #
             raise DOCplexQuadraticArithException
         else:
             try:
@@ -1430,6 +1431,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(e, Expr) and e.is_quad_expr():
             if not e.number_of_quadratic_terms:
                 return self.multiply(e.linear_part)
+            elif self.is_constant():
+                return e.multiply(self.get_constant())
             else:
                 StaticTypeChecker.mul_quad_lin_error(self._model, self, e)
 

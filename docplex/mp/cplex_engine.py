@@ -12,8 +12,8 @@ from docplex.mp.engine import DummyEngine
 from docplex.mp.utils import DOcplexException, str_holo, iter_one
 from docplex.mp.compat23 import izip
 
-from docplex.mp.constants import ConflictStatus
-from docplex.mp.constr import IndicatorConstraint, QuadraticConstraint, LinearConstraint, BinaryConstraint, \
+from docplex.mp.constants import ConflictStatus, SolveAttribute
+from docplex.mp.constr import IndicatorConstraint, QuadraticConstraint, LinearConstraint, RangeConstraint, BinaryConstraint, \
     EquivalenceConstraint
 from docplex.mp.progress import ProgressData
 from docplex.mp.solution import SolveSolution
@@ -404,10 +404,6 @@ class CplexEngine(DummyEngine):
         else:  # pragma: no cover
             raise ValueError
 
-    def _set_all_cplex_streams(self, ofs):
-        cpx = self._cplex
-        self._cpx_set_all_streams(cpx, ofs)
-
     @classmethod
     def _cpx_set_all_streams(cls, cpx, ofs):
         cpx.set_log_stream(ofs)
@@ -415,10 +411,10 @@ class CplexEngine(DummyEngine):
         cpx.set_error_stream(ofs)
         cpx.set_warning_stream(ofs)
 
-    def notify_trace_output(self, out):
+    def set_streams(self, out):
         self_log_output = self._saved_log_output
         if self_log_output != out:
-            self._set_all_cplex_streams(out)
+            self._cpx_set_all_streams(self._cplex, out)
             self._saved_log_output = out
 
     def get_var_index(self, dvar):  # pragma: no cover
@@ -503,11 +499,10 @@ class CplexEngine(DummyEngine):
     def create_one_variable(self, vartype, lb, ub, name):
         self._resync_if_needed()
         alltypes = self.compute_cpx_vartype(vartype.get_cplex_typecode(), size=1)
-        allnames = [name] if name is not None else []
-        alllbs = [float(lb)] if lb is not None else []
-        allubs = [float(ub)] if ub is not None else []
-        ret_val = self.fast_add_one_var(alltypes, alllbs, allubs, allnames)
-        #  ret_val = self._cplex.variables.add(names=allnames, types=alltypes, lb=alllbs, ub=allubs)
+        names1 = [name] if name is not None else []
+        lbs1 = [float(lb)] if lb is not None else []
+        ubs1 = [float(ub)] if ub is not None else []
+        ret_val = self.fast_add_cols(alltypes, lbs1, ubs1, names1)
         return self._allocate_one_index(ret_value=ret_val, scope=self._vars_scope, expect_range=True)
 
     def create_variables(self, keys, vartype, lbs, ubs, names):
@@ -526,7 +521,8 @@ class CplexEngine(DummyEngine):
         return self._create_cpx_variables(nb_vars, cpx_types, lbs, ubs, names)
 
     def _create_cpx_variables(self, nb_vars, cpx_vartypes, lbs, ubs, names):
-        ret_add = self._cplex.variables.add(names=names, types=cpx_vartypes, lb=lbs, ub=ubs)
+        ret_add = self.fast_add_cols(cpx_vartypes, lbs, ubs, names)
+        ##ret_add = self._cplex.variables.add(names=names, types=cpx_vartypes, lb=lbs, ub=ubs)
         return self._allocate_range_index(size=nb_vars, ret_value=ret_add, scope=self._vars_scope)
 
     def _apply_var_fn(self, dvars, args, setter_fn, getter_fn=None):
@@ -567,22 +563,36 @@ class CplexEngine(DummyEngine):
         self_var_ubs = self._var_ub_changed
         self_var_ubs[dvar] = float(ub)  # force float here: numpy types will crash
 
-    def get_solve_attribute(self, attr, index_seq):
-        self._check_is_solved_ok()
 
-        indices = list(index_seq)
-        if attr == "slacks":
-            all_attributes = self._cplex.solution.get_linear_slacks(indices)
-        elif attr == "duals":
-            all_attributes = self._cplex.solution.get_dual_values(indices)
-        elif attr == "reduced_costs":
-            all_attributes = self._cplex.solution.get_reduced_costs(indices)
-        else:  # pragma: no cover
-            self.error_handler.error('*unexpected attribute name: {0!s}', attr)
-            return {}
-        assert len(indices) == len(all_attributes)
-        filtered_attr_map = {indices[i]: all_attributes[i] for i in range(len(indices)) if all_attributes[i]}
-        return filtered_attr_map
+    def make_attribute_map_from_scope(self, mdl, cplexfn, scope):
+        # transforms an array of cplex values into a map
+        # using the scope object as a mapper
+        all_values = cplexfn()
+        value_map = {}
+        for ix, cplex_value in enumerate(all_values):
+            mobj = scope(ix)
+            if mobj is None:
+                mdl.warning("No object with index: {}", ix)
+            elif cplex_value:
+                value_map[mobj] = cplex_value
+
+        return value_map
+
+    def get_all_reduced_costs(self, mdl):
+        return self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_reduced_costs, mdl._var_scope)
+
+    def get_all_dual_values(self, mdl):
+        return self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_dual_values, mdl._linct_scope)
+
+    def get_all_slack_values(self, mdl):
+        lin_slacks =  self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_linear_slacks, mdl._linct_scope)
+        quad_slacks = self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_quadratic_slacks, mdl._quadct_scope)
+        ind_slacks = self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_indicator_slacks, mdl._indicator_scope)
+        # dict : cplex_scope -> dict from obj to slack
+        return {CplexScope.LINEAR_CT_SCOPE: lin_slacks,
+                CplexScope.QUAD_CT_SCOPE: quad_slacks,
+                CplexScope.IND_CT_SCOPE: ind_slacks}
+
 
     # the returned list MUST be of size 2 otherwise the wrapper will crash.
     _trivial_linexpr = [[], []]
@@ -893,14 +903,15 @@ class CplexEngine(DummyEngine):
 
     # -- fast 'procedural' api
 
-    def fast_add_one_var(self, cpx_vartype, lb, ub, name):
-        # use procedural routine to create one variable.
+    def fast_add_cols(self, cpx_vartype, lbs, ubs, names):
+        # assume lbs, ubs, names are list that are either [] or have len size
         cpx = self._cplex
         cpx_e = cpx._env._e
         cpx_lp = cpx._lp
         old = cpx.variables.get_num()
-        newcols(cpx_e, cpx_lp, obj=[], lb=lb, ub=ub, xctype=cpx_vartype, colname=name)
-        return six.moves.range(old, old + 1)
+        size = max(len(cpx_vartype), len(lbs), len(ubs), len(names))
+        newcols(cpx_e, cpx_lp, obj=[], lb=lbs, ub=ubs, xctype=cpx_vartype, colname=names)
+        return six.moves.range(old, old + size)
 
     def _fast_set_longanno(self, anno_idx, anno_objtype, indices, groups):
         if setlonganno:
@@ -953,27 +964,6 @@ class CplexEngine(DummyEngine):
     def _fast_set_rhs(self, ct_index, new_rhs):
         cpx = self._cplex
         chgrhs(cpx._env._e, cpx._lp, (ct_index,), (new_rhs,))
-
-    def fast_add_indicator(self, indvar_index, complemented, rhs, sense, linct_indices, linct_coefs, name):
-        # using procedural but we must handle pre-logical API
-        cpx = self._cplex
-        if cpx_indicator_type_ifthen:
-            # type is here
-            ret = addindconstr(cpx._env._e, cpx._lp, indvar_index, complemented, rhs, sense,
-                               linct_indices, linct_coefs, cpx_indicator_type_ifthen, name)
-        else:
-            # noinspection PyArgumentList
-            ret = addindconstr(cpx._env._e, cpx._lp, indvar_index, complemented, rhs, sense,
-                               linct_indices, linct_coefs, name)
-        return ret
-
-    def fast_add_logical_equivalence(self, indvar_index, rhs, sense, linct_indices, linct_coefs, name):
-        # using quivalence requires types to be present (should be ensured up)
-        assert cpx_indicator_type_equiv
-        cpx = self._cplex
-        ret = addindconstr(cpx._env._e, cpx._env._lp, indvar_index, 0, rhs, sense, linct_indices, linct_coefs,
-                           indtype=3, name=name)
-        return ret
 
     def _fast_add_piecewise_constraint(self, vary, varx, preslope, nbreaks, breaksx, breaksy, postslope, name):
         cpx = self._cplex
@@ -1050,7 +1040,8 @@ class CplexEngine(DummyEngine):
                 new_lb, new_ub = args
                 offset = rngct.expr.get_constant()
                 cpx_rhs_value = new_ub - offset
-                cpx_range_value = new_lb - new_ub  # negatrive?
+                msg = lambda : "Cannot update range values of {0!s} to [{1}..{2}]: domain is infeasible".format(rngct, new_lb, new_ub)
+                cpx_range_value = RangeConstraint.static_cplex_range_value(self._model, new_lb, new_ub, msg)
                 cpx_linear.set_rhs(rng_index, cpx_rhs_value)
                 cpx_linear.set_range_values(rng_index, cpx_range_value)
 
@@ -1394,7 +1385,7 @@ class CplexEngine(DummyEngine):
         else:
             pass
 
-    def solve(self, mdl, parameters=None):
+    def solve(self, mdl, parameters=None, lex_mipstart=None):
         self._resync_if_needed()
 
         cpx = self._cplex
@@ -1422,17 +1413,23 @@ class CplexEngine(DummyEngine):
             self.sync_equivalence_cts(mdl)
             self._apply_sos(mdl)
 
+            if mdl.clean_before_solve:
+                self.clean_before_solve()
+
             # --- mipstart block ---
             mip_starts = mdl.mip_starts
             cpx_mip_starts = cpx.MIP_starts
             effort_level = cpx.MIP_starts.effort_level.repair
-            if mdl.clean_before_solve:
-                self.clean_before_solve()
-            for mp in mip_starts:
-                if not isinstance(mp, SolveSolution):  # pragma: no cover
-                    mdl.fatal("mip_starts expects Solution, got: {0!r} - ignored", mp)
-                cpx_sol = self.sol_to_cpx_mipstart(mdl, mp, effort_level)
-                cpx_mip_starts.add(cpx_sol, effort_level)
+            if not lex_mipstart:
+                # ignore mip starts if within lexicographic
+                for mp in mip_starts:
+                    if not isinstance(mp, SolveSolution):  # pragma: no cover
+                        mdl.fatal("mip_starts expects Solution, got: {0!r} - ignored", mp)
+                    cpx_sol = self.sol_to_cpx_mipstart(mdl, mp, effort_level)
+                    cpx_mip_starts.add(cpx_sol, effort_level)
+            elif mip_starts:
+                self._model.warning("Lexicographic solve ignored {0} mipstarts".format(len(mip_starts)))
+
 
             # --- end of mipstart block ---
 
@@ -1959,7 +1956,7 @@ class CplexEngine(DummyEngine):
             return parameter.default_value
 
     def get_solve_status(self):  # pragma: no cover
-        from docloud.status import JobSolveStatus
+        from docplex.util.status import JobSolveStatus
         # In this function we try to do the exact same mappings as the IloCplex C++ and Java classes.
         # However, this is not always possible since the C++ and Java implementations are not consistent
         # and sometimes they are even in error (see RTC-21923).
@@ -2161,7 +2158,7 @@ def unpickle_cplex_engine(mdl, is_traced):
     unpicking_env = Environment()
     if unpicking_env.has_cplex:
         cplex_engine = CplexEngine(mdl)
-        cplex_engine.notify_trace_output(sys.stdout if is_traced else None)  # what to do if file??
+        cplex_engine.set_streams(sys.stdout if is_traced else None)  # what to do if file??
         # mark to be resync'ed
         cplex_engine._mark_as_out_of_sync()
         return cplex_engine

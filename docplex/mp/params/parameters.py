@@ -95,6 +95,9 @@ class ParameterGroup(object):
         """
         return len(self._subgroups)
 
+    def has_subgroups(self):
+        return len(self._subgroups) > 0
+
     def iter_subgroups(self):
         return iter(self._subgroups)
 
@@ -307,6 +310,11 @@ class Parameter(object):
         self._current_value = default_value
         # link to parent group
         group._add_param(self)
+
+    def ctor_name(self):
+        return self.__class__.__name__
+
+
 
     @property
     def short_name(self):

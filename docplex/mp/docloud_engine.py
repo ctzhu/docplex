@@ -12,7 +12,14 @@ from six import iteritems
 import tempfile
 
 from docplex.mp.engine import IndexerEngine
-from docplex.mp.docloud_connector import DOcloudConnector
+try:
+    # import DOcloudConnector only if JobClient is available
+    from docloud.job import JobClient
+    from docplex.mp.docloud_connector import DOcloudConnector
+except ImportError as ie:
+    # just ignore if docloud is not available
+    pass
+
 from docplex.mp.internal.json_solution_handler import JSONSolutionHandler
 from docplex.mp.internal.json_infeasibility_handler import JSONInfeasibilityHandler
 from docplex.mp.internal.json_conflict_handler import JSONConflictHandler
@@ -25,6 +32,8 @@ from docplex.mp.utils import normalize_basename
 from docplex.mp.constants import ConflictStatus
 from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrapper, VarUbConstraintWrapper
 from docplex.mp.constr import LinearConstraint, QuadraticConstraint, IndicatorConstraint
+
+from docplex.util.environment import make_attachment_name
 
 from docplex.mp.format import LP_format
 from docplex.mp.compat23 import StringIO
@@ -552,11 +561,11 @@ class DOcloudEngine(IndexerEngine):
 
         return result
 
-    def _make_attachment_name(self, job_name, extension):
-        return job_name + extension
+    def _make_attachment_name(self, basename, extension):
+        return make_attachment_name(basename + extension)
 
     # noinspection PyProtectedMember
-    def solve(self, mdl, parameters=None):
+    def solve(self, mdl, parameters=None, lex_mipstart=None):
         # Before submitting the job, we will build the list of attachments
         # parameters are CPLEX parameters
         attachments = []
@@ -577,28 +586,30 @@ class DOcloudEngine(IndexerEngine):
     
             # warmstart_data
             # export mipstart solution in CPLEX mst format, if any, else None
-            mdl_mipstarts = mdl.mip_starts
+            # if within a lexicographic solve, th elex_mipstart supersedes allother mipstarts
+            mdl_mipstarts = lex_mipstart or mdl.mip_starts
             if mdl_mipstarts:
                 warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts).encode('utf-8')
-                warmstart_name = self._make_attachment_name(job_name, ".mst")
+                mipstart_name = lex_mipstart.name.lower() if (lex_mipstart and lex_mipstart.name) else job_name
+                warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
                 attachments.append({'name': warmstart_name, 'data': warmstart_data})
-    
+
             # benders annotation
             if mdl.has_benders_annotations():
                 anno_data = ModelAnnotationPrinter.print_to_string(mdl).encode('utf-8')
                 anno_name = self._make_attachment_name(job_name, '.ann')
                 attachments.append({'name': anno_name, 'data': anno_data})
-    
+
             # info_to_monitor = {'jobid'}
             # if mdl.progress_listeners:
             # info_to_monitor.add('progress')
-    
+
             def notify_info(info):
                 if "jobid" in info:
                     mdl.fire_jobid(jobid=info["jobid"])
                 if "progress" in info:
                     mdl.fire_progress(progress_data=info["progress"])
-    
+
             # This block used to be try/catched for DOcloudConnector exceptions
             # and DOcloudException, but then infrastructure error were not
             # handled properly. Now we let the exception raise.
@@ -728,6 +739,9 @@ class DOcloudEngine(IndexerEngine):
         mdl.warning('unexpected index from cplex cloud: {}', ct_index)
 
     def get_solve_attribute(self, attr, index_seq):
+        return {}
+
+    def get_all_reduced_costs(self, mdl):
         return {}
 
     def get_solve_status(self):

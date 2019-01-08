@@ -24,8 +24,10 @@ from requests.exceptions import ConnectionError
 
 import warnings
 
+from docplex.util.status import JobSolveStatus
+
 from docloud.job import JobClient, DOcloudInterruptedException, DOcloudNotFoundError
-from docloud.status import JobSolveStatus, JobExecutionStatus
+from docloud.status import JobExecutionStatus
 
 from docplex.mp.utils import resolve_pattern, get_logger
 from docplex.mp.utils import CyclicLoop

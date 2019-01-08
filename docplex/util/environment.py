@@ -68,7 +68,7 @@ Then you run ``submit.py``::
 
 Environment representation can be accessed with different ways:
 
-    * direct object method calls, after retrieving an instance using 
+    * direct object method calls, after retrieving an instance using
       :meth:`docplex.util.environment.get_environment` and using methods of
       :class:`docplex.util.environment.Environment`.
     * using the function in package `docplex.util.environment`. They will call
@@ -86,6 +86,7 @@ Environment representation can be accessed with different ways:
            * :meth:`docplex.util.environment.remove_abort_callback`
 
 '''
+from collections import deque
 import json
 from functools import partial
 import os
@@ -93,6 +94,15 @@ import tempfile
 import threading
 import warnings
 import shutil
+import time
+import logging
+import sys
+
+try:
+    from string import maketrans, translate
+except ImportError:
+    maketrans = str.maketrans
+    translate = str.translate
 
 try:
     import pandas
@@ -100,6 +110,18 @@ except ImportError:
     pandas = None
 
 from six import iteritems
+
+from docplex.util.logging_utils import LoggerToFile, LoggerToDocloud
+
+log_level_mapping = {'OFF': None,
+                     'SEVERE': logging.ERROR,
+                     'WARNING': logging.WARNING,
+                     'INFO': logging.INFO,
+                     'CONFIG': logging.INFO,
+                     'FINE': logging.DEBUG,
+                     'FINER': logging.DEBUG,
+                     'FINEST': logging.DEBUG,
+                     'ALL': logging.DEBUG}
 
 
 class NotAvailableError(Exception):
@@ -152,6 +174,30 @@ def default_solution_storage_handler(env, solution):
 global_output_lock = threading.Lock()
 
 
+class SolveDetailsFilter(object):
+    '''Default solve detail filter class.
+
+    This default class filters details so that there are no more than 1 solve
+    details per second.
+    '''
+    def __init__(self, interval=1):
+        self.last_accept_time = 0
+        self.interval = interval
+
+    def filter(self, details):
+        '''Filters the details.
+
+        Returns:
+            True if the details are to be published.
+        '''
+        ret_val = None
+        now = time.time()
+        if (now - self.last_accept_time > self.interval):
+            ret_val = details
+            self.last_accept_time = now
+        return ret_val
+
+
 class Environment(object):
     ''' Methods for interacting with the execution environment.
 
@@ -181,14 +227,50 @@ class Environment(object):
             the :class:`~Environment` on which a solution should be saved. The
             `solution` is a dict containing all the data for an optimization
             solution. The default is :meth:`~default_solution_storage_handler`.
-        is_dods: True if the environment is Decision Optimization for Data Science.
+        record_history_fields: Fields which history is to be kept
+        record_history_size: maximum number of records in history
+        record_interval: min time between to history records
     '''
     def __init__(self):
         self.output_lock = global_output_lock
         self.solution_storage_handler = default_solution_storage_handler
         self.abort_callbacks = []
-        self.is_dods = False
         self.update_solve_details_dict = True
+        self.last_solve_details = {}  # stores the latest published details
+        # private behaviour for now: allows to filter details
+        # the SolveDetailsFilter.filter() method returns true if the details
+        # are to be kept
+        self.details_filter = None
+        self.unpublished_details = None
+        self._record_history_fields = None
+        # self.record_history_fields = ['PROGRESS_CURRENT_OBJECTIVE']
+        self.record_history = {}  # maps name -> deque
+        self.last_history_record = {}  # we keep the last here so that we can publish at end of solve
+        self.record_history_time_decimals = 2  # number of decimals for time
+        self.record_history_size = 100
+        self.record_min_time = 1
+        self.autoreset = True
+
+    def _reset_record_history(self, force=False):
+        if self.autoreset or force:
+            self.record_history = {}
+            self.unpublished_details = None
+
+    def get_record_history_fields(self):
+        if self._record_history_fields is None:
+            if self.is_dods():
+                self._record_history_fields = ['PROGRESS_CURRENT_OBJECTIVE']
+            else:
+                # the default out of dods is to not record any history
+                self._record_history_fields = []
+        return self._record_history_fields
+
+    def set_record_history_fields(self, value):
+        self._record_history_fields = value
+
+    # let record_history_fields be a property that is lazy initialized
+    # this gives the opportunity to set is_dods before record history fields are needed
+    record_history_fields = property(get_record_history_fields, set_record_history_fields)
 
     def store_solution(self, solution):
         '''Stores the specified solution.
@@ -361,6 +443,7 @@ class Environment(object):
         ''' Returns a parameter of the program.
 
         On DOcplexcloud, this method returns the job parameter whose name is specified.
+        On local solver, this method returns the environment variable whose name is specified.
 
         Args:
             name: The name of the parameter.
@@ -395,7 +478,7 @@ class Environment(object):
         #             :attr:`.Context.solver.auto_publish.solve_details`
         #         '''
         # ===============================================================================
-        pass
+        self._reset_record_history()
 
     def update_solve_details(self, details):
         '''Update the solve details.
@@ -407,6 +490,50 @@ class Environment(object):
 
         Args:
             details: A ``dict`` with solve details as key/value pairs.
+        '''
+        # publish details
+        to_publish = None
+        if self.update_solve_details_dict:
+            previous = self.last_solve_details
+            to_publish = {}
+            if details:
+                to_publish.update(previous)
+                to_publish.update(details)
+            self.last_solve_details = to_publish
+        else:
+            to_publish = details
+        # process history
+        to_publish = self.record_in_history(to_publish)
+
+        if self.details_filter:
+            if self.details_filter.filter(details):
+                self.publish_solve_details(to_publish)
+            else:
+                # just store the details for later use
+                self.unpublished_details = to_publish
+        else:
+            self.publish_solve_details(to_publish)
+
+    def record_in_history(self, details):
+        for f in self.record_history_fields:
+            if f in details:
+                current_ts = round(time.time(), self.record_history_time_decimals)
+                current_history_element = [current_ts, details[f]]
+                l = self.record_history.get(f, deque([], self.record_history_size))
+                self.record_history[f] = l
+                last_ts = l[-1][0] if len(l) >= 1 else -9999
+                if (current_ts - last_ts) >= self.record_min_time:
+                    l.append(current_history_element)
+                    details['%s.history' % f] = json.dumps(list(l))  # make new copy
+                else:
+                    self.last_history_record['%s.history' % f] = current_history_element
+        return details
+
+    def publish_solve_details(self, details):
+        '''Actually publish the solve specified details.
+
+        Returns:
+            The published details
         '''
         pass
 
@@ -429,7 +556,8 @@ class Environment(object):
         #             status: The solve status
         #         '''
         # ===============================================================================
-        pass
+        if self.unpublished_details:
+            self.publish_solve_details(self.unpublished_details)
 
     def set_stop_callback(self, cb):
         '''Sets a callback that is called when the script is run on
@@ -458,17 +586,66 @@ class Environment(object):
 
     stop_callback = property(get_stop_callback, set_stop_callback)
 
+    def get_engine_log_level(self):
+        '''Returns the engine log level as set by job parameter oaas.engineLogLevel.
+
+        oaas.engineLogLevel values are: OFF, SEVERE, WARNING, INFO, CONFIG, FINE, FINER, FINEST, ALL
+
+        The mapping to logging levels in python are:
+
+           * OFF: None
+           * SEVERE: logging.ERROR
+           * WARNING: logging.WARNING
+           * INFO, CONFIG: logging.INFO
+           * FINE, FINER, FINEST: logging.DEBUG
+           * ALL: logging.DEBUG
+
+
+        All other values are considered invalid values and will return None.
+
+        Returns:
+            The logging level or None if not set (off)
+        '''
+        oaas_level = self.get_parameter('oaas.engineLogLevel')
+        log_level = log_level_mapping.get(oaas_level.upper(), None) if oaas_level else None
+        return log_level
+
+    def is_debug_mode(self):
+        '''Returns true if the engine should run in debug mode.
+
+        This is equivalent to ``env.get_engine_log_level() <= logging.DEBUG``
+        '''
+        lvl = self.get_engine_log_level()
+        # logging.NOTSET is zero so will return false
+        return (self.get_engine_log_level() <= logging.DEBUG) if lvl is not None else False
+
+    def is_dods(self):
+        '''Returns true if this environment in running in DODS.
+        '''
+        value = os.environ.get("IS_DODS")
+        return str(value).lower() == "true"
+
+    def get_logger(self):
+        '''Returns a ``docplex.util.logging.DocplexLogger`` that can be use
+        for logging purposes.
+        '''
+        return None
+
 
 class LocalEnvironment(Environment):
     # The environment solving environment using all local input and outputs.
     def __init__(self):
         super(LocalEnvironment, self).__init__()
+        self.logger = None
 
     def get_input_stream(self, name):
         return open(name, "rb")
 
     def get_output_stream(self, name):
         return open(name, "wb")
+
+    def get_parameter(self, name):
+        return os.environ.get(name, None)
 
     def set_output_attachment(self, name, filename):
         # check that name leads to a file in cwd
@@ -478,6 +655,11 @@ class LocalEnvironment(Environment):
 
         if os.path.dirname(os.path.abspath(filename)) != os.getcwd():
             shutil.copyfile(filename, name)  # copy to current
+
+    def get_logger(self):
+        if not self.logger:  # lazy init
+            self.logger = LoggerToFile(sys.stdout)
+        return self.logger
 
 
 class OutputFileWrapper(object):
@@ -526,7 +708,7 @@ class WorkerEnvironment(Environment):
         super(WorkerEnvironment, self).__init__()
         self.solve_hook = solve_hook
         self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
-        self.last_solve_details = {}
+        self.logger = None
 
     def get_available_core_count(self):
         return self.solve_hook.get_available_core_count()
@@ -546,24 +728,19 @@ class WorkerEnvironment(Environment):
     def get_parameter(self, name):
         return self.solve_hook.get_parameter_value(name)
 
-    def update_solve_details(self, details):
-        if self.update_solve_details_dict:
-            previous = self.last_solve_details
-            self.last_solve_details = {}
-            if details:
-                self.last_solve_details.update(previous)
-                self.last_solve_details.update(details)
-                self.solve_hook.update_solve_details(self.last_solve_details)
-        else:
-            self.solve_hook.update_solve_details(details)
+    def publish_solve_details(self, details):
+        super(WorkerEnvironment, self).publish_solve_details(details)
+        self.solve_hook.update_solve_details(details)
 
     def notify_start_solve(self, solve_details):
+        super(WorkerEnvironment, self).notify_start_solve(solve_details)
         self.solve_hook.notify_start_solve(None,  # model
                                            solve_details)
 
     def notify_end_solve(self, status):
+        super(WorkerEnvironment, self).notify_end_solve(status)
         try:
-            from docloud.status import JobSolveStatus
+            from docplex.util.status import JobSolveStatus
             engine_status = JobSolveStatus(status) if status else JobSolveStatus.UNKNOWN
             self.solve_hook.notify_end_solve(None,  # model, unused
                                              None,  # has_solution, unused
@@ -581,6 +758,14 @@ class WorkerEnvironment(Environment):
     def get_stop_callback(self):
         warnings.warn('get_stop_callback() is deprecated since 2.4 - Use the abort_callbacks property instead')
         return self.abort_callbacks[1] if self.abort_callbacks else None
+
+    def get_logger(self):
+        if not self.logger:
+            if hasattr(self.solve_hook, 'logger'):
+                self.logger = LoggerToDocloud(self.solve_hook.logger)
+            else:
+                self.logger = LoggerToFile(sys.stdout)
+        return self.logger
 
 
 class OverrideEnvironment(object):
@@ -805,3 +990,34 @@ def remove_abort_callback(cb):
         cb: The abort callback
     '''
     default_environment.abort_callbacks.remove(cb)
+
+attachment_invalid_characters = '/\\?%*:|"#<> '
+attachment_trans_table = maketrans(attachment_invalid_characters, '_' * len(attachment_invalid_characters))
+
+
+def make_attachment_name(name):
+    '''From `name`, create an attachment name that is correct for DOcplexcloud.
+
+    Attachment filenames in DOcplexcloud has certain restrictions. A file name:
+
+        - is limited to 255 characters;
+        - can include only ASCII characters;
+        - cannot include the characters `/\?%*:|"<>`, the space character, or the null character; and
+        - cannot include _ as the first character.
+
+    This method replace all unauthorized characters with _, then removing leading
+    '_'.
+
+    Args:
+        name: The original attachment name
+    Returns:
+        An attachment name that conforms to the restrictions.
+    Raises:
+        ValueError if the attachment name is more than 255 characters
+    '''
+    new_name = translate(name, attachment_trans_table)
+    while (new_name.startswith('_')):
+        new_name = new_name[1:]
+    if len(new_name) > 255:
+        raise ValueError('Attachment names are limited to 255 characters')
+    return new_name

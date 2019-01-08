@@ -258,9 +258,9 @@ class TextModelPrinter(ModelPrinter):
             # 2 rhs is lb - constant
             # 3 bounds are (0, ub-lb)
             varname = 'Rg%s' % self.linearct_print_name(rng)
-            rlb = rng.cplex_range_lb()
-            ub = rng.ub - rng.lb
-            self._rangeData[rng] = (varname, rlb, ub)
+            rhs = rng.cplex_num_rhs()
+            rngval = rng.cplex_range_value(do_raise=False)
+            self._rangeData[rng] = (varname, rhs, rngval)
 
     @staticmethod
     def fix_whitespace(name):

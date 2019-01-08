@@ -1091,8 +1091,8 @@ def equals(v1, v2):
     if not _equals_lists(dv1, _get_vars(v2)):
         return False
     for k in dv1:
-        if not equals(getattr(v1, k), getattr(v2, k)):
-           return False
+        if not equals(getattr(v1, k, None), getattr(v2, k, None)):
+            return False
     return True
 
 
@@ -1196,7 +1196,7 @@ def open_utf8(file, mode='r'):
         mode:  Open mode
     """
     encd = 'utf-8-sig' if mode.startswith('r') else 'utf-8'
-    return io.open(file, mode=mode, encoding=encd)
+    return io.open(file, mode=mode, encoding=encd, errors='ignore')
 
 
 def list_module_public_functions(mod, excepted=()):
@@ -1734,6 +1734,16 @@ builtin_abs   = builtin.abs
 builtin_range = builtin.range
 builtin_all   = builtin.all
 builtin_any   = builtin.any
+
+
+#-----------------------------------------------------------------------------
+# Range iterator
+#-----------------------------------------------------------------------------
+
+if IS_PYTHON_2:
+    xrange = builtin.xrange
+else:
+    xrange = builtin.range
 
 
 #-----------------------------------------------------------------------------

@@ -22,7 +22,7 @@ from docplex.mp.solution import SolveSolution
 
 from itertools import product
 
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 
 
 
@@ -49,9 +49,15 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
     nb_missing = max(0, dimen - actual_nb_slots)
     return fmt + nb_missing * (key_format % '%s')
 
+def is_tuple_w_standard_str(z):
+    if isinstance(z, tuple):
+        zclass = z.__class__
+        return zclass is tuple or not ("__str__" in zclass.__dict__)
+    else:
+        return False
 
 def str_flatten_tuple(key, sep="_"):
-    if isinstance(key, tuple):
+    if is_tuple_w_standard_str(key):
         return sep.join(str(f) for f in key)
     else:
         return str(key)
@@ -521,7 +527,7 @@ class ModelFactory(_AbstractModelFactory):
     def _check_range_feasibility(self, lb, ub, expr):
         # INTERNAL
         if not lb <= ub:
-            self._model.warning("infeasible range constraint, lb={0}, ub={1}, expr={2}", lb, ub, expr)
+            self._model.error("infeasible range constraint, lb={0}, ub={1}, expr={2}", lb, ub, expr)
 
     def new_range_constraint(self, lb, expr, ub, name=None, check_feasible=True):
         self._check_range_feasibility(lb, ub, expr)
@@ -655,7 +661,7 @@ class ModelFactory(_AbstractModelFactory):
             rngct._internal_set_lb(new_lb)
         if new_ub is not None:
             rngct._internal_set_ub(new_ub)
-        self._check_range_feasibility(lb_to_use, ub_to_use, rngct.expr)
+        self._check_range_feasibility(rngct.lb, rngct.ub, rngct.expr)
 
     def set_range_constraint_expr(self, rngct, new_expr):
         new_op = self._to_linear_operand(new_expr)

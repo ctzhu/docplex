@@ -60,7 +60,7 @@ class ModelAggregator(object):
                 sum_expr = self.sum(terms)
                 return sum_expr * coefs
         else:
-            self._model.fatal("scal_prod expects iterable or number, gort: {0!s}", coefs)
+            self._model.fatal("scal_prod expects iterable or number, {0!s} was passed", coefs)
 
         # model has checked terms is an ordered sequence
         return self._scal_prod(terms, coefs)
@@ -177,7 +177,12 @@ class ModelAggregator(object):
     def _varlist_to_terms(self, var_list):
         # INTERNAL: converts a sum of vars to a dict, sorting if needed.
         linear_term_dict_type = self._model._term_dict_type
-        if len(var_list) == len(set(var_list)):
+        try:
+            assume_no_dups = len(var_list) == len(set(var_list))
+        except TypeError:
+            assume_no_dups = False
+
+        if assume_no_dups:
             varsum_terms = linear_term_dict_type()
             linear_terms_setitem = linear_term_dict_type.__setitem__
             for v in var_list:
@@ -185,7 +190,7 @@ class ModelAggregator(object):
                 #     print('bingo')
                 linear_terms_setitem(varsum_terms, v, 1)
         else:
-            # there are repeated variables.
+            # there might be repeated variables.
             varsum_terms = linear_term_dict_type()
             for v in var_list:
                 update_dict_from_item_value(varsum_terms, v, 1)

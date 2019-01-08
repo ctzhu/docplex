@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.6.94
+Version: 2.7.112
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,8 +244,28 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
+        Changed in 2.7.112:
+        ```````````````````
+        * In ``docplex.mp``:
+           * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the
+             product of the quadratic expression and the constant value.
+           * Model.solve_lexicographic() on cloud now send the previous pass solution as a MIP start (for MIP problems)
+           * The slack of quadratic constraints always returned  zero. Now returns the correct value.
+           * Accessing the dual (or slack) of a constraint that is not added to the model returned zero; now it raises an exception. A constraint must belong to a model to return a valid dual (or slack) value
+           * Range constraints with infeasible domain (i.e. lb > ub) did not fail to solve. Now they raise a modeling exception.
+           * Multiplying two absolute value expressions raised an exception. Now fixed.
+           * When using tuples in variable dictionaries, the default name generation used to generate non-LP-compliant names,
+             because of ( and ). Now the name generator formats the tuples with a "_" separator without parentheses.
+        
+        * In ``docplex.cp``:
+           * Split fzn stuff in a separate package docplex.cp.fzn
+           * Optimize construction of arrays in FZN parser
+           * Enhance FZN parser and save 30% time
+        
+        
         Changed in 2.6.94:
         ``````````````````
+        
         * In ``docplex.cp``:
            * Allow CpoModel.add() to accept list of constraints.
            * Fix a bug in the conversion of an array of boolean constants into CPO expression.
@@ -257,14 +277,14 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Parameters mean_UB and mean_LB are now optional in standard_deviation()
            * CpoModel.add() checks that the added expression is limited to constraint, boolean, objective or search phase.
            * Add documented functions slope_piecewise_linear() and coordinate__piecewise_linear() in modeler.py.
-        
+           * Remove default configuration settings for parameters TimeLimit and Workers.
         
         
         Changed in 2.5.92:
         ``````````````````
         
         * ``docplex.cli`` gains new features:
-           * option ``--details`` will display solve details as they are publihsed on
+           * option ``--details`` will display solve details as they are published on
              DOcplexcloud.
            * options ``--url`` and ``-key`` allow specification of credentials without
              using a config file.
@@ -280,7 +300,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Solve is automatically set to start/next loop when SolverProgressPanelListener is used.
            * In CpoModel, add a method that allows to substitute a function by another in the whole model.
            * Overwrite method __bool__ to avoid accidental use of CPO expressions as Python booleans.
-           * Add special cases to search for the local CP Optmizer Interactive executable.
+           * Add special cases to search for the local CP Optimizer Interactive executable.
            * Allow methods min(), max(), min_of() and max_of() to support variable number of arguments.
            * Allow method all_diff() to support variable number of arguments.
            * Context parameter 'length_for_rename' is deprecated. Only length_for_alias is used.
@@ -298,7 +318,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Examples are now available as Zeppelin notebooks.
         
         * In ``docplex.mp``:
-           * Express a linear problem as a scikit-learn tranformer by providing a numpy, a pandas or scipy matrix.
+           * Express a linear problem as a scikit-learn transformer by providing a numpy, a pandas or scipy matrix.
            * Logical constraints: constraint equivalence, if-then & rshift operator.
            * Meta-constraints: allow the use of discrete
              linear constraints in expressions, using their truth value.
@@ -309,7 +329,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         
         * In ``docplex.cp``:
            * add new method run_seeds() to execute a model multiple times, available with local solver 12.8.
-           * add support of new solver infos 'SearchStatus' eand 'SearchStopCause'.
+           * add support of new solver infos 'SearchStatus' and 'SearchStopCause'.
            * In method ``docplex.cp.model.CpoModel.propagate()``, add possibility to add an optional constraint to the model.
            * add domain iterator in integer variables and integer variables solutions, allowing to get domain
              as a list of individual integers.
@@ -365,7 +385,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
           have been added to directly indicate an objective at model level.
         * Notebook example ``scheduling_tuto.ipynb`` contains an extensive tutorial
           to solve scheduling problems with CP.
-        * Modeling methof sum() now supports sum of cumul expressions.
+        * Modeling method sum() now supports sum of cumul expressions.
         * Methods ``docplex.cp.model.start_search()`` allows to start a new 
           search sequence directly from the model object.
         * When setting ``context.solver.auto_publish`` is set, and using the CPLEX

@@ -623,7 +623,10 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 self._assign_scaled(other, this_constant)
 
         elif self.has_quadratic_term():
-            StaticTypeChecker.mul_quad_lin_error(self.model, self, other)
+            if other.is_constant():
+                return self.multiply(other.get_constant())
+            else:
+                StaticTypeChecker.mul_quad_lin_error(self.model, self, other)
 
         else:
             # self is actually a linear expression

@@ -8,6 +8,7 @@
 from docplex.mp.utils import is_number
 
 
+
 class StaticTypeChecker(object):
 
     @staticmethod
@@ -34,9 +35,20 @@ class StaticTypeChecker(object):
         if not ct.is_discrete():
             logger.fatal('{0}, {1!s} is not discrete', msg, ct)
 
+    @classmethod
+    def typecheck_added_constraint(cls, mdl, ct):
+        if not ct.has_valid_index():
+            mdl.fatal("Constraint: {0!s} has not been added to any model".format(ct))
+        elif mdl is not ct.model:
+            mdl.fatal("Constraint: {0!s} belongs to a different model".format(ct))
 
     @classmethod
     def mul_quad_lin_error(cls, logger, f1, f2):
         logger.fatal(
-            "Cannot multiply {0!s} by {1!s}, some terms would have degree > 3. Maximum polynomial degree is 2.",
+            "Cannot multiply {0!s} by {1!s}, some terms would have degree >= 3. Maximum polynomial degree is 2.",
             f1, f2)
+
+    @classmethod
+    def typecheck_callable(cls, logger, arg, msg):
+        if not callable(arg):
+            logger.fatal(msg)

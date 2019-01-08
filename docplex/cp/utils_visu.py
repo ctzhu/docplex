@@ -1311,12 +1311,13 @@ def panel(name=None):
 
     If no current timeline figure exists, one will be automatically created.
     The type of the created panel will depend on subsequent commands:
-        Command     -> Panel type
-        sequence    -> sequence panel
-        transition  -> sequence panel
-        interval    -> interval panel
-        function    -> function panel
-        segment     -> function panel
+
+        * Command     -> Panel type
+        * sequence    -> sequence panel
+        * transition  -> sequence panel
+        * interval    -> interval panel
+        * function    -> function panel
+        * segment     -> function panel
 
     Args:
         name (str): Name of the panel.
@@ -1469,9 +1470,10 @@ def transition(*args):
     panel.
 
     Args:
-        *args: The following combination of arguments is allowed:
-            (int start, int end)
-            (CpoIntervalVarSolution cpointerval)
+        args: The following combination of arguments is allowed:
+
+            * (int start, int end)
+            * (CpoIntervalVarSolution cpointerval)
 
     Examples:
     ::
@@ -1492,7 +1494,7 @@ def segment(*args):
     created.
 
     Args:
-        *args: The following combination of arguments is allowed:
+        args: The following combination of arguments is allowed:
 
             * (int start, int end, int vstart, int vend, string name)
             * (int start, int end, int vstart, int vend)
@@ -1504,11 +1506,12 @@ def segment(*args):
     If start=INT_MIN and end=INT_MAX, then you should have vstart=vend and the
     segment represents the constant function f=vstart on [INT_MIN,INT_MAX).
     Otherwise:
-        When start>INT_MIN, vstart denotes the value of the segment at its start.
-        When start=INT_MIN, vstart denotes the slope of the segment at its start.
-        When end<INT_MAX, vend denotes the value of the segment at its end.
-        When end=INT_MAX, vend denotes the slope of the segment at its end.
-        When vend is not specified, it means the segment has a constant value vstart (step).
+
+        * When start>INT_MIN, vstart denotes the value of the segment at its start.
+        * When start=INT_MIN, vstart denotes the slope of the segment at its start.
+        * When end<INT_MAX, vend denotes the value of the segment at its end.
+        * When end=INT_MAX, vend denotes the slope of the segment at its end.
+        * When vend is not specified, it means the segment has a constant value vstart (step).
 
     Examples:
     ::
@@ -1534,7 +1537,7 @@ def pause(*args):
     all segments of the function with value 0.
 
     Args:
-        *args: The following combination of arguments is allowed:
+        args: The following combination of arguments is allowed:
 
             * (int start, int end)
             * (CpoIntervalVarSolution cpointerval)

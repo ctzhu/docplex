@@ -58,8 +58,8 @@ When exists, the corresponding operator are also overloaded to make easier the w
 The following functions are used to construct logical expressions.
 As for arithmetic, the corresponding operators are also overloaded.
 
- * :meth:`logical_and`: Logical AND of two boolean expressions.
- * :meth:`logical_or`: Logical OR of two boolean expressions.
+ * :meth:`logical_and`: Logical AND of two boolean expressions or an array of expressions.
+ * :meth:`logical_or`: Logical OR of two boolean expressions or an array of expressions.
  * :meth:`logical_not`: Logical NOT of a boolean expression.
  * :meth:`equal`: Equality between two expressions.
  * :meth:`diff`: Inequality between two expressions.

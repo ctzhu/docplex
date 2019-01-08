@@ -3,6 +3,7 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
+# gendoc: ignore
 
 from docplex.mp.advmodel import AdvModel
 from docplex.mp.sktrans.pd_utils import make_solution
@@ -14,7 +15,7 @@ class DOcplexModeler(object):
         pass
 
     @classmethod
-    def _solve_model(cls, mdl, cols, colnames, objsense, costs, **params):
+    def _solve_model(cls, mdl, cols, colnames, objsense, costs, solution_maker=make_solution, **params):
         if costs is not None:
             mdl.set_objective(sense=objsense, expr=mdl.scal_prod_vars_all_different(cols, costs))
 
@@ -33,7 +34,7 @@ class DOcplexModeler(object):
         # -- solving
         s = mdl.solve()
         all_values = s.get_all_values() if s else None
-        return make_solution(all_values, colnames, keep_zeros)
+        return solution_maker(all_values, colnames, keep_zeros)
 
 
     @classmethod
@@ -41,12 +42,14 @@ class DOcplexModeler(object):
                                             var_types, var_names,
                                             cts_mat, rhs,
                                             objsense, costs,
+                                            cast_to_float,
+                                            solution_maker=make_solution,
                                             **transform_params):
         with AdvModel(name='lp_transformer') as mdl:
             varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
             sense = transform_params.get('sense', 'le')
             mdl.add(mdl.matrix_constraints(cts_mat, varlist, rhs, sense=sense))
-            return cls._solve_model(mdl, varlist, var_names, objsense, costs=costs,
+            return cls._solve_model(mdl, varlist, var_names, objsense, costs=costs, solution_maker=solution_maker,
                                     **transform_params)
 
     @classmethod
@@ -54,11 +57,13 @@ class DOcplexModeler(object):
                                            var_types, var_names,
                                            cts_mat, range_mins, range_maxs,
                                            objsense, costs,
+                                           cast_to_float,
+                                           solution_maker=make_solution,
                                            **transform_params):
         with AdvModel(name='lpr_transformer') as mdl:
             varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
             mdl.add(mdl.matrix_ranges(cts_mat, varlist, range_mins, range_maxs))
-            return cls._solve_model(mdl, varlist, var_names, objsense, costs=costs,
+            return cls._solve_model(mdl, varlist, var_names, objsense, costs=costs, solution_maker=solution_maker,
                                     **transform_params)
 
     @classmethod
@@ -66,6 +71,7 @@ class DOcplexModeler(object):
                                             var_types, var_names,
                                             nb_rows, cts_sparse_coefs,
                                             objsense, costs,
+                                            solution_maker=make_solution,
                                             **transform_params):
         with AdvModel(name='lp_transformer') as mdl:
             varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs)
@@ -83,4 +89,4 @@ class DOcplexModeler(object):
             cts = [lfactory.new_binary_constraint(exprs[r], rhs=rhss[r], sense=sense) for r in r_rows]
             lfactory._post_constraint_block(cts)
             return cls._solve_model(mdl, varlist, var_names, objsense=objsense, costs=costs,
-                                    **transform_params)
+                                    solution_maker=solution_maker, **transform_params)

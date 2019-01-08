@@ -703,6 +703,12 @@ INTERVAL_MIN = -INTERVAL_MAX
 INFINITY = float('inf')
 """ Infinity """
 
+POSITIVE_INFINITY = float('inf')
+""" Positive infinity """
+
+NEGATIVE_INFINITY = float('-inf')
+""" Negative infinity """
+
 DEFAULT_INTERVAL = (0, INTERVAL_MAX)
 """ Default interval. """
 
@@ -2031,7 +2037,7 @@ _PYTHON_TO_CPO_TYPE[CpoStateFunction]    = Type_StateFunction
 def _is_cpo_int(arg):
     """ Check that a value is a valid integer for cpo
     Args:
-        val:  Value to check
+        arg:  Value to check
     Returns:
         True if value is a valid CPO integer, False otherwise
     """
@@ -2051,7 +2057,7 @@ def _is_cpo_int_interval(val):
 def _is_cpo_interval_value(arg):
     """ Check that a value is a valid value for an interval
     Args:
-        val:  Value to check
+        arg:  Value to check
     Returns:
         True if value is a valid interval, False otherwise
     """
@@ -2103,7 +2109,7 @@ def _check_arg_interval(arg, name):
     # Check single value
     if is_int(arg):
         assert INTERVAL_MIN <= arg <= INTERVAL_MAX, "Argument '{}' should be in [INTERVAL_MIN , INTERVAL_MAX]".format(name)
-        return (arg, arg)
+        return arg, arg
 
     assert isinstance(arg, (list, tuple)) and len(arg) == 2, "Argument '" + name + "' should be an integer or an interval expressed as a tuple of two integers"
     lb = arg[0]
@@ -2129,9 +2135,9 @@ def _build_int_var_domain(min, max, domain):
     if domain is None:
         if min is None:
             if max is None:
-                return ((INT_MIN, INT_MAX),)
+                return (INT_MIN, INT_MAX),
             _check_arg_integer(max, "max")
-            return ((INT_MIN, max),)
+            return (INT_MIN, max),
         else:
             if max is None:
                 # Test that first argument is directly a domain (ascending compatibility)
@@ -2140,12 +2146,12 @@ def _build_int_var_domain(min, max, domain):
                     min = None
                 else:
                     _check_arg_integer(min, "min")
-                    return ((min, INT_MAX),)
+                    return (min, INT_MAX),
             else:
                 _check_arg_integer(min, "min")
                 _check_arg_integer(max, "max")
                 assert min <= max, "Argument 'min' should be lower or equal to 'max'"
-                return ((min, max),)
+                return (min, max),
 
     # Domain given extensively
     assert (min is None) and (max is None), "If domain is given extensively in 'domain', 'min' and/or 'max' should not be given"
@@ -2164,7 +2170,7 @@ def _check_arg_step_function(arg, name):
     Raises:
         Exception if argument has the wrong format
     """
-    assert isinstance(arg, CpoExpr) and (arg.type == Type_StepFunction), "Argument '" + name + "' should be a StepFunction"
+    assert isinstance(arg, CpoExpr) and (arg.type == Type_StepFunction), "Argument '" + name + "' should be a CpoStepFunction"
     return arg
 
 
@@ -2175,7 +2181,7 @@ def _check_arg_intensity(intensity, granularity):
        granularity: Granularity
     """
     if __debug__ and (intensity is not None):
-        assert isinstance(intensity, CpoExpr) and (intensity.is_type(Type_StepFunction)), "Interval variable 'intensity' should be None or a StepFunction"
+        assert isinstance(intensity, CpoExpr) and (intensity.is_type(Type_StepFunction)), "Interval variable 'intensity' should be None or a CpoStepFunction"
         if granularity is None:
             granularity = 100
         for (s, v) in intensity.get_step_list():
@@ -2295,7 +2301,7 @@ def _is_equal_expressions(v1, v2):
             if (cx < 0) and (alen != len(ar2)):
                 return False
             cx += 1
-            if (cx >= alen):
+            if cx >= alen:
                 estack.pop()
                 continue
             # Store new child index in descriptor

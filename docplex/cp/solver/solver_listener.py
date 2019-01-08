@@ -479,14 +479,14 @@ else:
 
         The solver progress panel displays the following information:
 
-         * the time ellapsed since the beginning of the solve,
+         * the time elapsed since the beginning of the solve,
          * the last known objective (if any)
          * the last known values of the KPIs (if any)
          * a *Stop solve* button allowing to stop the solve and keep the last known solution as model solution.
          * if parse_log indicator is set, information taken from the log: memory usage, bounds, etc
 
         Args:
-            parse_log(optional): Enaable log parsing to retrieve additional information such as memory, bounds, etc
+            parse_log(optional): Enable log parsing to retrieve additional information such as memory, bounds, etc
         """
         def __init__(self, parse_log=False):
             super(SolverProgressPanelListener, self).__init__()
@@ -544,8 +544,7 @@ else:
                         infos['Current bound'] = line[20:ex]
                     self.progress_panel.notify_infos(infos)
                 elif line.startswith(" ! Current objective is "):
-                    infos = {}
+                    infos = {'Current objective': line[24:]}
                     #infos['Current objective'] = [int(x) for x in line[24:].split(";")]
-                    infos['Current objective'] = line[24:]
                     self.progress_panel.notify_infos(infos)
 

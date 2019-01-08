@@ -1217,7 +1217,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     # noinspection PyPep8
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.print_name()):
         # INTERNAL
-        # Writes unicode repsentation of self
+        # Writes unicode representation of self
         c = 0
         # noinspection PyPep8Naming
         SP = u' '
@@ -1755,7 +1755,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
     def square(self):
         return self
 
-    # arithmetci to self
+    # arithmetic to self
     add = plus
     subtract = minus
     multiply = times

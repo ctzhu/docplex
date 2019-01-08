@@ -129,7 +129,7 @@ class ProgressListener(object):
             incumbent_value = incumbents[v._index]
             if incumbent_value:
                 # silently round discrete values, just as with engine solutions.
-                sol._set_var_value_internal(v, incumbent_value, rounding=True, do_warn_on_non_discrete=False)
+                 sol._set_var_value_internal(v, incumbent_value, rounding=True)
         return sol
 
     @classmethod

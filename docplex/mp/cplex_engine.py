@@ -1261,8 +1261,9 @@ class CplexEngine(DummyEngine):
     def get_name(self):
         return 'cplex_local'
 
-    def _sol_to_cpx(self, model, mipstart):
-        tl = mipstart._to_tuple_list(model)
+    @staticmethod
+    def sol_to_cpx_mipstart(model, mipstart, effort_level=4):
+        tl = [(dv.get_index(), mipstart[dv]) for dv in model.iter_variables()]
         ul = zip(*tl)
         # py3 zip() returns a generator, not a list, and CPLEX needs a list!
         return list(ul)
@@ -1430,7 +1431,7 @@ class CplexEngine(DummyEngine):
             for mp in mip_starts:
                 if not isinstance(mp, SolveSolution):  # pragma: no cover
                     mdl.fatal("mip_starts expects Solution, got: {0!r} - ignored", mp)
-                cpx_sol = self._sol_to_cpx(mdl, mp)
+                cpx_sol = self.sol_to_cpx_mipstart(mdl, mp, effort_level)
                 cpx_mip_starts.add(cpx_sol, effort_level)
 
             # --- end of mipstart block ---

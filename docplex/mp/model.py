@@ -943,7 +943,7 @@ class Model(object):
         :param descr: A string describing the type of the object being created (e.g. Constraint, Variable).
         :param mobj:  The newly created modeling object.
         :param mindex: The index as returned by the engine.
-        :param name_dir: The directory of objects by name (e.g. name -> constraitn directory).
+        :param name_dir: The directory of objects by name (e.g. name -> constraint directory).
         :param idx_scope:  The index scope
         """
         mobj.set_index(mindex)
@@ -2458,7 +2458,7 @@ class Model(object):
         elif self_trivial_warn_level > self.warn_trivial_infeasible:
             return
         # ---
-        # herefater we are sure to warn
+        # hereafter we are sure to warn
         if ct is None:
             arg = None
         elif ctname:
@@ -2945,7 +2945,7 @@ class Model(object):
             Use Model.add_constraint() or Model.add() to add it to the model.
 
         Note:
-            This constraint relies on the status of the `if_ct` constraaint, so this constraint must be discrete,
+            This constraint relies on the status of the `if_ct` constraint, so this constraint must be discrete,
             otherwise an exception will be raised.
         """
         checker = self._checker
@@ -2966,7 +2966,7 @@ class Model(object):
             an instance of IfThenConstraint.
 
         Note:
-            This constraint relies on the status of the `if_ct` constraaint, so this constraint must be discrete,
+            This constraint relies on the status of the `if_ct` constraint, so this constraint must be discrete,
             otherwise an exception will be raised.
         """
         ifthen_ct = self.if_then(if_ct, then_ct, negate=negate)
@@ -3748,7 +3748,7 @@ class Model(object):
             tolerances are used at each step to constraint the previous
             objective value to be be 'no worse' than the value found in the
             last pass. For example, if relative tolerance is 2% and pass #1 has
-            found an objective of 100, then pass #2 will comstraint the first
+            found an objective of 100, then pass #2 will constraint the first
             goal to be no greater than 102 if minimizing, or
             no less than 98, if maximizing.
 
@@ -3762,7 +3762,7 @@ class Model(object):
             if 0 <= tolerances <= 1:
                 schemes = generate_constant(_ToleranceScheme(relative=tolerances), count_max=None)
             else:
-                self.fatal('lexicograhphic tolerances expects number in [0,1], got: {0}', tolerances)
+                self.fatal('lexicographic tolerances expects number in [0,1], got: {0}', tolerances)
 
         elif is_indexable(tolerances) and not isinstance(tolerances, tuple):
             schemes = []
@@ -4389,7 +4389,7 @@ class Model(object):
                                     errors='backslashreplace'))
 
     def kpis_as_dict(self, s=None, kpi_filter=None, objective_key=None, use_names=True):
-        """ Returns KPI values in a solutuion as a dictionary.
+        """ Returns KPI values in a solution as a dictionary.
 
         Each KPI has a value in the solution. This method returns a dictionary of KPI values,
         indexed by KPI objects.
@@ -4530,7 +4530,7 @@ class Model(object):
             `model.add_kpi(x+y+z, "Total Profit")` adds the expression `(x+y+z)` as a KPI with the name "Total Profit".
 
             `model.add_kpi(x+y+z)` adds the expression `(x+y+z)` as a KPI with
-            the name "x+y+z", assumng variables x,y,z have names 'x', 'y', 'z' (resp.)
+            the name "x+y+z", assuming variables x,y,z have names 'x', 'y', 'z' (resp.)
 
         Returns:
             The newly added KPI instance.
@@ -4746,7 +4746,7 @@ class Model(object):
     def parameters(self):
         """ This property returns the root parameter group of the model.
 
-        The root parameter group models the parameter hirerachy.
+        The root parameter group models the parameter hierarchy.
         It is the way to access any CPLEX parameter and get or set its value.
 
         Examples:

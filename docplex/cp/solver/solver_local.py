@@ -378,9 +378,6 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                 self.end()
                 raise LocalSolverException("Unknown event received from local solver: " + str(evt))
 
-        # Return
-        return data
-
 
     def _wait_json_result(self, evt):
         """ Wait for a JSON result while forwarding logs if any.

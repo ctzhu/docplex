@@ -1,8 +1,25 @@
 Changelog
 ---------
 
+Changed in 2.6.93:
+``````````````````
+* In ``docplex.cp``:
+   * Allow CpoModel.add() to accept list of constraints.
+   * Fix a bug in the conversion of an array of boolean constants into CPO expression.
+   * Extend CpoModel method set_parameters() to accept a dictionary and/or optional list of updates using named arguments.
+   * Method CpoModel.set_parameters() now clone the CpoParameters object given in arguments.
+   * Add a new method CpoModel.add_parameters() that updates parameters associated to the model.
+   * Fix wrong source location (not in real model source) when CpoModel.add() is called from another docplex.cp method.
+   * When constraint auto-naming is on (in particular for refine_conflict(), searchPhases are no more included in the process.
+   * Parameters mean_UB and mean_LB are now optional in standard_deviation()
+   * CpoModel.add() checks that the added expression is limited to constraint, boolean, objective or search phase.
+   * Add documented functions slope_piecewise_linear() and coordinate__piecewise_linear() in modeler.py.
+
+
+
 Changed in 2.5.92:
 ``````````````````
+
 * ``docplex.cli`` gains new features:
    * option ``--details`` will display solve details as they are publihsed on
      DOcplexcloud.

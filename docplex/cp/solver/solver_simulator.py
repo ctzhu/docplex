@@ -224,7 +224,6 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
 
         # Generate a solution for each variable
         allvars = self.model.get_all_variables()
-        names_map = {}
         seqvars = []
         for var in allvars:
             if isinstance(var, CpoIntVar):
@@ -319,5 +318,5 @@ def _common_interval_domain(dom1, dom2):
     Returns:
         Common domain
     """
-    return (max(dom1[0], dom2[0]), min(dom1[1], dom2[1]))
+    return max(dom1[0], dom2[0]), min(dom1[1], dom2[1])
 

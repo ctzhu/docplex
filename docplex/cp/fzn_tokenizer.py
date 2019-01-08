@@ -147,7 +147,7 @@ class FznTokenizer(object):
             Next available token (type FznToken), TOKEN_NONE if end of input
         """
         # Skip separators and comments
-        while (True):
+        while True:
             c = self._next_char()
             while c and (c <= ' '):
                 c = self._next_char()
@@ -258,7 +258,7 @@ class FznTokenizer(object):
         c = self._next_char()
         while c and (c != '\n'):
             c = self._next_char()
-        return (self.line[start:self.read_index])
+        return self.line[start:self.read_index]
 
 
     def _get_token(self):
@@ -278,7 +278,7 @@ class FznTokenizer(object):
 
         # Check end of line
         if self.read_index >= self.line_length:
-            return('\n')
+            return '\n'
         return self.line[self.read_index]
 
 
@@ -290,7 +290,7 @@ class FznTokenizer(object):
         # Check end of line
         self.read_index += 1
         if self.read_index >= self.line_length:
-            return('\n')
+            return '\n'
         c = self.line[self.read_index]
         if c == '\n':
             self.line_number += 1

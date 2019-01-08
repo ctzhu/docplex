@@ -56,7 +56,7 @@ class CpoType(object):
             eltyp.parent_array_type = self
             self.is_constant  = eltyp.is_constant
         self.is_array = eltyp is not None
-        self.is_array_of_expr = self.is_array and not(self.is_constant)
+        self.is_array_of_expr = self.is_array and not self.is_constant
         self.parent_array_type = None
 
     def get_name(self):
@@ -105,9 +105,9 @@ class CpoType(object):
             return self.base_type._compute_common_type(tp)
         # Check direct comparison
         if (self is tp) or tp.is_kind_of(self):
-            return(self)
-        elif (self.is_kind_of(tp)):
-            return(tp)
+            return self
+        elif self.is_kind_of(tp):
+            return tp
         # Search common types in ancestors
         for ct in self.higher_types:
             if ct in tp.higher_types:

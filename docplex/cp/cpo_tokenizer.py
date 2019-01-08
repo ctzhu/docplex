@@ -90,7 +90,7 @@ TOKEN_PARENT_CLOSE = CpoToken(TOKEN_PUNCTUATION, ')')
 TOKEN_HASH         = CpoToken(TOKEN_PUNCTUATION, '#')
 
 # Operator tokens
-TOKEN_EQUAL         = CpoToken(TOKEN_OPERATOR, '=')
+TOKEN_ASSIGN        = CpoToken(TOKEN_OPERATOR, '=')
 TOKEN_SLASH         = CpoToken(TOKEN_OPERATOR, '/')
 TOKEN_GREATER       = CpoToken(TOKEN_OPERATOR, '>')
 TOKEN_GREATER_EQUAL = CpoToken(TOKEN_OPERATOR, '>=')
@@ -98,7 +98,6 @@ TOKEN_LOWER         = CpoToken(TOKEN_OPERATOR, '<')
 TOKEN_LOWER_EQUAL   = CpoToken(TOKEN_OPERATOR, '<=')
 TOKEN_EQUAL         = CpoToken(TOKEN_OPERATOR, '==')
 TOKEN_DIFFERENT     = CpoToken(TOKEN_OPERATOR, '!=')
-TOKEN_ASSIGN        = CpoToken(TOKEN_OPERATOR, '=')
 TOKEN_IMPLY         = CpoToken(TOKEN_OPERATOR, '=>')
 TOKEN_AND           = CpoToken(TOKEN_OPERATOR, '&&')
 TOKEN_OR            = CpoToken(TOKEN_OPERATOR, '||')
@@ -167,7 +166,7 @@ class CpoTokenizer(object):
             Next available token (type CpoToken), TOKEN_NONE if end of input
         """
         # Skip separators and comments
-        while (True):
+        while True:
             c = self._next_char()
             while c and (c <= ' '):
                 c = self._next_char()
@@ -315,7 +314,7 @@ class CpoTokenizer(object):
         c = self._next_char()
         while c and (c != '\n'):
             c = self._next_char()
-        return (self.line[start:self.read_index])
+        return self.line[start:self.read_index]
 
 
     def _get_token(self):
@@ -335,7 +334,7 @@ class CpoTokenizer(object):
 
         # Check end of line
         if self.read_index >= self.line_length:
-            return('\n')
+            return '\n'
         return self.line[self.read_index]
 
 
@@ -347,7 +346,7 @@ class CpoTokenizer(object):
         # Check end of line
         self.read_index += 1
         if self.read_index >= self.line_length:
-            return('\n')
+            return '\n'
         c = self.line[self.read_index]
         if c == '\n':
             self.line_number += 1

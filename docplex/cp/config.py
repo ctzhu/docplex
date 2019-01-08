@@ -510,7 +510,7 @@ def _get_effective_context(**kwargs):
         if (k != 'context') and (k != 'params') and (v not in DEFAULT_VALUES):
             rp = ctx.search_and_replace_attribute(k, v)
             # If not found, set in solving parameters
-            if (rp is None):
+            if rp is None:
                 rplist.append((k, v))
 
      # Replace or set remaining fields in parameters
@@ -528,7 +528,7 @@ def _get_effective_context(**kwargs):
 
 
 ##############################################################################
-## Overload this configuration with other customized configuraton python files
+## Overload this configuration with other customized configuration python files
 ##############################################################################
 
 def _eval_file(file):

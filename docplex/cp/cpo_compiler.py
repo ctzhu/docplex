@@ -38,6 +38,7 @@ _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 # Symbol used to reference anonymous variables
 _ANONYMOUS = "Anonymous"
 
+
 ###############################################################################
 ## Public classes
 ###############################################################################
@@ -101,7 +102,6 @@ class CpoCompiler(object):
         if mctx is not None:
             self.min_length_for_alias = mctx.length_for_alias
             self.name_all_constraints = mctx.name_all_constraints
-            cpver = mctx.version
 
         # Determine format version
         self.format_version = None if model is None else model.get_format_version()
@@ -231,9 +231,6 @@ class CpoCompiler(object):
         out.write(u"\n//--- Constants ---\n")
         for lx in self.list_consts:
             self._write_expression(out, lx)
-
-        # Get map of expressions printable names
-        idstrings = self.id_printable_strings
 
         # Write variables
         out.write(u"\n//--- Variables ---\n")
@@ -451,7 +448,7 @@ class CpoCompiler(object):
                 elif t is Type_StateFunction:
                     self._compile_state_function(e, cout)
 
-            # Check expression array
+            # Check array
             elif t.is_array:
                 oprnds = e.children
                 alen = len(oprnds)
@@ -623,7 +620,7 @@ class CpoCompiler(object):
         else:
             cout.append("[" + ", ".join(self._get_expr_id(v) for v in lvars) + "]")
         types = sv.get_types()
-        if (types is not None):
+        if types is not None:
             if len(lvars) == 0:
                 cout.append(", intArray[]")
             else:
@@ -645,7 +642,8 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _compile_transition_matrix(self, tm, cout):
+    @staticmethod
+    def _compile_transition_matrix(tm, cout):
         """ Compile a TransitionMatrix in a string in CPO format
 
         Args:
@@ -674,7 +672,8 @@ class CpoCompiler(object):
         cout.append("]")
 
 
-    def _compile_var_domain(self, dom, cout):
+    @staticmethod
+    def _compile_var_domain(dom, cout):
         """ Compile a variable domain in CPO format
 
         Args:
@@ -693,7 +692,8 @@ class CpoCompiler(object):
             cout.append(_number_value_string(dom))
 
 
-    def _compile_list_of_integers(self, lint, cout):
+    @staticmethod
+    def _compile_list_of_integers(lint, cout):
         """ Compile a list of integers in CPO format
 
         Args:
@@ -708,14 +708,15 @@ class CpoCompiler(object):
             j = i + 1
             while (j < llen) and (lint[j] == lint[j - 1] + 1):
                 j += 1
-            if (j > i + 1):
+            if j > i + 1:
                 cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
             else:
                 cout.append(str(lint[i]))
             i = j
 
 
-    def _compile_step_function(self, stfct, cout):
+    @staticmethod
+    def _compile_step_function(stfct, cout):
         """ Compile a StepFunction in a string in CPO format
 
         Args:
@@ -730,7 +731,8 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _compile_segmented_function(self, sgfct, cout):
+    @staticmethod
+    def _compile_segmented_function(sgfct, cout):
         """ Compile a SegmentedFunction in a string in CPO format
 
         Args:
@@ -845,7 +847,7 @@ class CpoCompiler(object):
                 xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                 expr_by_names[xname] = expr
                 xinfo[3] = xname
-            elif name_constraints and xinfo[4] and typ in (Type_Constraint, Type_SearchPhase, Type_BoolExpr):
+            elif name_constraints and xinfo[4] and (typ in (Type_Constraint, Type_BoolExpr)):
                 xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                 expr_by_names[xname] = expr
                 xinfo[3] = xname
@@ -909,7 +911,8 @@ def expr_to_string(expr):
 ###############################################################################
 
 _NUMBER_CONSTANTS = {INT_MIN: "intmin", INT_MAX: "intmax",
-                     INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax"}
+                     INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax",
+                     INFINITY: "inf", -INFINITY: "-inf", }
 
 def _number_value_string(val):
     """ Build the string representing a number value
@@ -940,10 +943,10 @@ def _int_var_value_string(ibv):
     Returns:
         String representation of the value
     """
-    if (ibv == INT_MIN):
-        return ("intmin")
-    elif (ibv == INT_MAX):
-        return ("intmax")
+    if ibv == INT_MIN:
+        return "intmin"
+    elif ibv == INT_MAX:
+        return "intmax"
     else:
         return str(ibv)
 
@@ -984,10 +987,10 @@ def _interval_var_value_string(ibv):
     Returns:
         String representation of the value
     """
-    if (ibv == INTERVAL_MIN):
-        return ("intervalmin")
-    elif (ibv == INTERVAL_MAX):
-        return ("intervalmax")
+    if ibv == INTERVAL_MIN:
+        return "intervalmin"
+    elif ibv == INTERVAL_MAX:
+        return "intervalmax"
     else:
         return str(ibv)
 
@@ -1002,7 +1005,7 @@ def _interval_var_domain_string(intv):
     """
     smn = intv[0]
     smx = intv[1]
-    if (smn == smx):
+    if smn == smx:
         return _interval_var_value_string(smn)
     return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
 

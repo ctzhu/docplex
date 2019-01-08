@@ -155,6 +155,7 @@ Detailed description
 from docplex.cp.utils import Context, is_int, is_number
 import warnings
 
+
 ###############################################################################
 ## Public constants
 ###############################################################################
@@ -231,7 +232,7 @@ class CpoParameters(Context):
     def __setattr__(self, name, value):
         """ Set a parameter.
         This method calls appropriate setter if exists (property does not work in this context)
-        to check paramete value.
+        to check the parameter value.
         Args:
             name:  Parameter name
             value: Parameter value
@@ -519,7 +520,7 @@ class CpoParameters(Context):
         This parameter controls the effort which is dedicated to dynamic probing. It is expressed as a
         factor of the total search effort: changing this parameter has no effect unless the DynamicProbing
         parameter is set to Auto or On. When DynamicProbing has value On, the probing strength is held
-        constant througout the search process. When DynamicProbing has value Auto, the probing strength
+        constant throughout the search process. When DynamicProbing has value Auto, the probing strength
         starts off at the specified value and is thereafter adjusted automatically. Possible values for this
         parameter range from 0.001 to 1000. A value of 1.0 indicates that dynamic probing will consume a
         roughly equal amount of effort as the rest of the search. The default value of this parameter is
@@ -592,7 +593,7 @@ class CpoParameters(Context):
         """
         This parameter controls how much time CP Optimizer invests into failure-directed search once it is
         started. The default value Auto means that CP Optimizer observes the actual performance of
-        failure-directed search and decides automaticaly how much time is invested. Any other value means
+        failure-directed search and decides automatically how much time is invested. Any other value means
         that once failure-directed search has started, it is used by given number of workers. The value does
         not have to be integer. For example, value 1.5 means that first worker spends 100% of the time by
         failure-directed search, second worker 50% and remaining workers 0%. See also Workers For more
@@ -906,7 +907,7 @@ class CpoParameters(Context):
         parameter), the different searches described above are spread over the workers. When the value of
         SearchType is Auto, then the decision of choosing the search type for a worker is automatically
         made; otherwise, all workers execute the same type of search. Note that in the latter case, the
-        workers will not do the same exploration due to some radomness introduced to break ties in decision
+        workers will not do the same exploration due to some randomness introduced to break ties in decision
         making.
 
         The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'Auto']. Default value is 'Auto'.

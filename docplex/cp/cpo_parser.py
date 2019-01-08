@@ -272,11 +272,11 @@ class CpoParser(object):
         elif tok.value == "sequenceVar":
             self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
             args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            if (len(args) == 1):
+            if len(args) == 1:
                 lvars = args[0]
                 ltypes = None
             else:
-                if (len(args) != 2):
+                if len(args) != 2:
                     self._raise_exception("'sequenceVar' should have 1 or 2 arguments")
                 lvars = args[0]
                 ltypes = args[1]
@@ -287,9 +287,9 @@ class CpoParser(object):
             self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
             args = self._read_expression_list(TOKEN_PARENT_CLOSE)
             nbargs = len(args)
-            if (nbargs == 0):
+            if nbargs == 0:
                 trmx = None
-            elif (nbargs == 1):
+            elif nbargs == 1:
                 trmx = args[0]
             else:
                 self._raise_exception("'stateFunction' should have 0 or 1 argument")
@@ -331,18 +331,18 @@ class CpoParser(object):
             # Read argument name
             self._check_token_string(tok)
             aname = tok.value
-            if (aname == "present"):
+            if aname == "present":
                 res.set_present()
                 self._next_token()
-            elif (aname == "absent"):
+            elif aname == "absent":
                 res.set_absent()
                 self._next_token()
-            elif (aname == "optional"):
+            elif aname == "optional":
                 res.set_optional()
                 self._next_token()
             else:
                 self._check_token(self._next_token(), TOKEN_ASSIGN)
-                if (aname in ("start", "end", "length", "size")):
+                if aname in ("start", "end", "length", "size"):
                     # Read interval
                     self._next_token()
                     intv = self._read_expression()
@@ -351,10 +351,10 @@ class CpoParser(object):
                     elif not isinstance(intv, (list, tuple)):
                         self._raise_exception("'start', 'end', 'length' or 'size' should be an integer or an interval")
                     setattr(res, aname, intv)
-                elif (aname == "intensity"):
+                elif aname == "intensity":
                     self._next_token()
                     res.set_intensity(self._read_expression())
-                elif (aname == "granularity"):
+                elif aname == "granularity":
                     tok = self._next_token()
                     self._check_token_integer(tok)
                     res.set_granularity(int(tok.value))
@@ -420,17 +420,17 @@ class CpoParser(object):
         tok = self.token
 
         # Check int constant
-        if (tok.type == TOKEN_INTEGER):
+        if tok.type == TOKEN_INTEGER:
             self._next_token()
             return int(tok.value)
         
         # Check float constant
-        if (tok.type == TOKEN_FLOAT):
+        if tok.type == TOKEN_FLOAT:
             self._next_token()
             return float(tok.value)
 
         # Check known identifier
-        if (tok.value in _KNOWN_IDENTIFIERS):
+        if tok.value in _KNOWN_IDENTIFIERS:
             self._next_token()
             return _KNOWN_IDENTIFIERS[tok.value]
 
@@ -444,7 +444,7 @@ class CpoParser(object):
             return self._create_operation_expression(op, (expr,))
         
         # Check symbol
-        if (tok.type == TOKEN_SYMBOL):
+        if tok.type == TOKEN_SYMBOL:
             ntok = self._next_token()
             if ntok is TOKEN_PARENT_OPEN:
                 # Read function arguments
@@ -579,13 +579,13 @@ class CpoParser(object):
         Args:
             name:  Section name
         """
-        if (name == "parameters"):
+        if name == "parameters":
             self._read_section_parameters()
-        elif (name == "internals"):
+        elif name == "internals":
             self._read_section_internals()
-        elif (name == "search"):
+        elif name == "search":
             self._read_section_search()
-        elif (name == "startingPoint"):
+        elif name == "startingPoint":
             self._read_section_starting_point()
         else:
             self._raise_exception("Unknown section '" + name + "'")
@@ -744,7 +744,7 @@ class CpoParser(object):
             integer value of the token
         """
         if tok.type is TOKEN_INTEGER:
-            return(int(tok.value))
+            return int(tok.value)
         if tok.value in _KNOWN_IDENTIFIERS:
             return _KNOWN_IDENTIFIERS[tok.value]
         self._raise_exception("Integer expected instead of '" + tok.value + "'")

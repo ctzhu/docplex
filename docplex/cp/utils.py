@@ -17,7 +17,7 @@ import sys
 import threading
 import io
 import inspect
-from collections import deque
+from collections import deque, Iterable
 import json
 import platform
 
@@ -57,10 +57,6 @@ IS_IN_NOTEBOOK = 'ipykernel' in sys.modules
 # Constant used to indicate to set a parameter to its default value
 # Useful if default value is not static
 DEFAULT = "default"
-
-# Infinity
-POSITIVE_INFINITY = float('inf')
-NEGATIVE_INFINITY = float('-inf')
 
 # Platform type
 IS_WINDOWS = platform.system() == 'Windows'
@@ -158,7 +154,7 @@ class Context(dict):
         ctx = self
         while True:
             if name in ctx:
-               return(ctx.get(name))
+               return ctx.get(name)
             ctx = ctx.get_parent()
             if ctx is None:
                 return default
@@ -222,18 +218,18 @@ class Context(dict):
             if isinstance(v, Context):
                 sctxs.append((k, v))
             else:
-                npath = path + "." + k
+                path = path + "." + k
                 if k == name:
                     ov = self.get_attribute(name)
-                    if (ov is not None):
+                    if ov is not None:
                         if isinstance(value, Context):
                             if not isinstance(ov, Context):
-                                raise Exception("Attribute '" + npath + "' is a Context and can only be replaced by a Context")
+                                raise Exception("Attribute '" + path + "' is a Context and can only be replaced by a Context")
                     self.set_attribute(name, value)
-                    return npath
+                    return path
         # Search then in sub-contexts
         for (k, v) in sctxs:
-            apth = v.search_and_replace_attribute(name, value, path=npath)
+            apth = v.search_and_replace_attribute(name, value, path=path)
             if apth:
                 return apth
         return None
@@ -381,7 +377,7 @@ class Context(dict):
             else:
                 if is_string(v):
                     # Check if value must be masked
-                    if (k in ("key", "secret")):
+                    if k in ("key", "secret"):
                         v = "**********" + v[-4:]
                     vstr = '"' + v + '"'
                 else:
@@ -449,7 +445,7 @@ class IdAllocator(object):
            res.append(bdgts[cnt % blen])
            cnt //= blen
         res.reverse()
-        return(self.prefix + ''.join(res))
+        return self.prefix + ''.join(res)
 
 
 class SafeIdAllocator(object):
@@ -508,7 +504,7 @@ class SafeIdAllocator(object):
            res.append(bdgts[cnt % blen])
            cnt //= blen
         res.reverse()
-        return(self.prefix + ''.join(res))
+        return self.prefix + ''.join(res)
 
     def reset(self):
         """ Reset the allocator
@@ -756,6 +752,7 @@ class Chrono(object):
         """
         return str(self.get_elapsed())
 
+
 class Barrier(object):
     """ Barrier blocking multiple threads
 
@@ -995,13 +992,13 @@ def to_string(val):
         String representation of the value
     """
     # Check tuple
-    if (isinstance(val, tuple)):
-        if (len(val) == 1):
+    if isinstance(val, tuple):
+        if len(val) == 1:
             return "(" + to_string(val[0]) + ",)"
         return "(" + ", ".join(map(to_string, val)) + ")"
 
     # Check list
-    if (isinstance(val, list)):
+    if isinstance(val, list):
         return "[" + ", ".join(map(to_string, val)) + "]"
 
     # Default
@@ -1064,8 +1061,8 @@ def equals(v1, v2):
         return False
 
     # Check basic types
-    if (t in BASIC_TYPES):
-        return (v1 == v2)
+    if t in BASIC_TYPES:
+        return v1 == v2
 
     # Check list or tuple
     if isinstance(v1, (list, tuple, bytes, bytearray)):
@@ -1169,17 +1166,17 @@ def format_text(txt, size):
     res = []
     sepchars = ' \t\n\r'
     txt = txt.strip(sepchars)
-    while (len(txt) > size):
+    while len(txt) > size:
         # Search end of line
         enx = size
         while (enx > 0) and (txt[enx] not in sepchars):
             enx -= 1
         # Check no separator in the line
-        if (enx == 0):
+        if enx == 0:
             enx = size
         # Check for a end of line in the line
         x = txt.find('\n', 0, enx)
-        if (x > 0):
+        if x > 0:
             enx = x
         # Append line
         res.append(txt[:enx])
@@ -1401,6 +1398,17 @@ def is_string(val):
     return type(val) in STRING_TYPES
 
 
+def is_iterable(val):
+    """ Check if a value is iterable, but not a string
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is iterable
+    """
+    return isinstance(val, Iterable) and not is_string(val)
+
+
 def is_int_array(val):
     """ Check that a value is an array of integers
 
@@ -1465,7 +1473,7 @@ def is_symbol_char(c):
     """
     # return ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')
     # Following is 25% faster
-    return (c in _SYMBOL_CHARS)
+    return c in _SYMBOL_CHARS
 
 
 def to_printable_string(id):
@@ -1483,7 +1491,7 @@ def to_printable_string(id):
     if (all((c in _SYMBOL_CHARS) for c in id)) and not id[0] in _DIGIT_CHARS:
         return make_unicode(id)
     # Build result string
-    return(u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in id) + u'"')
+    return u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in id) + u'"'
 
 
 def to_internal_string(strg):
@@ -1499,7 +1507,7 @@ def to_internal_string(strg):
     slen = len(strg) - 1
     while i < slen:
         c = strg[i]
-        if (c == '\\'):
+        if c == '\\':
             i += 1
             c = _FROM_SPECIAL_CHARS.get(strg[i], None)
             if c is None:
@@ -1544,7 +1552,7 @@ def int_to_base(val, bdgts):
     if val == 0:
         return bdgts[0]
     # Check negative number
-    if (val < 0):
+    if val < 0:
         isneg = True
         val = -val
     else:
@@ -1588,7 +1596,7 @@ def search_file_in_path(f, pext=None):
         return f
 
     # Search first executable in the path
-    path = os.getenv('PATH');
+    path = os.getenv('PATH')
     path = path.split(os.pathsep) if path else []
     if pext is not None:
         path.extend(pext)

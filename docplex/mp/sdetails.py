@@ -113,9 +113,9 @@ class SolveDetails(object):
             return arg_s  # in py3 do nothing.
 
     # ---
-    # list of fields to be retrived from the details
+    # list of fields to be retrieved from the details
     # as tuples: (<detail_attribute_name>, <json_attribute_name>, <type_conversion_fn>, <default_value>)
-    # exemple:
+    # example:
     # _time denotes solve time, a float value, default is 0, to be found in json["cplex.time"]
     # ---
     _json_fields = (("_time", "cplex.time", float, 0),

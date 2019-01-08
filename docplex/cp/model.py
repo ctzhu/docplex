@@ -6,8 +6,7 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module contains principally the class :class:`CpoModel` that handles all the
-elements that compose a CPO model:
+This module contains principally the class :class:`CpoModel` that handles all the elements that compose a CPO model:
 
  * the variables of the domain (integer variables, interval variables, sequence variables and state functions),
  * the constraints of the model,
@@ -15,10 +14,15 @@ elements that compose a CPO model:
  * optional search phases,
  * optional starting point (available for CPO solver release greater or equal to 12.7.0).
 
+The model expressions, constraints, objective and search phases can be added using method :meth:`~CpoModel.add`.
+Variables that appear in the expressions are automatically added to the model.
+
+A starting point can be added to the model using method :meth:`~CpoModel.set_starting_point`
+
 The different model expressions and elements are created using services provided by modules:
 
  * :mod:`docplex.cp.expression` for the simple expression elements,
- * :mod:`docplex.cp.modeler` to build complex expressions and constraints using the specialized CP Optimizer functions.
+ * :mod:`docplex.cp.modeler` for complex expressions and constraints using the specialized CP Optimizer functions.
 
 The solving of the model is handled by an object of class :class:`~docplex.cp.solver.solver.CpoSolver` that takes
 this model as parameter.
@@ -78,7 +82,6 @@ import sys
 import time
 import copy
 import types
-from collections import namedtuple
 from collections import OrderedDict
 
 
@@ -90,6 +93,9 @@ from collections import OrderedDict
 _MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler, ('maximize', 'minimize'))
 #_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler)
 
+
+# Marker of a this file belonging to docplex.cp
+THIS_FILE_MARKER = "docplex" + os.path.sep + "cp" + os.path.sep + "model."
 
 ###############################################################################
 ##  Public classes
@@ -152,7 +158,7 @@ class CpoModelStatistics(object):
         out.write("{}operations:                   ".format(prefix))
         if self.operation_usage:
             for i, k in enumerate(sorted(self.operation_usage.keys())):
-                if (i > 0):
+                if i > 0:
                     out.write(", ")
                 out.write("{}: {}".format(k, self.operation_usage[k]))
         else:
@@ -207,9 +213,9 @@ class CpoModel(object):
 
         # Store filename of the calling Python source
         if sfile is None:
-            mod = inspect.getmodule(inspect.stack()[1][0])
-            if mod is not None:
-                sfile = mod.__file__
+            loc = self._get_calling_location()
+            if loc is not None:
+                sfile = loc[0]
         self.source_file = sfile
 
         # Store model name
@@ -255,15 +261,22 @@ class CpoModel(object):
 
 
     def add(self, expr):
-        """ Adds a CP expression to the model.
+        """ Adds a CPO expression to the model.
 
-        This method adds a CP expression to the model.
-        All the variables that are used by this expression are automatically added to the model.
-
+        This method adds a CPO expression to the model.
         The order in which expressions are added to the model is preserved when it is submitted for solving.
 
+        The expression *expr* to add to the model can be:
+
+         * a constraint,
+         * a boolean expression, possibly constant,
+         * an objective,
+         * a search phase,
+         * a variable (but variables that appear in expressions are automatically added to the model),
+         * a list of expressions to add.
+
         Args:
-            expr: Expression to add.
+            expr: CPO expression (constraint, boolean, objective, etc) to add to the model.
         Raises:
             CpoException in case of error.
         """
@@ -274,28 +287,39 @@ class CpoModel(object):
             # return
             expr = build_cpo_expr(expr)
 
-        # Check expression
-        assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of {} (type {})".format(expr, str(type(expr)))
+        # Check expression type
+        if not isinstance(expr, CpoExpr):
+            # Try as iterable
+            try:
+                for x in expr:
+                    self.add(x)
+            except:
+                raise CpoException("Argument 'expr' should be a CpoExpr or a list of CpoExpr")
+            return
 
         # Determine calling location
         if self.source_loc:
-            f = inspect.currentframe().f_back
-            loc = (f.f_code.co_filename, f.f_lineno)
+            loc = self._get_calling_location()
         else:
             loc = None
 
         # Check type of expression
         etyp = expr.type
-        if etyp is Type_SearchPhase:
-            self.search_phases.append((expr, loc))
+        if etyp.is_kind_of(Type_Constraint):
+            self.expr_list.append((expr, loc))
         elif etyp is Type_Objective:
+            # Remove previous objective from the model
             if self.objective is not None:
-                # Remove previous objective from the model
                 self.remove(self.objective)
             self.objective = expr
             self.expr_list.append((expr, loc))
-        else:
+        elif etyp is Type_SearchPhase:
+            self.search_phases.append((expr, loc))
+        elif isinstance(expr, CpoVariable):
+            # Not really useful, just to force variable to be in the model
             self.expr_list.append((expr, loc))
+        else:
+            raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase.")
 
         # Update last add time
         self.last_add_time = time.time()
@@ -364,15 +388,64 @@ class CpoModel(object):
         return res
 
 
-    def set_parameters(self, params):
+    def set_parameters(self, params=None, **kwargs):
         """ Set the solving parameters associated to this model.
 
-        Args:
-            params: Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`, or None.
-        """
-        assert isinstance(params, CpoParameters), "argument 'params' should be an object of class CpoParameters"
-        self.parameters = params
+        The argument *params* can be either:
 
+         * An object of the class :class:`~docplex.cp.parameters.CpoParameters`.
+           The parameters object is cloned and replaces the existing parameters associated to the model, if any.
+
+         * A standard Python dictionary where keys are parameter names, and values parameter values.
+           In this case, a CpoParameters object is created from the dictionary and then associated to the model.
+
+         * None, to release the parameters of this model.
+
+        If optional named arguments are added to this method, they are considered as additions to the parameters
+        given in *params*, that is cloned prior to be modified. If *params* is None, a new
+        :class:`~docplex.cp.parameters.CpoParameters` is created.
+
+        Args:
+            params (Optional) : Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`,
+                                or a dictionary of parameters, or None to remove all parameters.
+            **kwargs (Optional): Optional changes to the parameters.
+        Returns:
+            The new CpoParameters object associated to this model.
+        """
+        # Check parameters given in params
+        if params is None:
+            self.parameters = None
+            if kwargs:
+                self.parameters = CpoParameters(**kwargs)
+        elif isinstance(params, CpoParameters):
+            self.parameters = params.clone()
+            if kwargs:
+                self.parameters.add(kwargs)
+        elif isinstance(params, dict):
+            self.parameters = CpoParameters(**params)
+            if kwargs:
+                self.parameters.add(**kwargs)
+        else:
+            raise AssertionError("argument 'params' should be an object of class CpoParameters, a dictionary, or None.")
+
+        return self.parameters
+
+
+    def add_parameters(self, **kwargs):
+        """ Add parameters to this model.
+
+        This method adds parameters to the :class:`~docplex.cp.parameters.CpoParameters` object currently
+        associated to the model.
+        If there is no such parameters object yet, a new :class:`~docplex.cp.parameters.CpoParameters` is created.
+
+        Args:
+            **kwargs (Optional): List of parameters assignments.
+        """
+        if kwargs:
+            if self.parameters is None:
+                self.parameters = CpoParameters()
+            for k, v in kwargs.items():
+                self.parameters.__setattr__(k, v)
 
     def get_parameters(self):
         """ Get the solving parameters associated to this model.
@@ -393,19 +466,14 @@ class CpoModel(object):
         if not is_array(phases):
             phases = [phases]
 
-        # Determine calling location
-        if self.source_loc:
-            f = inspect.currentframe().f_back
-            loc = (f.f_code.co_filename, f.f_lineno)
-        else:
-            loc = None
-
-        # Set list of phases
+        # Reset list of phases
         self.search_phases = []
+
+        # Add all new phases
         for p in phases:
             if not p.is_type(Type_SearchPhase):
                 raise AssertionError("Argument 'phases' should be an array of SearchPhases")
-            self.search_phases.append((p, loc))
+            self.add(p)
 
 
     def add_search_phase(self, phase):
@@ -417,20 +485,13 @@ class CpoModel(object):
         Args:
             phase: Phase to add to the list
         """
-        warnings.warn("Method 'add_search_phase' is deprecated since release 2.4.", DeprecationWarning)
+        warnings.warn("Method 'add_search_phase' is deprecated since release 2.4. Use add() instead.", DeprecationWarning)
 
         # Check arguments
-        assert isinstance(phase, CpoExpr) and phase.is_type(Type_SearchPhase), "Argument 'phase' should be a SearchPhases"
+        assert isinstance(phase, CpoExpr) and phase.is_type(Type_SearchPhase), "Argument 'phase' should be a SearchPhase"
 
-        # Determine calling location
-        if self.source_loc:
-            f = inspect.currentframe().f_back
-            loc = (f.f_code.co_filename, f.f_lineno)
-        else:
-            loc = None
-
-        # Append to list of phases
-        self.search_phases.append((phase, loc))
+        # Add to model
+        self.add(phase)
 
 
     def get_search_phases(self):
@@ -1250,7 +1311,8 @@ class CpoModel(object):
         return solver
 
 
-    def _remove_from_expr_list(self, expr, elist):
+    @staticmethod
+    def _remove_from_expr_list(expr, elist):
         """ Remove an expression from a list of expressions (and map of names)
         Args:
             expr:  Expression to remove.
@@ -1294,6 +1356,27 @@ class CpoModel(object):
                 estack.extend(e.children)
         return None
 
+
+    def _get_calling_location(self):
+        """ Determine the calling location, outside docplex.cp
+        Returns:
+             Couplt (file, line), or None if impossible to determine
+        """
+        frm = inspect.currentframe()
+        # Skip at least 2 frames (first called method + this one)
+        if frm is None:
+            return None
+        frm = frm.f_back
+        if frm is None:
+            return None
+        frm = frm.f_back
+        # Loop while still in the docplex.cp package
+        while frm:
+            fname = frm.f_code.co_filename
+            if THIS_FILE_MARKER not in fname:
+                return (fname, frm.f_lineno)
+            frm = frm.f_back
+        return None
 
 
 ###############################################################################

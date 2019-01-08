@@ -503,8 +503,7 @@ class CpoSegmentedFunction(CpoFunction):
     def get_segment_list(self):
         """ Returns the list of segments of the function.
         """
-        segments = []
-        segments.append((self.s0, self.v0))
+        segments = [(self.s0, self.v0)]
         for i in range(len(self.x)):
             segments.append((self.x[i], self.v[i], self.s[i]))
         return segments

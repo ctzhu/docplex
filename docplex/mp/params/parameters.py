@@ -231,8 +231,8 @@ class ParameterGroup(object):
 
         Args:
            predicate: A function that takes one parameter as asrgument.
-           The return value of this function will be interpeted as a boolean using
-           Python conversionb rules.
+           The return value of this function will be interpreted as a boolean using
+           Python conversion rules.
 
         Returns:
             A generator object.
@@ -270,7 +270,7 @@ class ParameterGroup(object):
         elif hasattr(self, attr_name):
             attr = getattr(self, attr_name)
             if isinstance(attr, Parameter):
-                # attribute is set inside param, not necesarily in engine...
+                # attribute is set inside param, not necessarily in engine...
                 attr.set(value)
             else:
                 docplex_fatal("No parameter with name {0} in {1}", attr_name, self.qualified_name())

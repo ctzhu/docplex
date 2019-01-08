@@ -50,11 +50,15 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
     return fmt + nb_missing * (key_format % '%s')
 
 
-def str_flatten_tuple(tpl, sep="_"):
-    return sep.join(str(f) for f in tpl)
+def str_flatten_tuple(key, sep="_"):
+    if isinstance(key, tuple):
+        return sep.join(str(f) for f in key)
+    else:
+        return str(key)
 
 
-def compile_naming_function(keys, user_name, dimension=1, key_format=None, _default_key_format='_%s'):
+def compile_naming_function(keys, user_name, dimension=1, key_format=None,
+                            _default_key_format='_%s', stringifier=str_flatten_tuple):
     # INTERNAL
     # builds a naming rule from an input , a dimension, and an optional meta-format
     # Makes sure the format string does contain the right number of format slots
@@ -74,7 +78,7 @@ def compile_naming_function(keys, user_name, dimension=1, key_format=None, _defa
 
         fixed_format_string = fix_format_string(user_name, dimension, used_key_format)
         if 1 == dimension:
-            return lambda k: fixed_format_string % str(k)
+            return lambda k: fixed_format_string % stringifier(k)
         else:
             # here keys are tuples of size >= 2
             return lambda key_tuple: fixed_format_string % key_tuple
@@ -108,6 +112,7 @@ class ModelFactory(_AbstractModelFactory):
 
     status_var_fmt = '[{0:s}]'
 
+
     @staticmethod
     def float_or_default(bound, default_bound):
         return default_bound if bound is None else float(bound)
@@ -121,6 +126,7 @@ class ModelFactory(_AbstractModelFactory):
         self.one_expr = None
         self.ordered = ordered
         self.term_dict_type = term_dict_type
+        self.stringifier = str_flatten_tuple
 
     @property
     def _has_cplex(self):
@@ -227,7 +233,8 @@ class ModelFactory(_AbstractModelFactory):
             return []
         else:
             # default_naming_fn = self._model._create_automatic_varname
-            actual_naming_fn = compile_naming_function(keys, user_name, dimension, key_format)
+            actual_naming_fn = compile_naming_function(keys, user_name, dimension, key_format,
+                                                       stringifier=self.stringifier)
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
@@ -775,8 +782,7 @@ class ModelFactory(_AbstractModelFactory):
         if is_string(ctnames):
             from docplex.mp.utils import _AutomaticSymbolGenerator
             # no separator added, use a terminal "_" if need be
-            ctnames =_AutomaticSymbolGenerator(ctnames)
-
+            ctnames = _AutomaticSymbolGenerator(ctnames)
 
         for ct, ctname in izip_longest(cts, ctnames):  # use izip_longest so as not to forget any ct
             if ct is None:  # izip stops
@@ -937,7 +943,10 @@ class _VariableContainer(object):
                 # try a function
                 from os.path import commonprefix
                 try:
-                    all_names = [raw_name(k) for k in self._keys]
+                    if 1 == self.nb_dimensions:
+                        all_names = [raw_name(k) for ks in self._keys for k in ks]
+                    else:
+                        all_names = [raw_name(k) for k in self._keys]
                     s_name = commonprefix(all_names)
                 except TypeError:
                     s_name = ''

@@ -94,6 +94,8 @@ Following functions allow to construct general purpose expressions and constrain
  * :meth:`lexicographic`: Constraint which maintains two arrays to be lexicographically ordered.
  * :meth:`standard_deviation`: Standard deviation of the values of the variables in an array.
  * :meth:`strong`: Encourage CP Optimizer to produce stronger (higher inference) constraints.
+ * :meth:`slope_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and slopes.
+ * :meth:`coordinate_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and values.
 
 **Objective**
 
@@ -261,10 +263,10 @@ Detailed description
 
 from docplex.cp.catalog import *
 from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset, \
-                                  build_cpo_transition_matrix, INTERVAL_MAX
+                                  build_cpo_transition_matrix, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY
 import docplex.cp.expression as expression
 from docplex.cp.utils import *
-from docplex.cp.config import context
+import docplex.cp.config as config
 import collections
 
 
@@ -349,6 +351,15 @@ def _convert_arg(val, name, type, errmsg=None):
     val = build_cpo_expr(val)
     assert val.is_kind_of(type), errmsg if errmsg is not None else "Argument '{}' should be a {}".format(name, TYPE_NAMES[type])
     return val
+
+
+def _get_generation_version():
+    """ Get the CPO format version used for model generation
+    Returns:
+        CPO format version
+    """
+    cpver = config.context.model.version
+    return "12.7" if cpver is None else cpver
 
 
 #==============================================================================
@@ -566,6 +577,7 @@ def sum_of(x):
     # Build model expression
     arr = build_cpo_expr(x)
 
+    # Array of integer expressions
     if arr.is_kind_of(Type_IntExprArray):
         # alen = len(arr.value)
         # if alen == 1:
@@ -573,14 +585,16 @@ def sum_of(x):
         # if alen == 2:
         #     return arr.value[0] + arr.value[1]
         return CpoFunctionCall(Oper_sum, Type_IntExpr, (arr,))
+
+    # Array of float expressions
     if arr.is_kind_of(Type_FloatExprArray):
         return CpoFunctionCall(Oper_sum, Type_FloatExpr, (arr,))
 
+    # Array of Cumul expr
     assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
 
     # Check generation version
-    cpver = context.model.version
-    if cpver and cpver >= "12.8":
+    if _get_generation_version() >= "12.8":
         return CpoFunctionCall(Oper_sum, Type_CumulExpr, (arr,))
 
     # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
@@ -1110,8 +1124,8 @@ def count(exprs, v):
     Returns:
         An integer expression representing the number of occurrences of *v* in *exprs*
     """
-    exprs = build_cpo_expr(exprs);
-    v = build_cpo_expr(v);
+    exprs = build_cpo_expr(exprs)
+    v = build_cpo_expr(v)
     if v.is_kind_of(Type_Int):
         assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer expressions"
     else:
@@ -1152,8 +1166,8 @@ def scal_prod(x, y):
     Returns:
         An expression of type float expression or integer expression
     """
-    x = build_cpo_expr(x);
-    y = build_cpo_expr(y);
+    x = build_cpo_expr(x)
+    y = build_cpo_expr(y)
     if x.is_kind_of(Type_IntExprArray) and y.is_kind_of(Type_IntExprArray):
         return CpoFunctionCall(Oper_scal_prod, Type_IntExpr, (x, y))
 
@@ -1294,8 +1308,8 @@ def member(element, array):
     """ Checks if an integer expression is member of an array of expressions.
 
     Args:
-        value:  Integer expression whose value is to check in the array.
-        array:  Array of integer values
+        element:  Integer expression whose value is to check in the array.
+        array:    Array of integer values
     Returns:
         A boolean expression denoting the presence of the value in the array.
     """
@@ -1530,22 +1544,27 @@ def lexicographic(x, y):
                                                                  _convert_arg(y, "y", Type_IntExprArray)))
 
 
-def standard_deviation(x, meanLB, meanUB):
+def standard_deviation(x, meanLB=NEGATIVE_INFINITY, meanUB=POSITIVE_INFINITY):
     """ Creates a constrained numeric expression equal
     to the standard deviation of the values of the variables in an array.
 
     This function creates a new constrained numeric expression which is equal to the
     standard deviation of the values of the variables in the array *x*.
+
     The mean of the values of the variables in the array x is constrained to be in the
     interval [meanLB, meanUB].
 
     Args:
         x:      An array of integer expressions.
-        meanLB: A float value for lower bound on the mean of the array.
-        meanUB: A float value upper bound on the mean of the array.
+        meanLB (Optional): A float value for lower bound on the mean of the array, -infinity if not given.
+        meanUB (Optional): A float value upper bound on the mean of the array, infinity if not given.
     Returns:
         A float expression
     """
+    # Check optional bounds
+    if (meanLB is NEGATIVE_INFINITY) and (meanUB is POSITIVE_INFINITY) and (_get_generation_version() > "12.8"):
+        return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),))
+
     return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),
                                                                      _convert_arg(meanLB, "meanLB", Type_Float),
                                                                      _convert_arg(meanUB, "meanUB", Type_Float),))
@@ -1570,6 +1589,83 @@ def strong(x):
         Constraint expression
     """
     return CpoFunctionCall(Oper_strong, Type_Constraint, (_convert_arg(x, "x", Type_IntExprArray),))
+
+
+def slope_piecewise_linear(x, points, slopes, refX, refY):
+    """ Evaluates piecewise-linear function given by set of breaking points and slopes.
+
+    This function evaluates piecewise-linear function at a point *x*.
+    The function consists of several segments separated by *points*, within each segment the function is linear.
+    The function is defined by slopes of all segments (*slopes*) and by breaking points (*points*) on x-axis.
+    Furthermore it is necessary to specify reference value *refX* and corresponding function value *refY*.
+
+    The function is continuous unless some value in *points* is specified twice.
+    Specifying the same value in *points* allows to model discontinuous function,
+    in this case the corresponding value in *slopes* is not interpreted as a slope but as the height of the jump (delta)
+    at that point.
+
+    Assuming that the array *points* has size *n*, the function consists of the following linear segments:
+
+     * the segment 0 is defined on interval (-infinity, *points*[0]) and has a *slope*[0].
+     * the segment i, i in 1, 2, .., n-1, is defined on the interval [*points*[i-1], *points*[i]) with a slope *slope*[i].
+     * the segment n is defined on the interval [*points*[n-1], infinity) with a slope *slope*[n].
+
+    Args:
+        x:      x-value for which the function should be evaluated.
+        points: sorted array of n-1 x-values (breaking points) that separate n function segments.
+        slopes: array of n slopes, one for each segments.
+        refX:   reference x-value.
+        refY:   value of the function at refX(reference y-value).
+    Returns:
+        Value of the function at point x.
+    """
+    return CpoFunctionCall(Oper_slope_piecewise_linear, Type_FloatExpr,
+                           (_convert_arg(x,      "x",      Type_FloatExpr),
+                            _convert_arg(points, "points", Type_FloatArray),
+                            _convert_arg(slopes, "slopes", Type_FloatArray),
+                            _convert_arg(refX,   "refX",   Type_FloatExpr),
+                            _convert_arg(refY,   "refY",   Type_FloatExpr),
+                            ))
+
+
+def coordinate_piecewise_linear(x, firstSlope, points, values, lastSlope):
+    """ Evaluates piecewise-linear function given by set of breaking points and values.
+
+    This function evaluates piecewise-linear function at point *x*.
+    The function consists of several segments separated by *points*, within each segment the function is linear.
+    The function is defined by slope of the first segment (*firstSlope*), an array of breaking points (*points*)
+    on x-axis, an array of corresponding values on y-axis (*values*) and the slope of the last segment.
+    In each segment the function is linear.
+    The function may be discontinuous, in this case it is necessary to specify the point of discontinuity
+    twice in *points*.
+
+    Assuming that the common length of arrays *points* and *values* is *n*, the function consists of the
+    following linear segments:
+
+     * the segment 0 is defined on interval (-infinity, *points*[0]) and is a linear function with slope *firstSlope*
+       ending at (*points*[0], *values*[0]).
+     * the segment i, i in 1, 2, .., n-1, is defined on the interval [*points*[i-1], *points*[i]) and is a
+       linear function from (*points*[-1], *values*[i-1]) to (*points*[i], *values*[i]).
+     * the segment n is defined on the interval [*points*[n-1], infinity) and is a linear function
+       from (*points*[n-1], *values*[n-1]) with slope *lastSlope*.
+
+    Args:
+        x :         x-value for which the function should be evaluated.
+        firstSlope: slope of the first function segment (ending at (points[0], values[0])).
+        points:     sorted array of x-values that separate function segments (breaking points).
+        values:     y-values corresponding to the breaking points (the array must have the same length as points).
+        lastSlope:  slope of the last segment beginning at (points[n-1], values[n-1])
+                    where n is length of points and  values.
+    Returns:
+        Value of the function at point x.
+    """
+    return CpoFunctionCall(Oper_coordinate_piecewise_linear, Type_FloatExpr,
+                           (_convert_arg(x,          "x",          Type_FloatExpr),
+                            _convert_arg(firstSlope, "firstSlope", Type_Float),
+                            _convert_arg(points,     "points",     Type_FloatArray),
+                            _convert_arg(values,     "values",     Type_FloatArray),
+                            _convert_arg(lastSlope,  "lastSlope",  Type_Float),
+                            ))
 
 
 #==============================================================================
@@ -1682,7 +1778,7 @@ def start_of(interval, absentValue=None):
 
     Args:
         interval: Interval variable.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
                       Zero if not given.
     Returns:
         An integer expression
@@ -1702,7 +1798,7 @@ def end_of(interval, absentValue=None):
 
     Args:
         interval: Interval variable.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
                       Zero if not given.
     Returns:
         An integer expression
@@ -1722,7 +1818,7 @@ def length_of(interval, absentValue=None):
 
     Args:
         interval: Interval variable.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
                      Zero if not given.
     Returns:
         An integer expression
@@ -1742,7 +1838,7 @@ def size_of(interval, absentValue=None):
 
     Args:
         interval: Interval variable.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
                      Zero if not given.
     Returns:
         An integer expression
@@ -2013,7 +2109,7 @@ def alternative(interval, array, cardinality=None):
     Args:
         interval:    Interval variable.
         array:       Array of interval variables.
-        cardinality: (Optional) Cardinality of the alternative constraint.
+        cardinality (Optional): Cardinality of the alternative constraint.
                      By default, when this optional argument is not specified, a unit cardinality is assumed (cardinality=1).
     Returns:
         Constraint expression
@@ -2056,9 +2152,9 @@ def isomorphism(array1, array2, map=None, absentValue=None):
 
     Args:
         array1: The first array of interval variables.
-        array1: The second array of interval variables.
+        array2: The second array of interval variables.
         map:    (Optional) Array of integer expressions mapping intervals of array2 on array1.
-        absentValue: (Optional) Integer value of map[i] when array2[i] is absent.
+        absentValue (Optional): Integer value of map[i] when array2[i] is absent.
 
     Possible argument and return type combinations are:
 
@@ -2262,7 +2358,7 @@ def start_of_next(sequence, interval, lastValue=None, absentValue=None):
         sequence: Sequence variable.
         interval: Interval variable.
         lastValue: (Optional) Value to return if interval variable interval is the last one in sequence.
-        absentValue: (Optional) Value to return if interval variable interval becomes absent.
+        absentValue (Optional): Value to return if interval variable interval becomes absent.
     Returns:
         An integer expression
     """
@@ -2281,7 +2377,7 @@ def start_of_prev(sequence, interval, firstValue=None, absentValue=None):
         sequence: Sequence variable.
         interval: Interval variable.
         firstValue: (Optional) Value to return if interval variable interval is the first one in sequence.
-        absentValue: (Optional) Value to return if interval variable interval becomes absent.
+        absentValue (Optional): Value to return if interval variable interval becomes absent.
     Returns:
         An integer expression
     """
@@ -2461,12 +2557,13 @@ def no_overlap(sequence, distance_matrix=None, is_direct=None):
 
     Args:
         sequence: A sequence variable, or an array of interval variables.
-        distance_matrix: An optional transition matrix defining the transition distance between consecutive interval
-                         variables.
+        distance_matrix (Optional): An optional transition matrix defining the transition distance between consecutive
+                         interval variables.
                          Transition matrix is given as an iterable of iterables of positive integers,
                          or as the result of a call to the method :meth:`~docplex.cp.expression.transition_matrix`.
-        is_direct: A boolean flag stating whether the distance specified in the transition matrix *distance_matrix*
-                   holds between direct bs (is_direct=True) or also between indirect bs (is_direct=None, default).
+        is_direct (Optional): A boolean flag stating whether the distance specified in the transition matrix
+                 *distance_matrix* holds between direct successors (is_direct=True)
+                 or also between indirect successors (is_direct=False, default).
     Returns:
         Constraint expression
     """
@@ -2506,7 +2603,7 @@ def overlap_length(interval, interval2, absentValue=None):
     Args:
         interval: Interval variable
         interval2: Another interval variable, or fixed interval expressed as a tuple of 2 integers.
-        absentValue: Value to return if some interval variable is absent.
+        absentValue (Optional): Value to return if some interval variable is absent.
     Returns:
         An integer expression
     """
@@ -2540,7 +2637,7 @@ def start_eval(interval, function, absentValue=None):
     Args:
         interval: Interval variable.
         function: Function to evaluate.
-        absentValue: (Optional) Value to return if interval variable interval is absent.
+        absentValue (Optional): Value to return if interval variable interval is absent.
                      If not given, absent value is zero.
     Returns:
         A float expression
@@ -2561,7 +2658,7 @@ def end_eval(interval, function, absentValue=None):
     Args:
         interval: Interval variable.
         function: Function to evaluate.
-        absentValue: (Optional) Value to return if interval variable interval is absent.
+        absentValue (Optional): Value to return if interval variable interval is absent.
                      If not given, absent value is zero.
     Returns:
         A float expression
@@ -2582,7 +2679,7 @@ def size_eval(interval, function, absentValue=None):
     Args:
         interval: Interval variable.
         function: Function to evaluate.
-        absentValue: (Optional) Value to return if interval variable interval is absent.
+        absentValue (Optional): Value to return if interval variable interval is absent.
                      If not given, absent value is zero.
     Returns:
         A float expression
@@ -2603,7 +2700,7 @@ def length_eval(interval, function, absentValue=None):
     Args:
         interval: Interval variable.
         function: Function to evaluate.
-        absentValue: (Optional) Value to return if interval variable interval is absent.
+        absentValue (Optional): Value to return if interval variable interval is absent.
                      If not given, absent value is zero.
     Returns:
         A float expression
@@ -2632,8 +2729,8 @@ def same_sequence(seq1, seq2, array1=None, array2=None):
     Args:
         seq1: First constrained sequence variables.
         seq2: Second constrained sequence variables.
-        array1: (Optional) First array of interval variables defining the mapping between the two sequence variables.
-        array2: (Optional) Second array of interval variables defining the mapping between the two sequence variables.
+        array1 (Optional): First array of interval variables defining the mapping between the two sequence variables.
+        array2 (Optional): Second array of interval variables defining the mapping between the two sequence variables.
     Returns:
         Constraint expression
     """
@@ -2667,8 +2764,8 @@ def same_common_subsequence(seq1, seq2, array1=None, array2=None):
     Args:
         seq1:   First constrained sequence variables.
         seq2:   Second constrained sequence variables.
-        array1: (Optional) First array of interval variables defining the mapping between the two sequence variables.
-        array2: (Optional) Second array of interval variables defining the mapping between the two sequence variables.
+        array1 (Optional): First array of interval variables defining the mapping between the two sequence variables.
+        array2 (Optional): Second array of interval variables defining the mapping between the two sequence variables.
     Returns:
         Constraint expression
     """
@@ -2685,7 +2782,7 @@ def same_common_subsequence(seq1, seq2, array1=None, array2=None):
 
 
 #==============================================================================
-#  Cumuative expressions
+#  Cumulative expressions
 #==============================================================================
 
 def pulse(interval, height, _x=None):
@@ -2833,7 +2930,7 @@ def height_at_start(interval, function, absentValue=None):
     Args:
         interval:    Interval variable.
         function:    Cumul function expression.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
     Returns:
         An integer expression
     """
@@ -2857,7 +2954,7 @@ def height_at_end(interval, function, absentValue=None):
     Args:
         interval:    Interval variable.
         function:    Cumul function expression.
-        absentValue: (Optional) Value to return if the interval variable interval becomes absent.
+        absentValue (Optional): Value to return if the interval variable interval becomes absent.
     Returns:
         An integer expression
     """
@@ -2986,8 +3083,8 @@ def always_constant(function, interval, isStartAligned=None, isEndAligned=None):
         function: Constrained state function.
         interval: Interval variable contributing to the cumul function,
                   or fixed interval expressed as a tuple of 2 integers.
-        isStartAligned: Boolean flag that states whether the interval is start aligned (default: no alignment).
-        isEndAligned: Boolean flag that states whether the interval is end aligned (default: no alignment).
+        isStartAligned (Optional): Boolean flag that states whether the interval is start aligned (default: no alignment).
+        isEndAligned (Optional): Boolean flag that states whether the interval is end aligned (default: no alignment).
     Returns:
         Constraint expression
     """
@@ -3035,8 +3132,8 @@ def always_equal(function, interval, value, isStartAligned=None, isEndAligned=No
         interval: Interval variable contributing to the cumul function,
                   or fixed interval expressed as a tuple of 2 integers.
         value: Value of the function during the interval.
-        isStartAligned: Boolean flag that states whether the interval is start aligned (default: no alignment).
-        isEndAligned: Boolean flag that states whether the interval is end aligned (default: no alignment).
+        isStartAligned (Optional): Boolean flag that states whether the interval is start aligned (default: no alignment).
+        isEndAligned (Optional): Boolean flag that states whether the interval is end aligned (default: no alignment).
     Returns:
         Constraint expression
     """
@@ -3125,7 +3222,7 @@ def var_index(vars, defaultIndex=None):
 
     Args:
         vars:  Array of integer variables.
-        defaultIndex: Default index that is returned if the variable does not appear in the array.
+        defaultIndex (Optional): Default index that is returned if the variable does not appear in the array.
                       If not given, -1 is used.
     Returns:
         An evaluator of integer variable
@@ -3146,7 +3243,7 @@ def var_local_impact(effort=None):
     will increase as the effort value increases.
 
     Args:
-        effort: Integer representing how much effort should be spent to compute this impact.
+        effort (Optional): Integer representing how much effort should be spent to compute this impact.
                 By default, -1 is used.
     Returns:
         An evaluator of integer variable
@@ -3195,7 +3292,7 @@ def explicit_var_eval(vars, vals, defaultEval=None):
     Args:
         vars: Array of integer variables
         vals: Array of values
-        defaultEval: (Optional) Default value of a variable that is not in the array
+        defaultEval (Optional): Default value of a variable that is not in the array
                      If not given, default eval value is zero.
     Returns:
         An evaluator of integer variable
@@ -3255,7 +3352,7 @@ def value_index(vals, defaultValue=None):
 
     Args:
         vals: Array of integer values
-        defaultValue: (Optional) Default value that is returned if value is not in the array.
+        defaultValue (Optional): Default value that is returned if value is not in the array.
                       By default, this value is -1.
     Returns:
         An evaluator of integer value
@@ -3278,7 +3375,7 @@ def explicit_value_eval(vals, evals, defaultEval=None):
     Args:
         vals: Array of values
         evals: Array of the evaluations of values
-        defaultEval: (Optional) Evaluation of a value that does not appears in *vals*.
+        defaultEval (Optional): Evaluation of a value that does not appears in *vals*.
                      By default, this value is zero.
     Returns:
         An evaluator of integer value
@@ -3321,9 +3418,9 @@ def select_smallest(evaluator, minNumber=None, tolerance=None):
 
     Args:
         evaluator: Evaluator of integer variable or integer value
-        minNumber: (Optional) Minimum number of values that are selected,
+        minNumber (Optional): Minimum number of values that are selected,
                     with the smallest evaluation according to the evaluator e
-        tolerance: Tolerance of the values to be selected
+        tolerance (Optional): Tolerance of the values to be selected
     Returns:
         An expression of type selector of integer value or selector of integer variable
     """
@@ -3376,9 +3473,9 @@ def select_largest(evaluator, minNumber=None, tolerance=None):
 
     Args:
         evaluator: Evaluator of integer variable or integer value
-        minNumber: (Optional) Minimum number of values that are selected,
-                    with the largest evaluation according to the evaluator e
-        tolerance: Tolerance of the values to be selected
+        minNumber (Optional): Minimum number of values that are selected,
+                    with the smallest evaluation according to the evaluator e
+        tolerance (Optional): Tolerance of the values to be selected
     Returns:
         An expression of type selector of integer value or selector of integer variable
     """
@@ -3454,17 +3551,17 @@ def search_phase(vars=None, varchooser=None, valuechooser=None):
         mdl.set_search_phases([search_phase(x), search_phase(y)])
 
     indicates to CP search that variables from the array x must be instantiated before those from the array y.
-    The way to instantate them will be choosen by CP search.
+    The way to instantiate them will be chosen by CP search.
 
     Similarly, it is not necessary to specify an array of variables to a search phase.
     A search phase defined this way will be applied to every integer variable extracted from the model.
 
     Args:
-        vars: (Optional) Array of integer, interval or sequence variables.
-        varchooser: (Optional) Chooser of integer variable.
+        vars (Optional): Array of integer, interval or sequence variables.
+        varchooser (Optional): Chooser of integer variable.
                     Used only if *vars* is undefined or contains an array of integer variables.
                     Must be defined if a *valuechooser* is defined.
-        valuechooser: (Optional) Chooser of integer value
+        valuechooser (Optional): Chooser of integer value
                     Used only if *vars* is undefined or contains an array of integer variables.
                     Must be defined if a *varchooser* is defined.
     Returns:

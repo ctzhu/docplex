@@ -33,7 +33,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
         ''' Sets the constraint as mandatory.
 
         This prevents relaxation from relaxing this constraint.
-        To revert this, set the priority to any non-mandatory priprity, or None.
+        To revert this, set the priority to any non-mandatory priority, or None.
         '''
         self.priority = Priority.MANDATORY
 
@@ -113,7 +113,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
 
     def _get_dual_value(self):
         # INTERNAL
-        # Note that dual values are only avilable for LP problems,
+        # Note that dual values are only available for LP problems,
         # so can be calle donly on linear or range constraints.
         return self._model._dual_value1(ct=self)
 

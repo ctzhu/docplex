@@ -301,7 +301,7 @@ class Expr(ModelingObjectBase, Operand):
             return raw_value
 
     def _get_solution_value(self, s=None):
-        # INTERNAL: compute solutoion value.
+        # INTERNAL: compute solution value.
         raise NotImplementedError  # pragma: no cover
 
     @property
@@ -449,7 +449,7 @@ class _SubscriptionMixin(object):
 
     __slots__ = ()
     # INTERNAL:
-    # This class is absolutley not meant to be directly instantiated
+    # This class is absolutely not meant to be directly instantiated
     # but used as a mixin
 
     @classmethod

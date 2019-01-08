@@ -81,6 +81,8 @@ class SolveSolution(object):
         self._solve_status = None
         self._keep_zeros = keep_zeros
         self._solve_details = None
+        # the round function
+        self._roundfn = self.__model.round_nearest
 
         if var_value_map is not None:
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
@@ -98,7 +100,7 @@ class SolveSolution(object):
         # trust engines
         for var, value in iteritems(var_value_map):
             if value:
-                sol._set_var_value_internal(var=var, value=value, rounding=True, do_warn_on_non_discrete=False, )
+                sol._set_var_value_internal(var=var, value=value, rounding=True)
         if job_solve_status is not None:
             sol._set_solve_status(job_solve_status)
         return sol
@@ -113,7 +115,7 @@ class SolveSolution(object):
             sol = SolveSolution(mdl, var_value_map={}, obj=objective,
                                 rounding=rounding, keep_zeros=keep_zeros, name=name)
             for dvar, val in izip(mdl.iter_variables(), values):
-                sol._set_var_value_internal(dvar, val, rounding=rounding, do_warn_on_non_discrete=False)
+                sol._set_var_value_internal(dvar, val, rounding=rounding)
             return sol
 
     def _get_var_by_name(self, varname):
@@ -161,7 +163,7 @@ class SolveSolution(object):
         """ This property allows to get/set a name on the solution.
 
         In some cases , it might be interesting to build different solutions for the same model,
-        in this case, use the name property to disinguish them.
+        in this case, use the name property to distinguish them.
 
         """
         return self._name
@@ -205,41 +207,31 @@ class SolveSolution(object):
             value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_key_value(var_key, value, keep_zero=True, rounding=False, do_warn_on_non_discrete=True)
+        self._set_var_key_value(var_key, value, keep_zero=True, rounding=False)
 
     def __setitem__(self, var_key, value):
-        # aleays keep zero, no warnings, no checks
-        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False,
-                                do_warn_on_non_discrete=False)
+        # always keep zero, no warnings, no checks
+        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False)
 
-    def set_var_key_value(self, var_key, value, keep_zero, rounding, do_warn_on_rounding):
+    def set_var_key_value(self, var_key, value, keep_zero, rounding):
         # INTERNAL
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_key_value(var_key, value, keep_zero, rounding, do_warn_on_rounding)
+        self._set_var_key_value(var_key, value, keep_zero, rounding)
 
-    def _set_var_key_value(self, var_key, value, keep_zero, rounding, do_warn_on_non_discrete):
+    def _set_var_key_value(self, var_key, value, keep_zero, rounding):
         # INTERNAL: no checks done.
         if value or keep_zero:
             var = self._resolve_var(var_key, do_raise=False)
             if var is not None:
-                self._set_var_value_internal(var, value, rounding, do_warn_on_non_discrete=do_warn_on_non_discrete)
+                self._set_var_value_internal(var, value, rounding)
 
-    def _set_var_value_internal(self, var, value, rounding, do_warn_on_non_discrete):
+    def _set_var_value_internal(self, var, value, rounding):
         # INTERNAL, no check
         if var.is_discrete() and rounding and not self._is_discrete_value(value):
-            stored_value = self.model.round_nearest(value)
+            stored_value = self._roundfn(value)
         else:
             stored_value = value
-            # if do_warn_on_non_discrete:
-            #     if rounding:
-            #         self.error_handler.warning(
-            #             "Trying to assign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
-            #             (var, value, stored_value))
-            #     else:
-            #         self.error_handler.warning(
-            #             "Discrete variable {0!r} has been assigned non-discrete value: {1}",
-            #             (var, value))
-        # ---
+
         self.__var_value_map[var] = stored_value
 
     def is_attributes_fetched(self, attr_name):
@@ -331,8 +323,7 @@ class SolveSolution(object):
         # INTERNAL
         for e, val in iteritems(key_value_map):
             # need to check var_keys and values
-            self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding,
-                                   do_warn_on_rounding=False)
+            self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding)
 
     def store_infeasibilities(self, infeasibilities, infeas_key=INFEAS_KEY):
         assert isinstance(infeasibilities, dict)
@@ -772,13 +763,6 @@ class SolveSolution(object):
         if is_explicit and count_values == 0:
             docplex_fatal("MIP start contains no discrete variable")  # pragma: no cover
         return True
-
-    def _to_tuple_list(self, model):
-        if self._keep_zeros:
-            vv_tuples = [(dv.get_index(), val) for dv, val in self.iter_var_values()]
-        else:
-            vv_tuples = [(dv.get_index(), self[dv]) for dv in model.iter_variables()]
-        return vv_tuples
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}

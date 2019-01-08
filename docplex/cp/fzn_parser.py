@@ -94,7 +94,7 @@ PREDICATES_MAP = \
     'bool_le': lambda a, b: a <= b,
     'bool_le_reif': lambda a, b, r: modeler.equal(r, (a <= b)),
     'bool_lin_eq': lambda a, b, r: _scal_prod(a, b, r, modeler.equal),
-    'bool_lin_le': lambda a, b, r: _scal_prod(a, b, r, modeler.less_or_equal()),
+    'bool_lin_le': lambda a, b, r: _scal_prod(a, b, r, modeler.less_or_equal),
     'bool_lt': lambda a, b: a < b,
     'bool_lt_reif': lambda a, b, r: r == (a < b),
     'bool_not': lambda a, b: b == modeler.logical_not(a),
@@ -250,7 +250,7 @@ class FznReader(object):
                  'objective',    # Model objective
                  )
 
-    def __init__(self, mdl=None):
+    def __init__(self):
         """ Create a new FZN reader
         """
         super(FznReader, self).__init__()
@@ -333,7 +333,7 @@ class FznReader(object):
                 pass
             while self._read_constraint():
                 pass
-            self._read_objective();
+            self._read_objective()
 
 
         except Exception as e:
@@ -436,7 +436,7 @@ class FznReader(object):
         if tok.type != TOKEN_SYMBOL:
             self._raise_exception("Symbol expected as variable name.")
         vid = tok.value
-        tok = self._next_token()
+        self._next_token()
 
         # Check annotations
         annotations = self._read_annotations()
@@ -604,7 +604,7 @@ class FznReader(object):
                 self._check_token(self._next_token(), TOKEN_HOOK_CLOSE)
                 self._next_token()
                 # Build array access as a tuple (arr_name, index)
-                return(sid, int(tok2.value))
+                return sid, int(tok2.value)
             # Check annotation function call
             elif self.token == TOKEN_PARENT_OPEN:
                 lexprs = [sid]
@@ -698,7 +698,7 @@ class FznReader(object):
                 j = i + 1
                 while (j < llen) and (lint[j] == lint[j - 1] + 1):
                     j += 1
-                if (j > i + 1):
+                if j > i + 1:
                     dom.append((lint[i], lint[j - 1]))
                 else:
                     dom.append(lint[i])
@@ -717,12 +717,12 @@ class FznReader(object):
             v1 = int(tok.value)
             v2 = int(tok2.value)
             if v1 == v2:
-                return (v1,)
+                return v1,
             return ((v1, v2),)
-        else:
-            return (int(tok.value),)
 
-        self._raise_exception("Wrong token '{}' to start a variable domain definition.".format(tok))
+        if tok.type != TOKEN_INTEGER:
+            self._raise_exception("Variable domain should end with an integer constant.")
+        return (int(tok.value),)
 
 
     def _read_annotations(self):
@@ -992,7 +992,7 @@ class FznParser(object):
             arr = self.cpo_exprs.get(expr[0])
             if arr is None:
                 raise FznParserException("Can not find array {}".format(expr[0]))
-            return(_get_value(arr)[expr[1]-1])
+            return _get_value(arr)[expr[1] - 1]
 
         # List
         if etyp is list:
@@ -1072,7 +1072,8 @@ class FznParser(object):
         return modeler.greater_or_equal(bnd, cumf)
 
 
-    def _pred_bool2int(self, bx, ix):
+    @staticmethod
+    def _pred_bool2int(bx, ix):
         """ Convert a boolean expression into integer
         Args:
             bx:  Boolean expression
@@ -1289,11 +1290,11 @@ def _get_domain_bounds(x):
         Tuple (min, max)
     """
     if isinstance(x, CpoIntVar):
-        return (x.get_domain_min(), x.get_domain_max())
+        return x.get_domain_min(), x.get_domain_max()
     if isinstance(x, CpoValue):
         x = x.value
     if is_int(x):
-        return (x, x)
+        return x, x
     return x
 
 

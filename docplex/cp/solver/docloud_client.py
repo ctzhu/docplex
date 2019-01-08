@@ -216,7 +216,7 @@ class JobClient(object):
             True if the job deletion was successful
         """
         rsp = self._request('delete', self.ctx.url + "/jobs/" + self.jobid, [200])
-        return(rsp.json().get('status', None) == 'DELETED')
+        return rsp.json().get('status', None) == 'DELETED'
 
 
     def clean_job(self):

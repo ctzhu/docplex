@@ -626,7 +626,7 @@ class CpoSolver(object):
         There may be other conflicts in the model; consequently, repair of a given conflict
         does not guarantee feasibility of the remaining model.
 
-        Conflict refiner is controled by the following parameters (that can be set at CpoSolver creation):
+        Conflict refiner is controlled by the following parameters (that can be set at CpoSolver creation):
 
          * ConflictRefinerBranchLimit
          * ConflictRefinerFailLimit
@@ -733,7 +733,7 @@ class CpoSolver(object):
         self._set_status(STATUS_ABORTED)
         agt = self.agent
         self.agent = None
-        if (agt is not None):
+        if agt is not None:
             agt.end()
 
 
@@ -742,7 +742,7 @@ class CpoSolver(object):
         agt = self.agent
         self.agent = None
         self._set_status(STATUS_RELEASED)
-        if (agt is not None):
+        if agt is not None:
             agt.end()
 
 
@@ -850,7 +850,7 @@ class CpoSolver(object):
         Raise:
             CpoException if solver is not in the right status
         """
-        if (self.status != ests):
+        if self.status != ests:
            raise CpoException("Unexpected solver status. Should be '{}' instead of '{}'".format(ests, self.status))
 
 
@@ -889,6 +889,7 @@ class CpoSolver(object):
         else:
             # Search first available agent in the list
             agent = None
+            aname = None
             errors = []
             for aname in alist:
                 try:

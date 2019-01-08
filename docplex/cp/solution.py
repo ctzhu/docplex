@@ -44,7 +44,7 @@ Detailed description
 import docplex.cp.utils as utils
 from docplex.cp.utils import *
 from docplex.cp.expression import CpoVariable, CpoIntVar, CpoIntervalVar, CpoSequenceVar, CpoStateFunction, \
-    INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, _domain_iterator, compare_expressions
+    INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY, _domain_iterator, compare_expressions
 from docplex.cp.parameters import CpoParameters
 import types
 from collections import OrderedDict
@@ -389,21 +389,21 @@ class CpoIntervalVarSolution(CpoVarSolution):
         Returns:
             Interval variable value as a tuple.
         """
-        if (self.is_present()):
+        if self.is_present():
             if self.length is None:
-                return (self.start, self.end, self.size)
+                return self.start, self.end, self.size
             else:
-                return (self.start, self.end, self.size, self.length)
+                return self.start, self.end, self.size, self.length
         return ()
 
 
     def __str__(self):
         """ Convert this expression into a string """
         res = [self.get_name(), ': ']
-        if (self.is_absent()):
+        if self.is_absent():
             res.append("absent")
         else:
-            if (self.is_optional()):
+            if self.is_optional():
                 res.append("optional")
             res.append("(start=" + str(self.get_start()))
             res.append(", end=" + str(self.get_end()))
@@ -695,8 +695,8 @@ class CpoModelSolution(object):
         """ Add a KPI value to this solution
 
         Args:
-            name:  Name of the KPI
-            var:   Model variable representing this KPI
+            name:    Name of the KPI
+            value:   Model variable representing this KPI
         """
         self.kpi_values[name] = value
 
@@ -771,7 +771,7 @@ class CpoModelSolution(object):
             var = _get_expr_from_map(expr_map, vname)
             v = vars[vname]
             if 'start' in v:
-                # Check partially instanciated
+                # Check partially instantiated
                 if 'presence' in v:
                     vsol = CpoIntervalVarSolution(var,  True if v['presence'] == 1 else None,
                                                   _get_domain(v['start']), _get_domain(v['end']), _get_domain(v['size']))
@@ -946,7 +946,7 @@ class CpoRunResult(object):
 
 
     def get_process_infos(self):
-        """ Gets the set of informations provided by the Python API converning the solving of the model.
+        """ Gets the set of informations provided by the Python API concerning the solving of the model.
 
         Returns:
             Object of class :class:`CpoProcessInfos` that contains general information on model processing.
@@ -1729,7 +1729,7 @@ class CpoProcessInfos(InfoDict):
     the full content of the information structure.
     """
 
-    # Model build time (time between model creatiuon and last addition of an expression)
+    # Model build time (time between model creation and last addition of an expression)
     MODEL_BUILD_TIME = "ModelBuildTime"
 
     # Attribute name for time needed to transform model into CPO format
@@ -1782,7 +1782,7 @@ class CpoProcessInfos(InfoDict):
     def get_model_build_time(self):
         """ Get the time spent to build the model.
 
-        Modeilng time is computed as the time spent between model creation and last addition of a model expression.
+        Modeling time is computed as the time spent between model creation and last addition of a model expression.
 
         Returns:
             Total modeling time in seconds.
@@ -1820,7 +1820,7 @@ def _get_domain(val):
         for v in val:
             if is_array(v):
                 vl = len(v)
-                if (vl == 2):
+                if vl == 2:
                     res.append((_get_num_value(v[0]), _get_num_value(v[1])))
                 elif vl == 3:
                     res.append((_get_num_value(v[0]), _get_num_value(v[1]), _HOLE_MARKER))

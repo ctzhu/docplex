@@ -496,5 +496,6 @@ class DOcloudConnector(object):
                                                     pg.remaining_nb_nodes))
             # assume that there's an incubent if ther's a gap
             pg.has_incumbent = 'PROGRESS_GAP' in details
-        pg.time = ((info.get('updatedAt')) - int(info.get('startedAt'))) / 1000
+        if 'startedAt' in info and 'updatedAt' in info:
+            pg.time = ((info.get('updatedAt')) - int(info.get('startedAt'))) / 1000
         return pg

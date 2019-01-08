@@ -33,12 +33,12 @@ class _WorkerEnvironmentOverride(WorkerEnvironment):
     is a LocalEnvironment. If the default_env is a WorkerEnvironment,
     just use it.
     '''
-    def __init__(self, env):
-        Environment.__init__(self)
+    def __init__(self, env, solve_hook=None):
+        super(_WorkerEnvironmentOverride, self).__init__(None)
         self.env = env
 
     def get_available_core_count(self):
-        return Environment.get_available_core_count(self)
+        return self.env.get_available_core_count()
 
     def get_input_stream(self, name):
         return self.env.get_input_stream(name)
@@ -50,22 +50,22 @@ class _WorkerEnvironmentOverride(WorkerEnvironment):
         return self.env.set_output_attachment(name, filename)
 
     def get_parameter(self, name):
-        return Environment.get_parameter(self, name)
+        return self.env.get_parameter(name)
 
     def update_solve_details(self, details):
-        return Environment.update_solve_details(self, details)
+        return self.env.update_solve_details(details)
 
     def notify_start_solve(self, solve_details):
-        return Environment.notify_start_solve(self, solve_details)
+        return self.env.notify_start_solve(solve_details)
 
     def notify_end_solve(self, status):
-        return Environment.notify_end_solve(self, status)
+        return self.env.notify_end_solve(status)
 
     def set_stop_callback(self, cb):
-        return Environment.set_stop_callback(self, cb)
+        return self.env.set_stop_callback(cb)
 
     def get_stop_callback(self):
-        return Environment.get_stop_callback(self)
+        return self.env.get_stop_callback()
 
 
 class Executor(object):

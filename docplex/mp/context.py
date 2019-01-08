@@ -386,9 +386,8 @@ class Context(BaseContext):
             file_list: The list of config files to read.
             kwargs: context parameters to override. See :func:`docplex.mp.context.Context.update`
         """
-        context = Context()
+        context = Context(**kwargs)
         context.read_settings(file_list=file_list, logger=logger)
-        context.update(kwargs)
         if 'DOCPLEX_CONTEXT' in os.environ:
             values_pairs = []
             for v in shlex.split(os.environ['DOCPLEX_CONTEXT']):
@@ -446,7 +445,7 @@ class Context(BaseContext):
             # try a set_converted_value if it's a Parameter
             try:
                 target_attribute.set(property_value)
-            except AttributeError:
+            except (AttributeError, TypeError):
                 # no set(), just setattr
                 setattr(o, to_be_set, property_value)
 

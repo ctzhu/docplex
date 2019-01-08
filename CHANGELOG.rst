@@ -1,7 +1,7 @@
 Changelog
 ---------
 
-Changed in 2.7.112:
+Changed in 2.7.113:
 ```````````````````
 * In ``docplex.mp``:
    * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the

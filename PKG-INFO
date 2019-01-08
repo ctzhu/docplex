@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.7.112
+Version: 2.7.113
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,7 +244,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        Changed in 2.7.112:
+        Changed in 2.7.113:
         ```````````````````
         * In ``docplex.mp``:
            * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the

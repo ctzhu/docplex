@@ -9,5 +9,5 @@
 # See script tools/gen_version.py
 docplex_version_major = 2
 docplex_version_minor = 7
-docplex_version_micro = 112
-docplex_version_string = '2.7.112'
+docplex_version_micro = 113
+docplex_version_string = '2.7.113'

@@ -707,7 +707,8 @@ class WorkerEnvironment(Environment):
     def __init__(self, solve_hook):
         super(WorkerEnvironment, self).__init__()
         self.solve_hook = solve_hook
-        self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
+        if solve_hook:
+            self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
         self.logger = None
 
     def get_available_core_count(self):

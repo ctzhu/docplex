@@ -16,10 +16,9 @@ In particular, it defines the following classes:
  * :class:`CpoIntervalVar`: representation of an interval variable,
  * :class:`CpoSequenceVar`: representation of a sequence variable,
  * :class:`CpoTransitionMatrix`: representation of a transition matrix,
- * :class:`CpoTupleSet`: representation of a tuple set,
  * :class:`CpoStateFunction`: representation of a state function.
 
-None of these classes should be created explicitly.
+**None of these classes should be created explicitly.**
 There are various factory functions to do so, such as:
 
  * :meth:`integer_var`, :meth:`integer_var_list`, :meth:`integer_var_dict` to create integer variable(s),
@@ -46,9 +45,8 @@ from docplex.cp.utils import *
 from docplex.cp.catalog import *
 from docplex.cp.config import context
 
-import math
-import collections
 import threading
+import warnings
 
 
 ###############################################################################
@@ -253,16 +251,15 @@ class CpoExpr(object):
         """
         return (type(self) == type(other)) and (self.type == other.type) and (self.name == other.name)
 
-    # def _incr_ref_count(self):
-    #     """ Increase reference count on this expression and create a name if more than one
-    #     """
-    #     # Increment reference count
-    #     self.reference_count += 1
-    #     # if (self.reference_count > 1) and not(self.type.is_constant_atom):
-    #     #     # Add expression id if none
-    #     #     if self.name is None:
-    #     #         self.name = self._generate_name()
+    def _garbage(self):
+        """ Signal that the expression is not used.
 
+        This method removes all children and decrement explicit reference_count on children.
+        """
+        cl = self.children
+        self.children = ()
+        for c in cl:
+            c.reference_count -= 1
 
     def __str__(self):
         """ Convert this expression into a string """
@@ -327,8 +324,8 @@ class CpoExpr(object):
 
     def __add__(self, other):
         """ Plus """
-        if other is 0:  # Do not use ==
-            return self
+        # if other is 0:  # Do not use == because it is overloaded
+        #     return self
         other = build_cpo_expr(other)
         if self.is_kind_of(Type_IntExpr):
             if other.is_kind_of(Type_IntExpr):
@@ -344,8 +341,8 @@ class CpoExpr(object):
 
     def __radd__(self, other):
         """ Plus (right) """
-        if other is 0:  # Do not use ==
-            return self
+        # if other is 0:  # Do not use == because it is overloaded
+        #     return self
         return build_cpo_expr(other).__add__(self)
 
     def __pos__(self):
@@ -447,6 +444,10 @@ class CpoExpr(object):
 
     def __and__(self, other):
         """ Binary and used to represent logical and """
+        # if other is True:  # Do not use == because it is overloaded
+        #     return self
+        # if other is False:  # Do not use == because it is overloaded
+        #     return False
         other = build_cpo_expr(other)
         assert self.is_kind_of(Type_BoolExpr) and other.is_kind_of(Type_BoolExpr), "Operands of & (logical and) should be boolean expressions"
         return CpoFunctionCall(Oper_logical_and, Type_BoolExpr, (self, other))
@@ -457,6 +458,10 @@ class CpoExpr(object):
 
     def __or__(self, other):
         """ Binary or used to represent logical or """
+        # if other is False:  # Do not use == because it is overloaded
+        #     return self
+        # if other is True:  # Do not use == because it is overloaded
+        #     return True
         other = build_cpo_expr(other)
         assert self.is_kind_of(Type_BoolExpr) and other.is_kind_of(Type_BoolExpr), "Operands of | (logical or) should be boolean expressions"
         return CpoFunctionCall(Oper_logical_or, Type_BoolExpr, (self, other))
@@ -1002,14 +1007,11 @@ class CpoSequenceVar(CpoVariable):
         return len(self.children)
 
 
-class CpoTransitionMatrix(CpoExpr):
+class CpoTransitionMatrix(CpoValue):
     """ This class represents a *transition matrix* that is used in CPO model to represent transition distances.
     """
-    __slots__ = ('size',    # Matrix width/height
-                 'matrix',  # Matrix values
-                 'is_flat', # Indicates that the list of values is flat
-                )
-    
+    __slots__ = ()  # Matrix stored in value field
+
     def __init__(self, size=None, values=None, name=None):
         """ Creates a new transition matrix (square matrix of integers).
 
@@ -1025,65 +1027,42 @@ class CpoTransitionMatrix(CpoExpr):
           * In a state function, the transition matrix represents the minimal distance between two integer
             states of the function.
 
-        There are two ways to create a transition matrix:
+        A transition matrix can be created:
 
-          * Giving only its size. In this case, a transition matrix is created by this constructor with all
+          * Deprecated.
+            Giving only its size. In this case, a transition matrix is created by this constructor with all
             values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
 
-          * Giving the matrix values either as list of rows, each row being a list of integers,
-            or as a single list of integers containing the concatenation of rows.
-            Given value is not duplicated. Any change on the value is reflected in the transition matrix,
-            and any change in the matrix using :meth:`set_value` is reflected in the source object.
+          * Giving the matrix values as a list of rows, each row being a list of integers.
+            Matrix values can not be changed after it has been created.
 
         Args:
-            size (optional):  Matrix size (width or height).
-                    If not given, the `values` argument must be given.
-            values (optional):  Matrix value as list of integers or list of rows.
-                    If not given, the method `set_value()` should be called to initialize matrix content.
-            name (optional):  Name of the matrix. None by default.
+            size (optional):   Matrix size (width and height),
+            name (optional):   Name of the matrix. None by default.
+            values (optional): Matrix values expressed as a list of rows.
         """
 
-        super(CpoTransitionMatrix, self).__init__(Type_TransitionMatrix, name)
+        super(CpoTransitionMatrix, self).__init__(None, Type_TransitionMatrix)
+        if name:
+            self.set_name(name)
 
-        if size is not None:
-            assert is_int(size) and size >= 0, "Argument 'size' should be a positive integer"
-            self.size = size
-
-        if values is None:
-            assert size is not None, "At least 'size' or 'values' should be given"
-            # Allocate matrix as flat array
-            self.matrix = [0] * (size * size)
-            self.is_flat = True
+        # Check type of argument
+        if size:
+            assert is_int(size) and size >= 0, "Argument 'size' should be a positive integer."
+            assert values is None, "Arguments 'size' and 'values' should not be given together."
+            warnings.warn("Creating editable transition matrix by size is deprecated since release 2.3.",
+                          DeprecationWarning)
+            self.value = [[0 for i in range(size)] for j in range(size)]
         else:
-            assert is_array(values), "Argument 'values' should be an array of integers"
-            # Check empty array
-            alen = len(values)
-            if alen == 0:
-                assert size is None or size == 0, "Size should be zero with an empty array of values"
-                self.size = 0
-                self.is_flat = True
-            else:
-                if is_int(values[0]):
-                    # Assume matrix is a flat array of integers
-                    self.is_flat = True
-                    assert all(is_int(v) and v >= 0 for v in values), "All matrix values should be positive integers"
-                    if size is None:
-                        size = int(math.sqrt(alen))
-                        assert (alen == (size * size)), "Array of values should have a length that is a perfect square"
-                        self.size = size
-                    else:
-                        assert alen == size * size, "Array of values should have a size equal to size * size"
-                else:
-                    # Assume matrix is an array of arrays
-                    self.is_flat = False
-                    if size is None:
-                        self.size = alen
-                    else:
-                        assert (alen == size), "Array of values has a size that is different than the given one"
-                    assert all(is_array(r) for r in values), "Array of values should be a list of lists of integers"
-                    assert all((len(r) == alen) for r in values), "All values rows should have the same size"
-                    assert all(all(is_int(v) and v >= 0 for v in r) for r in values), "All matrix values should be positive integers"
-            self.matrix = values
+            try:
+                self.value = tuple(tuple(x) for x in values)
+            except TypeError:
+                assert False, "Argument 'values' should be an iterable of iterables of integers."
+            size = len(self.value)
+            assert all (len(x) == size for x in self.value), \
+                "Matrix value should be squared (list of rows of the same size)"
+            assert all(all(is_int(v) and v >= 0 for v in r) for r in self.value), \
+                "All matrix values should be positive integers"
 
     def get_size(self):
         """ Returns the size of the matrix.
@@ -1091,7 +1070,7 @@ class CpoTransitionMatrix(CpoExpr):
         Returns:
             Matrix size.
         """
-        return self.size
+        return len(self.value)
 
     def get_value(self, from_state, to_state):
         """ Returns a value in the transition matrix.
@@ -1102,12 +1081,7 @@ class CpoTransitionMatrix(CpoExpr):
         Returns:
             Transition value.
         """
-        assert_arg_int_interval(from_state, 0, self.size, "from_state")
-        assert_arg_int_interval(to_state, 0, self.size, "to_state")
-        if self.is_flat:
-            return self.matrix[(from_state * self.size) + to_state]
-        else:
-            return self.matrix[from_state][to_state]
+        return self.value[from_state][to_state]
 
     def get_all_values(self):
         """ Returns an iterator on all matrix values, in row/column order
@@ -1115,7 +1089,8 @@ class CpoTransitionMatrix(CpoExpr):
         Returns:
             Iterator on all values
         """
-        return (self.get_value(f, t) for f in range(self.size) for t in range(self.size))
+        sizerg = range(len(self.value))
+        return (self.value[f][t] for f in sizerg for t in sizerg)
 
     def get_matrix(self):
         """ Returns the complete transition matrix.
@@ -1123,7 +1098,7 @@ class CpoTransitionMatrix(CpoExpr):
         Returns:
             Transition matrix as a list of integers that is the concatenation of all matrix rows.
         """
-        return self.matrix
+        return self.value
 
     def set_value(self, from_state, to_state, value):
         """ Sets a value in the transition matrix.
@@ -1133,132 +1108,20 @@ class CpoTransitionMatrix(CpoExpr):
             to_state:   Index of the to state.
             value:      Transition value.
         """
-        assert_arg_int_interval(from_state, 0, self.size, "from_state")
-        assert_arg_int_interval(to_state, 0, self.size, "to_state")
         assert is_int(value) and value >= 0, "Value should be a positive integer"
-        if self.is_flat:
-            self.matrix[from_state * self.size + to_state] = value
-        else:
-            self.matrix[from_state][to_state] = value
-
-    def _equals(self, other):
-        """ Checks the equality of this expression with another object.
-
-        This particular method just checks local attributes, but does not check recursively children if any.
-        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
-        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
-
-        Args:
-            other: Other object to compare with.
-        Returns:
-            True if 'other' is semantically identical to this object, False otherwise.
-        """
-        return super(CpoTransitionMatrix, self)._equals(other) and \
-               (self.size == other.size) and \
-               (self.matrix == other.matrix)
+        self.value[from_state][to_state] = value
 
     def __str__(self):
         """ Convert this expression into a string """
-        return "TransitionMatrix" + to_string(self.matrix)
-    
-    
-class CpoTupleSet(CpoExpr):
-    """ This class is used to represent a set of integer tuples.
-    """
-    __slots__ = ('size',      # Size of a single tuple
-                 'tupleset',  # List of tuples
-                 )
-    
-    def __init__(self, size=-1, name=None, tset=None):
-        """ Constructor
+        return "TransitionMatrix" + to_string(self.value)
 
-        Args:
-            size (optional): Tuple size, default value is -1 for automatic size.
-            name (optional): Name of the tuple set. Default is None.
-            tset (optional): Initial set value
-        """
-        assert is_int(size), "Argument 'size' should be an int"
-        super(CpoTupleSet, self).__init__(Type_TupleSet, name)
-        self.size = size
-        self.tupleset = []
-        if tset:
-            self.size = size = len(tset[0])
-            assert (all(len(t) == size for t in tset)), "All tuples in 'tset' should have the same length"
-         
-    def get_size(self):
-        """ Returns the size of one tuple in this set.
 
-        Returns:
-            Tuple size, -1 if undefined.
-        """
-        return self.size
-
-    def add(self, tpl):
-        """ Appends a tuple at the end of this tuple set.
-
-        Args:
-            tpl: Tuple to add.
-        """
-        # Check for intervals
-        tpl = _check_and_expand_interval_tuples("tpl", tpl)
-        if self.size < 0:
-            self.size = len(tpl)
-        elif len(tpl) != self.size:
-            raise CpoException("You must add only tuples of size " + str(self.size))
-        self.tupleset.append(tpl)
-
-    def add_set(self, tpls):
-        """ Appends a set of tuples in this tuple set.
-
-        Args:
-            tpls: Iterator of tuples to add.
-        """
-        for t in tpls:
-            self.add(t)
-
-    def get_tuple_set(self):
-        """ Returns the complete tuple set.
-
-        Returns:
-            Tuple set (list of tuples)
-        """
-        return self.tupleset
-
-    def _equals(self, other):
-        """ Checks the equality of this expression with another object.
-
-        This particular method just checks local attributes, but does not check recursively children if any.
-        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
-        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
-
-        Args:
-            other: Other object to compare with.
-        Returns:
-            True if 'other' is semantically identical to this object, False otherwise.
-        """
-        return super(CpoTupleSet, self)._equals(other) and \
-               (self.size == other.size) and \
-               (self.tupleset == other.tupleset)
-
-    def __len__(self):
-        """ Returns the number of tuples in this tuple set.
-
-        Returns:
-            Number of tuples in this tuple set.
-        """
-        return len(self.tupleset)
-
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "TupleSet" + to_string(self.tupleset)
-    
-    
 class CpoStateFunction(CpoVariable):
     """ This class represents a *state function* expression node.
 
     State functions are used by *interval variables* to represent the evolution of a state variable over time.
     """
-    __slots__ = ('trmtx',      # Transition matrix
+    __slots__ = ('trmtx',  # Transition matrix
                 )
 
     # Expression name generator
@@ -1268,9 +1131,10 @@ class CpoStateFunction(CpoVariable):
         """ Creates a new state function.
 
         Args:
-            trmtx (optional):  Transition matrix.
-                               If not given in the constructor, method :meth:`set_transition_matrix` should be called
-                               after the constructor.
+            trmtx (optional): An optional transition matrix defining the transition distance between consecutive states
+                              of the state function.
+                              Transition matrix is given as a list of rows (iterable of iterables of positive integers),
+                              or as the result of a call to the method :meth:`~docplex.cp.expression.transition_matrix`.
             name (optional):   Name of the state function.
         """
         # Force name for state functions
@@ -1281,12 +1145,17 @@ class CpoStateFunction(CpoVariable):
         """ Sets the transition matrix.
 
         Args:
-            trmtx: Transition matrix, None if none.
+        trmtx : A transition matrix defining the transition distance between consecutive states of the state function.
+                Transition matrix is given as a list of rows (iterable of iterables of positive integers),
+                or as the result of a call to the method :meth:`~docplex.cp.expression.transition_matrix`.
         """
-        self.trmtx = trmtx
+
         if trmtx is None:
+            self.trmtx = None
             self.children = ()
         else:
+            trmtx =  build_cpo_transition_matrix(trmtx)
+            self.trmtx = trmtx
             assert isinstance(trmtx, CpoTransitionMatrix), "Argument 'trmtx' should be a CpoTransitionMatrix"
             trmtx.reference_count += 1
             self.children = (trmtx,)
@@ -1373,7 +1242,7 @@ def integer_var_list(size, min=None, max=None, name=None, domain=None):
         size:   Size of the list of variables
         min:    Domain min value. Optional if domain is given extensively.
         max:    Domain max value. Optional if domain is given extensively.
-        name:   Optional variable name. If not given, a name is automatically generated.
+        name:   Optional variable name prefix. If not given, a name is automatically generated.
         domain: Variable domain expressed as extensive list of values and/or intervals expressed as tuples of integers.
                 Unused if min and max are provided.
     Returns:
@@ -1420,7 +1289,7 @@ def integer_var_dict(keys, min=None, max=None, name=None, domain=None):
     isnamestr = is_string(name)
     for k in keys:
         if isnamestr:
-            vname = name + str(i) 
+            vname = name + str(i)
         else:
             vname = name(k)
         res[k] = CpoIntVar(dom, vname)
@@ -1609,7 +1478,7 @@ def sequence_var(vars, types=None, name=None):
     return CpoSequenceVar(vars, types, name)
 
 
-def transition_matrix(size=None, values=None, name=None):
+def transition_matrix(szvals, name=None):
     """ Creates a new transition matrix (square matrix of integers).
 
     A transition matrix is a square matrix of non-negative integers that represents a minimal distance between
@@ -1624,58 +1493,81 @@ def transition_matrix(size=None, values=None, name=None):
       * In a state function, the transition matrix represents the minimal distance between two integer
         states of the function.
 
-    There are two ways to create a transition matrix:
+    A transition matrix can be created:
 
-      * Giving only its size. In this case, a transition matrix is created by this constructor with all
+      * Deprecated.
+        Giving only its size. In this case, a transition matrix is created by this constructor with all
         values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
 
-      * Giving the matrix values either as list of rows, each row being a list of integers,
-        or as a single list of integers containing the concatenation of rows.
-        Given value is not duplicated. Any change on the value is reflected in the transition matrix,
-        and any change in the matrix using :meth:`set_value` is reflected in the source object.
+      * Giving the matrix values as a list of rows, each row being a list of integers.
+        Matrix values can not be changed after it has been created.
 
     Args:
-        size (optional):  Matrix size (width or height).
-                If not given, the `values` argument must be given.
-        values (optional):  Matrix value as list of integers or list of rows.
-                If not given, the method `set_value()` should be called to initialize matrix content.
+        szvals:  Matrix values expressed as a list of rows (iterable of iterables of positive integers).
         name (optional):  Name of the matrix. None by default.
     Returns:
         TransitionMatrix expression.
     """
-    return CpoTransitionMatrix(size, values, name)
- 
- 
-def tuple_set(size, name=None):
-    """ Create tuple set.
+    # Check build of editable matrix (deprecated)
+    if is_int(szvals):
+        return CpoTransitionMatrix(size=szvals, name=name)
 
-    The tuple set can be created empty, and then filled using methods provided by the TupleSet object.
-    Another option is to pass the list of all tuples as first parameter of this function.
+    # Build matrix checking from cache
+    res = build_cpo_transition_matrix(szvals)
+    if name:
+        res.set_name(name)
+    return res
+
+
+def tuple_set(tset, name=None):
+    """ Create a tuple set.
+
+    A tuple set is essentially a matrix of integers, but not necessarily square.
+    Boolean expressions allowed_assignments() and forbidden_assignments() use a tuple set to express
+    allowed/forbidden combinations of values for a collection of variables.
+    Each allowed/forbidden combination is called a tuple and it is represented by a row in the tuple set matrix.
+
+    Note that modeling methods allowed_assignments() and forbidden_assignments() automatically create a tuple_set
+    object if given argument is an iterable of iterables.
+    There is then no need to explicitly call this factory method to create a tuple set, except to assign a name to it.
 
     Args:
-        size:  Size of one tuple, or initial list of tuples.
+        tset:  List of tuples, as iterable of iterables of integers
         name:  Object name (default is None).
     Returns:
         TupleSet expression.
     """
-    # Check if a tupleset is given
-    if (is_array(size)):
-        res = CpoTupleSet(-1, name)
-        res.add_set(size)
-        return res
-    return CpoTupleSet(size, name)
+    res = build_cpo_tupleset(tset)
+    if name:
+        res.set_name(name)
+    return res
 
 
 def state_function(trmtx=None, name=None):
     """ Create a new State Function
 
     Args:
-        trmtx: Transition matrix
-        name: Name of the state function
+        trmtx (optional): An optional transition matrix defining the transition distance between consecutive states
+                          of the state function.
+                          Transition matrix is given as a list of rows (iterable of iterables of positive integers),
+                          or as the result of a call to the method :meth:`~docplex.cp.expression.transition_matrix`.
+        name (optional):  Name of the state function
     Returns:
         CpoStateFunction expression
     """
     return CpoStateFunction(trmtx, name)
+
+
+def is_cpo_expr(expr, type=None):
+    """ Check if an expression is a CPO model expression
+
+    Args:
+        expr:             Value to check
+        type (optional):  Precise CPO type, in Type_*
+    Returns:
+        True if parameter is a CPO expression, of the expected type if given
+    """
+    return isinstance(expr, CpoExpr) and (type is None or expr.type == type)
 
 
 ###############################################################################
@@ -1723,7 +1615,7 @@ def build_cpo_expr(val):
     if ctyp:
         return CpoValue(val, ctyp)
 
-    # Check numpy Array Scalars (special case when called from overloaded operator)
+    # Check numpy scalars (special case when called from overloaded operator)
     if vtyp is NUMPY_NDARRAY and not val.shape:
         return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type))
 
@@ -1735,20 +1627,19 @@ def build_cpo_expr(val):
 
     # Check if already in the cache
     if _CACHE_ACTIVE:
-        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-        try:
-            cpval = _CPO_VALUES_FROM_PYTHON.get(val)
-        except TypeError:
-            # Convert to tuple every member of the tuple
-            val = tuple(_convert_to_tuple_if_possible(x) for x in val)
+        with _CPO_VALUES_FROM_PYTHON_LOCK:
             try:
                 cpval = _CPO_VALUES_FROM_PYTHON.get(val)
             except TypeError:
-                raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
-        if cpval is None:
-            cpval = _create_cpo_array_expr(val)
-            _CPO_VALUES_FROM_PYTHON.set(val, cpval)
-        _CPO_VALUES_FROM_PYTHON_LOCK.release()
+                # Convert to tuple every member of the tuple
+                val = tuple(_convert_to_tuple_if_possible(x) for x in val)
+                try:
+                    cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+                except TypeError:
+                    raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
+            if cpval is None:
+                cpval = _create_cpo_array_expr(val)
+                _CPO_VALUES_FROM_PYTHON.set(val, cpval)
     else:
         cpval = _create_cpo_array_expr(val)
 
@@ -1756,40 +1647,85 @@ def build_cpo_expr(val):
 
 
 def build_cpo_tupleset(val):
-    """ Builds a TupleSet expression from a given Python value.
+    """ Builds a TupleSet expression from a Python value.
 
-    This method uses a cache to return the same CpoExpr for the same constant.
+    This method uses the value cache to return the same CpoExpr for the same value.
 
     Args:
-        val: Value to convert (possibly already an expression).
+        val: Value to convert. Iterator or iterators of integers, or existing TupleSet expression.
     Returns:
-        Corresponding expression.
+        Model tupleset, not editable.
     Raises:
-        CpoException if conversion is not possible.
+        Exception if conversion is not possible.
     """
     # Check if already a TupleSet expression
-    if isinstance(val, CpoTupleSet):
+    if isinstance(val, CpoExpr) and val.is_type(Type_TupleSet):
         return val
 
     # Create result set
     try:
-        val = tuple(tuple(x) for x in val)
+        tset = tuple(tuple(x) for x in val)
     except TypeError:
-       raise CpoException("Impossible to build a CPO tuple set with value '" + to_string(val) + "'")
+        assert False, "Argument should be an iterable of iterables of integers."
 
     # Check if already in the cache
     if _CACHE_ACTIVE:
-        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-        try:
-            cpval = _CPO_VALUES_FROM_PYTHON.get(val)
-        except TypeError:
-            raise CpoException("Impossible to build a CPO tuple set with value '" + to_string(val) + "'")
-        if cpval is None:
-            cpval = CpoTupleSet(tset=val)
-            _CPO_VALUES_FROM_PYTHON.set(val, cpval)
-        _CPO_VALUES_FROM_PYTHON_LOCK.release()
+        with _CPO_VALUES_FROM_PYTHON_LOCK:
+            key = ('tupleset', tset)
+            cpval = _CPO_VALUES_FROM_PYTHON.get(key)
+            if cpval is None:
+                # Verify new tuple set
+                assert len(tset) > 0, "Tuple set should not be empty"
+                size = len(tset[0])
+                assert all(len(t) == size for t in tset), "All tuples in 'tset' should have the same length"
+                assert all(all(is_int(v) for v in r) for r in tset), "All tupleset values should be integer"
+                # Put tuple set in cache
+                cpval = CpoValue(tset, Type_TupleSet)
+                _CPO_VALUES_FROM_PYTHON.set(key, cpval)
     else:
-        cpval = CpoTupleSet(tset=val)
+        cpval = CpoValue(tset, Type_TupleSet)
+
+    return cpval
+
+
+def build_cpo_transition_matrix(val):
+    """ Builds a TransitionMatrix expression from a Python value.
+
+    This method uses the value cache to return the same CpoExpr for the same value.
+
+    Args:
+        val: Value to convert. Iterator or iterators of integers, or existing TransitionMatrix expression.
+    Returns:
+        Model transition matrix, not editable.
+    Raises:
+        Exception if conversion is not possible.
+    """
+    # Check if already a TransitionMatrix expression
+    if isinstance(val, CpoExpr) and val.is_type(Type_TransitionMatrix):
+        return val
+
+    # Create internal tuple
+    try:
+        trmx = tuple(tuple(x) for x in val)
+    except TypeError:
+        assert False, "Argument should be an iterable of iterables of integers."
+
+    # Check if already in the cache
+    if _CACHE_ACTIVE:
+        with _CPO_VALUES_FROM_PYTHON_LOCK:
+            key = ('matrix', trmx)
+            cpval = _CPO_VALUES_FROM_PYTHON.get(key)
+            if cpval is None:
+                # Verify matrix
+                size = len(trmx)
+                assert size > 0, "Transition matrix should not be empty"
+                assert all(len(t) == size for t in trmx), "All matrix lines should have the same length " + str(size)
+                assert all(all(is_int(v) and v >= 0 for v in r) for r in trmx), "All matrix values should be positive integer"
+                # Build matrix and put it in cache
+                cpval = CpoTransitionMatrix(values=trmx)
+                _CPO_VALUES_FROM_PYTHON.set(key, cpval)
+    else:
+        cpval = CpoTransitionMatrix(values=trmx)
 
     return cpval
 
@@ -1818,12 +1754,6 @@ def _create_cpo_array_expr(val):
     # Convert array elements if required
     if typ.is_array_of_expr:
         return CpoValue(tuple(build_cpo_expr(v) for v in val), typ)
-
-    # Tuple set
-    if typ == Type_TupleSet:
-        res = CpoTupleSet()
-        res.add_set(val)
-        return res
 
     # Default
     return CpoValue(val, typ)
@@ -1925,6 +1855,13 @@ def _get_cpo_type(val):
     return None
 
 
+def _clear_value_cache():
+    """ Clear the cache of CPO values
+    """
+    with _CPO_VALUES_FROM_PYTHON_LOCK:
+        _CPO_VALUES_FROM_PYTHON.clear()
+
+
 def _get_cpo_type_str(val):
     """ Get the CPO type name of a value
 
@@ -1981,7 +1918,6 @@ _PYTHON_TO_CPO_TYPE[CpoIntVar]           = Type_IntVar
 _PYTHON_TO_CPO_TYPE[CpoIntervalVar]      = Type_IntervalVar
 _PYTHON_TO_CPO_TYPE[CpoSequenceVar]      = Type_SequenceVar
 _PYTHON_TO_CPO_TYPE[CpoTransitionMatrix] = Type_TransitionMatrix
-_PYTHON_TO_CPO_TYPE[CpoTupleSet]         = Type_TupleSet
 _PYTHON_TO_CPO_TYPE[CpoStateFunction]    = Type_StateFunction
 
 

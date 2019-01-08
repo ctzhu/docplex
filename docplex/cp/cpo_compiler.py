@@ -398,7 +398,7 @@ class CpoCompiler(object):
                 elif (t is Type_TransitionMatrix):
                     self._compile_transition_matrix(e, cout)
                 elif (t is Type_TupleSet):
-                    self._compile_tuple_set(e, cout)
+                    self._compile_tuple_set(e.value, cout)
                 elif (t is Type_StepFunction):
                     self._compile_step_function(e, cout)
                 elif (t is Type_SegmentedFunction):
@@ -631,11 +631,11 @@ class CpoCompiler(object):
         """ Compile a TupleSet in a string in CPO format
 
         Args:
-           tplset: Tuple set
+           tplset: Tuple set as tuple of tuples
            cout:   Output string list
         """
         cout.append("[")
-        for i, tpl in enumerate(tplset.get_tuple_set()):
+        for i, tpl in enumerate(tplset):
             if i > 0:
                 cout.append(", ")
             cout.append("[")

@@ -16,6 +16,7 @@ from docplex.cp.function import *
 import docplex.cp.model
 from docplex.cp.catalog import *
 from docplex.cp.solution import *
+import math
 
 
 ###############################################################################
@@ -450,7 +451,11 @@ class CpoParser(object):
                     else:
                         mtrx = self._read_expression_list(TOKEN_PARENT_CLOSE)
                     self._next_token()
-                    return CpoTransitionMatrix(values=mtrx)
+                    slen = len(mtrx)
+                    size = int(math.sqrt(slen))
+                    if size * size != slen:
+                        raise CpoParserException("Length of transition matrix values should be a square")
+                    return CpoTransitionMatrix(values=(mtrx[i * size : (i+1) * size] for i in range(size)))
                 else:
                     args = self._read_expression_list(TOKEN_PARENT_CLOSE)
                     self._next_token()

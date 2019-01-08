@@ -72,7 +72,7 @@ SOLVE_STATUS_JOB_FAILED = "JobFailed"
 ALL_SOLVE_STATUSES = (SOLVE_STATUS_UNKNOWN,
                       SOLVE_STATUS_INFEASIBLE, SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL,
                       SOLVE_STATUS_JOB_ABORTED, SOLVE_STATUS_JOB_FAILED)
-""" List of all possible solve statuses """
+
 
 # Fail status: Unknown
 FAIL_STATUS_UNKNOWN = "Unknown"
@@ -81,7 +81,7 @@ FAIL_STATUS_UNKNOWN = "Unknown"
 FAIL_STATUS_FAILED_NORMALLY = "SearchHasFailedNormally"
 
 # Fail status: Not failed (success)
-FAIL_STATUS_NOT_FAILED = "SearchHasNotFailed"
+FAIL_STATUS_HAS_NOT_FAILED = "SearchHasNotFailed"
 
 # Fail status: Stopped by abort
 FAIL_STATUS_ABORT = "SearchStoppedByAbort"
@@ -103,10 +103,44 @@ FAIL_STATUS_SEARCH_COMPLETED = "SearchCompleted"
 
 # List of all possible search statuses
 ALL_FAIL_STATUSES = (FAIL_STATUS_UNKNOWN,
-                     FAIL_STATUS_FAILED_NORMALLY, FAIL_STATUS_NOT_FAILED,
+                     FAIL_STATUS_FAILED_NORMALLY, FAIL_STATUS_HAS_NOT_FAILED,
                      FAIL_STATUS_ABORT, FAIL_STATUS_EXCEPTION, FAIL_STATUS_EXIT, FAIL_STATUS_LABEL,
                      FAIL_STATUS_TIME_LIMIT, FAIL_STATUS_SEARCH_COMPLETED)
-""" List of all possible fail statuses """
+
+
+# Search status: Not started
+SEARCH_STATUS_NOT_STARTED = "SearchNotStarted"
+
+# Search status: Ongoing
+SEARCH_STATUS_ONGOING = "SearchOngoing"
+
+# Search status: Completed
+SEARCH_STATUS_COMPLETED = "SearchCompleted"
+
+# Search status: Stopped. Cause given in SearchStopCause.
+SEARCH_STATUS_STOPPED = "SearchStopped"
+
+# List of all possible search statuses
+ALL_SEARCH_STATUSES = (SEARCH_STATUS_NOT_STARTED, SEARCH_STATUS_ONGOING, SEARCH_STATUS_COMPLETED, SEARCH_STATUS_STOPPED)
+
+
+# Stop cause: Not stopped
+STOP_CAUSE_NOT_STOPPED = "SearchHasNotBeenStopped"
+
+# Stop cause: Search terminated on limit (time limit, fail limit, etc)
+STOP_CAUSE_LIMIT = "SearchStoppedByLimit"
+
+# Stop cause: Exit called while solving, for example by a callback
+STOP_CAUSE_EXIT = "SearchStoppedByExit"
+
+# Stop cause: Search aborted externally
+STOP_CAUSE_ABORT = "SearchStoppedByAbort"
+
+# Stop cause: Unknown cause
+STOP_CAUSE_UNKNOWN = "SearchStoppedByUnknownCause"
+
+# List of all possible stop causes
+ALL_STOP_CAUSES = (STOP_CAUSE_NOT_STOPPED, STOP_CAUSE_LIMIT, STOP_CAUSE_EXIT, STOP_CAUSE_ABORT, STOP_CAUSE_UNKNOWN)
 
 
 ###############################################################################
@@ -165,6 +199,10 @@ class CpoVarSolution(object):
             True if this object is equal to the other, False otherwise
         """
         return utils.equals(self, other)
+
+
+    def __hash__(self):
+        return id(self)
 
 
 class CpoIntVarSolution(CpoVarSolution):
@@ -555,6 +593,15 @@ class CpoModelSolution(object):
         return None if var is None else var.get_value()
 
 
+    def is_empty(self):
+        """ Check whether this solution contains any information
+
+        Returns:
+            True if there is no objective value and no variable
+        """
+        return (self.objective_values is None) and (not self.var_solutions)
+
+
     def _add_json_solution(self, jsol):
         """ Add a json solution to this solution descriptor
 
@@ -722,6 +769,8 @@ class CpoSolveResult(CpoRunResult):
         self.model = model
         self.solve_status = SOLVE_STATUS_UNKNOWN   # Solve status, with value in SOLVE_STATUS_*
         self.fail_status = FAIL_STATUS_UNKNOWN     # Fail status, with values in FAIL_STATUS_*
+        self.search_status = None                  # Search status, with value in SEARCH_STATUS_*
+        self.stop_cause = None                     # Stop cause, with values in STOP_CAUSE_*
         self.solveTime = 0                         # Solve time
         self.parameters = None                     # Solving parameters
         self.solution = CpoModelSolution()         # Solution
@@ -748,15 +797,6 @@ class CpoSolveResult(CpoRunResult):
         return self.solve_status
 
 
-    def _set_fail_status(self, fsts):
-        """ Set the fail status
-
-        Args:
-            fsts: Fail status
-        """
-        self.fail_status = fsts
-
-
     def get_fail_status(self):
         """ Gets the solving fail status.
 
@@ -764,6 +804,32 @@ class CpoSolveResult(CpoRunResult):
             Fail status, element of the global list :const:`ALL_FAIL_STATUSES`.
         """
         return self.fail_status
+
+
+    def get_search_status(self):
+        """ Gets the search status.
+
+        This solver information is provided by the COS 12.8 CP solver in addition/replacement to solve_status.
+        Value is None if the solver is earlier than this version.
+
+        Returns:
+            Search status, element of the global list :const:`ALL_SEARCH_STATUSES`.
+            None if not defined.
+        """
+        return self.search_status
+
+
+    def get_stop_cause(self):
+        """ Gets the stop cause.
+
+        This solver information is provided by the COS 12.8 CP solver in addition/replacement to fail_status.
+        Value is None if the solver is earlier than this version.
+
+        Returns:
+            Stop cause, element of the global list :const:`ALL_STOP_CAUSES`.
+            None if not defined.
+        """
+        return self.stop_cause
 
 
     def is_solution(self):
@@ -775,7 +841,8 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             True if there is a solution.
         """
-        return (self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)
+        return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)) \
+                or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
 
 
     def __nonzero__(self):
@@ -806,7 +873,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             True if there is a solution that is optimal.
         """
-        return self.solve_status is SOLVE_STATUS_OPTIMAL
+        return self.solve_status == SOLVE_STATUS_OPTIMAL
 
 
     def get_solution(self):
@@ -923,7 +990,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Variable solution (class CpoVarSolution), None if not found.
         """
-        return self.solution.get_var_solution((name))
+        return self.solution.get_var_solution(name)
 
 
     def get_all_var_solutions(self):
@@ -959,8 +1026,10 @@ class CpoSolveResult(CpoRunResult):
         """
         # Add solver status
         status = jsol.get('solutionStatus', ())
-        self.solve_status = status.get('solveStatus', self.solve_status)
-        self.fail_status = status.get('failStatus', self.fail_status)
+        self.solve_status  = status.get('solveStatus', self.solve_status)
+        self.fail_status   = status.get('failStatus', self.fail_status)
+        self.search_status = status.get('SearchStatus')
+        self.stop_cause    = status.get('SearchStopCause')
         nsts = status.get('nextStatus')
         if nsts is not None:
             if nsts != 'NextTrue':

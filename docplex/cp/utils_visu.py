@@ -1269,12 +1269,10 @@ def matrix(name=None, matrix=None, tuples=None, cpomatrix=None):
     """
     n = (matrix is not None) + (tuples is not None) + (cpomatrix is not None)
     assert n == 1, "_Visu.matrix(...): please supply one and only one argument among 'matrix', 'tuples' and 'cpomatrix'"
+    if cpomatrix is not None:
+        matrix = cpomatrix.value
     if matrix is not None or tuples is not None:
         _visu.matrix(name, matrix, tuples)
-    elif cpomatrix is not None:
-        assert isinstance(cpomatrix, CpoTransitionMatrix)
-        # _Matrix imported from an instance of CpoTransitionMatrix
-        _define_matrix(name, cpomatrix)
 
 
 def timeline(name=None, origin=None, horizon=None, pauses=None):
@@ -1590,7 +1588,7 @@ def show(object=None, name=None, origin=None, horizon=None):
                 _define_solution(object, name)
             elif isinstance(object, CpoTransitionMatrix):
                 # use default display for an instance of CpoTransitionMatrix
-                _define_matrix(object, name)
+                _visu.matrix(title=name, tuples=object.value)
             elif isinstance(object, (CpoFunction, CpoStateFunctionSolution)):
                 # use default display for an instance of CpoFunction or
                 # CpoStateFunctionSolution

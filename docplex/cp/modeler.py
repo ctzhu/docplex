@@ -72,7 +72,7 @@ As for arithmetic, the corresponding operators are also overloaded.
 
 **General purpose**
 
-Followinf functions allow to construct general purpose expressions and constraints.
+Following functions allow to construct general purpose expressions and constraints.
 
  * :meth:`all_diff`: Constrains multiple expressions to be all different.
  * :meth:`abstraction`: Abstracts the values of one array as values in another array.
@@ -260,14 +260,10 @@ Detailed description
 """
 
 from docplex.cp.catalog import *
-from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset
-from docplex.cp.utils import is_array, is_int
+from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset, \
+                                  build_cpo_transition_matrix, INTERVAL_MAX
+from docplex.cp.utils import *
 import collections
-
-try:
-    import __builtin__ as builtin  # Python 2.7
-except ImportError:
-    import builtins as builtin     # Python 3
 
 
 ###############################################################################
@@ -282,7 +278,7 @@ def _expand(arg):
 
 def _is_cpo_expr(x):
     """ Check if x is a CPO expression, or an array of CPO expressions """
-    return isinstance(x, CpoExpr) or (isinstance(x, (list, tuple)) and all(isinstance(v, CpoExpr) for v in x))
+    return isinstance(x, CpoExpr) or (isinstance(x, (list, tuple)) and builtin_all(isinstance(v, CpoExpr) for v in x))
 
 def _is_int_couple(x):
     """ Check if x is a tuple or list of 2 integers """
@@ -294,7 +290,7 @@ def _is_cpo_array(val):
         return True
     if not is_array(val):
         return False
-    return any(isinstance(x, CpoExpr) for x in val)
+    return builtin_any(isinstance(x, CpoExpr) for x in val)
 
 
 # Map of type names
@@ -350,8 +346,7 @@ def _convert_arg(val, name, type, errmsg=None):
         type: Expected type
         errmsg: Optional error message
     """
-    if not isinstance(val, CpoExpr):
-        val = build_cpo_expr(val)
+    val = build_cpo_expr(val)
     assert val.is_kind_of(type), errmsg if errmsg is not None else "Argument '{}' should be a {}".format(name, TYPE_NAMES[type])
     return val
 
@@ -487,7 +482,8 @@ def abs(x):
 
     *abs(x)* is a more efficient way of writing *max(x, -x)*.
 
-    This method recalls the abs() builtin function if its argument is not a CP model expression.
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin abs() function if no model expression is found in the parameters.
 
     Args:
         x: Integer or floating-point expression for which the absolute value is to be computed.
@@ -496,7 +492,7 @@ def abs(x):
     """
     # Check call to builtin function
     if not _is_cpo_expr(x):
-        return builtin.abs(x)
+        return builtin_abs(x)
     return abs_of(x)
 
 
@@ -562,7 +558,6 @@ def sum_of(x):
     The function *sum_of* computes the sum of *x*.
     Depending on the type of *x* the result is an integer, floating-point or cumul expression.
 
-
     Args:
         x: An array of integer, floating-point or cumul expressions.
     Returns:
@@ -574,23 +569,27 @@ def sum_of(x):
         return CpoFunctionCall(Oper_sum, Type_IntExpr, (arr,))
     if arr.is_kind_of(Type_FloatExprArray):
         return CpoFunctionCall(Oper_sum, Type_FloatExpr, (arr,))
-    assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
 
     # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
-    res = x[0]
-    for v in x[1:]:
+    assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
+    values = arr.children
+    res = values[0]
+    for v in values[1:]:
         res = res + v
+    # Garbage the array because unused (remove links on children)
+    arr._garbage()
     return res
 
 
-def sum(*args):
+def sum(x, *args):
     """ Returns the sum of all expressions in an array of expressions.
 
-    The function *sum* computes the sum of *x*.
-    Depending on the type of *x* the result is an integer or a floating-point expression.
+    The function *sum* computes the sum of all expressions in array *x*.
+    If all elements of *x* are integer expressions, result is an integer expression.
+    If at least one element of x is a floating-point expression, result is a floating-point expression.
 
-    The implementation of this method uses a variable number of arguments to be capable to
-    recall builtin sum() function if no parameter is a model expression.
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin sum() function if no model expression is found in the parameters.
 
     Args:
         x: An array of integer or floating-point expressions.
@@ -598,13 +597,13 @@ def sum(*args):
         An integer or float expression depending on the type of argument.
     """
     # Check calls to builtin sum()
-    if len(args) == 2:
-        return builtin.sum(*args)
-    assert len(args) == 1, "This method should have a single argument to build a CP expression"
-    x = _expand(args[0])
+    if args:
+        return builtin_sum(x, *args)
+    # Check array of model expressions
+    x = _expand(x)
     if _is_cpo_array(x):
         return sum_of(x)
-    return builtin.sum(x)
+    return builtin_sum(x)
 
 
 def min_of(x):
@@ -627,15 +626,15 @@ def min_of(x):
     return CpoFunctionCall(Oper_min, Type_FloatExpr, (arr,))
 
 
-def min(*args):
+def min(x, *args):
     """ Computes the minimum of an array of integer or floating-point expressions.
 
     The *min* function returns an expression which has the same value as the
     minimum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
-    The implementation of this method uses a variable number of arguments to be capable to
-    recall builtin min() function if no parameter is a model expression.
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin min() function if no model expression is found in the parameters.
 
     Args:
         x: An array of integer or floating-point expressions.
@@ -643,13 +642,12 @@ def min(*args):
         An integer or float expression according to the type of parameters.
     """
     # Check calls to builtin min()
-    if len(args) == 2:
-        return builtin.min(*args)
-    assert len(args) == 1, "This method should have a single argument to build a CP expression"
-    x = _expand(args[0])
+    if args:
+        return builtin_min(x, *args)
+    x = _expand(x)
     if _is_cpo_array(x):
         return min_of(x)
-    return builtin.min(x)
+    return builtin_min(x)
 
 
 def max_of(x):
@@ -672,15 +670,15 @@ def max_of(x):
     return CpoFunctionCall(Oper_max, Type_FloatExpr, (arr,))
 
 
-def max(*args):
+def max(x, *args):
     """ Computes the maximum of a pair or array of integer or floating-point expressions.
 
     The *max* function returns an expression which has the same value as the
     maximum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
-    The implementation of this method uses a variable number of arguments to be capable to
-    recall builtin max() function if no parameter is a model expression.
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin max() function if no model expression is found in the parameters.
 
     Args:
         x: An array of integer or floating-point expressions.
@@ -688,13 +686,12 @@ def max(*args):
         An integer or float expression according to the type of parameters.
     """
     # Check calls to builtin max()
-    if len(args) == 2:
-        return builtin.max(*args)
-    assert len(args) == 1, "This method should have a single argument to build a CP expression"
-    x = _expand(args[0])
+    if len(args) > 1:
+        return builtin_max(x, *args)
+    x = _expand(x)
     if _is_cpo_array(x):
         return max_of(x)
-    return builtin.max(x)
+    return builtin_max(x)
 
 
 #==============================================================================
@@ -702,8 +699,89 @@ def max(*args):
 #==============================================================================
 
 
-def logical_and(e1, e2):
-    """ Creates an expression representing the logical AND of two boolean expressions.
+def all_of(lexpr):
+    """ Creates an expression representing the logical AND of an array of boolean expressions.
+
+    Args:
+        lexpr:  Array (iterable) of boolean expressions
+    Returns:
+        A boolean expression representing the logical AND of all expressions in lexpr.
+        If the array is empty array of expressions, result is CP constant True.
+    """
+    # Build and of expressions as list of logical and
+    if not lexpr:
+        return true()
+    assert is_array(lexpr), "Argument should be an array of boolean expressions"
+    res = None
+    for v in lexpr:
+        v = build_cpo_expr(v)
+        assert v.is_kind_of(Type_BoolExpr), "Each array element should be a boolean expression"
+        res = v if res is None else res & v
+    return res
+
+
+def all(lexpr):
+    """ Creates an expression representing the logical AND of an array of expressions.
+
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin all() function if no model expression is found in the parameters.
+
+    Args:
+        lexpr:  Array (iterable) of expressions
+    Returns:
+        A boolean expression representing the logical AND of all expressions in lexpr.
+        Or the result of the builtin function all() if no model expression is in the list.
+    """
+    # Build and of expressions as list of logical and
+    lexpr = _expand(lexpr)
+    if _is_cpo_array(lexpr):
+        return all_of(lexpr)
+    return builtin_all(lexpr)
+
+
+def any_of(lexpr):
+    """ Creates an expression representing the logical OR of an array of boolean expressions.
+
+    Args:
+        lexpr:  Array (iterable) of boolean expressions
+    Returns:
+        A boolean expression representing the logical OR of all expressions in lexpr.
+        If the array is empty array of expressions, result is CP constant False.
+    """
+    # Build and of expressions as list of logical and
+    if not lexpr:
+        return false()
+    assert is_array(lexpr), "Argument should be an array of boolean expressions"
+    res = None
+    for v in lexpr:
+        v = build_cpo_expr(v)
+        assert v.is_kind_of(Type_BoolExpr), "Each array element should be a boolean expression"
+        res = v if res is None else res | v
+    return res
+
+
+def any(lexpr):
+    """ Creates an expression representing the logical OR of an array of expressions.
+
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin any() function if no model expression is found in the parameters.
+
+    Args:
+        lexpr:  Array (iterable) of expressions
+    Returns:
+        A boolean expression representing the logical OR of all expressions in lexpr.
+        Or the result of the builtin function any() if no model expression is in the list.
+    """
+    # Build and of expressions as list of logical and
+    lexpr = _expand(lexpr)
+    if _is_cpo_array(lexpr):
+        return any_of(lexpr)
+    return builtin_any(lexpr)
+
+
+def logical_and(e1, e2=None):
+    """ Creates an expression representing the logical AND of two boolean expressions,
+    or of an array of expressions.
 
     The python operator '&' is overloaded to implement a call to this modeling method.
     Writing *logical_and(e1, e2)* is equivalent to write *(e1 & e2)*.
@@ -713,17 +791,22 @@ def logical_and(e1, e2):
     We recommend to always fully parenthesise expressions that use such binary operators in place of logical operators.
 
     Args:
-        e1:  First boolean expression
-        e2:  Second boolean expression
+        e1:  First boolean expression, or array of expressions
+        e2:  (Optional) Second boolean expression.
     Returns:
-        A boolean expression representing (e1 and e2).
+        A boolean expression representing (e1 and e2), or logical and of all expressions in array e1.
+        If e1 is an empty array of expressions, result is CP constant True.
     """
-    return CpoFunctionCall(Oper_logical_and, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
-                                                             _convert_arg(e2, "e2", Type_BoolExpr)))
+    if e2 is not None:
+        return CpoFunctionCall(Oper_logical_and, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
+                                                                 _convert_arg(e2, "e2", Type_BoolExpr)))
+    # Build and of expressions as list of logical and
+    return all_of(_expand(e1))
 
 
-def logical_or(e1, e2):
-    """ Creates an expression representing the logical OR of two boolean expressions.
+def logical_or(e1, e2=None):
+    """ Creates an expression representing the logical OR of two boolean expressions,
+    or of an array of expressions.
 
     The python operator '|' is overloaded to implement a call to this modeling method.
     Writing *logical_or(e1, e2)* is equivalent to write *(e1 | e2)*.
@@ -733,13 +816,17 @@ def logical_or(e1, e2):
     We recommend to always fully parenthesise expressions that use such binary operators in place of logical operators.
 
     Args:
-        e1:  First boolean expression
-        e2:  Second boolean expression
+        e1:  First boolean expression, or array of expressions
+        e2:  (Optional) Second boolean expression.
     Returns:
-        A boolean expression representing (e1 or e2).
+        A boolean expression representing (e1 or e2), or logical or of all expressions in array e1.
+        If e1 is an empty array of expressions, result is CP constant False.
     """
-    return CpoFunctionCall(Oper_logical_or, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
-                                                            _convert_arg(e2, "e2", Type_BoolExpr)))
+    if e2 is not None:
+        return CpoFunctionCall(Oper_logical_or, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
+                                                                _convert_arg(e2, "e2", Type_BoolExpr)))
+    # Build and of expressions as list of logical or
+    return any_of(_expand(e1))
 
 
 def logical_not(e):
@@ -1025,6 +1112,7 @@ def pack(load, where, size, used=None):
 
     The *pack* constraint is used to represent sub-problems where the requirement is to assign objects to
     containers such that the capacities or minimum fill levels of the containers are respected.
+
     Let's assume we have *n* objects and *m* containers.
     The sizes of the array arguments of *pack* must correspond to these constants,
     that is *load* must be of size *m*, whereas *where* and *size* must be of size *n*.
@@ -1047,7 +1135,7 @@ def pack(load, where, size, used=None):
 
     Args:
         load: An array of integer expressions, each element representing the load (total size of the objects inside)
-              the corresponding container.
+              of the corresponding container.
         where: An array of integer expressions, each element representing in which container the
                corresponding object is placed.
         size: An array of integers, each element representing the size of the corresponding object.
@@ -1183,7 +1271,7 @@ def in_range(x, lb, ub):
                                                        _convert_arg(ub, "ub", Type_Float)))
 
 
-def range(*args):
+def range(x, lb=None, ub=None):
     """ Restricts the bounds of an integer or floating-point expression.
 
     This boolean expression (which is interpreted as a constraint outside of an expression)
@@ -1192,20 +1280,23 @@ def range(*args):
 
     *range(y, a, b)* is also a more efficient form of writing *a <= y && y <= b*.
 
-    The implementation of this method uses a variable number of arguments to be capable to
-    recall builtin range() function if all parameters are integers.
+    Implementation of this method is proof to import all functions of this module at root level.
+    It recalls the builtin range() function if no model expression is found in the parameters.
 
     Args:
-        x: The integer or floating-point expression.
+        x:  The integer or floating-point expression.
         lb: The lower bound.
         ub: The upper bound.
     Returns:
         An expression of type boolean expression
     """
-    # Check if it is a call to builtin range
-    if (len(args) != 3) or (all(is_int(i) for i in args)):
-        return builtin.range(*args)
-    return in_range(args[0], args[1], args[2])
+    if lb is None:
+        return builtin_range(x)
+    if ub is None:
+        return builtin_range(x, lb)
+    if is_int(x) and is_int(lb) and is_int(ub):
+        return builtin_range(x, lb, ub)
+    return in_range(x, lb, ub)
 
 
 def all_min_distance(exprs, distance):
@@ -1237,6 +1328,21 @@ def if_then(e1, e2):
     """
     return CpoFunctionCall(Oper_if_then, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
                                                          _convert_arg(e2, "e2", Type_BoolExpr)))
+
+
+def conditional(c, et, ef):
+    """ Creates and returns an expression that depends on a condition.
+
+    This expression is equivalent of writing (c ? et : ef) in C++ or Java.
+
+    Args:
+        c:   Boolean expression
+        et:  Integer expression to return if condition *c* is true.
+        ef:  Integer expression to return if condition *c* is false.
+    Returns:
+        Integer expression *et* or *ef* depending on the value of *c*.
+    """
+    return element(c, [_convert_arg(ef, "ef", Type_IntExpr), _convert_arg(et, "et", Type_IntExpr)])
 
 
 def inverse(f, invf):
@@ -1312,6 +1418,8 @@ def allowed_assignments(exprs, values):
     exprs = build_cpo_expr(exprs)
     if exprs.is_kind_of(Type_IntExpr):
         return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, _convert_arg(values, values, Type_IntArray)))
+
+    # 'expr' is an array of expressions, and 'values' a tupleset
     assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
     return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
 
@@ -1341,6 +1449,8 @@ def forbidden_assignments(exprs, values):
     exprs = build_cpo_expr(exprs)
     if exprs.is_kind_of(Type_IntExpr):
         return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, _convert_arg(values, values, Type_IntArray)))
+
+    # 'expr' is an array of expressions, and 'values' a tupleset
     assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
     return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
 
@@ -2276,7 +2386,7 @@ def type_of_prev(sequence, interval, firstValue=None, absentValue=None):
     return _sequence_operation(Oper_type_of_prev, sequence, interval, firstValue, false, absentValue)
 
 
-def no_overlap(sequence, distanceMatrix=None, isDirect=None):
+def no_overlap(sequence, distance_matrix=None, is_direct=None):
     """ Constrains a set of interval variables not to overlap each others.
 
     This function returns a constraint over a set of interval variables {*a1*, ..., *an*} that states that all the present
@@ -2287,38 +2397,42 @@ def no_overlap(sequence, distanceMatrix=None, isDirect=None):
     constraint works on the set of interval variables {*a1*, ..., *an*} of the sequence and that the order of interval
     variables of the sequence will describe the order of the non-overlapping intervals. That is, if *ai* and *aj*, i!=j are
     both present and if *ai* appears before *aj* in the sequence value, then *ai* is constrained to end before the start of
-    *aj*. If a transition matrix *distanceMatrix* is specified and if *tpi* and *tpj* respectively denote the types of
-    interval variables *ai* and *aj* in the *sequence*, it means that a minimal distance *distanceMatrix[tpi,tpj]* is to be
-    maintained between the end of *ai* and the start of *aj*. If Boolean flag *isDirect* is true, the transition distance
-    holds between an interval and its immediate b in the sequence otherwise, if *isDirect* is false (default), the
+    *aj*. If a transition matrix *distance_matrix* is specified and if *tpi* and *tpj* respectively denote the types of
+    interval variables *ai* and *aj* in the *sequence*, it means that a minimal distance *distance_matrix[tpi,tpj]* is to be
+    maintained between the end of *ai* and the start of *aj*. If Boolean flag *is_direct* is true, the transition distance
+    holds between an interval and its immediate b in the sequence otherwise, if *is_direct* is false (default), the
     transition distance holds between an interval and all its bs in the sequence.
 
     If the first argument is an array of interval variables, the two others are ignored.
 
     Args:
         sequence: A sequence variable, or an array of interval variables.
-        distanceMatrix: An optional transition matrix defining the transition distance between consecutive interval variables.
-                        Transition matrix is an object of class :class:`~docplex.cp.expression.CpoTransitionMatrix` created with
-                        method :meth:`~docplex.cp.expression.transition_matrix`.
-        isDirect: A boolean flag stating whether the distance specified in the transition matrix distanceMatrix holds between
-                  direct bs (isDirect=1) or also between indirect bs (isDirect=None, default).
+        distance_matrix: An optional transition matrix defining the transition distance between consecutive interval
+                         variables.
+                         Transition matrix is given as an iterable of iterables of positive integers,
+                         or as the result of a call to the method :meth:`~docplex.cp.expression.transition_matrix`.
+        is_direct: A boolean flag stating whether the distance specified in the transition matrix *distance_matrix*
+                   holds between direct bs (is_direct=True) or also between indirect bs (is_direct=None, default).
     Returns:
         Constraint expression
     """
+    # Check if sequence is an array of interval variables
     sequence = build_cpo_expr(sequence)
     if sequence.is_kind_of(Type_IntervalVarArray):
-        assert (distanceMatrix is None) and (isDirect is None), "As first argument is an array of interval variables, other arguments should be absent"
+        assert (distance_matrix is None) and (is_direct is None), "As first argument is an array of interval variables, other arguments should be absent"
         return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,))
 
+    # Sequence is a sequence variable
     assert sequence.is_kind_of(Type_SequenceVar), "First argument should be a sequence variable or an array of interval variables"
-    if isDirect is None:
-        if distanceMatrix is None:
-            return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,))
-        return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,
-                                                                  _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix)))
-    return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,
-                                                              _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix),
-                                                              _convert_arg(isDirect, "isDirect", Type_BoolInt)))
+    if distance_matrix is None:
+        assert is_direct is None, "is_direct should not be given if no distance matrix is given"
+        return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,))
+    
+    distance_matrix = build_cpo_transition_matrix(distance_matrix)
+    if is_direct is None:
+        return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix))
+    return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix, _convert_arg(is_direct, "is_direct", Type_BoolInt)))
+    
 
 
 def overlap_length(interval, interval2, absentValue=None):
@@ -2450,6 +2564,9 @@ def length_eval(interval, function, absentValue=None):
 def same_sequence(seq1, seq2, array1=None, array2=None):
     """ This function creates a same-sequence constraint between two sequence variables.
 
+    The constraint states that the two sequences *seq1* and *seq2* are identical modulo a mapping between
+    intervals *array1[i]* and *array2[i]*.
+
     Sequence variables *seq1* and *seq2* should be of the same size *n*.
     If no array of interval variables is specified, the mapping between interval variables of the
     two sequences is given by the order of the interval variables in the arrays *array1* and *array2* used
@@ -2457,9 +2574,6 @@ def same_sequence(seq1, seq2, array1=None, array2=None):
 
     If interval variable arrays *array1* and *array2* are used, these arrays define the mapping
     between interval variables of the two sequences.
-
-    The constraint states that the two sequences *seq1* and *seq2* are identical modulo a mapping between
-    intervals *array1[i]* and *array2[i]*.
 
     Args:
         seq1: First constrained sequence variables.
@@ -2719,8 +2833,8 @@ def always_in(function, interval, min, max, _x=None):
         function: Constrained cumul expression or state function.
         interval: Interval variable contributing to the cumul function,
                   or fixed interval expressed as a tuple of 2 integers.
-        min: Minimum of the allowed range for values of function during the interval.
-        max: Maximum of the allowed range for values of function during the interval.
+        min: Minimum of the allowed range for values of function during the interval, in [0..intervalmax).
+        max: Maximum of the allowed range for values of function during the interval, in [0..intervalmax).
     Returns:
         Constraint expression
     """
@@ -2733,10 +2847,12 @@ def always_in(function, interval, min, max, _x=None):
         msg = "Deprecated calling form, consult documentation for details"
         return CpoFunctionCall(Oper_always_in, Type_Constraint, (function,
                                                                  _convert_arg(interval, "interval", Type_TimeInt, msg),
-                                                                 _convert_arg(min, "min", Type_TimeInt, msg),
+                                                                 _convert_arg(min, "min", Type_TimeInt, msg),  # Min is end
                                                                  _convert_arg(max, "max", Type_PositiveInt, msg),
                                                                  _convert_arg(_x, "_x", Type_PositiveInt, msg)))
 
+    assert 0 <= min <= INTERVAL_MAX, "Argument 'min' should be in 0..{}".format(INTERVAL_MAX)
+    assert 0 <= max <= INTERVAL_MAX, "Argument 'max' should be in 0..{}".format(INTERVAL_MAX)
     min = _convert_arg(min, "min", Type_PositiveInt)
     max = _convert_arg(max, "max", Type_PositiveInt)
     if _is_int_couple(interval):

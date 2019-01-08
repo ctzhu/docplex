@@ -561,6 +561,12 @@ class LinearConstraint(BinaryConstraint):
 
         Note:
             This method will raise an exception if the model has not been solved successfully.
+            
+            This method is OK with small numbers of constraints. For large numbers of constraints (>100),
+            consider using Model.dual_values() with a sequence of constraints.
+            
+        See Also:
+            `func:docplex.mp.model.Model.dual_values()`
         """
         return self._get_dual_value()
 
@@ -570,6 +576,13 @@ class LinearConstraint(BinaryConstraint):
 
         Note:
             This method will raise an exception if the model has not been solved successfully.
+            
+                        
+            This method is OK with small numbers of constraints. For large numbers of constraints (>100),
+            consider using Model.slack_values() with a sequence of constraints.
+            
+        See Also:
+            `func:docplex.mp.model.Model.slack_values()`
         """
         return self._model.slack_values(cts=self)
 

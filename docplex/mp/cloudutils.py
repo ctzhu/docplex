@@ -87,14 +87,24 @@ def context_must_use_docloud(__context, **kwargs):
         return False
     docloud_agent_name = "docloud"  # this might change
     have_docloud_context = kwargs.get('docloud_context') is not None
-    have_api_key = get_key_in_kwargs(__context, kwargs)
-    have_url = get_url_in_kwargs(__context, kwargs)
+    # TODO: remove have_api_key = get_key_in_kwargs(__context, kwargs)
+    # TODO: remove have_url = get_url_in_kwargs(__context, kwargs)
+
+    has_url_key_in_kwargs = False
+    if 'url' in kwargs and 'key' in kwargs:
+        has_url_key_in_kwargs = is_url_valid(kwargs['url'])
+
     context_agent_is_docloud = __context.solver.get('agent') == docloud_agent_name
     kwargs_agent_is_docloud = kwargs.get('agent') == docloud_agent_name
     return have_docloud_context \
-           or (have_api_key and have_url) \
+           or has_url_key_in_kwargs \
            or context_agent_is_docloud \
            or kwargs_agent_is_docloud
+
+
+def is_url_valid(url):
+    return url is not None and isinstance(url, six.string_types) and \
+        url.strip().lower().startswith('http')
 
 
 def context_has_docloud_credentials(context, do_warn=True):

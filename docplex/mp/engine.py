@@ -106,6 +106,12 @@ class ISolver(object):
     def clean_before_solve(self):
         raise NotImplementedError  # pragma: no cover
 
+    def solved_as_lp(self):
+        return False
+
+    def solved_as_lp(self):
+        return False
+
 
 
 # noinspection PyAbstractClass

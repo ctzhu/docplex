@@ -422,9 +422,8 @@ class SolveSolution(object):
 
     def get_attribute(self, mobjs, attr, default_attr_value=0):
         assert is_iterable(mobjs)
-        if not mobjs:
-            return []
-        elif attr not in self._attribute_map:
+
+        if attr not in self._attribute_map:
             # warn
             return [0] * len(mobjs)
         else:

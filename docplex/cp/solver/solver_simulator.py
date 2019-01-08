@@ -56,7 +56,7 @@ class CpoSolverSimulatorFail(solver.CpoSolverAgent):
 
         # Build fake infeasible solution
         msol = CpoSolveResult(self.model)
-        msol._set_solve_status(SOLVE_STATUS_INFEASIBLE)
+        msol.solve_status = SOLVE_STATUS_INFEASIBLE
 
         # Return
         return msol
@@ -117,8 +117,8 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         if self.solution_count >= self.max_iterator_solutions:
             # Generate last solution
             msol = CpoSolveResult(self.model)
-            msol._set_solve_status(SOLVE_STATUS_FEASIBLE)
-            msol._set_fail_status(FAIL_STATUS_SEARCH_COMPLETED)
+            msol.solve_status = SOLVE_STATUS_FEASIBLE
+            msol.fail_status = FAIL_STATUS_SEARCH_COMPLETED
             return msol
         else:
            # Generate next solution
@@ -145,7 +145,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         """
         # Build fake feasible solution
         ssol = CpoSolveResult(self.model)
-        ssol._set_solve_status(SOLVE_STATUS_FEASIBLE)
+        ssol.solve_status = SOLVE_STATUS_FEASIBLE
         msol = ssol.solution
 
         # Generate objective

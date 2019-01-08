@@ -31,6 +31,9 @@ Retrieving the value of a parameter can be done in the same way using:
 If a parameter is not set, the value returned by the first two access forms is None.
 The last access form (element of a dictionary) raises an exception.
 
+Setting a parameter value to None is equivalent to force its default value.
+This may be for example useful to reset at solve time a parameter that has been set at model level.
+
 Getting the list of all parameters that have been changed can be done by calling the method `keys()`.
 
 Note that the *PEP8* naming convention is not applied here, to keep parameter names as they
@@ -149,12 +152,34 @@ Detailed description
 --------------------
 """
 
-from docplex.cp.utils import Context, is_int, is_float, is_number
+from docplex.cp.utils import Context, is_int, is_number
+import warnings
 
-#----------------------------------------------------------------------------
-#  Symbolic parameters values
-#----------------------------------------------------------------------------
+###############################################################################
+## Public constants
+###############################################################################
 
+# Set of all public parameter names
+PUBLIC_PARAMETER_NAMES = \
+    {"AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit",
+     "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit",
+     "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit","CountDifferentInferenceLevel", "CountInferenceLevel",
+     "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing",
+     "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch",
+     "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod",
+     "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel",
+     "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed",
+     "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel",
+     "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations",
+     "WarningLevel", "Workers",}
+
+# Set of all private but accepted parameter names
+PRIVATE_PARAMETER_NAMES = {"ObjectiveLimit",}
+
+# Set of all authorized parameter names
+ALL_PARAMETER_NAMES = PUBLIC_PARAMETER_NAMES | PRIVATE_PARAMETER_NAMES
+
+# Symbolic parameter values
 VALUE_AUTO         = 'Auto'
 VALUE_OFF          = 'Off'
 VALUE_ON           = 'On'
@@ -174,23 +199,48 @@ VALUE_DIVERSE      = 'Diverse'
 VALUE_CPU_TIME     = 'CPUTime'
 VALUE_ELAPSED_TIME = 'ElapsedTime'
 
+# Authorized sets of values
 _INFERENCE_LEVELS = (VALUE_DEFAULT, VALUE_LOW, VALUE_BASIC, VALUE_MEDIUM, VALUE_EXTENDED)
 _ON_OFF_AUTO = (VALUE_ON, VALUE_OFF, VALUE_AUTO)
 _ON_OFF = (VALUE_ON, VALUE_OFF)
 
 
-#----------------------------------------------------------------------------
-#  Parameters handler
-#----------------------------------------------------------------------------
-
+###############################################################################
+## Public classes
+###############################################################################
 
 class CpoParameters(Context):
     """ Class for handling solving parameters
     """
     def __init__(self, **kwargs):
-        """ Creates a new empty parameters repository
+        """ Creates a new set of solving parameters.
+
+        This constructor takes a variable number of optional arguments that allow to set parameters directly.
+        For example:
+        ::
+           myparams = CpoParameters(TimeLimit=20, LogPeriod=5000))
+
+        Args:
+            (param): (Optional) Any individual parameter as defined in this class.
         """
-        super(CpoParameters, self).__init__(**kwargs)
+        super(CpoParameters, self).__init__()
+        for k, v in kwargs.items():
+            self.__setattr__(k, v)
+
+
+    def __setattr__(self, name, value):
+        """ Set a parameter.
+        This method calls appropriate setter if exists (property does not work in this context)
+        to check paramete value.
+        Args:
+            name:  Parameter name
+            value: Parameter value
+        """
+        m = getattr(self, 'set_' + name, None)
+        if m and callable(m):
+            m(value)
+        else:
+            self.set_attribute(name, value)
 
 
     def get_AllDiffInferenceLevel(self):
@@ -205,8 +255,7 @@ class CpoParameters(Context):
         return self.get_attribute('AllDiffInferenceLevel')
 
     def set_AllDiffInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('AllDiffInferenceLevel', val)
+        self._set_value_enum('AllDiffInferenceLevel', val, _INFERENCE_LEVELS)
 
     AllDiffInferenceLevel = property(get_AllDiffInferenceLevel, set_AllDiffInferenceLevel)
 
@@ -223,8 +272,7 @@ class CpoParameters(Context):
         return self.get_attribute('AllMinDistanceInferenceLevel')
 
     def set_AllMinDistanceInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('AllMinDistanceInferenceLevel', val)
+        self._set_value_enum('AllMinDistanceInferenceLevel', val, _INFERENCE_LEVELS)
 
     AllMinDistanceInferenceLevel = property(get_AllMinDistanceInferenceLevel, set_AllMinDistanceInferenceLevel)
 
@@ -234,7 +282,7 @@ class CpoParameters(Context):
         This parameter is an advanced, low-level one for controlling the behavior of solve() and next().
         When the model being solved has an objective and solve is used, or when startNewSearch and next are
         used to produce multiple solutions, the solver may have a need to replay the last (or best) solution
-        found. This can, in some cases, involve re-invoking the stategy which produced the solution.
+        found. This can, in some cases, involve re-invoking the strategy which produced the solution.
         Normally this is only necessary if you use low level "Ilc" interfaces to specify problem elements
         not in the model (instance of Model). This parameter can take the values On or Off. The default
         value is On. A typical reason for setting this parameter to Off is, for instance, if you use your
@@ -242,13 +290,16 @@ class CpoParameters(Context):
         thing when executed twice). In this instance, the replay will not work correctly, and you can use
         this parameter to disable replay.
 
+        This parameter is deprecated since release 2.3.
+
         The value is a symbol in ['On', 'Off']. Default value is 'On'.
         """
+        warnings.warn("Parameter 'AutomaticReplay' is deprecated since release 2.3.", DeprecationWarning)
         return self.get_attribute('AutomaticReplay')
 
     def set_AutomaticReplay(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('AutomaticReplay', val)
+        warnings.warn("Parameter 'AutomaticReplay' is deprecated since release 2.3.", DeprecationWarning)
+        self._set_value_enum('AutomaticReplay', val, _ON_OFF)
 
     AutomaticReplay = property(get_AutomaticReplay, set_AutomaticReplay)
 
@@ -266,8 +317,7 @@ class CpoParameters(Context):
         return self.get_attribute('BranchLimit')
 
     def set_BranchLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('BranchLimit', val)
+        self._set_value_integer('BranchLimit', val)
 
     BranchLimit = property(get_BranchLimit, set_BranchLimit)
 
@@ -281,8 +331,7 @@ class CpoParameters(Context):
         return self.get_attribute('ChoicePointLimit')
 
     def set_ChoicePointLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('ChoicePointLimit', val)
+        self._set_value_integer('ChoicePointLimit', val)
 
     ChoicePointLimit = property(get_ChoicePointLimit, set_ChoicePointLimit)
 
@@ -297,8 +346,7 @@ class CpoParameters(Context):
         return self.get_attribute('ConflictRefinerBranchLimit')
 
     def set_ConflictRefinerBranchLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('ConflictRefinerBranchLimit', val)
+        self._set_value_integer('ConflictRefinerBranchLimit', val)
 
     ConflictRefinerBranchLimit = property(get_ConflictRefinerBranchLimit, set_ConflictRefinerBranchLimit)
 
@@ -313,8 +361,7 @@ class CpoParameters(Context):
         return self.get_attribute('ConflictRefinerFailLimit')
 
     def set_ConflictRefinerFailLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('ConflictRefinerFailLimit', val)
+        self._set_value_integer('ConflictRefinerFailLimit', val)
 
     ConflictRefinerFailLimit = property(get_ConflictRefinerFailLimit, set_ConflictRefinerFailLimit)
 
@@ -329,8 +376,7 @@ class CpoParameters(Context):
         return self.get_attribute('ConflictRefinerIterationLimit')
 
     def set_ConflictRefinerIterationLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('ConflictRefinerIterationLimit', val)
+        self._set_value_integer('ConflictRefinerIterationLimit', val)
 
     ConflictRefinerIterationLimit = property(get_ConflictRefinerIterationLimit, set_ConflictRefinerIterationLimit)
 
@@ -346,8 +392,7 @@ class CpoParameters(Context):
         return self.get_attribute('ConflictRefinerOnVariables')
 
     def set_ConflictRefinerOnVariables(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('ConflictRefinerOnVariables', val)
+        self._set_value_enum('ConflictRefinerOnVariables', val, _ON_OFF)
 
     ConflictRefinerOnVariables = property(get_ConflictRefinerOnVariables, set_ConflictRefinerOnVariables)
 
@@ -361,8 +406,7 @@ class CpoParameters(Context):
         return self.get_attribute('ConflictRefinerTimeLimit')
 
     def set_ConflictRefinerTimeLimit(self, val):
-        _check_value_float(val)
-        self.set_attribute('ConflictRefinerTimeLimit', val)
+        self._set_value_float('ConflictRefinerTimeLimit', val)
 
     ConflictRefinerTimeLimit = property(get_ConflictRefinerTimeLimit, set_ConflictRefinerTimeLimit)
 
@@ -379,8 +423,7 @@ class CpoParameters(Context):
         return self.get_attribute('CountDifferentInferenceLevel')
 
     def set_CountDifferentInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('CountDifferentInferenceLevel', val)
+        self._set_value_enum('CountDifferentInferenceLevel', val, _INFERENCE_LEVELS)
 
     CountDifferentInferenceLevel = property(get_CountDifferentInferenceLevel, set_CountDifferentInferenceLevel)
 
@@ -397,8 +440,7 @@ class CpoParameters(Context):
         return self.get_attribute('CountInferenceLevel')
 
     def set_CountInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('CountInferenceLevel', val)
+        self._set_value_enum('CountInferenceLevel', val, _INFERENCE_LEVELS)
 
     CountInferenceLevel = property(get_CountInferenceLevel, set_CountInferenceLevel)
 
@@ -415,8 +457,7 @@ class CpoParameters(Context):
         return self.get_attribute('CumulFunctionInferenceLevel')
 
     def set_CumulFunctionInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('CumulFunctionInferenceLevel', val)
+        self._set_value_enum('CumulFunctionInferenceLevel', val, _INFERENCE_LEVELS)
 
     CumulFunctionInferenceLevel = property(get_CumulFunctionInferenceLevel, set_CumulFunctionInferenceLevel)
 
@@ -432,8 +473,7 @@ class CpoParameters(Context):
         return self.get_attribute('DefaultInferenceLevel')
 
     def set_DefaultInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('DefaultInferenceLevel', val)
+        self._set_value_enum('DefaultInferenceLevel', val, _INFERENCE_LEVELS)
 
     DefaultInferenceLevel = property(get_DefaultInferenceLevel, set_DefaultInferenceLevel)
 
@@ -450,8 +490,7 @@ class CpoParameters(Context):
         return self.get_attribute('DistributeInferenceLevel')
 
     def set_DistributeInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('DistributeInferenceLevel', val)
+        self._set_value_enum('DistributeInferenceLevel', val, _INFERENCE_LEVELS)
 
     DistributeInferenceLevel = property(get_DistributeInferenceLevel, set_DistributeInferenceLevel)
 
@@ -470,8 +509,7 @@ class CpoParameters(Context):
         return self.get_attribute('DynamicProbing')
 
     def set_DynamicProbing(self, val):
-        _check_value_enum(val, _ON_OFF_AUTO)
-        self.set_attribute('DynamicProbing', val)
+        self._set_value_enum('DynamicProbing', val, _ON_OFF_AUTO)
 
     DynamicProbing = property(get_DynamicProbing, set_DynamicProbing)
 
@@ -492,8 +530,7 @@ class CpoParameters(Context):
         return self.get_attribute('DynamicProbingStrength')
 
     def set_DynamicProbingStrength(self, val):
-        _check_value_float(val, 0.001, 1000)
-        self.set_attribute('DynamicProbingStrength', val)
+        self._set_value_float('DynamicProbingStrength', val, 0.001, 1000)
 
     DynamicProbingStrength = property(get_DynamicProbingStrength, set_DynamicProbingStrength)
 
@@ -510,8 +547,7 @@ class CpoParameters(Context):
         return self.get_attribute('ElementInferenceLevel')
 
     def set_ElementInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('ElementInferenceLevel', val)
+        self._set_value_enum('ElementInferenceLevel', val, _INFERENCE_LEVELS)
 
     ElementInferenceLevel = property(get_ElementInferenceLevel, set_ElementInferenceLevel)
 
@@ -525,8 +561,7 @@ class CpoParameters(Context):
         return self.get_attribute('FailLimit')
 
     def set_FailLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('FailLimit', val)
+        self._set_value_integer('FailLimit', val)
 
     FailLimit = property(get_FailLimit, set_FailLimit)
 
@@ -548,8 +583,7 @@ class CpoParameters(Context):
         return self.get_attribute('FailureDirectedSearch')
 
     def set_FailureDirectedSearch(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('FailureDirectedSearch', val)
+        self._set_value_enum('FailureDirectedSearch', val, _ON_OFF)
 
     FailureDirectedSearch = property(get_FailureDirectedSearch, set_FailureDirectedSearch)
 
@@ -569,8 +603,7 @@ class CpoParameters(Context):
         return self.get_attribute('FailureDirectedSearchEmphasis')
 
     def set_FailureDirectedSearchEmphasis(self, val):
-        _check_value_float(val)
-        self.set_attribute('FailureDirectedSearchEmphasis', val)
+        self._set_value_float('FailureDirectedSearchEmphasis', val)
 
     FailureDirectedSearchEmphasis = property(get_FailureDirectedSearchEmphasis, set_FailureDirectedSearchEmphasis)
 
@@ -594,8 +627,7 @@ class CpoParameters(Context):
         return self.get_attribute('FailureDirectedSearchMaxMemory')
 
     def set_FailureDirectedSearchMaxMemory(self, val):
-        _check_value_integer(val)
-        self.set_attribute('FailureDirectedSearchMaxMemory', val)
+        self._set_value_integer('FailureDirectedSearchMaxMemory', val)
 
     FailureDirectedSearchMaxMemory = property(get_FailureDirectedSearchMaxMemory, set_FailureDirectedSearchMaxMemory)
 
@@ -612,8 +644,7 @@ class CpoParameters(Context):
         return self.get_attribute('IntervalSequenceInferenceLevel')
 
     def set_IntervalSequenceInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('IntervalSequenceInferenceLevel', val)
+        self._set_value_enum('IntervalSequenceInferenceLevel', val, _INFERENCE_LEVELS)
 
     IntervalSequenceInferenceLevel = property(get_IntervalSequenceInferenceLevel, set_IntervalSequenceInferenceLevel)
 
@@ -629,8 +660,7 @@ class CpoParameters(Context):
         return self.get_attribute('LogPeriod')
 
     def set_LogPeriod(self, val):
-        _check_value_integer(val, 1)
-        self.set_attribute('LogPeriod', val)
+        self._set_value_integer('LogPeriod', val, min=1)
 
     LogPeriod = property(get_LogPeriod, set_LogPeriod)
 
@@ -650,8 +680,7 @@ class CpoParameters(Context):
         return self.get_attribute('LogSearchTags')
 
     def set_LogSearchTags(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('LogSearchTags', val)
+        self._set_value_enum('LogSearchTags', val, _ON_OFF)
 
     LogSearchTags = property(get_LogSearchTags, set_LogSearchTags)
 
@@ -671,8 +700,7 @@ class CpoParameters(Context):
         return self.get_attribute('LogVerbosity')
 
     def set_LogVerbosity(self, val):
-        _check_value_enum(val, (VALUE_QUIET, VALUE_TERSE, VALUE_NORMAL, VALUE_VERBOSE))
-        self.set_attribute('LogVerbosity', val)
+        self._set_value_enum('LogVerbosity', val, (VALUE_QUIET, VALUE_TERSE, VALUE_NORMAL, VALUE_VERBOSE))
 
     LogVerbosity = property(get_LogVerbosity, set_LogVerbosity)
 
@@ -690,8 +718,7 @@ class CpoParameters(Context):
         return self.get_attribute('ModelAnonymizer')
 
     def set_ModelAnonymizer(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('ModelAnonymizer', val)
+        self._set_value_enum('ModelAnonymizer', val, _ON_OFF)
 
     ModelAnonymizer = property(get_ModelAnonymizer, set_ModelAnonymizer)
 
@@ -710,8 +737,7 @@ class CpoParameters(Context):
         return self.get_attribute('MultiPointNumberOfSearchPoints')
 
     def set_MultiPointNumberOfSearchPoints(self, val):
-        _check_value_integer(val, 2)
-        self.set_attribute('MultiPointNumberOfSearchPoints', val)
+        self._set_value_integer('MultiPointNumberOfSearchPoints', val, min=2)
 
     MultiPointNumberOfSearchPoints = property(get_MultiPointNumberOfSearchPoints, set_MultiPointNumberOfSearchPoints)
 
@@ -728,8 +754,7 @@ class CpoParameters(Context):
         return self.get_attribute('NoOverlapInferenceLevel')
 
     def set_NoOverlapInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('NoOverlapInferenceLevel', val)
+        self._set_value_enum('NoOverlapInferenceLevel', val, _INFERENCE_LEVELS)
 
     NoOverlapInferenceLevel = property(get_NoOverlapInferenceLevel, set_NoOverlapInferenceLevel)
 
@@ -747,8 +772,7 @@ class CpoParameters(Context):
         return self.get_attribute('OptimalityTolerance')
 
     def set_OptimalityTolerance(self, val):
-        _check_value_float(val)
-        self.set_attribute('OptimalityTolerance', val)
+        self._set_value_float('OptimalityTolerance', val)
 
     OptimalityTolerance = property(get_OptimalityTolerance, set_OptimalityTolerance)
 
@@ -765,8 +789,7 @@ class CpoParameters(Context):
         return self.get_attribute('PrecedenceInferenceLevel')
 
     def set_PrecedenceInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('PrecedenceInferenceLevel', val)
+        self._set_value_enum('PrecedenceInferenceLevel', val, _INFERENCE_LEVELS)
 
     PrecedenceInferenceLevel = property(get_PrecedenceInferenceLevel, set_PrecedenceInferenceLevel)
 
@@ -782,8 +805,7 @@ class CpoParameters(Context):
         return self.get_attribute('Presolve')
 
     def set_Presolve(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('Presolve', val)
+        self._set_value_enum('Presolve', val, _ON_OFF)
 
     Presolve = property(get_Presolve, set_Presolve)
 
@@ -799,8 +821,7 @@ class CpoParameters(Context):
         return self.get_attribute('PrintModelDetailsInMessages')
 
     def set_PrintModelDetailsInMessages(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('PrintModelDetailsInMessages', val)
+        self._set_value_enum('PrintModelDetailsInMessages', val, _ON_OFF)
 
     PrintModelDetailsInMessages = property(get_PrintModelDetailsInMessages, set_PrintModelDetailsInMessages)
 
@@ -815,8 +836,7 @@ class CpoParameters(Context):
         return self.get_attribute('RandomSeed')
 
     def set_RandomSeed(self, val):
-        _check_value_integer(val)
-        self.set_attribute('RandomSeed', val)
+        self._set_value_integer('RandomSeed', val)
 
     RandomSeed = property(get_RandomSeed, set_RandomSeed)
 
@@ -835,8 +855,7 @@ class CpoParameters(Context):
         return self.get_attribute('RelativeOptimalityTolerance')
 
     def set_RelativeOptimalityTolerance(self, val):
-        _check_value_float(val)
-        self.set_attribute('RelativeOptimalityTolerance', val)
+        self._set_value_float('RelativeOptimalityTolerance', val)
 
     RelativeOptimalityTolerance = property(get_RelativeOptimalityTolerance, set_RelativeOptimalityTolerance)
 
@@ -853,8 +872,7 @@ class CpoParameters(Context):
         return self.get_attribute('RestartFailLimit')
 
     def set_RestartFailLimit(self, val):
-        _check_value_integer(val, 1)
-        self.set_attribute('RestartFailLimit', val)
+        self._set_value_integer('RestartFailLimit', val, 1)
 
     RestartFailLimit = property(get_RestartFailLimit, set_RestartFailLimit)
 
@@ -872,8 +890,7 @@ class CpoParameters(Context):
         return self.get_attribute('RestartGrowthFactor')
 
     def set_RestartGrowthFactor(self, val):
-        _check_value_float(val, min=1)
-        self.set_attribute('RestartGrowthFactor', val)
+        self._set_value_float('RestartGrowthFactor', val, min=1)
 
     RestartGrowthFactor = property(get_RestartGrowthFactor, set_RestartGrowthFactor)
 
@@ -897,8 +914,7 @@ class CpoParameters(Context):
         return self.get_attribute('SearchType')
 
     def set_SearchType(self, val):
-        _check_value_enum(val, (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_AUTO))
-        self.set_attribute('SearchType', val)
+        self._set_value_enum('SearchType', val, (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_AUTO))
 
     SearchType = property(get_SearchType, set_SearchType)
 
@@ -915,8 +931,7 @@ class CpoParameters(Context):
         return self.get_attribute('SequenceInferenceLevel')
 
     def set_SequenceInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('SequenceInferenceLevel', val)
+        self._set_value_enum('SequenceInferenceLevel', val, _INFERENCE_LEVELS)
 
     SequenceInferenceLevel = property(get_SequenceInferenceLevel, set_SequenceInferenceLevel)
 
@@ -930,8 +945,7 @@ class CpoParameters(Context):
         return self.get_attribute('SolutionLimit')
 
     def set_SolutionLimit(self, val):
-        _check_value_integer(val)
-        self.set_attribute('SolutionLimit', val)
+        self._set_value_integer('SolutionLimit', val)
 
     SolutionLimit = property(get_SolutionLimit, set_SolutionLimit)
 
@@ -948,8 +962,7 @@ class CpoParameters(Context):
         return self.get_attribute('StateFunctionInferenceLevel')
 
     def set_StateFunctionInferenceLevel(self, val):
-        _check_value_enum(val, _INFERENCE_LEVELS)
-        self.set_attribute('StateFunctionInferenceLevel', val)
+        self._set_value_enum('StateFunctionInferenceLevel', val, _INFERENCE_LEVELS)
 
     StateFunctionInferenceLevel = property(get_StateFunctionInferenceLevel, set_StateFunctionInferenceLevel)
 
@@ -966,8 +979,7 @@ class CpoParameters(Context):
         return self.get_attribute('TemporalRelaxation')
 
     def set_TemporalRelaxation(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('TemporalRelaxation', val)
+        self._set_value_enum('TemporalRelaxation', val, _ON_OFF)
 
     TemporalRelaxation = property(get_TemporalRelaxation, set_TemporalRelaxation)
 
@@ -982,8 +994,7 @@ class CpoParameters(Context):
         return self.get_attribute('TimeLimit')
 
     def set_TimeLimit(self, val):
-        _check_value_float(val)
-        self.set_attribute('TimeLimit', val)
+        self._set_value_float('TimeLimit', val)
 
     TimeLimit = property(get_TimeLimit, set_TimeLimit)
 
@@ -1001,8 +1012,7 @@ class CpoParameters(Context):
         return self.get_attribute('TimeMode')
 
     def set_TimeMode(self, val):
-        _check_value_enum(val, (VALUE_CPU_TIME, VALUE_ELAPSED_TIME))
-        self.set_attribute('TimeMode', val)
+        self._set_value_enum('TimeMode', val, (VALUE_CPU_TIME, VALUE_ELAPSED_TIME))
 
     TimeMode = property(get_TimeMode, set_TimeMode)
 
@@ -1021,8 +1031,7 @@ class CpoParameters(Context):
         return self.get_attribute('UseFileLocations')
 
     def set_UseFileLocations(self, val):
-        _check_value_enum(val, _ON_OFF)
-        self.set_attribute('UseFileLocations', val)
+        self._set_value_enum('UseFileLocations', val, _ON_OFF)
 
     UseFileLocations = property(get_UseFileLocations, set_UseFileLocations)
 
@@ -1040,8 +1049,7 @@ class CpoParameters(Context):
         return self.get_attribute('WarningLevel')
 
     def set_WarningLevel(self, val):
-        _check_value_integer(val, 0, 3)
-        self.set_attribute('WarningLevel', val)
+        self._set_value_integer('WarningLevel', val, min=0, max=3)
 
     WarningLevel = property(get_WarningLevel, set_WarningLevel)
 
@@ -1064,58 +1072,48 @@ class CpoParameters(Context):
 
     def set_Workers(self, val):
         assert (val is None) or (is_int(val) and val > 0) or val == "Auto", \
-            "Parameter value '{}' should be a positive integer or 'Auto'".format(val)
+            "Value of parameter 'Workers' should be a positive integer or 'Auto'"
         self.set_attribute('Workers', val)
 
     Workers = property(get_Workers, set_Workers)
 
 
-# Set of all public parameter names
-PUBLIC_PARAMETER_NAMES = \
-    {"AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit",
-     "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit",
-     "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit","CountDifferentInferenceLevel", "CountInferenceLevel",
-     "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing",
-     "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch",
-     "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod",
-     "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel",
-     "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed",
-     "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel",
-     "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations",
-     "WarningLevel", "Workers",}
+    def _set_value_enum(self, name, val, accepted):
+        """ Check if a value is in a given set and set it if ok.
+        Args:
+            name:     Parameter name
+            val:      Parameter value to set
+            accepted: Accepted values
+        """
+        assert (val is None) or (val in accepted), "Value of parameter '{}' should be in {}".format(name, accepted)
+        self.set_attribute(name, val)
 
-# Set of all private but accepted parameter names
-PRIVATE_PARAMETER_NAMES = {"ObjectiveLimit",}
+    def _set_value_integer(self, name, val, min=0, max=None):
+        """ Check if a value is a non-negative integer and set it if ok.
+        Args:
+            name:     Parameter name
+            val:      Parameter value to set
+            min:      (Optional) Minimun value
+            max:      (Optional) Maximum value
+        """
+        assert (val is None) or \
+               (is_int(val) and ((min is None or val >= min) and (max is None or val <= max))), \
+                     "Value of parameter '{}' should be an integer in [{}..{}]"\
+                         .format(name, "-Infinity" if min is None else min, "Infinity" if max is None else max)
+        self.set_attribute(name, val)
 
-# Set of all authorized parameter names
-ALL_PARAMETER_NAMES = PUBLIC_PARAMETER_NAMES | PRIVATE_PARAMETER_NAMES
 
-
-def _check_value_enum(val, accepted):
-    """ Check if a value is in a given set.
-    Args:
-        val:      Value to check
-        accepted: Accepted values
-    """
-    assert (val is None) or (val in accepted), "Parameter value should be in " + str(accepted)
-
-def _check_value_integer(val, min=0, max=None):
-    """ Check if a value is a non-negative integer.
-    Args:
-        val: Value to check
-    """
-    assert (val is None) or \
-           (is_int(val) and ((min is None or val >= min) and (max is None or val <= max))), \
-                 "Parameter value should be an integer value in [{}..{}]"\
-                     .format("-Infinity" if min is None else min, "Infinity" if max is None else max)
-
-def _check_value_float(val, min=0, max=None):
-    """ Check if a value is a non-negative float.
-    Args:
-        val: Value to check
-    """
-    assert (val is None) or \
-           (is_number(val) and ((min is None or val >= min) and (max is None or val <= max))), \
-                  "Parameter value should be a float value in [{}..{}]"\
-                      .format("-Infinity" if min is None else min, "Infinity" if max is None else max)
+    def _set_value_float(self, name, val, min=0, max=None):
+        """ Check if a value is a non-negative float and set it if ok.
+        Args:
+            name:     Parameter name
+            val:      Parameter value to set
+            min:      (Optional) Minimun value
+            max:      (Optional) Maximum value
+        """
+        assert (val is None) or \
+               (is_number(val) and ((min is None or val >= min) and (max is None or val <= max))), \
+                      "Value of parameter '{}' should be a float in [{}..{}]"\
+                          .format(name, "-Infinity" if min is None else min, "Infinity" if max is None else max)
+        self.set_attribute(name, val)
 

@@ -225,6 +225,12 @@ class CplexEngine(DummyEngine):
     """
     CPX_RANGE_SYMBOL = 'R'
 
+    def solved_as_lp(self):
+        return self._cplex.get_problem_type() == 0
+
+    def solved_as_lp(self):
+        return self._cplex.get_problem_type() == 0
+
     def __init__(self, mdl, **kwargs):
         """
         INTERNAL

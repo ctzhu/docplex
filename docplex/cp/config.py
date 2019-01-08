@@ -240,7 +240,7 @@ Detailed description
 --------------------
 """
 
-from docplex.cp.utils import Context, CpoException, search_file_in_path, IS_IN_NOTEBOOK
+from docplex.cp.utils import Context, CpoException, search_file_in_path, IS_IN_NOTEBOOK, is_string
 from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
 import sys, socket, os, platform, traceback
@@ -386,7 +386,7 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 #-----------------------------------------------------------------------------
 # Local solving agent context
 
-context.solver.local = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverAngel",
+context.solver.local = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverLocal",
                                execfile   = "cpoptimizer" + EXE_EXTENSION,
                                parameters = ['-angel'],
                                log_prefix = "[Local] ")
@@ -397,8 +397,8 @@ context.solver.angel = context.solver.local
 LOCAL_CONTEXT = context.clone()
 LOCAL_CONTEXT.solver.angel = LOCAL_CONTEXT.solver.local
 
-LOCAL_CONTEXT.params.TimeLimit = None
-LOCAL_CONTEXT.params.Workers = None
+LOCAL_CONTEXT.params.pop('TimeLimit')
+LOCAL_CONTEXT.params.pop('Workers')
 
 LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
 LOCAL_CONTEXT.solver.agent = 'local'
@@ -457,8 +457,11 @@ def _get_effective_context(**kwargs):
         Updated (cloned) context
     """
     # If 'url' and 'key' are defined, force agent to be docloud
-    if ('agent' not in kwargs) and _is_defined('url', kwargs) and _is_defined('key', kwargs) and not ENVIRONMENT_PRESENT:
-        kwargs['agent'] = 'docloud'
+    if ('agent' not in kwargs) and not ENVIRONMENT_PRESENT:
+        url = kwargs.get('url')
+        key = kwargs.get('key')
+        if url and key and is_string(url) and is_string(key) and url.startswith('http'):
+            kwargs['agent'] = 'docloud'
 
     # Determine source context
     ctx = kwargs.get('context')
@@ -490,7 +493,7 @@ def _get_effective_context(**kwargs):
             for k, v in rplist:
                 if chkparams and not k in ALL_PARAMETER_NAMES:
                     raise CpoException("CPO solver does not accept a parameter named '{}'".format(k))
-                params.set_attribute(k, v)
+                setattr(params, k, v)
 
     # Return
     # print("\n*** Result context");

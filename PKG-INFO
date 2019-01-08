@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.2.36
+Version: 2.3.44
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,8 +244,36 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        Changed in 2.2.36:
+        Changed in 2.3.44:
         ``````````````````
+        * Module ``docplex.cp.model.solver_angel.py`` has been renamed ``solver_local.py``. 
+          A shadow copy with previous name still exist to preserve ascending compatibility.
+          Module ``docplex.cp.model.config.py`` is modified to refer this new module.
+        * Class ``docplex.cp.model.solver_local.SolverAngel`` has been renamed ``SolverLocal``. 
+          A shadow copy with previous name still exist to preserve ascending compatibility.
+        * Class ``docplex.cp.model.solver_local.AngelException`` has been renamed ``LocalSolverException``. 
+          A shadow copy with previous name still exist to preserve ascending compatibility.
+        * Functions logical_and() and logical_or() are able to accept a list of model boolean expressions.
+        * Fix defect on allowed_assignments() and forbiden_assignments() that was wrongly converting 
+          list of tupes into tuple_set.
+        * Update all examples to add comments and split them in sections data / prepare / model / solve
+        * Add new sched_RCPSPMM_json.py example that reads data from JSON file instead of raw data file.
+        * Rename all visu examples with more explicit names.
+        * Remove the object class CpoTupleSet. Tuple sets can be constructed only by calling tuple_set() method, or more
+          simply by passing directly a Python iterable of iterables when a tupleset is required 
+          (in expressions allowed_assignments() and forbidden_assignments)
+        * Allow logical_and() and logical_or() to accept a list of boolean expressions.
+        * Add overloading of builtin functions all() and any() as other form of logical_and() and logical_or().
+        * In no_overlap() and state_function(), transition matrix can be passed directly as a Python iterable of iterables of integers, 
+        * Editable transition matrix, created with a size only, is deprecated. However it is still available for ascending compatibility.
+        * Add conditional() modeling function
+        * Parameter 'AutomaticReplay' is deprecated.
+        * Add get_search_status() and get_stop_cause() on object CpoSolveResult, available for solver COS12.8
+        * Improved performance of ``Var.reduced_cost()`` in ``docplex.mp``.
+        
+        Changed in 2.2.34 (2017.07):
+        ````````````````````````````
+        
         * Methods ``docplex.cp.model.export_model()`` and ``docplex.cp.model.import_model()``
           have been added to respectively generate or parse a model in CPO format.
         * Methods ``docplex.cp.model.minimize()`` and ``docplex.cp.model.maximize()``
@@ -264,6 +292,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         * ``docplex.util.environment.Environment.set_stop_callback`` and
           ``docplex.util.environment.Environment.get_stop_callback`` are added so that
           you can add a callback when the DOcplexcloud job is aborted.
+        
         
         Changed in 2.1.28:
         ``````````````````
@@ -287,6 +316,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         * Bug fixes when editing an existing model.
         * Bug fix in the relaxation mechanism when using docplexcloud.
         
+        
         Changed in 2.0.15:
         ``````````````````
         
@@ -306,6 +336,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
           This feature has been deprecated since 1.0.0.
         * Known incompatibility: class ``docplex.mp.model.AbstractModel`` moved to ``docplex.mp.absmodel.AbstractModel``. 
           Samples using this class have been updated.
+        
         
         Changed in 1.0.630:
         ```````````````````
@@ -347,3 +378,5 @@ Classifier: License :: OSI Approved :: Apache Software License
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 2.7
 Classifier: Programming Language :: Python :: 3.4
+Classifier: Programming Language :: Python :: 3.5
+Classifier: Programming Language :: Python :: 3.6

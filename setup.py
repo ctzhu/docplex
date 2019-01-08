@@ -1,15 +1,18 @@
-from distutils.core import setup
-required=[ 'requests',
-           'six',
-           'docloud>=1.0.257']
-import sys
-if ((sys.version_info[0]) < 3) or ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
-    required.append('futures')
-
-
 import os
 import re
+from distutils.core import setup
+import sys
+
+required = ['requests',
+            'six',
+            'docloud>=1.0.257']
+if ((sys.version_info[0]) < 3) or \
+   ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
+    required.append('futures')
+
 HERE = os.path.abspath(os.path.dirname(__file__))
+
+
 def read(*parts):
     try:
         with open(os.path.join(HERE, *parts)) as f:
@@ -19,7 +22,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.2'
+    readme = 'DOcplex 2.3'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -28,16 +31,16 @@ if changelog is None:
 ss = str(readme) + str(changelog)
 
 setup(
-    name = 'docplex',
-    packages = ['docplex',
-                'docplex.cp',
-                'docplex.cp.solver',
-                'docplex.mp',
-                'docplex.mp.internal',
-                'docplex.mp.params',
-                'docplex.mp.worker',
-                'docplex.util'],
-    version = '2.2.36',  # replaced at build time
+    name='docplex',
+    packages=['docplex',
+               'docplex.cp',
+               'docplex.cp.solver',
+               'docplex.mp',
+               'docplex.mp.internal',
+               'docplex.mp.params',
+               'docplex.mp.worker',
+               'docplex.util'],
+    version = '2.3.44',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',
@@ -62,7 +65,9 @@ setup(
                    "License :: OSI Approved :: Apache Software License",
                    "Programming Language :: Python",
                    "Programming Language :: Python :: 2.7",
-                   "Programming Language :: Python :: 3.4"
+                   "Programming Language :: Python :: 3.4",
+                   "Programming Language :: Python :: 3.5",
+                   "Programming Language :: Python :: 3.6"
                    ],
 )
 

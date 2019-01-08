@@ -76,10 +76,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             Conflict result,
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
-        self._raise_not_supported() # Temporarily unsupported
-
         # Force all constraints to be named
-        self.context.model.name_all_constraints = True
+        self.model._ensure_all_root_constraints_named()
 
         return self._submit_job('RefineConflict', CpoRefineConflictResult)
 
@@ -93,7 +91,6 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             Propagation result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
-        self._raise_not_supported() # Temporarily unsupported
         return self._submit_job('Propagate', CpoSolveResult)
 
 
@@ -162,7 +159,9 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
 
             # Get solve status
             ssts = _get_solve_status(jinfo)
-            if ssts in _STATUS_WITH_RESULT:
+            if (cmd == "Solve") and (ssts not in _STATUS_WITH_RESULT):
+                jsol = None
+            else:
                 # Get solution
                 try:
                     stime = time.time()
@@ -174,8 +173,6 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
                     self.process_infos[CpoProcessInfos.RESULT_DECODE_TIME] = time.time() - stime
                 except Exception as e:
                     raise CpoException("Model solution access error: " + str(e))
-            else:
-                jsol = None
 
             # Create solution structure
             msol = self._create_result_object(rclass, jsol)
@@ -191,7 +188,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
                     if not(('.' in k) or ('_' in k)):
                         sinfos[k] = _value_of(detls[k])
                 # Retrieve special hard-coded values
-                if msol.solution.objective_values is None:
+                if isinstance(msol, CpoSolveResult) and msol.solution.objective_values is None:
                     oval = detls.get('PROGRESS_CURRENT_OBJECTIVE', None)
                     if oval is not None:
                         msol.solution.objective_values = [float(v) for v in oval.split(";")]

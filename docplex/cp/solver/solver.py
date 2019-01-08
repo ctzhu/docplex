@@ -346,16 +346,28 @@ class CpoSolver(object):
                 )
 
     def __init__(self, model, **kwargs):
-        """ Constructor:
+        """ Constructor
+
+        All necessary solving parameters are taken from the solving context that is constructed from the following list
+        of sources, each one overwriting the previous:
+
+           - the parameters that are set in the model itself,
+           - the default solving context that is defined in the module :mod:`~docplex.cp.config`
+           - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the optional arguments of this method.
 
         Args:
             model:     Model to solve
-        Optional args:
-            context:   Complete solving context. If not given, context is the default context that is set in config.py.
-            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (others):  All other context parameters that can be changed.
+            context:   (Optional) Complete solving context.
+                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
+            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                       that overwrite those in the solving context.
+            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others):  (Optional) Any leaf attribute with the same name in the solving context
+                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
         """
         super(CpoSolver, self).__init__()
         self.agent = None
@@ -404,8 +416,7 @@ class CpoSolver(object):
         if exists, plus different information on the solving process.
 
         Returns:
-            Model solution,
-            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+            Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoException: (or derived) if error.
         """

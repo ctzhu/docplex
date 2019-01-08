@@ -462,13 +462,19 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def reduced_cost(self):
         """ Returns the reduced cost of the variable.
 
+       This method will raise an exception if the model has not been solved as a LP.
+
         Note:
-            This method will raise an exception if the model has not been solved successfully as a LP.
+            For a large number of variables (> 100), using the `Model.reduced_costs()` method can be much faster.
 
         Returns:
             The reduced cost of the variable (a float value).
+
+        See Also:
+
+            :func:`docplex.mp.model.Model.reduced_costs`
         """
-        return self._model.reduced_costs(self)
+        return self._model._reduced_cost1(self)
 
     @property
     def benders_annotation(self):

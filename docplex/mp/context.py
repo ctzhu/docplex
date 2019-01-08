@@ -604,8 +604,6 @@ def CreateDefaultDOcloudContext():
     dctx.debug_dump_dir = None
     dctx.log_poll_interval = None
     dctx.progress_poll_interval = None
-    dctx.ignored_keys = "ENTER YOUR KEY HERE"
-    dctx.ignored_urls = "ENTER YOUR URL HERE"
     dctx.verbose_progress_logger = None
     dctx.delete_job = True
     # if true, download job info after solve() has finished and fire

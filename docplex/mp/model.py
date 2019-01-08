@@ -24,6 +24,7 @@ from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstra
 from docplex.mp.context import Context, is_key_ignored, is_url_ignored, \
     is_auto_publishing_solve_details, is_auto_publishing_json_solution, \
     is_auto_publishing, has_credentials
+from docplex.mp.cloudutils import is_url_valid
 from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
@@ -944,8 +945,12 @@ class Model(object):
         return dvar.vartype.get_cplex_typecode() == 'N'
 
 
-    def _count_variables_filtered(self, predicate):
-        return sum(1 for _ in filter(predicate, self.__allvars))
+    def _count_variables_w_code(self, cpxcode):
+        cnt = 0
+        for v in self.iter_variables():
+            if v._vartype.get_cplex_typecode() == cpxcode:
+                cnt += 1
+        return cnt
 
     def _iter_variables_filtered(self, predicate):
         for v in self.iter_variables():
@@ -963,35 +968,39 @@ class Model(object):
     def number_of_binary_variables(self):
         """ This property returns the total number of binary decision variables added to the model.
         """
-        return self._count_variables_filtered(lambda v: self._is_binary_var(v))
+        return self._count_variables_w_code('B')
 
     @property
     def number_of_integer_variables(self):
         """ This property returns the total number of integer decision variables added to the model.
         """
-        return self._count_variables_filtered(lambda v: self._is_integer_var(v))
+        return self._count_variables_w_code('I')
 
     @property
     def number_of_continuous_variables(self):
         """ This property returns the total number of continuous decision variables added to the model.
         """
-        return self._count_variables_filtered(lambda v: self._is_continuous_var(v))
+        return self._count_variables_w_code('C')
 
     @property
     def number_of_semicontinuous_variables(self):
         """ This property returns the total number of semi-continuous decision variables added to the model.
         """
-        return self._count_variables_filtered(lambda v: self._is_semicontinuous_var(v))
+        return self._count_variables_w_code('S')
 
     @property
     def number_of_semiinteger_variables(self):
         """ This property returns the total number of semi-integer decision variables added to the model.
         """
-        return self._count_variables_filtered(lambda v: self._is_semiinteger_var(v))
+        return self._count_variables_w_code('N')
 
     def _has_discrete_var(self):
         # INTERNAL
-        return any(v.is_discrete() for v in self.iter_variables())
+        for v in self.iter_variables():
+            if v.is_discrete():
+                return True
+        else:
+            return False
 
     def _solves_as_mip(self):
         # INTERNAL: will the model solve as a MIP?
@@ -1120,6 +1129,10 @@ class Model(object):
     def get_var_by_index(self, idx):
         # INTERNAL
         self._checker.typecheck_valid_index(idx)
+        return self._var_scope.get_object_by_index(idx)
+
+    def _var_by_index(self, idx):
+        # INTERNAL
         return self._var_scope.get_object_by_index(idx)
 
     def set_var_type(self, dvar, new_vartype):
@@ -2785,9 +2798,7 @@ class Model(object):
         # update the context with provided kwargs
         for argname, argval in six.iteritems(kwargs):
             # skip context argname if any
-            if argname == "url" and is_url_ignored(context, argval) and context.solver.docloud.url:
-                pass
-            elif argname == "key" and is_key_ignored(context, argval) and context.solver.docloud.key:
+            if argname == "url" and (not is_url_valid(argval)) and context.solver.docloud.url:
                 pass
             elif argname == 'clean_before_solve':
                 pass
@@ -3404,7 +3415,7 @@ class Model(object):
             will write ``foo.lp`` in ``gettempdir()``.
             
             >>> m.export_as_lp(basename="foo", path="e:/home/docplex")
-            
+
             will write file ``e:/home/docplex/foo.lp``.
             
             >>> m.export_as_lp("e/home/docplex/bar.lp")
@@ -3574,14 +3585,7 @@ class Model(object):
         return anno_path
 
     # advanced values
-    def _get_engine_attribute(self, arg, attr_name):
-        """
-        Queries and returns some solve attribute from the last solve.
-        :param arg: Object or iterable.
-        :param attr_name: The name of the attribute.
-        :return:
-        """
-        attribute = SolveAttribute.parse(attr_name, do_raise=True)
+    def _get_engine_attribute(self, arg, attribute, do_check=True):
         if is_iterable(arg):
             if not arg:
                 return []
@@ -3589,10 +3593,11 @@ class Model(object):
                 return self._get_engine_attributes_internal(arg, attribute)
         else:
             # defer checking to the checker
-            if attribute.requires_vars:
-                self._checker.typecheck_var(arg)
-            else:
-                self._checker.typecheck_constraint(arg)
+            if do_check:
+                if attribute.requires_vars:
+                    self._checker.typecheck_var(arg)
+                else:
+                    self._checker.typecheck_constraint(arg)
             attrs = self._get_engine_attributes_internal([arg], attribute)
             return attrs[0]
 
@@ -3602,7 +3607,7 @@ class Model(object):
         if not self.solution.is_attributes_fetched(attribute.name):
             if is_for_vars:
                 indices = [v.index for v in self.iter_variables()]
-                mapper = lambda idx: self.get_var_by_index(idx)
+                mapper = lambda idx: self._var_by_index(idx)
             else:
                 indices = [ct.index for ct in self.iter_linear_constraints()]
                 mapper = lambda idx: self.get_constraint_by_index(idx)
@@ -3616,7 +3621,12 @@ class Model(object):
         return self.solution.get_attribute(mobjs, attr_name)
 
     def check_solved_as_lp(self, arg):
+        # first check a solution exists
         self.check_has_solution()
+        return self.__engine.solved_as_lp() or self.solves_as_lp(arg)
+
+    def solves_as_lp(self, arg):
+        # INTERNAL
         if self._solves_as_mip():
             self.fatal('{0} are only available for LP problems'.format(arg))
 
@@ -3630,13 +3640,13 @@ class Model(object):
     def dual_values(self, cts):
         self.check_solved_as_lp(arg='dual values')
         dual_arg = self._check_ct_or_ct_seq(cts)
-        duals = self._get_engine_attribute(dual_arg, 'duals')
+        duals = self._get_engine_attribute(dual_arg, SolveAttribute.duals)
         return duals
 
     def slack_values(self, cts):
         self.check_has_solution()
         slack_arg = self._check_ct_or_ct_seq(cts)
-        return self._get_engine_attribute(slack_arg, 'slacks')
+        return self._get_engine_attribute(slack_arg, SolveAttribute.slacks)
 
     def reduced_costs(self, dvars):
         self.check_solved_as_lp(arg='reduced costs')
@@ -3645,7 +3655,27 @@ class Model(object):
         else:
             self._checker.typecheck_var(dvars)
             rc_arg = dvars
-        return self._get_engine_attribute(rc_arg, 'reduced_costs')
+        return self._get_engine_attribute(rc_arg, SolveAttribute.reduced_costs, do_check=False)
+
+    def _reduced_cost1(self, dvar):
+        self.check_solved_as_lp(arg='reduced costs')
+        return self._get_engine_attribute(dvar, SolveAttribute.reduced_costs, do_check=False)
+
+    DEFAULT_VAR_VALUE_QUOTED_SOLUTION_FMT = '  \"{varname}\"={value:.{prec}f}'
+    DEFAULT_VAR_VALUE_UNQUOTED_SOLUTION_FMT = '  {varname}={value:.{prec}f}'
+    DEFAULT_OBJECTIVE_FMT = "objective: {0:.{prec}f}"
+
+    def supports_logical_constraints(self):
+        # INTERNAL
+        ok, _ = self.get_engine().supports_logical_constraints()
+        return ok
+
+    def check_logical_constraint_support(self):
+        # INTERNAL
+        ok, why = self.get_engine().supports_logical_constraints()
+        if not ok:
+            assert why
+            self.fatal(msg=why)
 
     DEFAULT_VAR_VALUE_QUOTED_SOLUTION_FMT = '  \"{varname}\"={value:.{prec}f}'
     DEFAULT_VAR_VALUE_UNQUOTED_SOLUTION_FMT = '  {varname}={value:.{prec}f}'

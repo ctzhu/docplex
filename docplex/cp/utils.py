@@ -428,10 +428,9 @@ class SafeIdAllocator(object):
         Returns:
             Next id for this allocator
         """
-        self.lock.acquire()
-        self.count += 1
-        cnt = self.count
-        self.lock.release()
+        with self.lock:
+            self.count += 1
+            cnt = self.count
         res = []
         bdgts = self.bdgts
         blen = len(bdgts)
@@ -704,9 +703,8 @@ class Barrier(object):
         """ Wait for the barrier
         This method blocks the calling thread until required number of threads has called this method.
         """
-        self.lock.acquire()
-        self.count += 1
-        self.lock.release()
+        with self.lock:
+            self.count += 1
         if self.count < self.parties:
            self.barrier.acquire()
         self.barrier.release()
@@ -1451,3 +1449,30 @@ else:
     # For Python 3.
     zip = zip
     zip_longest = itertools.zip_longest
+
+
+#-----------------------------------------------------------------------------
+# Retrieve builtin functions that are overwritten
+#-----------------------------------------------------------------------------
+
+try:
+    import __builtin__ as builtin  # Python 2
+except ImportError:
+    import builtins as builtin     # Python 3
+
+builtin_min   = builtin.min
+builtin_max   = builtin.max
+builtin_sum   = builtin.sum
+builtin_abs   = builtin.abs
+builtin_range = builtin.range
+builtin_all   = builtin.all
+builtin_any   = builtin.any
+
+
+#-----------------------------------------------------------------------------
+# Set warning filter to default (print warnings)
+#-----------------------------------------------------------------------------
+
+# import warnings
+# warnings.simplefilter("default", DeprecationWarning)
+# warnings.simplefilter("default", PendingDeprecationWarning)

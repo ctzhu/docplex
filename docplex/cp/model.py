@@ -141,6 +141,9 @@ class CpoModel(object):
         self.integer_var       = expression.integer_var
         self.integer_var_list  = expression.integer_var_list
         self.integer_var_dict  = expression.integer_var_dict
+        self.binary_var        = expression.binary_var
+        self.binary_var_list   = expression.binary_var_list
+        self.binary_var_dict   = expression.binary_var_dict
         self.interval_var      = expression.interval_var
         self.interval_var_list = expression.interval_var_list
         self.interval_var_dict = expression.interval_var_dict
@@ -159,6 +162,8 @@ class CpoModel(object):
         self.sum = modeler.sum_of
         self.abs = modeler.abs_of
         self.range = modeler.in_range
+        self.all = modeler.all_of
+        self.any = modeler.any_of
 
 
     def __enter__(self):
@@ -534,9 +539,17 @@ class CpoModel(object):
         created according to default solving context, possibly modified by the parameters of this method.
 
         The class :class:`~docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
-        but also some others functions allowing to invoke more specialized functions. An advanced programming may
-        require to explicitly create a CpoSolver instead of calling function at model level.
+        but also some others functions allowing to invoke more specialized functions.
+        An advanced programming may require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
+
+        All necessary solving parameters are taken from the solving context that is constructed from the following list
+        of sources, each one overwriting the previous:
+
+           - the parameters that are set in the model itself,
+           - the default solving context that is defined in the module :mod:`~docplex.cp.config`
+           - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the optional arguments of this method.
 
         Args:
             context:   (Optional) Complete solving context.

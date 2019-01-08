@@ -12,6 +12,7 @@ import sched
 import tempfile
 import threading
 import time
+import sys
 
 from six import PY2 as six_py2
 from six import itervalues
@@ -23,6 +24,7 @@ __int_types = {int}
 __float_types = {float}
 __numpy_ndslot_type = None
 __pandas_series_type = None
+__pandas_dataframe_type = None
 
 try:
     type(long)
@@ -68,11 +70,13 @@ except ImportError:  # pragma: no cover
     numpy_is_integer = None
 
 try:
-    from pandas import Series
+    from pandas import Series, DataFrame
 
     __pandas_series_type = Series
+    __pandas_dataframe_type = DataFrame
 except ImportError:
     __pandas_series_type = None
+    __pandas_dataframe_type = None
 
 __int_types = frozenset(__int_types)
 def is_int(s):
@@ -137,6 +141,9 @@ def _is_numpy_ndslot(s):
 def is_pandas_series(s):
     return __pandas_series_type is not None and type(s) is __pandas_series_type
 
+def is_pandas_dataframe(s):
+    return __pandas_dataframe_type and isinstance(s, __pandas_dataframe_type)
+
 
 def is_numpy_ndarray(s):
     return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
@@ -172,12 +179,12 @@ def is_indexable(e):
     return hasattr(e, "__getitem__")
 
 
-def is_iterable(e):
+def is_iterable(e, accept_string=True):
     ''' Returns true if we can extract an iterator from it
     '''
     try:
         iter(e)
-        return True
+        return accept_string or not is_string(e)
     except TypeError:
         return False
 
@@ -256,14 +263,6 @@ class DOCplexSolutionValueError(DOcplexException):
         DOcplexException.__init__(self, msg)
 
 
-class DOCplexQuadraticNotImplementedError(DOcplexException):
-    def __init__(self, first, second):
-        msg = "Cannot multiply {0!s} by {1!s}: quadratic programming not supported".format(first, second)
-        DOcplexException.__init__(self, msg)
-
-
-class DOCPlexQuadraticArithException(Exception):
-    pass
 
 
 def normalize_basename(s, force_lowercase=True):
@@ -304,6 +303,8 @@ def make_path(error_handler, basename, extension, output_dir=None, name_transfor
 
 
 def generate_constant(the_constant, count_max):
+    if count_max is None:
+        count_max = sys.maxsize
     loop_counter = 0
     while loop_counter <= count_max:
         yield the_constant
@@ -322,7 +323,7 @@ def resolve_pattern(pattern, args):
     :param args:
     :return:
     """
-    if args is None:
+    if args is None or len(args) == 0:
         return pattern
     elif pattern.find('%') >= 0:
         return pattern % args

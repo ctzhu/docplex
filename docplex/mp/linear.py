@@ -18,6 +18,10 @@ from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
 from docplex.mp.xcounter import ExprCounter
 
+class DOCplexQuadraticArithException(Exception):
+    # INTERNAL
+    pass
+
 
 class Var(ModelingObject, Operand):
     """Var()
@@ -318,7 +322,7 @@ class Var(ModelingObject, Operand):
                 return self
         try:
             return self.to_linear_expr().add(e)
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             return e.plus(self)
 
     def __radd__(self, e):
@@ -333,7 +337,7 @@ class Var(ModelingObject, Operand):
                 return self
         try:
             return self.to_linear_expr().subtract(e)
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             return e.rminus(self)
 
     def __rsub__(self, e):
@@ -455,27 +459,9 @@ class Var(ModelingObject, Operand):
         # INTERNAL
         self._vartype = new_vartype
 
-    def _name_marker(self):
-        if self.is_generated():
-            return "?"  # ? for generated variables e.g. _x1?
-        elif self.has_automatic_name():
-            return "*"  # anonymous but not generated _x1*
-        else:
-            return ""   # no suffix for usernames
-
     def to_string(self):
         str_name = self.get_name() or ('_x%d' % (self.unchecked_index +1 ))
         return str_name
-
-    def to_full_string(self):
-        str_name = self.name or '%s_var_%d' % (self.vartype.short_name, self.unchecked_index)
-        name_mark = self._name_marker()
-        self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
-        if self_vartype.is_default_domain(self_lb, self_ub):
-            str_bounds = ""
-        else:
-            str_bounds = "[%g..%g]" % (self_lb, self_ub)
-        return "{1}{2}{3}".format(self_vartype.one_letter_symbol(), str_name, name_mark, str_bounds)
 
     def to_stringio(self, oss):
         oss.write(self.to_string())
@@ -664,7 +650,7 @@ class MonomialExpr(AbstractLinearExpr):
         else:
             try:
                 return self.to_linear_expr().add(e)
-            except DOCPlexQuadraticArithException:
+            except DOCplexQuadraticArithException:
                 return e.plus(self)
 
     def minus(self, e):
@@ -672,7 +658,7 @@ class MonomialExpr(AbstractLinearExpr):
             expr = self.to_linear_expr()
             expr.subtract(e)
             return expr
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             return e.rminus(self)
 
     def times(self, e):
@@ -795,21 +781,16 @@ class LinearExpr(AbstractLinearExpr):
     either using operators or using `Model.linear_expr()`.
 
     """
-
-    # what type to use for merging dicts
-    counter_type = ExprCounter
-
     # what type to use for storing terms
     term_dict_type = OrderedDict
-
 
     @staticmethod
     def _sort_terms_if_needed(mdl, counter, term_dict_type=term_dict_type):
         # INTERNAL
         if not mdl._keep_ordering:
             return counter
-        elif isinstance(counter, term_dict_type):
-            return counter
+        # elif isinstance(counter, term_dict_type):
+        #     return counter
         else:
             # normalize by sorting variables by increasing indices
             sorted_items = sorted(counter.items(), key=lambda vk: vk[0].get_index())
@@ -902,7 +883,7 @@ class LinearExpr(AbstractLinearExpr):
             self._constant = e.constant
             self.__terms = self.term_dict_type(e._get_terms_dict())  # copy
 
-        elif is_iterable(e) and not is_string(e):
+        elif is_iterable(e, accept_string=False):
             for o in e:
                 model.typecheck_var(o)
                 self.__terms[o] = 1
@@ -1244,7 +1225,7 @@ class LinearExpr(AbstractLinearExpr):
         elif is_number(e):
             self._constant += e
         elif isinstance(e, Expr) and e.is_quad_expr():
-            raise DOCPlexQuadraticArithException
+            raise DOCplexQuadraticArithException
         else:
             try:
                 self.add(e.to_linear_expr())
@@ -1295,7 +1276,7 @@ class LinearExpr(AbstractLinearExpr):
         elif isinstance(e, ZeroExpr):
             pass
         elif isinstance(e, Expr) and e.is_quad_expr():
-            raise DOCPlexQuadraticArithException
+            raise DOCplexQuadraticArithException
         else:
             try:
                 self.subtract(e.to_linear_expr())
@@ -1395,14 +1376,14 @@ class LinearExpr(AbstractLinearExpr):
         cloned = self.clone_if_necessary()
         try:
             return cloned.add(e)
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             return e.plus(self)
 
     def minus(self, e):
         cloned = self.clone_if_necessary()
         try:
             return cloned.subtract(e)
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             return e.rminus(self)
 
     def times(self, e):
@@ -1446,7 +1427,7 @@ class LinearExpr(AbstractLinearExpr):
         try:
             self.add(e)
             return self
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             # modify self
             r = e + self
             self = r
@@ -1464,7 +1445,7 @@ class LinearExpr(AbstractLinearExpr):
     def __isub__(self, e):
         try:
             return self.subtract(e)
-        except DOCPlexQuadraticArithException:
+        except DOCplexQuadraticArithException:
             # modify self
             r = -e + self
             self = r

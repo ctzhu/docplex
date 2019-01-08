@@ -34,11 +34,12 @@ class IQuadFactory(_AbstractModelFactory):
 
 
 class QuadFactory(IQuadFactory):
+    # INTERNAL
 
     def __init__(self, model):
         _AbstractModelFactory.__init__(self, model)
         self._model = model
-        self._qterm_type = QuadExpr._qterms_dict_type
+        self.term_dict_type = QuadExpr.term_dict_type
         self.zero_expr = model._get_zero_expr()
 
     def _unexpected_product_error(self, factor1, factor2):

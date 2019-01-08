@@ -6,11 +6,10 @@
 
 # gendoc: ignore
 
-import math
-
 from docplex.mp.sosvarset import SOSVariableSet
 from docplex.mp.basic import ObjectiveSense
-from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr, Expr
+from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr, Expr, \
+    DOCplexQuadraticArithException
 from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint, _DummyFeasibleConstraint, _DummyInfeasibleConstraint, RangeConstraint, \
     IndicatorConstraint
@@ -79,8 +78,6 @@ def compile_naming_function(keys, user_name, default_fn, arity=1, key_format=Non
                                .format(user_name))
 
 
-
-
 class _AbstractModelFactory(object):
     def __init__(self, model):
         self._model = model
@@ -88,6 +85,11 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(object):
+
+    @property
+    def term_dict_type(self):
+        return LinearExpr.term_dict_type
+
     def is_free_lb(self, var_lb):
         return var_lb <= - self.infinity
 
@@ -131,6 +133,28 @@ class ModelFactory(object):
         idx = self.__engine.create_one_variable(vartype, float(var.get_lb()), float(var.get_ub()), actual_name)
         self_model._register_one_var(var, idx, varname)
         return var
+
+    # --- sequences
+    def _make_key_seq(self, keys, name):
+        # INTERNAL Takes as input a candidate keys input and returns a valid key sequence
+        if is_iterable(keys):
+            if is_pandas_dataframe(keys):
+                return name, keys.index.values
+            elif has_len(keys):
+                return name, keys
+            elif is_iterator(keys):
+                return name, list(keys)
+            else:
+                # TODO: make a test for this case.
+                self.fatal("Cannot handle iterable var keys: {0!s} : no len() and not an iterator",
+                           keys)  # pragma: no cover
+
+        elif is_int(keys) and keys >= 0:
+            # if name is str and we have a size, trigger automatic names
+            used_name = None if name is str else name
+            return used_name, range(0, keys)
+        else:
+            self.fatal("Unexpected var keys: {0!s}, expecting iterable or integer", keys)  # pragma: no cover
 
     def _expand_names(self, keys, user_name, arity, key_format):
         # if user_name is None:
@@ -211,23 +235,20 @@ class ModelFactory(object):
                      keys, vartype,
                      lb=None, ub=None,
                      name=str,
-                     arity=1, key_format=None,
-                     allow_empty_keys=True):
-        if not keys:
-            if allow_empty_keys:
-                return []
-            else:
-                self.fatal("No keys to index the variables.")
-        else:
-            if any((k is None for k in keys)):
-                self.fatal("A variable key cannot be None, see: {0!s}", keys)
+                     arity=1, key_format=None):
+        number_of_vars = len(keys)
+        if 0 == number_of_vars:
+            return []
+
+        if any((k is None for k in keys)):
+            self.fatal("A variable key cannot be None, see: {0!s}", keys)
 
         mdl = self._model
 
         # compute defaults once
         default_lb = vartype.default_lb
         default_ub = vartype.default_ub
-        number_of_vars = len(keys)
+
         xlbs = self._expand_bounds(keys, lb, default_lb, number_of_vars, is_lb_or_ub=True)
         xubs = self._expand_bounds(keys, ub, default_ub, number_of_vars, is_lb_or_ub=False)
         # at this point both list are either [] or have size numberOfVars
@@ -269,7 +290,7 @@ class ModelFactory(object):
     def constant_expr(self, cst, safe_number=False, context=None, force_clone=False):
         if 0 == cst:
             return self.zero_expr
-        elif 1 ==  cst:
+        elif 1 == cst:
             if force_clone:
                 return LinearExpr(self._model, e=None, constant=1, safe=True)
             else:
@@ -321,7 +342,7 @@ class ModelFactory(object):
         else:
             try:
                 return e.to_linear_expr()
-            except DOCPlexQuadraticArithException:
+            except DOCplexQuadraticArithException:
                 return e
             except AttributeError:
                 pass
@@ -335,7 +356,7 @@ class ModelFactory(object):
 
     def _new_binary_constraint(self, lhs, ctype, rhs, name=None):
         # noinspection PyPep8
-        left_expr  = self._to_linear_expr(lhs, context="LinearConstraint.left_expr")
+        left_expr = self._to_linear_expr(lhs, context="LinearConstraint.left_expr")
         right_expr = self._to_linear_expr(rhs, context="LinearConstraint.right_expr")
         self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = LinearConstraint(self._model, left_expr, ctype, right_expr, name)
@@ -413,7 +434,6 @@ class ModelFactory(object):
 
         # send objective
         self_engine.set_objective(self_model.objective_sense, self_model.objective_expr)
-
 
     def new_sos(self, dvars, sos_type, name):
         # INTERNAL

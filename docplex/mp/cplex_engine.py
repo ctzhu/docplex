@@ -331,15 +331,12 @@ class CplexEngine(DummyEngine):
         return self._allocate_one_index(ret_value=ret_val, scope=self._vars_scope)
 
     def create_variables(self, keys, vartype, lbs, ubs, names):
-        if keys:
-            self._resync_if_needed()
-            nb_vars = len(keys)
-            alltypes = self._create_cpx_vartype_list(vartype, nb_vars)
-            ret_add = self.__cplex.variables.add(names=names, types=alltypes, lb=lbs, ub=ubs)
-            return self._allocate_range_index(size=nb_vars, ret_value=ret_add, scope=self._vars_scope)
+        self._resync_if_needed()
+        nb_vars = len(keys)
+        alltypes = self._create_cpx_vartype_list(vartype, nb_vars)
+        ret_add = self.__cplex.variables.add(names=names, types=alltypes, lb=lbs, ub=ubs)
+        return self._allocate_range_index(size=nb_vars, ret_value=ret_add, scope=self._vars_scope)
 
-        else:  # pragma: no cover
-            return []
 
     def _apply_var_fn(self, var, args, setter_fn, getter_fn=None):
         cpxvars = self.__cplex.variables
@@ -649,11 +646,11 @@ class CplexEngine(DummyEngine):
         cpx_objective.set_offset(expr.get_constant())
         # --- set coefficients
         if expr.is_quad_expr():
-            cvq, cvv = expr.compute_separable_convexity()
-            if cvv is not None and cvq < 0:
-                self._model.warning(
-                    "Objective is separable with negative coefficients, therefore non-convex. See term(s): {0}{1!s}^2",
-                    cvq, cvv)
+            # cvq, cvv = expr.compute_separable_convexity()
+            # if cvv is not None and cvq < 0:
+            #     self._model.warning(
+            #         "Objective is separable with negative coefficients, therefore non-convex. See term(s): {0}{1!s}^2",
+            #         cvq, cvv)
 
             self._set_quadratic_objective_coefs(cpx_objective, quad_expr=expr)
             self._set_linear_objective_coefs(cpx_objective, expr.linear_part)
@@ -686,8 +683,9 @@ class CplexEngine(DummyEngine):
             # 1. reset quad part
             cpx_objective = self.__cplex.objective
             # -- set quad coeff to 0 for all quad variable pairs
-            for qv1, qv2, _ in expr.iter_quad_triplets():
-                cpx_objective.set_quadratic_coefficients(qv1._index, qv2._index, 0.)
+            quad_reset_triplets = [(qvp.first._index, qvp.second._index, 0) for qvp, qk in expr.iter_quads()]
+            if quad_reset_triplets:
+                cpx_objective.set_quadratic_coefficients(quad_reset_triplets)
             # 2. reset linear part
             self._clear_linear_objective(expr.linear_part)
         else:

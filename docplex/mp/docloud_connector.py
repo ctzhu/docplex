@@ -13,6 +13,8 @@ from datetime import datetime
 from six import iteritems, string_types
 from requests.exceptions import ConnectionError
 
+import warnings
+
 from docloud.job import JobClient, DOcloudInterruptedException, DOcloudNotFoundError
 from docloud.status import JobSolveStatus, JobExecutionStatus
 
@@ -122,8 +124,20 @@ class DOcloudConnector(object):
         if not info_to_monitor:
             info_to_monitor = {}
 
-        client = JobClient(self.docloud_context.url,
-                           self.docloud_context.key)
+        proxies = self.docloud_context.proxies
+        try:
+            client = JobClient(self.docloud_context.url,
+                               self.docloud_context.key,
+                               proxies=proxies)
+        except TypeError:
+            # docloud client <= 1.0.172 do not have the proxes
+            warnings.warn("Using a docloud client that do not support warnings in init()",
+                          UserWarning)
+            client = JobClient(self.docloud_context.url,
+                               self.docloud_context.key)
+        self.log("client created")
+        if proxies:
+            self.log("proxies = %s" % proxies)
 
         # prepare client
         if self.docloud_context.log_requests:

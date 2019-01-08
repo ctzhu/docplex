@@ -220,6 +220,28 @@ class FastOrderedDict(dict):
         else:
             self._update_from_key_values(from_arg)
 
+    def update_from_item_value(self, item, value=1,
+                               _dict_get=dict.get, dict_set=dict.__setitem__,
+                               fastdict_set=__setitem__):
+        """
+        This differs from standard Counter when a dict instance is required.
+        :param item: the key to be updated
+        :param value: the associated value
+        :return:
+        """
+        if value:
+            old_value = _dict_get(self, item, 0)
+            if old_value:
+                new_value = old_value + value
+                if 0 != new_value:
+                    dict_set(self, item, new_value)
+                else:
+                    del self[item]
+            else:
+                # we are sure item is not already present, it must be added to the sequence...
+                fastdict_set(self, item, value)
+
+
     def _update_from_key_values(self, kv_seq):
         for key, val in kv_seq:
             self[key] = val

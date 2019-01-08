@@ -4,19 +4,21 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-# gendoc: ignore
-
 import os
 
 # docplex
 from docplex.mp.model import Model, Environment
 from docplex.mp.utils import DOcplexException
+
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.constants import CplexCtSenseToPython
 # cplex
-from cplex import Cplex
-from cplex._internal._subinterfaces import ObjSense
-from cplex.exceptions import CplexError, CplexSolverError
+try:
+    from cplex import Cplex
+    from cplex._internal._subinterfaces import ObjSense
+    from cplex.exceptions import CplexError, CplexSolverError
+except ImportError:
+    Cplex = None
 from docplex.mp.compat23 import izip
 
 
@@ -32,7 +34,7 @@ class _CplexReaderFileContext(object):
 
     def __enter__(self):
         cpx = Cplex()
-        # no output from cplex
+        # no output from CPLEX
         cpx.set_results_stream(None)
         cpx.set_log_stream(None)
         cpx.set_warning_stream(None)
@@ -61,10 +63,34 @@ class _CplexReaderFileContext(object):
 
 
 class ModelReader(object):
+    """ This class is used to read models from CPLEX files.
 
-    # internal class to store range data
-    # canno use tuples as they are immutable
+    All keyword arguments understood by the `Model` class can be passed to the `ModelReader` constructor.
+    These arguments will be used to create the initial empty model.
+
+    Args:
+        model_class: A subclass of `Model` (the default). This class type
+            is used to build the empty model and fill it with the contents of the file.
+            For example, to build an instance of `AdvModel`, pass `model_class=AdvModel`
+            to the constructor of `ModelReader`.
+
+    Returns:
+        An instance of :class:`doc.mp.model.Model` if the file was successfully read, or None.
+
+    Note:
+        This class requires CPLEX to be installed and present in ``PYTHONPATH``. The following file formats are
+        accepted: LP, SAV, MPS.
+
+    Example:
+        Reads the contents of file ``mymodel.sav`` into an `AdvModel` instance, built with the context `my_ctx`::
+
+            mr = ModelReader(model_class=AdvModel)
+            mr.read_model('mymodel.sav', context=my_ctx)
+
+    """
+
     class _RangeData(object):
+        # INTERNAL
         def __init__(self, var_index, var_name, lb=0, ub=1e+75):
             self.var_index = var_index
             self.var_name = var_name
@@ -74,25 +100,27 @@ class ModelReader(object):
     @staticmethod
     def _build_linear_expr_from_sparse_pair(mdl, var_map, cpx_sparsepair):
         expr = mdl._linear_expr()
-        for cpx_index, cpx_val in zip(cpx_sparsepair.ind, cpx_sparsepair.val):
-            expr.add_term(var_map[cpx_index], cpx_val)
+        for cpx_index, cpx_val in izip(cpx_sparsepair.ind, cpx_sparsepair.val):
+            expr._add_term(var_map[cpx_index], cpx_val)
         return expr
 
-    def __init__(self, use_block_cts=True):
-        self._use_block_constraints = use_block_cts
+    def __init__(self, **kwargs):
+        self.model_class = kwargs.get('model_class', Model)
 
     def read_prm(self, filename):
         """ Reads a CPLEX PRM file.
 
-        Reads a CPLEX file with parameters, and returns a DOcplex parameter group
+        Reads a CPLEX parameters file and returns a DOcplex parameter group
         instance. This parameter object can be used in a solve().
 
         Args:
-            filename: a path string
+            filename: A path string.
 
         Returns:
-            A RootParameterGroup object , if the read operation succeeds, else None.
+            A `RootParameterGroup object`, if the read operation succeeds, else None.
         """
+        if not Cplex:
+            raise RuntimeError("read_prm() requires CPLEX to run")
         with _CplexReaderFileContext(filename, read_method=["parameters", "read_file"]) as cpx:
             if cpx:
                 # raw parameters
@@ -111,31 +139,31 @@ class ModelReader(object):
     def read_model(self, filename, model_name=None, verbose=True, **kwargs):
         """ Reads a model from a CPLEX export file.
 
-        Accepts all formats exported by CPLEX: LP, SAV, MPS...
+        Accepts all formats exported by CPLEX: LP, SAV, MPS.
 
         If an error occurs while reading the file, the message of the exception
         is printed and the function returns None.
 
         Args:
-            filename: the file to read
-            model_name: an optional name for the newly created model. If None,
+            filename: The file to read.
+            model_name: An optional name for the newly created model. If None,
                 the model name will be the path basename.
-            verbose: flag
-            kwargs: a dict of keyword-based arguments, that are used when creating the model
+            verbose: Flag.
+            kwargs: A dict of keyword-based arguments that are used when creating the model
                 instance.
 
         Example:
-            m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)
-
+            `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)`
 
         Returns:
-            an instance of Model, or None if an exception is raised.
+            An instance of Model, or None if an exception is raised.
 
         """
         if not os.path.exists(filename):
             print("* file not found: {0}".format(filename))
             return None
-
+        if not Cplex:
+            raise RuntimeError("read_prm() requires CPLEX to run")
         # extract pure basename
         if model_name:
             name_to_use = model_name
@@ -172,7 +200,8 @@ class ModelReader(object):
         #  print("-> end CPLEX read file: {0}".format(filename))
         try:
 
-            mdl = Model(name=name_to_use, **kwargs)
+            mdl = self.model_class(name=name_to_use, **kwargs)
+            lfactory = mdl._lfactory
             mdl.set_quiet()  # output level set to ERROR
             vartype_cont = mdl.continuous_vartype
             vartype_map = {'B': mdl.binary_vartype,
@@ -201,7 +230,7 @@ class ModelReader(object):
                     # generated var for ranges
                     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=ub)
                 else:
-                    docplex_var = mdl._var(vartype, lb, ub, varname)
+                    docplex_var = lfactory.new_var(vartype, lb, ub, varname)
                     idx_to_var_map[v] = docplex_var
 
             # 2. upload linear constraints and ranges (mixed in cplex)
@@ -219,7 +248,7 @@ class ModelReader(object):
             has_range = range_map or any(s == "R" for s in all_senses)
             deferred_cts = []
             deferred_ctnames = []
-            postpone = self._use_block_constraints
+            postpone = True
 
             for c in range(nb_linear_cts):
                 row = all_rows[c]
@@ -235,7 +264,7 @@ class ModelReader(object):
                 # build an expr
 
                 if not has_range:
-                    expr = mdl.scal_prod((idx_to_var_map[idx] for idx in indices), coefs)
+                    expr = mdl._aggregator._scal_prod((idx_to_var_map[idx] for idx in indices), coefs)
                     op = CplexCtSenseToPython.cplex_ctsense_to_python_op(sense)
                     ct = op(expr, rhs)
                     if postpone:
@@ -245,7 +274,7 @@ class ModelReader(object):
                         mdl.add_constraint(ct, ctname)
                 else:
                     expr = mdl.linear_expr()
-                    for idx, koef in zip(indices, coefs):
+                    for idx, koef in izip(indices, coefs):
                         var = idx_to_var_map.get(idx, None)
                         if var:
                             expr._add_term(var, koef)
@@ -394,66 +423,3 @@ class ModelReader(object):
 
         return mdl
 
-
-def read_model(filename, verbose=False):
-    env = Environment()
-    if not env.has_cplex:
-        print("Model.read() requires a CPLEX DLL")
-        return None
-    elif not isinstance(filename, str):
-        print("Model.read() expects a path, got: {0!s}".format(filename))
-        return None
-
-    docplex_reader = ModelReader()
-    m = docplex_reader.read_model(filename, verbose=verbose)
-    if m is None:
-        print("* cannot read file: {0}".format(filename))
-    return m
-
-
-def read_all_in_dir(directory, verbose=True, use_block_cts=True):
-    from collections import Counter
-
-    mreader = ModelReader(use_block_cts=use_block_cts)
-    if not os.path.isdir(directory):
-        print("Not a directory: {0}".format(directory))
-        return
-
-    read_count = 0
-    error_files = set({})
-    all_models = []
-    cc = Counter()
-    for f in os.listdir(directory):
-        full_path = os.path.join(directory, f)
-        extension = os.path.splitext(full_path)[1]
-        if extension in frozenset({".lp", ".sav", ".mps"}):
-            read_count += 1
-            cc.update({extension: 1})
-            m = None
-            try:
-                #  print("{0} --> start reading file: {1}".format(read_count, full_path))
-                m = mreader.read_model(full_path, verbose=verbose)
-            except DOcplexException:
-                m = None
-            except Exception as e:
-                print("Python exception while reading file {0}: {1!s}".format(full_path, e))
-                m = None
-            finally:
-                status = "OK" if m is not None else "KO"
-                print("{0}> read file: {1}: {2}".format(read_count, full_path, status))
-
-            if m is None:
-                print("! ERROR reading: {0}".format(full_path))
-                error_files.add(full_path)
-            else:
-                all_models.append(m)
-    print("* files by extension: {0!s}".format(cc))
-    print("* read {0} files, #errors ={1}".format(read_count, len(error_files)))
-    if error_files:
-        for f in error_files:
-            print("**** error reading file: {0}".format(f))
-    return all_models
-
-
-if __name__ == "__main__":
-    tempmodels = read_all_in_dir("c:/temp")

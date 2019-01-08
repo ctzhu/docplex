@@ -245,9 +245,10 @@ _TParamData = namedtuple('_TParamInfo', ['short_name', 'default_value', 'accesso
 
 class Relaxer(object):
     ''' This class is an abstract algorithm, in the sense that it operates on interfaces.
-    
+
         It takes a prioritizer, which an implementation of ``IConstraintPrioritizer``.
         For convenience, predefined prioritizer types are accessible  through names:
+
             - `all` relaxes all constraints using a MEDIUM priority; this is the default.
             - `named` relaxes all constraints with a user name but not the others.
             - `match` looks for priority names within constraint names;

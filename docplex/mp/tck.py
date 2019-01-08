@@ -7,7 +7,7 @@
 # gendoc: ignore
 
 
-from docplex.mp.utils import is_int, is_number, is_iterable, is_string
+from docplex.mp.utils import is_int, is_number, is_iterable, is_string, is_iterator, is_ordered_sequence
 
 from docplex.mp.basic import Priority
 from docplex.mp.vartype import VarType
@@ -32,8 +32,10 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_var_seq(self, seq):
-        for v in seq:
-            self.typecheck_var(v)
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_var_seq_all_different(self, seq):
+        raise NotImplementedError  # pragma: no cover
 
     def typecheck_operand(self, obj, accept_numbers=True, caller=None):
         raise NotImplementedError  # pragma: no cover
@@ -77,10 +79,16 @@ class IDocplexTypeChecker(object):
     def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
         raise NotImplementedError  # pragma: no cover
 
+    def get_number_validation_fn(self):
+        raise NotImplementedError  # pragma: no cover
+
     def typecheck_progress_listener(self, arg):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_two_in_model(self, model, obj1, obj2, ctx_msg):
+        raise NotImplementedError  # pragma: no cover
+
+    def check_ordered_sequence(self, arg, header):
         raise NotImplementedError  # pragma: no cover
 
 
@@ -127,6 +135,27 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if not isinstance(obj, Var):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
 
+    def typecheck_var_seq(self, seq):
+        var_seq = list(seq)
+        for x in var_seq:
+            self.typecheck_var(x)
+        return var_seq
+
+    def typecheck_var_seq_all_different(self, seq):
+        # return the checked sequence, so take the list
+        seq_as_list = list(seq)
+        for v in seq_as_list:
+            self.typecheck_var(v)
+        # check for all differemt and output a justifier variable apperaing twice.
+        inc_set = set([])
+        for v in seq_as_list:
+            if v in inc_set:
+                self.fatal('Variable: {0} appears twice in sequence', v)
+                break
+            else:
+                inc_set.add(v)
+        return seq_as_list
+
     def typecheck_constraint(self, obj):
         if not isinstance(obj, AbstractConstraint):
             self.fatal("Expecting constraint, got: {0!s} with type: {1!s}", obj, type(obj))
@@ -152,12 +181,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         elif math.isnan(arg):
             self.fatal("{0}NaN value detected", caller_string)
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
         if is_string(arg):
             if not accept_empty and 0 == len(arg):
                 self.fatal("A nonempty string is not allowed here")
-        elif arg is None and not accept_none:
-            self.fatal("expecting string, got: None")
+        elif not (arg is None and accept_none):
+            self.fatal("{0}Expecting string, got: {1!r}", header, arg)
 
     def typecheck_priority(self, prio):
         if not isinstance(prio, Priority):
@@ -212,6 +241,20 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             return -infinity
 
     @staticmethod
+    def static_validate_num(e, checked_num=False, infinity=1e+20):
+        if not checked_num and not is_number(e):
+            docplex_fatal("Not a number: {}".format(e))
+        elif -infinity <= e <= infinity:
+            return e
+        elif e >= infinity:
+            return infinity
+        else:
+            return -infinity
+
+    def get_number_validation_fn(self):
+        return self.static_validate_num
+
+    @staticmethod
     def _is_operand(arg, accept_numbers=True):
         return isinstance(arg, (Expr, Var)) or (accept_numbers and is_number(arg))
 
@@ -237,6 +280,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Objects do not belong to model {0}. obj1={1!s}, obj2={2!s}"
                        .format(self, mobj1, mobj2))
 
+    def check_ordered_sequence(self, arg, header):
+        # in some cases, we need an ordered sequence, if not the code won't crash
+        # but may do unexpected things
+        if not is_ordered_sequence(arg) and not is_iterator(arg):
+            self.fatal("{0}, got: {1!s}", header, type(arg).__name__)
+
 
 class NumericTypeChecker(StandardTypeChecker):
     def __init__(self, logger):
@@ -259,6 +308,28 @@ class NumericTypeChecker(StandardTypeChecker):
         else:
             return -infinity
 
+    @staticmethod
+    def static_validate_num(e, checked_num=False, infinity=1e+20, context_msg=None):
+        if not checked_num and not is_number(e):
+            docplex_fatal("Not a number: {}".format(e))
+        elif math.isnan(e):
+            msg = "NaN value found in expression"
+            if context_msg is not None:
+                try:
+                    msg = "{0}: {1}".format(context_msg(), msg)
+                except TypeError:
+                    msg = "{0}: {1}".format(context_msg, msg)
+            docplex_fatal(msg)
+        elif -infinity <= e <= infinity:
+            return e
+        elif e >= infinity:
+            return infinity
+        else:
+            return -infinity
+
+    def get_number_validation_fn(self):
+        return self.static_validate_num
+
 
 class DummyTypeChecker(IDocplexTypeChecker):
     # noinspection PyUnusedLocal
@@ -278,7 +349,10 @@ class DummyTypeChecker(IDocplexTypeChecker):
         pass  # pragma: no cover
 
     def typecheck_var_seq(self, seq):
-        pass  # pragma: no cover
+        return seq  # pragma: no cover
+
+    def typecheck_var_seq_all_different(self, seq):
+        return seq
 
     def typecheck_operand(self, obj, accept_numbers=True, caller=None):
         pass  # pragma: no cover
@@ -329,13 +403,21 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_two_in_model(self, model, obj1, obj2, ctx_msg):
         pass  # pragma: no cover
 
+    def check_ordered_sequence(self, arg, header):
+        pass  # pragma: no cover
+
+    def get_number_validation_fn(self):
+        return None
+
+
 
 _tck_map = {'default': StandardTypeChecker,
             'standard': StandardTypeChecker,
+            'on': StandardTypeChecker,
             'numeric': NumericTypeChecker,
-            'none': DummyTypeChecker,
-            None: DummyTypeChecker}
-
+            'off': DummyTypeChecker,
+            'deploy': DummyTypeChecker,
+            'no_checks': DummyTypeChecker}
 
 def get_typechecker(arg, logger):
     key = arg.lower() if arg else 'default'

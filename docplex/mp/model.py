@@ -15,13 +15,11 @@ import os
 
 import six
 
-from docloud.status import JobSolveStatus
-
 from docplex.mp.context import Context, is_key_ignored, is_url_ignored, is_auto_publishing_solve_details, \
     is_auto_publishing_json_solution
 from docplex.mp.environment import Environment
 from docplex.mp.error_handler import DefaultErrorHandler
-from docplex.mp.constants import ComparisonType
+from docplex.mp.constants import ComparisonType, SolveAttribute
 
 from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType, SemiContinuousVarType
@@ -97,27 +95,6 @@ class _ToleranceScheme(object):
 
     def __str__(self):
         return self.to_string()  # pragma: no cover
-
-
-class _SolveAttribute(object):
-    # A generic descriptor class for engine solve attributes (e.g. dual values, reduced costs).
-
-    def __init__(self, name, is_for_vars, requires_solve=True):
-        self._name = name
-        self._is_for_vars = is_for_vars
-        self._requires_solved = requires_solve
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def is_for_vars(self):
-        return self._is_for_vars
-
-    @property
-    def requires_solved(self):
-        return self._requires_solved
 
 
 class _VariableContainer(object):
@@ -451,7 +428,7 @@ class Model(object):
          # start modeling...
 
     When the `with` block is finished, the :func:`end` method is called automatically, and all resources
-    allocated by the model are reclaimed.
+    allocated by the model are destroyed.
 
     When a model is created without a specified ``context``, a default
     ``Context`` is created and initialized as described in :func:`docplex.mp.context.Context.read_settings`.
@@ -485,9 +462,11 @@ class Model(object):
             passed, a default context is created.
         agent (optional): The ``context.solver.agent`` is initialized with
             this string.
-        log_output (optional): if ``True``, solver logs are output to
+        log_output (optional): If ``True``, solver logs are output to
             stdout. If this is a stream, solver logs are output to that
             stream object.
+        checker (optional): If ``None``, then checking is disabled everywhere. Turning off checking
+            may improve performance but should be done only with extreme caution.
     """
 
     _name_generator = _SymbolGenerator(pattern="docplex_model", offset=1)
@@ -536,6 +515,8 @@ class Model(object):
         return self._environment
 
     _saved_numpy_options = None
+
+    _unknown_status = None
 
     @staticmethod
     def init_numpy():
@@ -591,35 +572,6 @@ class Model(object):
         # from docplex.environment import ClosedEnvironment
         # return ClosedEnvironment
         return self._lazy_get_environment()
-
-    def _make_key_seq(self, keys, name):
-        # INTERNAL Takes as input a candidate keys input and returns a valid key sequence
-        if is_iterable(keys):
-            if has_len(keys):
-                return name, keys
-            elif is_iterator(keys):
-                return name, list(keys)
-            else:
-                # TODO: make a test for this case.
-                self.fatal("Cannot handle iterable var keys: {0!s} : no len() and not an iterator",
-                           keys)  # pragma: no cover
-
-        elif is_int(keys) and keys >= 0:
-            # if name is str and we have a size, trigger automatic names
-            used_name = None if name is str else name
-            return used_name, range(0, keys)
-        else:
-            self.fatal("Unexpected var keys: {0!s}, expecting iterable or integer", keys)  # pragma: no cover
-
-    # ---- semantic checking
-
-    def _check_ordered(self, arg, header):
-        # INTERNAL
-        # in some cases, we need an ordered sequence, if not the code won't crash
-        # but may do unexpected things
-        if not is_ordered_sequence(arg):
-            if not is_iterator(arg):
-                self.fatal("{0}, got: {1!s}", header, type(arg))
 
     # ---- type checking
 
@@ -700,7 +652,7 @@ class Model(object):
             elif arg_name == 'name_all_cts':
                 self._name_all_cts = arg_val
             else:
-                self.warning("argument: {0:s}:{1!s} - is not recognized (ignored)", arg_name, arg_val)
+                self.info("argument: {0:s}:{1!s} - is not recognized (ignored)", arg_name, arg_val)
 
     def _get_kwargs(self):
         kwargs_map = {'float_precision': self.float_precision,
@@ -754,7 +706,7 @@ class Model(object):
         self.__allvars = []
         self.__vars_by_name = {}
         self.__allcts = []
-        self.__cts_by_name = {}
+        self.__cts_by_name = None
 
         self._allsos = []
 
@@ -765,8 +717,9 @@ class Model(object):
         self._solve_hooks = []  # debugSolveHook()
         self._mipstarts = []
 
-        # -- float formats
+
         self._keep_ordering = False
+        # -- float formats
         self._float_precision = 3
         self._continuous_var_format = "%.3f"
 
@@ -1129,11 +1082,11 @@ class Model(object):
         self.__allvarctns = []
         self.__vars_by_name = {}
         self.__allcts = []
-        self.__cts_by_name = {}
+        self.__cts_by_name = None
         self._allkpis = []
         self.clear_kpis()
         self._solve_count = 0
-        self._last_solve_status = JobSolveStatus.UNKNOWN  # initial status
+        self._last_solve_status = self._unknown_status
         self.__solution = None
         self._mipstarts = []
         self._clear_scopes()
@@ -1180,16 +1133,15 @@ class Model(object):
         Prints the number of constraints and their breakdown by type.
 
         """
-        if self.error_handler.prints_info():
-            print("Model: %s" % self.name)
-            self.get_statistics().print_information()
+        print("Model: %s" % self.name)
+        self.get_statistics().print_information()
 
-            self_params = self.parameters
-            if self_params.has_nondefaults():
-                print(" - parameters:")
-                self_params.print_information(indent_level=5)  # 3 for " - " + 2 = 5
-            else:
-                print(" - parameters: defaults")
+        self_params = self.parameters
+        if self_params.has_nondefaults():
+            print(" - parameters:")
+            self_params.print_information(indent_level=5)  # 3 for " - " + 2 = 5
+        else:
+            print(" - parameters: defaults")
 
     def _is_empty(self):
         # INTERNAL
@@ -1277,6 +1229,11 @@ class Model(object):
             is_name_safe=is_ctname_safe)
 
         self.__allcts.append(ct)
+
+    def _ensure_cts_by_name(self):
+        if self.__cts_by_name is None:
+            self.__cts_by_name = { ct.get_name() : ct for ct in self.iter_constraints() if ct.has_user_name()}
+        return self.__cts_by_name
 
     def _register_block_cts(self, cts, indices, safe_names=False):
         # INTERNAL: assert len(cts) == len(indices)
@@ -1560,7 +1517,7 @@ class Model(object):
         Returns:
             A constraint or None.
         """
-        return self.__cts_by_name.get(name)
+        return self._ensure_cts_by_name().get(name)
 
     def get_constraint_by_index(self, idx):
         # INTERNAL
@@ -1739,6 +1696,7 @@ class Model(object):
             name: An optional name for the variable.
 
         :returns: An instance of the :class:`docplex.mp.linear.Var` class with type `IntegerVarType`.
+        :rtype: :class:`docplex.mp.linear.Var`
         """
         return self._var(self.integer_vartype, lb, ub, name)
 
@@ -1769,7 +1727,7 @@ class Model(object):
 
     def var_list(self, keys, vartype, lb=None, ub=None, name=str, key_format=None):
         self._checker.typecheck_vartype(vartype)
-        actual_name, fixed_keys = self._make_key_seq(keys, name)
+        actual_name, fixed_keys = self._lfactory._make_key_seq(keys, name)
         ctn = _VariableContainer(vartype, [fixed_keys], lb, ub, name)
         self._add_var_container(ctn)
         return self._lfactory.new_var_list(ctn, fixed_keys, vartype, lb, ub, actual_name, 1, key_format)
@@ -1780,7 +1738,7 @@ class Model(object):
 
     def _var_dict(self, keys, vartype, lb=None, ub=None, name=str, key_format=None):
         # INTERNAL
-        actual_name, key_seq = self._make_key_seq(keys, name)
+        actual_name, key_seq = self._lfactory._make_key_seq(keys, name)
         ctn = _VariableContainer(vartype, [key_seq], lb, ub, name)
         self._add_var_container(ctn)
         var_list = self._lfactory.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
@@ -1854,18 +1812,17 @@ class Model(object):
                 it is interpreted as the number of variables to create.
 
             lb: Lower bounds of the variables. Accepts either a floating-point number,
-                a list of numbers, a function,  or None.
-                Use a number if all variables share the same lower bound,
-                else use either an explicit list of numbers
+                a list of numbers, a function, or None.
+                Use a number if all variables share the same lower bound.
+                Otherwise either use an explicit list of numbers
                 or use a function if lower bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means using the default lower bound (0) is used.
 
             ub: Upper bounds of the variables. Accepts either a floating-point number,
                 a list of numbers, a function, or None.
-                Use a number if all variables share the same upper bound,
-                Use a number if all variables share the same lower bound,
-                else use either an explicit list of numbers
+                Use a number if all variables share the same upper bound.
+                Otherwise either use an explicit list of numbers
                 or use a function if upper bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default upper bound (model infinity) is used.
@@ -1902,17 +1859,17 @@ class Model(object):
                 it is interpreted as the number of variables to create.
 
             lb: Lower bounds of the variables. Accepts either a floating-point number,
-                a list of numbers or a function.
-                Use a number if all variables share the same lower bound,
-                else either use an explicit list of numbers, or
+                a list of numbers, or a function.
+                Use a number if all variables share the same lower bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if lower bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
-                Note that the lower bound of a semi-continuous variable must be strictly positive
+                Note that the lower bound of a semi-continuous variable must be strictly positive.
 
             ub: Upper bounds of the variables. Accepts either a floating-point number,
                 a list of numbers, a function, or None.
-                Use a number if all variables share the same upper bound,
-                else use either an explicit list of numbers or,
+                Use a number if all variables share the same upper bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if upper bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default upper bound (model infinity) is used.
@@ -1956,17 +1913,17 @@ class Model(object):
                 it is interpreted as the number of variables to create.
 
             lb: Lower bounds of the variables. Accepts either a floating-point number,
-                a list of numbers or a function.
-                Use a number if all variables share the same lower bound,
-                else either use an explicit list of numbers, or
+                a list of numbers, or a function.
+                Use a number if all variables share the same lower bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if lower bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default lower bound (0) is used.
 
             ub: Upper bounds of the variables. Accepts either a floating-point number,
                 a list of numbers, a function, or None.
-                Use a number if all variables share the same upper bound,
-                else use either an explicit list of numbers or,
+                Use a number if all variables share the same upper bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if upper bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default upper bound (model infinity) is used.
@@ -2008,17 +1965,17 @@ class Model(object):
                 it is interpreted as the number of variables to create.
 
             lb: Lower bounds of the variables. Accepts either a floating-point number,
-                a list of numbers or a function.
-                Use a number if all variables share the same lower bound,
-                else either use an explicit list of numbers, or
+                a list of numbers, or a function.
+                Use a number if all variables share the same lower bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if lower bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default lower bound (0) is used.
 
             ub: Upper bounds of the variables. Accepts either a floating-point number,
                 a list of numbers, a function, or None.
-                Use a number if all variables share the same upper bound,
-                else use either an explicit list of numbers or,
+                Use a number if all variables share the same upper bound.
+                Otherwise either use an explicit list of numbers or
                 use a function if upper bounds vary depending on the key, in which case,
                 the function will be called on each `key` in `keys`.
                 None means the default upper bound (model infinity) is used.
@@ -2043,7 +2000,7 @@ class Model(object):
         """
         return self._var_dict(keys, self.integer_vartype, lb=lb, ub=ub, name=name, key_format=key_format)
 
-    def binary_var_dict(self, keys, name=str, key_format=None):
+    def binary_var_dict(self, keys, lb=None, ub=None, name=str, key_format=None):
         """ Creates a dictionary of binary decision variables, indexed by key objects.
 
         Creates a dictionary that allows retrieval of variables from business
@@ -2071,13 +2028,13 @@ class Model(object):
         :returns: A dictionary of :class:`docplex.mp.linear.Var` objects with type
                   :class:`docplex.mp.vartype.BinaryVarType` indexed by the objects in `keys`.
         """
-        return self._var_dict(keys, self.binary_vartype, name=name, key_format=key_format)
+        return self._var_dict(keys, self.binary_vartype, lb=lb, ub=ub, name=name, key_format=key_format)
 
     def var_multidict(self, vartype, seq_of_key_seqs, lb=None, ub=None, name=stringify_tuple, key_format=None):
         # INTERNAL
         self._checker.typecheck_vartype(vartype)
         self._checker.typecheck_iterable(seq_of_key_seqs)
-        fixed_keys = [self._make_key_seq(ks, name)[1] for ks in seq_of_key_seqs]
+        fixed_keys = [self._lfactory._make_key_seq(ks, name)[1] for ks in seq_of_key_seqs]
 
         ctn = _VariableContainer(vartype, fixed_keys, lb, ub, name)
         self._add_var_container(ctn)
@@ -2088,8 +2045,10 @@ class Model(object):
 
         # create cartesian product of keys...
         all_key_tuples = list(product(*fixed_keys))
-        cube_vars = self._lfactory.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format,
-                                                False)
+        # check empty list
+        if not all_key_tuples:
+            self.fatal('multidict has no keys to index the variables')
+        cube_vars = self._lfactory.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
 
         var_dict = dict(zip(all_key_tuples, cube_vars))
         return var_dict
@@ -2377,7 +2336,7 @@ class Model(object):
 
         :return: A linear expression or 0.
         """
-        self._check_ordered(arg=terms, header='Model.scal_prod() requires a list of expressions/variables')
+        self._checker.check_ordered_sequence(arg=terms, header='Model.scal_prod() requires a list of expressions/variables')
         return self._aggregator.scal_prod(terms, coefs)
 
     def dot(self, terms, coefs):
@@ -2560,20 +2519,22 @@ class Model(object):
                     self._notify_trivial_constraint(ct, ctname, is_feasible=False)
 
         # --- name management ---
-        if not ctname:
+        if ctname:
+            ct_name_map = self.__cts_by_name
+            if ct_name_map:
+                if ctname in ct_name_map:
+                    self.warning("Duplicate constraint name: {0!s}, used for: {1}", ctname, ct_name_map[ctname])
+                ct_name_map[ctname] = ct
+            ct.name = ctname
+        else:
             if self._name_all_cts and not ct.has_name():
                 ct_auto_name = self._create_automatic_ctname(ct)
                 ct._set_automatic_name(ct_auto_name)
-        elif ctname in self.__cts_by_name:
-            self.fatal("Duplicate constraint name: {0!s}, used for: {1}", ctname,
-                       self.get_constraint_by_name(ctname).to_string())
-        else:
-            # might be an issue if both ctname and ct.name exist
-            ct.name = ctname
+
         # ---
 
         # check for already posted cts.
-        if do_check and ct.has_valid_index():
+        if do_check and ct._index >= 0:
             self.warning("constraint has already been posted: {0!s}, index is: {1}", ct, ct.index)  # pragma: no cover
             return False, ct  # pragma: no cover
         return True, ct
@@ -2594,7 +2555,7 @@ class Model(object):
         :return:
         """
         ct_name = ct.name
-        if ct_name:
+        if ct_name and self.__cts_by_name:
             try:
                 del self.__cts_by_name[ct_name]
             except KeyError:
@@ -2665,7 +2626,7 @@ class Model(object):
         self.__engine.remove_constraints(cts=None)  # special case to denote all
         # clear containers
         self.__allcts = []
-        self.__cts_by_name = {}
+        self.__cts_by_name = None
         # clear constraint index scopes.
         for ctscope in self._ctscopes:
             ctscope.reset()
@@ -3185,6 +3146,7 @@ class Model(object):
                 stdout. If this is a stream, solver logs are output to that
                 stream object. Overwrites the ``context.solver.log_output``
                 parameter.
+            proxies (optional): a dict with the proxies mapping.
         Returns:
             A :class:`docplex.mp.solution.SolveSolution` object if the solve operation succeeded.
             None if the solve operation failed.
@@ -3309,7 +3271,7 @@ class Model(object):
         # --- solve is protected in try/except block
         has_solution = False
         reported_obj = 0
-        engine_status = JobSolveStatus.UNKNOWN
+        engine_status = self._unknown_status
         self_engine = self.__engine
 
         if parameters is not self.parameters:
@@ -3370,9 +3332,9 @@ class Model(object):
         """ Returns the solve status of the last successful solve.
 
         If the model has been solved successfully, returns the status stored in the
-        model solution. Otherwise returns `JobSolveStatus.UNKNOWN`.
+        model solution. Otherwise returns None`.
 
-        :returns: The solve status of the last successful solve, an instance of :class:`docloud.status.JobSolveStatus`, or None.
+        :returns: The solve status of the last successful solve, a string, or None.
         """
         return self._last_solve_status
 
@@ -3907,12 +3869,6 @@ class Model(object):
         self.parameters.export_prm_to_path(path=prm_path)
         return prm_path
 
-
-    # -- supported attributes
-    _supported_attributes = {"duals": _SolveAttribute("duals", False),
-                             "slacks": _SolveAttribute("slacks", False),
-                             "reduced_costs": _SolveAttribute("reduced_costs", True)}
-
     # advanced values
     def _get_engine_attribute(self, arg, attr_name):
         """
@@ -3921,35 +3877,29 @@ class Model(object):
         :param attr_name: The name of the attribute.
         :return:
         """
-        attr_data = self._supported_attributes.get(attr_name)
-        if not attr_data:
-            self.fatal("Unsupported solve attribute: {0:s}", attr_name)
-
-        # if attr_data.requires_solved and not self._can_solve():
-        #     self.fatal('Cannot query attribute {0}, engine has no solve capability', attr_name, self.__engine.name())
-
+        attribute = SolveAttribute.parse(attr_name, do_raise=True)
         if is_iterable(arg):
             if not arg:
                 return []
             else:
-                return self._get_engine_attributes_internal(arg, attr_data)
+                return self._get_engine_attributes_internal(arg, attribute)
         else:
             # defer checking to the checker
-            if attr_name in ('reduced_costs',):
+            if attribute.requires_vars:
                 self._checker.typecheck_var(arg)
             else:
                 self._checker.typecheck_constraint(arg)
-            attrs = self._get_engine_attributes_internal([arg], attr_data)
+            attrs = self._get_engine_attributes_internal([arg], attribute)
             return attrs[0]
 
-    def _get_engine_attributes_internal(self, mobjs, attr_data):
-        attr_name = attr_data.name
-        is_for_vars = attr_data.is_for_vars
+    def _get_engine_attributes_internal(self, mobjs, attribute):
+        attr_name = attribute.name
+        is_for_vars = attribute.requires_vars
         if is_for_vars:
             indices = [v.index for v in self.iter_variables()]
         else:
             indices = [ct.index for ct in self.iter_constraints()]
-        if not self.solution.is_attributes_fetched(attr_data.name):
+        if not self.solution.is_attributes_fetched(attribute.name):
             # get index to value from engine
             attr_idx_map = self.__engine.get_solve_attribute(attr_name, indices)
             self.solution._store_attribute_result(attr_name, attr_idx_map, is_for_vars)
@@ -4138,8 +4088,9 @@ class Model(object):
 
         Example:
             `model.add_kpi(x+y+z, "Total Profit")` adds the expression `(x+y+z)` as a KPI with the name "Total Profit".
-            `model.add_kpi(x+y+z)` adds the expression `(x+y+z)` as a KPI with the name "x+y+z", assumng variables x,y,z have
-                        names 'x', 'y', 'z' (resp.)
+
+            `model.add_kpi(x+y+z)` adds the expression `(x+y+z)` as a KPI with
+            the name "x+y+z", assumng variables x,y,z have names 'x', 'y', 'z' (resp.)
 
         Returns:
             The newly added KPI instance.
@@ -4329,8 +4280,8 @@ class Model(object):
     def end(self):
         """ Terminates a model instance.
 
-        Reclaims all memory consumed by the model.
-        Reclaims memory allocated by CPLEX, if any.
+        Since this method destroys the objects associated with the model, you must not use the model
+        after you call this member function.
 
         """
         self.clear()
@@ -4517,7 +4468,7 @@ class Model(object):
         '''
         sos_type = SOSType.parse(sos_arg)
         msg = 'Model.add_%s() expects an ordered sequence (or iterator) of variables' % sos_type.lower()
-        self._check_ordered(arg=dvars, header=msg)
+        self._checker.check_ordered_sequence(arg=dvars, header=msg)
         var_list = _to_list(dvars)
         self._checker.typecheck_var_seq(var_list)
         if len(var_list) < sos_type.min_size():

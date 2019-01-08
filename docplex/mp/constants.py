@@ -62,22 +62,21 @@ class ComparisonType(Enum):
 class RelaxationMode(Enum):
     """ This enumerated type describes the different strategies for model relaxation: MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad.
 
-    Relaxation algorithms work in two phases: in the first phase, they attempt to find a
-    feasible solution while making minimal changes to the model (according to a metric). In a second phase, they
+    Relaxation algorithms work in two phases: In the first phase, they attempt to find a
+    feasible solution while making minimal changes to the model (according to a metric). In the second phase, they
     attempt to find an optimal solution while keeping the relaxation at the minimal value found in phase 1.
 
     Values of this type define two aspects of the algorithm:
-     - whether or not they should continue to a second phase: all OptXxx values continue to a second phase, and
-       MinXxx values stop at phase 1.
-    - which metric to use for evaluating the relaxation in the first phase. There are three metrics:
-        - the sum of relaxations for OptSum, MinSum, or
-        - the total number of constraints being relaxed for OptInf, MinInf, or
-        - the sum of squares of relaxations for OptQuad, MinQuad.
+        - whether or not they should continue to a second phase: all OptXxx values continue to a
+          second phase, and MinXxx values stop at phase 1.
+        - which metric to use for evaluating the relaxation in the first phase. There are three metrics:
+              - the sum of relaxations for OptSum, MinSum, or
+              - the total number of constraints being relaxed for OptInf, MinInf, or
+              - the sum of squares of relaxations for OptQuad, MinQuad.
 
     """
 
     MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad = range(6)
-
 
     @staticmethod
     def parse(arg):
@@ -91,7 +90,6 @@ class RelaxationMode(Enum):
                     return m
         else:
             docplex_fatal('cannot parse this as a relaxation mode: {0!r}'.format(arg))
-
 
     @staticmethod
     def get_no_optimization_mode(mode):
@@ -108,17 +106,9 @@ class RelaxationMode(Enum):
         return 'docplex.mp.RelaxationMode.{0}'.format(self.name)
 
 
-
-
-
-# class ConstraintType(Enum):
-#     Variable_lower_bound, Variable_upper_bound, Linear_constraint, Quadratic_constraint, \
-#         Special_ordered_set_constraint, Indicator_constraint = 1, 2, 3, 4, 5, 6
-
-
 class ConflictStatus(Enum):
     """
-    This enumerated class defines the conflict status types
+    This enumerated class defines the conflict status types.
     """
     Excluded, Possible_member, Possible_member_lower_bound, Possible_member_upper_bound, \
         Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
@@ -174,3 +164,33 @@ class SOSType(Enum):
 
     def __repr__(self):
         return 'docplex.mp.SOSType.{0}'.format(self.name)
+
+
+class SolveAttribute(Enum):
+    duals = 1, False, True
+    slacks = 2, False, True
+    reduced_costs = 3, True, True
+
+    def __new__(cls, code, is_for_vars, requires_solve):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj.requires_vars = is_for_vars
+        obj.requires_solve = requires_solve
+        return obj
+
+    @classmethod
+    def parse(cls, arg, do_raise=True):
+        # INTERNAL
+        # noinspection PyTypeChecker
+        for m in cls:
+            if arg == m or arg == m.value:
+                return m
+            elif is_string(arg):
+                if arg == str(m.value) or arg.lower() == m.name.lower():
+                    return m
+        else:
+            if do_raise:
+                docplex_fatal('cannot convert this to a solve attribute: {0!r}'.format(arg))
+            else:
+                return None

@@ -234,29 +234,30 @@ class Context(BaseContext):
         cplex_parameters: A
            :class:`docplex.mp.params.parameters.RootParameterGroup` to store
            CPLEX parameters.
-        solver.auto_publish: If ``True``, :meth:`docplex.mp.model.Model.solve` will do as if every
-            automatically publishable item (``solve_details``, ``json_solution``) must be published
-            when the code is run on the DOcplexcloud Python worker.
-        solver.auto_publish.solve_details: If ``True``, automatically publish solve details
-            when :meth:`docplex.mp.model.Model.solve` is called and code is run on the DOcplexcloud
-            Python worker. The default value is ``True``.
-        solver.auto_publish.json_solution: If ``True``, automatically publish the solution
-            when :meth:`docplex.mp.model.Model.solve` is called and code is run on hte DOcplexcloud
-            Python worker. The solution is saved as an output attachment which name is ``solution.json``.
+        solver.auto_publish: If ``True``, a model being solved will automatically
+            publish all publishable items (``solve_details``,
+            ``json_solution``).
+        solver.auto_publish.solve_details: If ``True``, solve details are
+            automatically published when :meth:`docplex.mp.model.Model.solve` is called.
             The default value is ``True``.
+        solver.auto_publish.json_solution: If ``True``, the solution is automatically
+            published when :meth:`docplex.mp.model.Model.solve` is called.
+            The solution is saved as an output attachment whose name is
+            ``solution.json``. The default value is ``False``, unless the Python script is run on the
+            DOcplexcloud service.
         solver.log_output: This attribute can have the following values:
 
             * True: When True, logs are printed to sys.out.
             * False: When False, logs are not printed.
             * A file-type object: Logs are printed to that file-type object.
 
-        solver.docloud: The parent node for attributes controlling solve on Decision Optimization on Cloud.
+        solver.docloud: The parent node for attributes controlling the solve on Decision Optimization on Cloud.
         solver.docloud.url: The DOcplexcloud service URL.
         solver.docloud.key: The DOcplexcloud service API key.
-        solver.docloud.ignored_keys: A collection or a string that is comma separated list of
+        solver.docloud.ignored_keys: A collection or a string that is a comma-separated list of
             values to ignore. If any ``key`` passed has a value in this list,
             the key is ignored.
-        solver.docloud.ignored_urls: A collection or a string that is comma separated list of
+        solver.docloud.ignored_urls: A collection or a string that is a comma-separated list of
             values to ignore. If any ``url`` passed has a value in this list,
             the url is ignored.
         solver.docloud.run_deterministic: Specific engine parameters are uploaded to keep the
@@ -427,6 +428,8 @@ class Context(BaseContext):
             self.solver.log_output = value
         elif k is 'override':
             self.update_from_list(iteritems(value))
+        elif k is 'proxies':
+            self.solver.docloud.proxies = value
         elif k is '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
@@ -615,6 +618,8 @@ class DOcloudContext(object):
         # - client: the docloud client used to connect to docloud
         # - connector: the DOcloudConnector
         self.on_solve_finished_cb = None
+        # The proxies
+        self.proxies = None
 
 
     # This maps "old property names" to the corresponding new qualified name.

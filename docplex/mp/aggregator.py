@@ -6,8 +6,6 @@
 
 # gendoc: ignore
 
-import sys
-
 from docplex.mp.compat23 import izip
 
 from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_series, \
@@ -15,14 +13,19 @@ from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_seri
 from docplex.mp.linear import Var, MonomialExpr, AbstractLinearExpr, LinearExpr, ZeroExpr
 from docplex.mp.functional import _IAdvancedExpr
 from docplex.mp.quad import QuadExpr
+from docplex.mp.xcounter import ExprCounter
 
 
 class ModelAggregator(object):
+
+    counter_type = ExprCounter
+
     def __init__(self, linear_factory, quad_factory):
         self._linear_factory = linear_factory
         self._checker = linear_factory._checker
         self._quad_factory = quad_factory
         self._model = linear_factory._model
+        self._ordered = linear_factory._model.keep_ordering
         self.zero_expr = linear_factory.zero_expr
 
     def scal_prod(self, terms, coefs=1.0):
@@ -44,7 +47,7 @@ class ModelAggregator(object):
         # model has checked terms is an ordered sequence
         return self._scal_prod(terms, coefs)
 
-    def _scal_prod(self, terms, coefs, cc_type=LinearExpr.counter_type):
+    def _scal_prod(self, terms, coefs, cc_type=counter_type):
         # INTERNAL
         checker = self._checker
         total_num = 0
@@ -79,12 +82,7 @@ class ModelAggregator(object):
             else:
                 self._model.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
 
-        sorted_terms = LinearExpr._sort_terms_if_needed(self._model, counter=lcc)
-        linear_expr = LinearExpr(self._model, e=sorted_terms, constant=total_num, safe=True)
-        if qcc:
-            return self._quad_factory.new_quad(quad_args=qcc, linexpr=linear_expr, safe=True)
-        else:
-            return linear_expr
+        return self._to_expr(qcc=qcc, lcc=lcc, constant=total_num)
 
     def sum(self, sum_args):
         if is_iterable(sum_args):
@@ -112,7 +110,7 @@ class ModelAggregator(object):
         else:
             return self._linear_factory._to_linear_expr(sum_args)
 
-    def _sum_with_iter(self, args, cctype=LinearExpr.counter_type):
+    def _sum_with_iter(self, args, cctype=counter_type):
         accumulated_ct = 0
         lcc = cctype()
         checker = self._checker
@@ -148,19 +146,14 @@ class ModelAggregator(object):
                 except AttributeError:
                     self._model.fatal("Model.sum() expects numbers/variables/expressions, got: {0!s}", item)
 
-        sorted_terms = LinearExpr._sort_terms_if_needed(self._model, lcc)
-        linear_sum = LinearExpr(self._model, e=sorted_terms, constant=accumulated_ct, safe=True)
-        if qcc:
-            return self._quad_factory.new_quad(quad_args=qcc, linexpr=linear_sum, safe=True)
-        else:
-            return linear_sum
+        return self._to_expr(qcc=qcc, lcc=lcc, constant=accumulated_ct)
 
     def _sum_vars(self, dvars):
         sumvars_terms = self._varlist_to_terms(dvars)
         return LinearExpr(self._model, e=sumvars_terms, safe=True)
 
     def _varlist_to_terms(self, var_list,
-                          cc_type=LinearExpr.counter_type,
+                          cc_type=counter_type,
                           term_dict_type=LinearExpr.term_dict_type):
         # INTERNAL: converts a sum of vars to a dict, sorting if needed.
         if self._model._keep_ordering:
@@ -238,24 +231,16 @@ class ModelAggregator(object):
         else:
             self._model.fatal("Model.sumsq() expects number/iterable/expression, got: {0!s}", sum_args)
 
-    def _scal_prodq2(self, coefs, terms):
-        # INTERNAL
-        accumulated_ct = 0
-        checker = self._checker
-        quad = self._quad_factory.new_quad(quad_args=None, linexpr=None, safe=True)
-        for coef, term in izip(coefs, terms):
-            if 0 == coef:
-                continue
-
-            safe_coef = checker.to_valid_number(coef, context_msg=lambda: "Model.scalprodq({0!s}..)".format(coef))
-            checker.typecheck_operand(term, accept_numbers=False)
-            cst = term.get_constant()
-            for k, v in term.iter_terms():
-                quad._add_one_quad_triplet(qv1=v, qv2=v, qk=safe_coef * (k ** 2))
-                quad._add_linear_term(v=v, k=2 * cst * k)
-
-            accumulated_ct += cst ** 2
-
-        quad += accumulated_ct
-        return quad
-
+    def _to_expr(self, qcc, lcc=None, constant=0):
+        if qcc:
+            qcc = QuadExpr._sort_qterms_if_needed(self._ordered, qcc)
+            linear_expr = LinearExpr(self._model, e=lcc, constant=constant, safe=True)
+            quad = self._quad_factory.new_quad(quad_args=qcc, linexpr=linear_expr, safe=True)
+            return quad
+        elif lcc or constant:
+            sorted_lcc = LinearExpr._sort_terms_if_needed(self._model, counter=lcc)
+            #sorted_lcc = lcc
+            linear_expr = LinearExpr(self._model, e=sorted_lcc, constant=constant, safe=True)
+            return linear_expr
+        else:
+            return self.zero_expr

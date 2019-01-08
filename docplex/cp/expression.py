@@ -518,6 +518,7 @@ class CpoFunctionCall(CpoExpr):
 class CpoVariable(CpoExpr):
     """ This class is an abstract class extended by all expression nodes that represent a CPO variable.
     """
+    __slots__ = ()
 
     # Expression name generator
     __name_generator__ = _VARIABLE_ID_ALLOCATOR
@@ -533,7 +534,6 @@ class CpoVariable(CpoExpr):
         if name is None:
             name = self._generate_name()
         super(CpoVariable, self).__init__(type, name)
-        self.alias = None
 
     def is_variable(self):
         """ Checks if this expression is a variable.

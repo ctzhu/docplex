@@ -687,7 +687,7 @@ class CpoCompiler(object):
             be the root expression.
         """
         # Expand expressions
-        exprset = self.exprset   # Set of named expressions already compiled
+        exprset = self.exprset  # Set of named expressions already compiled
         estack = [expr]
         enx = 0
         while enx < len(estack):
@@ -696,9 +696,8 @@ class CpoCompiler(object):
                     estack.append(e)
             enx += 1
 
-        # Scan list reversly
-        exprset = self.exprset   # Set of named expressions already compiled
-        subexpr = []             # Result list of expressions
+        # Scan list reversely
+        subexpr = []  # Result list of expressions
         while estack:
             e = estack.pop()
             eid = id(e)

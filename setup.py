@@ -1,7 +1,7 @@
 from distutils.core import setup
 required=[ 'requests',
            'six',
-           'docloud>=1.0.132']
+           'docloud>=1.0.202']
 import sys
 if ((sys.version_info[0]) < 3) or ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
     required.append('futures')
@@ -15,8 +15,17 @@ def read(*parts):
         with open(os.path.join(HERE, *parts)) as f:
             return f.read()
     except:
-        return "docplex"
-ss = str(read('README.rst'))
+        return None
+
+readme = read('README.rst')
+if readme is None:
+    readme = 'DOcplex 1.0'
+
+changelog = str(read('CHANGELOG.rst'))
+if changelog is None:
+    changelog = ''
+
+ss = str(readme) + str(changelog)
 
 setup(
     name = 'docplex',
@@ -28,7 +37,7 @@ setup(
                 'docplex.mp.params',
                 'docplex.mp.worker',
                 'docplex.util'],
-    version = '1.0.607',  # replaced at build time
+    version = '1.0.630',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

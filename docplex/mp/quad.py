@@ -5,8 +5,8 @@
 # --------------------------------------------------------------------------
 from six import iteritems
 
-from docplex.mp.compat23 import unitext, izip
-from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr, LinearExpr
+from docplex.mp.compat23 import unitext
+from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
 from docplex.mp.utils import *
 
 from docplex.mp.xcounter import FastOrderedDict
@@ -25,13 +25,15 @@ class VarPair(object):
         if v2 is None:
             self.first = v1
             self.second = v1
-        elif _compare_vars(v1, v2) <= 0:
-            self.first = v1
-            self.second = v2
+            self._cached_hash = hash(v1)
         else:
-            self.first = v2
-            self.second = v1
-        self._cached_hash = self._hash_pair()
+            if _compare_vars(v1, v2) <= 0:
+                self.first = v1
+                self.second = v2
+            else:
+                self.first = v2
+                self.second = v1
+            self._cached_hash = self._hash_pair()
 
     def is_square(self):
         return self.first is self.second
@@ -42,17 +44,15 @@ class VarPair(object):
         return isinstance(other, VarPair) and (self.first is other.first) and (self.second is other.second)
 
     def _hash_pair(self):
-        if self.is_square():
-            return hash(self.first)
-        else:
-            f = hash(self.first)
-            s = hash(self.second)
-            # cantor encoding. must cast to int() for py3
-            self_hash = int(((f + s) * (s + f + 1) / 2) + s)
-            if self_hash == -1:
-                # value -1 is reserved for errors
-                self_hash = -2
-            return self_hash
+        # INTERNAL
+        f = hash(self.first)
+        s = hash(self.second)
+        # cantor encoding. must cast to int() for py3
+        self_hash = int(((f + s) * (s + f + 1) / 2) + s)
+        if self_hash == -1:
+            # value -1 is reserved for errors
+            self_hash = -2
+        return self_hash
 
     def __hash__(self):
         return self._cached_hash
@@ -71,6 +71,10 @@ class VarPair(object):
         else:
             raise StopIteration
 
+    def index_tuple(self):
+        # INTERNAL
+        return (self.first.get_index(), self.second.get_index())
+
 
 class QuadExpr(Expr):
     """QuadExpr()
@@ -80,10 +84,10 @@ class QuadExpr(Expr):
     either by using operators or by using :func:`docplex.mp.model.Model.quad_expr`.
 
     """
-    _qterms_dict_type = FastOrderedDict
+    term_dict_type = FastOrderedDict
 
     def copy(self, target_model, var_mapping):
-        copied_quads = self._qterms_dict_type()
+        copied_quads = self.term_dict_type()
         for qv1, qv2, qk in self.iter_quad_triplets():
             new_v1 = var_mapping[qv1]
             new_v2 = var_mapping[qv2]
@@ -120,7 +124,7 @@ class QuadExpr(Expr):
 
     __slots__ = ('_quadterms', '_linexpr')
 
-    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False, _qterm_type=_qterms_dict_type):
+    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False, _qterm_type=term_dict_type):
         Expr.__init__(self, model, name)
         model._quadexpr_instance_counter += 1
         if quads is None:
@@ -255,7 +259,7 @@ class QuadExpr(Expr):
             return True
 
 
-    def compute_separable_convexity(self):
+    def compute_separable_convexity(self, sense=1):
         # INTERNAL
         # returns 1 if separable, convex
         # returns -1 if separable non convex
@@ -265,7 +269,7 @@ class QuadExpr(Expr):
         for qv, qk in self.iter_quads():
             if not qv.is_square():
                 return 0, None  # non separable: fast exit
-            elif qk < 0:
+            elif qk * sense < 0:
                 if justifier is None:
                     justifier = (qk, qv[0])  # separable, non convex, kept
         else:
@@ -512,11 +516,15 @@ class QuadExpr(Expr):
         return self.quotient(e)
 
     def __idiv__(self, other):
-        self._divide(other, check=True)
+        self.divide(other, check=True)
         return self
 
     def __truediv__(self, e):
         return self.quotient(e)  # pragma: no cover
+
+    def __itruediv__(self, other):
+        # this is for Python 3.z
+        return self.divide(other)  # pragma: no cover
 
     def __neg__(self):
         cloned = self.clone()
@@ -556,6 +564,11 @@ class QuadExpr(Expr):
         self._linexpr.negate()
         return self
 
+    def _multiply_error(self, f1, f2):
+        self.fatal(
+            "Cannot multiply {0!s} by {1!s}, exponent would be greater than 2. A variable's exponent can be at most 2",
+            f1, f2)
+
     def multiply(self, other):
         if is_number(other):
             self._scale(other)
@@ -568,25 +581,43 @@ class QuadExpr(Expr):
             else:
                 self._assign_scaled(other, this_constant)
 
-        elif self.is_quad_expr():
-            self.fatal(
-                "Cannot multiply {0!s} by {1!s}, exponent would be greater than 2. A variable's exponent can be at most 2",
-                self, other)
+        elif self.has_quadratic_term():
+            self._multiply_error(self, other)
+
         else:
-            self._linexpr.multiply(other)
+            # self is actually a linear expression
+            if other.is_quad_expr():
+                if other.has_quadratic_term():
+                    self._multiply_error(self, other)
+                else:
+                    return self.multiply(other._linexpr)
+            else:
+                other_linexpr = other.to_linear_expr()
+                self_linexpr = self._linexpr
+                for v1, k1 in self_linexpr.iter_terms():
+                    for v2, k2 in other_linexpr.iter_terms():
+                        self._add_one_quad_triplet(v1, v2, k1*k2)
+                other_cst = other.get_constant()
+                self_cst = self_linexpr.get_constant()
+                if other_cst:
+                    self_linexpr._scale(other_cst)
+                if self_cst:
+                    for ov, ok in other.iter_terms():
+                        self_linexpr._add_term(ov, ok * self_cst)
         return self
 
     def quotient(self, e):
         self.model.typecheck_as_denominator(e, self)
         cloned = self.clone()
-        cloned._divide(e, check=False)
+        cloned.divide(e, check=False)
         return cloned
 
-    def _divide(self, other, check=True):
+    def divide(self, other, check=True):
         if check:
             self.model.typecheck_as_denominator(other, self)  # only a nonzero number is allowed...
         inverse = 1.0 / other
         self._scale(inverse)
+        return self
 
     def _scale(self, factor):
         # INTERNAL: scales a quad expr from a numeric constant.
@@ -652,7 +683,7 @@ class QuadExpr(Expr):
 
 
     def clear(self):
-        self._quadterms = self._qterms_dict_type()  # clear quads
+        self._quadterms = self.term_dict_type()  # clear quads
         self._linexpr = self.zero_expr()
 
     # quad-specific
@@ -673,8 +704,7 @@ class QuadExpr(Expr):
 
     def to_linear_expr(self):
         if self.has_quadratic_term():
-            raise DOCPlexQuadraticArithException(
-                "quadratic expression [{0!s}] cannot be converted to a linear expression", self)
+            self.fatal("Quadratic expression [{0!s}] cannot be converted to a linear expression", self)
         else:
             return self._linexpr.clone()
 
@@ -694,3 +724,14 @@ class QuadExpr(Expr):
 
     def __ge__(self, other):
         return self._model._qfactory.new_ge_constraint(self, other)
+
+
+    @staticmethod
+    def _sort_qterms_if_needed(ordered, counter, term_dict_type=term_dict_type):
+        # INTERNAL
+        if not ordered:
+            return counter
+        else:
+            # normalize by sorting variables by increasing indices
+            sorted_items = sorted(counter.items(), key=lambda vpk: vpk[0].index_tuple())
+            return term_dict_type(sorted_items)

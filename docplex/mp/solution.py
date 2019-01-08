@@ -15,6 +15,7 @@ from six import iteritems, iterkeys
 from docloud.status import JobSolveStatus
 
 from docplex.mp.compat23 import StringIO
+from docplex.mp.constants import SolveAttribute
 from docplex.mp.utils import is_iterable, is_number, is_string, str_holo
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
@@ -54,10 +55,7 @@ class SolveSolution(object):
 
     # a symbolic value for no objective ?
     NO_OBJECTIVE_VALUE = -1e+75
-    # attribute keys
-    SLACK_KEY = 'slacks'
-    DUAL_KEY = 'duals'
-    REDCOST_KEY = 'reduced_costs'
+
     INFEAS_KEY = 'infeasibities'
 
     @staticmethod
@@ -151,7 +149,7 @@ class SolveSolution(object):
         '''
         Returns a string indicating how the solution was produced.
 
-        - If the solution was created by program, this field returns None.
+        - If the solution was created by a program, this field returns None.
         - If the solution originated from a local CPLEX solve, this method returns the string 'cplex_local'.
         - If the solution originated from a DOcplexcloud solve, this method returns 'cplex_cloud'.
 
@@ -171,7 +169,7 @@ class SolveSolution(object):
         return self._name
 
     def set_name(self, solution_name):
-        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True)
+        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True, header='SolveSolution.set_name(): ')
         self._name = solution_name
 
     name = property(get_name, set_name)
@@ -304,14 +302,14 @@ class SolveSolution(object):
             self.set_var_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding, do_warn_on_rounding=False)
 
     def _store_attribute_results(self, var_rc_results, ct_dual_results, ct_slacks_results):
-        self._store_attribute_result(self.REDCOST_KEY, var_rc_results, is_variable=True)
-        self._store_attribute_result(self.DUAL_KEY, ct_dual_results, is_variable=False)
-        self._store_attribute_result(self.SLACK_KEY, ct_slacks_results, is_variable=False)
+        self._store_attribute_result(SolveAttribute.reduced_costs.name, var_rc_results, is_variable=True)
+        self._store_attribute_result(SolveAttribute.duals.name, ct_dual_results, is_variable=False)
+        self._store_attribute_result(SolveAttribute.slacks.name, ct_slacks_results, is_variable=False)
 
-    def store_slacks(self, slacks, slack_key=SLACK_KEY):
+    def store_slacks(self, slacks):
         # INTERNAL
         assert isinstance(slacks, dict)
-        self._attribute_map[slack_key] = slacks
+        self._attribute_map[SolveAttribute.slacks.name] = slacks
 
     def store_infeasibilities(self, infeasibilities, infeas_key=INFEAS_KEY):
         assert isinstance(infeasibilities, dict)
@@ -387,9 +385,24 @@ class SolveSolution(object):
         dvar = self._resolve_var(dvar_arg, do_raise=True)
         return self.__var_value_map.get(dvar, 0) if dvar is not None else 0
 
+    def get_values(self, dvars):
+        """
+        Gets the value of a sequence of variables in a solution.
+        If a variable is not mentioned in the solution,
+        the method assumes 0 and does not raise an exception.
+
+        Returns:
+            A sequence of float values.
+
+        """
+
+        checker = self._checker
+        checker.check_ordered_sequence(arg=dvars, header='SolveSolution.get_values() expects ordered sequence of variables')
+        dvar_seq = checker.typecheck_var_seq(dvars)
+        return self._get_values(dvar_seq)
+
     def _get_values(self, dvars):
-        # internal.
-        # assume dvars is a seuqnec of decision variables.
+        # ginternal: no checks are done.
         self_value_map = self.__var_value_map
         return [self_value_map.get(dv, 0) for dv in dvars]
 
@@ -444,8 +457,8 @@ class SolveSolution(object):
             attr_map = self._attribute_map[attr]
             return [attr_map.get(mobj, default_attr_value) for mobj in mobjs]
 
-    def get_slack(self, ct, slack_key=SLACK_KEY):
-        return self._attribute_map[slack_key].get(ct, 0)
+    def get_slack(self, ct):
+        return self._attribute_map[SolveAttribute.slacks.name].get(ct, 0)
 
     def get_infeasibility(self, ct, infeas_key=INFEAS_KEY):
         return self._attribute_map[infeas_key].get(ct, 0)
@@ -632,7 +645,7 @@ class SolveSolution(object):
             Boolean: True if this solution is a valid MIP start.
         """
         is_explicit = self._keep_zeros
-        if is_explicit and not (self.__var_value_map):
+        if is_explicit and not self.__var_value_map:
             docplex_fatal("MIP start solution is empty, provide at least one discrete variable value")
 
         discrete_vars = (dv for dv in self.iter_variables() if dv.is_discrete())

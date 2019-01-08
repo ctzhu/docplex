@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 1.0.607
+Version: 1.0.630
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -224,7 +224,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
             * IBM® Decision Optimization CPLEX Optimizer Modeling for Python - with namespace docplex.mp
             * IBM® Decision Optimization CP Optimizer Modeling for Python - with namespace docplex.cp
         
-        Solving with CPLEX locally requires that IBM® ILOG CPLEX Optimization Studio v12.6.3
+        Solving with CPLEX locally requires that IBM® ILOG CPLEX Optimization Studio V12.6.3 or V12.7.0 
         is installed on your machine.
         
         Solving with the IBM® Decision Optimization on Cloud service requires that you
@@ -241,6 +241,27 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         
         *  ``pip install docplex``
         
+        Changelog
+        ---------
+        
+        New in 1.0.630:
+        ---------------
+        * Added support for CPLEX 12.7 and Python 3.5.
+        * Upgraded the DOcplexcloud client to version 1.0.202.
+        * Module ``docplex.mp.advmodel`` is now officially supported. This module
+           provides support for efficient, specialized aggregator methods for large
+           models.
+        * When solving on DOcplexcloud, proxies can now be specified with the
+           ``context.solver.docloud.proxies`` property.
+        * When two constraints are defined with the same name, issue a warning instead of
+           a fatal exception. The last constraint defined will take over the first one.
+        * Fix ValueError when passing a pandas DataFrame as variable keys (using
+           DataFrame indexes).
+        * Solution.get_values() returns a collection of variables' values in one call.
+        * ``docplex.mp.model`` no longer imports ``docloud.status``. Any status
+           previously initialized as ``JobSolveStatus.UNKNOWN`` is now initialized as
+           ``None``.
+        * Minor improvements to notebooks and examples.
         
         
 Keywords: docloud,optimization,cplex,cpo

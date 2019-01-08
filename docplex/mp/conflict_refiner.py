@@ -184,10 +184,12 @@ class ConflictRefiner(object):
             A list of ``TConflictConstraint`` namedtuples, each tuple corresponding to a constraint that is
             involved in the conflict.
             The fields of the ``TConflictConstraint`` namedtuple are:
+
                 - the name of the constraint or None if the constraint corresponds to a variable lower or upper bound.
                 - a reference to the constraint or to a wrapper representing a Var upper or lower bound.
                 - a ``docplex.mp.constants.ConflictStatus`` object that indicates the
                   conflict status type (Excluded, Possible_member, Member...).
+
             This list is empty if no conflict is found by the conflict refiner.
         """
 

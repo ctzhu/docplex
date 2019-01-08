@@ -46,11 +46,11 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         if _safe_lb:
             self._lb = lb
         else:
-            self._lb = vartype.compute_lb(lb)
+            self._lb = vartype.compute_lb(lb, model)
         if _safe_ub:
             self._ub = ub
         else:
-            self._ub = vartype.compute_ub(ub)
+            self._ub = vartype.compute_ub(ub, model)
 
     def cplex_scope(self):
         return CplexScope.VAR_SCOPE
@@ -66,6 +66,12 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def iter_terms(self):
         yield self, 1
+
+    def clone(self):
+        return self
+
+    def negate(self):
+        return MonomialExpr(self._get_model(), self, coeff=-1)
 
     iter_sorted_terms = iter_terms
 
@@ -158,10 +164,10 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self._ub
 
     def has_free_lb(self):
-        return self.get_linear_factory().is_free_lb(self._lb)
+        return self._lb <= - self._model.infinity
 
     def has_free_ub(self):
-        return self.get_linear_factory().is_free_ub(self._ub)
+        return self._ub >= self._model.infinity
 
     def is_free(self):
         return self.has_free_lb() and self.has_free_ub()
@@ -177,12 +183,17 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self._vartype
 
     def set_vartype(self, new_vartype):
-        return self._model.set_var_type(self, new_vartype)
+        self._model._checker.typecheck_vartype(new_vartype)
+        old_vartype = self._vartype
+        if new_vartype != old_vartype:
+            nlb = new_vartype.resolve_lb(self._lb)
+            nub = new_vartype.resolve_ub(self._ub)
+            # maybe update bounds?
+            self._model.change_var_type(self, new_vartype)
 
     def _set_vartype_internal(self, new_vartype):
         # INTERNAL
         self._vartype = new_vartype
-
 
     def has_type(self, vartype):
         # internal
@@ -247,14 +258,27 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self._get_solution_value()
 
     def _get_solution_value(self, s=None):
-        sol = s or  self._get_model()._get_solution()
-        return sol.get_value(self)
+        sol = s or self._get_model()._get_solution()
+        return sol[self]
 
     def get_container_index(self):
         ctn = self.get_container()
         return ctn.index if ctn else -1
 
     def get_key(self):
+        """ Returns the key used to create the variable, or None.
+
+        When the variable is part of a list or dictionary of variables created from a sequence of keys,
+        returns the key associated with the variable.
+
+        Example:
+            xs = m.continuous_var_dict(keys=['a', 'b', 'c'])
+            xa = xs['a']
+            assert xa.get_key() == 'a'
+
+        :return:
+            a Python object, possibly None.
+        """
         self_container = self.get_container()
         return self_container.get_var_key(self) if self_container else None
 
@@ -324,7 +348,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         # if is_number(e):
         #     return self._make_linear_expr(e=(self, -1), constant=e, safe=True)
         # else:
-        expr = self.get_linear_factory()._to_linear_expr(e, force_clone=True)  # makes a clone.
+        expr = self.get_linear_factory()._to_linear_operand(e, force_clone=True)  # makes a clone.
         return expr.subtract(self)
 
     def divide(self, e):
@@ -363,6 +387,30 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             return self
         else:
             return self.square()
+
+    def __rshift__(self, other):
+        """ Redefines the right-shift operator to create indicators.
+
+        This operator allows to create indicators with the `>>` operator.
+        It expects a linear constraint as second argument.
+
+        :param other: a linear constraint used to create the indicator
+
+        :return:
+            an instance of IndicatorConstraint, that is not added to the model.
+            Use `Model.add()` to add it to the model.
+
+        Note:
+            The variable must be binary, otherwise an exception is raised.
+
+        Example:
+
+            >>> m.add(b >> (x >=3)
+
+            creates an indicator which links the satisfaction of the constraint (x >= 3)
+            to the value of binary variable b.
+        """
+        return self._model.indicator_constraint(self, other)
 
     def square(self):
         return self._model._qfactory.new_var_square(self)
@@ -403,7 +451,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         """
         return float(self.solution_value)
 
-    def to_bool(self):
+    def to_bool(self, precision=1e-6):
         """ Converts a variable value to True or False.
 
         This is only possible for discrete variables and assumes there is a solution.
@@ -420,10 +468,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         if not self.is_discrete():
             self.fatal("boolean conversion only for discrete variables, type is {0!s}", self.vartype)
         value = self.solution_value  # this property checks for a solution.
-        return value != 0
-
-    # def __nonzero__(self):
-    # return self.to_boolean(precision=1e-5)
+        return abs(value) >= precision
 
     def __str__(self):
         """
@@ -455,7 +500,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             repr_name = ",name='{0}'".format(self.name)
         else:
             repr_name = ''
-        return "docplex.mp.linear.Var(type={0}{1}{2}{3})". \
+        return "docplex.mp.Var(type={0}{1}{2}{3})". \
             format(self_vartype.one_letter_symbol(), repr_name, repr_lb, repr_ub)
 
     @property
@@ -490,12 +535,9 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         self.set_benders_annotation(new_anno)
 
 
-
-
-
 # noinspection PyAbstractClass
 class AbstractLinearExpr(Expr, LinearOperand):
-    __slots__ = ()
+    __slots__ = ('_discrete_locked')
 
     def get_coef(self, dvar):
         """ Returns the coefficient of a variable in the expression.
@@ -520,7 +562,24 @@ class AbstractLinearExpr(Expr, LinearOperand):
         # but this would make sum loop forever.
         raise TypeError
 
-class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
+    def lock_discrete(self):
+        # intern al: used for any expression used in linear constraints inside equivalences
+        self._discrete_locked = True
+
+    def is_discrete_locked(self):
+        return getattr(self, '_discrete_locked', False)
+
+    def check_discrete_lock_frozen(self, op=None):
+        # an expression involved i n an equivalence cannot be modified
+        if self.is_discrete_locked():
+            self.fatal('Expression: {0} is used in equivalence, cannot be modified', self)
+
+    def _discrete_locked_noninteger_attr_error(self, coeff, attr_name):
+        self.fatal('Expression: {0} is used in equivalence, cannot be modified with non-integer {2}: {1}',
+                   self, coeff, attr_name)
+
+
+class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     # INTERNAL
 
     def _get_solution_value(self, s=None):
@@ -546,6 +605,10 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
     def number_of_variables(self):
         return 1
 
+    def __hash__(self):
+        # py3 requires this function
+        return id(self)
+
     @property
     def var(self):
         return self._dvar
@@ -569,7 +632,6 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
     def copy(self, target_model, var_mapping):
         copy_var = var_mapping[self._dvar]
         return MonomialExpr(target_model, dvar=copy_var, coeff=self._coef, safe=True)
-
 
     def iter_terms(self):
         yield self._dvar, self._coef
@@ -611,10 +673,7 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
 
     def times(self, e):
         if is_number(e):
-            # e might be a fancy numpy type
-            if 1 == e:
-                return self
-            elif 0 == e:
+            if 0 == e:
                 return self.get_linear_factory().new_zero_expr()
             else:
                 # return a fresh instance
@@ -633,7 +692,8 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         return self.model._qfactory.new_monomial_product(self, self)
 
     def quotient(self, e):
-        self.model.typecheck_as_denominator(e, self)
+        # returns a new instance
+        self._model.typecheck_as_denominator(e, self)
         inverse = 1.0 / float(e)
         return MonomialExpr(self._model, self._dvar, self._coef * inverse, checked_num=True)
 
@@ -647,7 +707,7 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         return self.minus(e)
 
     def __rsub__(self, e):
-        return self.model._to_linear_expr(e, force_clone=True).minus(self)
+        return self.get_linear_factory()._to_linear_operand(e, force_clone=True).minus(self)
 
     def __neg__(self):
         opposite = self.clone()
@@ -675,12 +735,32 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         self.model.cannot_be_used_as_denominator_error(self, e)
 
     subtract = minus
-    divide = quotient
-    multiply = times
     add = plus
+
+    # changing a coef
+    def set_coefficient(self, dvar, coef):
+        checker = self._model._checker
+        checker.typecheck_var(dvar)
+        checker.typecheck_num(coef, 'Expr.set_coefficient()')
+        return self._set_coefficient(dvar, coef)
+
+    def _set_coefficient(self, dvar, coef):
+        self.check_discrete_lock_frozen()
+        if dvar is self._dvar:
+            self._coef = coef
+            self.notify_modified(event=UpdateEvent.LinExprCoef)
+        elif coef:
+            # monomail is extended to a linear expr
+            new_self = self.to_linear_expr()
+            new_self._add_term(dvar, coef)
+            # beware self is modified here
+            self.notify_replaced(new_self)
+            self = new_self
+        return self
 
     # -- arithmetic to self
     def __iadd__(self, other):
+        self.check_discrete_lock_frozen(op='+')
         if isinstance(other, LinearOperand) or is_number(other):
             added = self.to_linear_expr().add(other)
         else:
@@ -689,6 +769,7 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         return added
 
     def __isub__(self, other):
+        self.check_discrete_lock_frozen(op='-=')
         if isinstance(other, LinearOperand) or is_number(other):
             expr = self.to_linear_expr()
             expr.subtract(other)
@@ -699,21 +780,19 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         return subtracted
 
     def __imul__(self, e):
+        return self.multiply(e)
+
+    def multiply(self, e):
+        self.check_discrete_lock_frozen(op='*=')
         if is_number(e):
-            # e might be a fancy numpy type
-            if 1 == e:
-                # fast exit, no replacement
-                return self
-            elif 0 == e:
+            if 0 == e:
                 product = self.get_linear_factory().new_zero_expr()
             else:
-                # return a fresh instance
                 self._coef *= e
                 self.notify_modified(event=UpdateEvent.LinExprCoef)
-                # fast exit
-                return self
+                product = self
         elif isinstance(e, LinearExpr):
-            product =  e.times(self)
+            product = e.times(self)
         elif isinstance(e, Var):
             product = self.model._qfactory.new_var_product(e, self)
         elif isinstance(e, MonomialExpr):
@@ -737,12 +816,12 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         return self.divide(other)
 
     def divide(self, other):
+        self.check_discrete_lock_frozen(op='/=')
         self.model.typecheck_as_denominator(other, self)
         inverse = 1.0 / float(other)
         self._coef *= inverse
         self.notify_modified(event=UpdateEvent.LinExprCoef)
         return self
-
 
     def equals_expr(self, other):
         if isinstance(other, MonomialExpr):
@@ -757,7 +836,6 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
 
     # conversion
     def to_linear_expr(self):
-        #terms = self._model._lfactory.term_dict_type([(self._dvar, self._coef)])
         e = LinearExpr(self._model, e=(self._dvar, self._coef), safe=True, transient=True)
         return e
 
@@ -791,7 +869,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _new_empty_terms_dict(self, model):
         return model._term_dict_type()
 
-
     def to_linear_expr(self):
         return self
 
@@ -799,12 +876,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         # INTERNAL
         return self.__terms
 
-    def __typecheck_terms_dict(self, terms):  #  pragma: no cover
-        """
-        INTERNAL: check a given dictionary of terms for (var, float)
-        :param terms:
-        :return:
-        """
+    def __typecheck_terms_dict(self, terms):  # pragma: no cover
         if not isinstance(terms, dict):
             self.fatal("expecting expression terms as python dict, got: {0!s}", terms)
         self_model = self.model
@@ -818,25 +890,22 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         if assume_normalized:
             self.__terms = terms
         else:
-            # must put back to normal form
-            self.__terms = self._new_terms_dict(self._model,
-                                                [(k, v) for k, v in iteritems(terms) if v != 0])
+            self.__terms = self._model._term_dict_type([(k, v) for k, v in iteritems(terms)])
         return self
 
     __slots__ = ('_constant', '__terms', '_transient', '_subscribers')
 
-    #@profile
+    def __hash__(self):
+        # py3 requires this function
+        return id(self)
+
     def __init__(self, model, e=None, constant=0, name=None, safe=False, transient=False):
         ModelingObjectBase.__init__(self, model, name)
-        # a global counter for performance measurement
-        #model._linexpr_instance_counter += 1
-        # "calling LinearExpr ctor, k=%d" % LinearExpr.InstanceCounter)
         if not safe and constant:
             model.typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
         self._transient = transient
         self._subscribers = []
-
 
         if isinstance(e, dict):
             if safe:
@@ -855,19 +924,21 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         if e is None:
             pass
+
         elif isinstance(e, Var):
             self.__terms[e] = 1
 
+        elif is_number(e):
+            self._constant += e
+
         elif isinstance(e, MonomialExpr):
+            # TODO: simplify by self_terms[e.var] = e.coef
             self._add_term(e.var, e.coef)
 
         elif isinstance(e, LinearExpr):
             # note that transient is not kept.
             self._constant = e.constant
             self.__terms = self._new_terms_dict(model, e._get_terms_dict())  # make a copy
-
-        elif is_number(e):
-            self._constant += e
 
         elif isinstance(e, tuple):
             v, k = e
@@ -878,6 +949,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def keep(self):
         self._transient = False
+        return self
 
     def is_kept(self):
         # INTERNAL
@@ -948,7 +1020,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         All variables and coefficients are removed and the constant term is set to zero.
         """
-        #self._check_mutable()
         self._constant = 0
         self.__terms.clear()
 
@@ -977,14 +1048,12 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         return not self.__terms
 
-
     def _has_nonzero_var_term(self):
         for dv, k in self.iter_terms():
             if k:
                 return True
         else:
             return False
-
 
     def as_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
@@ -1016,7 +1085,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             cloned.normalize()
             return cloned
 
-
     def number_of_variables(self):
         return len(self.__terms)
 
@@ -1036,7 +1104,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             The modified expression itself.
         """
         if coeff:
-            #self._check_mutable()
             self._model.typecheck_var(dvar)
             self._model.typecheck_num(coeff)
             self._add_term(dvar, coeff)
@@ -1046,14 +1113,14 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _add_term(self, dvar, coef=1):
         # INTERNAL
         self_terms = self.__terms
-        if coef or dvar in self_terms:
-            self_terms[dvar] = self_terms.get(dvar, 0) + coef
+        #if coef or dvar in self_terms:
+        self_terms[dvar] = self_terms.get(dvar, 0) + coef
 
     def set_coefficient(self, dvar, coeff):
-        #self._check_mutable()
         self._model.typecheck_var(dvar)
         self._model.typecheck_num(coeff)
         self._set_coefficient(dvar, coeff)
+
 
     def _set_coefficient_internal(self, dvar, coeff):
         self_terms = self.__terms
@@ -1064,16 +1131,16 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             return False
 
     def _set_coefficient(self, dvar, coeff):
+        self.check_discrete_lock_frozen()
         if self._set_coefficient_internal(dvar, coeff):
             self.notify_modified(event=UpdateEvent.LinExprCoef)
 
     def set_coefficients(self, var_coef_seq):
-        #self._check_mutable()
         # TODO: typecheck
         self._set_coefficients(var_coef_seq)
 
-    #@profile
     def _set_coefficients(self, var_coef_seq):
+        self.check_discrete_lock_frozen()
         nb_changes = 0
         for dv, k in var_coef_seq:
             if self._set_coefficient_internal(dv, k):
@@ -1109,18 +1176,9 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def _set_constant(self, new_constant):
         if new_constant != self._constant:
-            #self._check_mutable()
+            self.check_discrete_lock_frozen()
             self._constant = new_constant
             self.notify_modified(event=UpdateEvent.ExprConstant)
-
-
-    # def iter_variables(self):
-    #     """  Iterates over all variables mentioned in the linear expression.
-    #
-    #     Returns:
-    #         An iterator object.
-    #     """
-    #     # return iter(self.__terms.keys())
 
     def contains_var(self, dvar):
         """ Checks whether a decision variable is part of an expression.
@@ -1201,7 +1259,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def _add_expr(self, other_expr):
         # INTERNAL
-        #self._check_mutable()
         self._constant += other_expr._constant
         # merge term dictionaries
         for v, k in other_expr.iter_terms():
@@ -1266,6 +1323,9 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def number_of_terms(self):
         return len(self.__terms)
 
+    def size(self):
+        return len(self.__terms) + bool(self._constant)
+
     def subtract(self, e):
         """ Subtracts an expression from this expression.
         Note:
@@ -1312,7 +1372,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _scale(self, factor):
         # INTERNAL: used my multiply
         # this method modifies self.
-        #self._check_mutable()
         if 0 == factor:
             self._clear()
         elif factor != 1:
@@ -1466,9 +1525,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             self.add(e)
             return self
         except DOCplexQuadraticArithException:
-            # modify self
             r = e + self
-            #self = r
+            self.notify_replaced(new_expr=r)
             return r
 
     def __sub__(self, e):
@@ -1514,8 +1572,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def __rtruediv__(self, e):
         self.fatal("Expression {0!s} cannot be used as divider of {1!s}", self, e)  # pragma: no cover
-
-
 
     @property
     def solution_value(self):
@@ -1581,10 +1637,11 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
     def is_zero(self):
         return True
 
-
-
     # INTERNAL
     __slots__ = ('_subscribers')
+
+    def __hash__(self):
+        return id(self)
 
     def __init__(self, model):
         ModelingObjectBase.__init__(self, model)
@@ -1681,7 +1738,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self
 
     def __repr__(self):
-        return "docplex.mp.linear.ZeroExpr()"
+        return "docplex.mp.ZeroExpr()"
 
     def equals_expr(self, other):
         return isinstance(other, ZeroExpr)
@@ -1699,7 +1756,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         return other
 
     def __isub__(self, other):
-        linear_other = self.get_linear_factory()._to_linear_expr(other, force_clone=True)
-        linear_other.negate()
-        self.notify_replaced(linear_other)
-        return linear_other
+        linear_other = self.get_linear_factory()._to_linear_operand(other, force_clone=True)
+        negated = linear_other.negate()
+        self.notify_replaced(negated)
+        return negated

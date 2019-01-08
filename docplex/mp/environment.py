@@ -83,9 +83,7 @@ class Environment(object):
 
     @property
     def has_cplex(self):
-        """
-        Returns:
-            Boolean: True if the CPLEX libraries are available.
+        """True if the CPLEX libraries are available.
         """
         return self._found_cplex
 
@@ -99,9 +97,7 @@ class Environment(object):
 
     @property
     def has_matplotlib(self):
-        """
-         Returns:
-             Boolean: True if the `matplotlib` libraries are available.
+        """True if the `matplotlib` libraries are available.
         """
         if self._found_matplotlib is None:
             self.__check_matplotlib()
@@ -109,9 +105,7 @@ class Environment(object):
 
     @property
     def has_pandas(self):
-        """
-        Returns:
-            Boolean: True if the `pandas` libraries are available.
+        """True if the `pandas` libraries are available.
         """
         self.__check_pandas()
         return self._found_pandas
@@ -123,25 +117,19 @@ class Environment(object):
 
     @property
     def cplex_location(self):
-        """
-        Returns:
-            string: The system path where CPLEX is located, if present. Otherwise, returns None.
+        """The system path where CPLEX is located, if present. Otherwise, returns None.
         """
         return self._cplex_location
 
     @property
     def has_numpy(self):
-        """
-         Returns:
-             Boolean: True if the `numpy` libraries are available.
+        """True if the `numpy` libraries are available.
         """
         self._check_numpy()
         return self._found_numpy
 
     def is_64bit(self):
-        """
-        Returns:
-            Boolean: True if running on a 64-bit platform.
+        """True if running on a 64-bit platform.
         """
         return self._is64bit
 

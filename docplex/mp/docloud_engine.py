@@ -6,7 +6,10 @@
 
 from io import BytesIO
 
+import os
+
 from six import iteritems
+import tempfile
 
 from docplex.mp.engine import IndexerEngine
 from docplex.mp.docloud_connector import DOcloudConnector
@@ -19,7 +22,7 @@ from docplex.mp.anno import ModelAnnotationPrinter
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.utils import normalize_basename
-from docplex.mp.constants import ConflictStatus, SolveAttribute
+from docplex.mp.constants import ConflictStatus
 from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrapper, VarUbConstraintWrapper
 from docplex.mp.constr import LinearConstraint, QuadraticConstraint, IndicatorConstraint
 
@@ -193,7 +196,7 @@ class DOcloudEngine(IndexerEngine):
     def get_cplex(self):
         raise DOcplexException("{0} engine contains no instance of CPLEX".format(self.name()))
 
-    def __init__(self, mdl, exchange_format=None, hide_user_names=False, **kwargs):
+    def __init__(self, mdl, exchange_format=None, **kwargs):
         IndexerEngine.__init__(self)
 
         docloud_context = kwargs.get('docloud_context')
@@ -204,15 +207,31 @@ class DOcloudEngine(IndexerEngine):
         self._connector = DOcloudConnector(docloud_context, log_output=actual_log_output)
         self._exchange_format = exchange_format or docloud_context.exchange_format or _DEFAULT_EXCHANGE_FORMAT
 
-        self._printer = ModelPrinterFactory.new_printer(self._exchange_format, hide_user_names, full_obj=True)
+        mangle_names = mdl.ignore_names or mdl.context.solver.docloud.mangle_names
+        self._printer = ModelPrinterFactory.new_printer(self._exchange_format, full_obj=True)
+        if mangle_names:
+            self._printer.set_mangle_names(True)
 
         # -- results.
         self._lpname_to_var_map = {}
         self._solve_details = SolveDetails.make_dummy()
+        self._quality_metrics = {}  # latest quality metrics from json
 
         # noinspection PyPep8
         self.debug_dump = docloud_context.debug_dump
         self.debug_dump_dir = docloud_context.debug_dump_dir
+
+    def _new_printer(self, ctx):
+        return self._printer
+        # printer = ModelPrinterFactory.new_printer(self._exchange_format, full_obj=True)
+        # if ctx.solver.docloud.mangle_names:
+        #     print('LP names will be mangled')
+        #     printer.hide_use_names = True
+        # return printer
+
+    def supports_logical_constraints(self):
+        # <-> is supposed to be supported in LP?
+        return True, None
 
     def name(self):
         return 'docloud'
@@ -266,9 +285,40 @@ class DOcloudEngine(IndexerEngine):
         prm_data = parameters.export_prm_to_string(overloaded_params)
         return prm_data
 
+    def serialize_model_as_file(self, mdl):
+        # step 1 : prints the model in whatever exchange format
+        printer = self._new_printer(ctx=mdl.context)
+
+        if self._exchange_format.is_binary:
+            filemode = "w+b"
+        else:
+            filemode = "w+"
+
+        lp_output = tempfile.NamedTemporaryFile(mode=filemode, delete=False)
+
+        printer.printModel(mdl, lp_output)
+
+        # lp name to docplex var
+        self._lpname_to_var_map = printer.get_name_to_var_map(mdl)
+
+        # DEBUG: dump request file
+        if self.debug_dump:
+            dump_path = make_path(error_handler=mdl.error_handler,
+                                  basename=mdl.name,
+                                  output_dir=self.debug_dump_dir,
+                                  extension=printer.extension(),
+                                  name_transformer="docloud_%s")
+            print("DEBUG DUMP in " + dump_path)
+            with open(dump_path, filemode) as out_file:
+                lp_output.seek(0)
+                out_file.write(lp_output)
+
+        lp_output.close()
+        return lp_output.name
+
     def serialize_model(self, mdl):
         # step 1 : prints the model in whatever exchange format
-        printer = self._printer
+        printer = self._new_printer(ctx=mdl.context)
 
         if self._exchange_format.is_binary:
             filemode = "wb"
@@ -279,7 +329,7 @@ class DOcloudEngine(IndexerEngine):
 
         printer.printModel(mdl, oss)
 
-        ## lp name to docplex var
+        # lp name to docplex var
         self._lpname_to_var_map = printer.get_name_to_var_map(mdl)
 
         # DEBUG: dump request file
@@ -417,7 +467,7 @@ class DOcloudEngine(IndexerEngine):
         # make sure model is the first attachment: that will be the name of the job on the console
         job_name = "python_%s" % self._model.name
         model_data = self.serialize_model(self._model)
-        mprinter = self._printer
+        mprinter = self._new_printer(ctx=mdl.context)
         model_name = normalize_basename(job_name) + self._exchange_format.extension
         attachments.append({'name': model_name, 'data': model_data})
 
@@ -434,7 +484,7 @@ class DOcloudEngine(IndexerEngine):
                                                    for v in self._model.iter_variables()],
                                             preference=1.0)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[LinearConstraint],
-                                            [(c, mprinter.ct_print_name(c))
+                                            [(c, mprinter.linearct_print_name(c))
                                                     for c in self._model.iter_linear_constraints()],
                                             preference_dict=preferences)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[QuadraticConstraint],
@@ -442,7 +492,7 @@ class DOcloudEngine(IndexerEngine):
                                                     for c in self._model.iter_quadratic_constraints()],
                                             preference_dict=preferences)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[IndicatorConstraint],
-                                            [(c, mprinter.ic_print_name(c))
+                                            [(c, mprinter.logicalct_print_name(c))
                                                     for c in self._model.iter_indicator_constraints()],
                                             preference_dict=preferences)
         else:
@@ -505,74 +555,79 @@ class DOcloudEngine(IndexerEngine):
     def _make_attachment_name(self, job_name, extension):
         return job_name + extension
 
-
     # noinspection PyProtectedMember
     def solve(self, mdl, parameters=None):
         # Before submitting the job, we will build the list of attachments
         # parameters are CPLEX parameters
         attachments = []
 
+
         # make sure model is the first attachment: that will be the name of the job on the console
         job_name = normalize_basename("python_%s" % mdl.name)
-        model_data = self.serialize_model(mdl)
-        model_data_name = self._make_attachment_name(job_name, self._exchange_format.extension)
-        attachments.append({'name': model_data_name, 'data': model_data})
-
-        # prm
-        docloud_parameters = parameters if parameters is not None else mdl.parameters
-        prm_data = self._serialize_parameters(docloud_parameters)
-        prm_name = self._make_attachment_name(job_name , '.prm')
-        attachments.append({'name': prm_name, 'data': prm_data})
-
-        # warmstart_data
-        # export mipstart solution in CPLEX mst format, if any, else None
-        mdl_mipstarts = mdl.mip_starts
-        if mdl_mipstarts:
-            warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts).encode('utf-8')
-            warmstart_name = self._make_attachment_name(job_name, ".mst")
-            attachments.append({'name': warmstart_name, 'data': warmstart_data})
-
-        # benders annotation
-        if mdl.has_benders_annotations():
-            anno_data = ModelAnnotationPrinter.print_to_string(mdl).encode('utf-8')
-            anno_name = self._make_attachment_name(job_name, '.ann')
-            attachments.append({'name': anno_name, 'data': anno_data})
-
-        # info_to_monitor = {'jobid'}
-        # if mdl.progress_listeners:
-        # info_to_monitor.add('progress')
-
-        def notify_info(info):
-            if "jobid" in info:
-                mdl.fire_jobid(jobid=info["jobid"])
-            if "progress" in info:
-                mdl.fire_progress(progress_data=info["progress"])
-
-        # This block used to be try/catched for DOcloudConnector exceptions
-        # and DOcloudException, but then infrastructure error were not
-        # handled properly. Now we let the exception raise.
-        connector = self._connector
-        mdl.notify_start_solve()
-        connector.submit_model_data(attachments,
-                                    gzip=not self._exchange_format.is_binary,
-                                    info_callback=notify_info,
-                                    info_to_monitor={'jobid', 'progress'})
-
-        # --- cplex solve details
-        json_details = connector.get_cplex_details()
-        self._solve_details = SolveDetails.from_json(json_details)
-        # ---
-
-        # --- build a solution object, or None
-        solution_handler = JSONSolutionHandler(connector.results.get('solution.json'))
-        if not solution_handler.has_solution:
-            mdl.notify_solve_failed()
-            solution = None
-        else:
-            solution = self._make_solution(mdl, solution_handler)
-        # ---
-
-        return solution
+        model_file = self.serialize_model_as_file(mdl)
+        try:
+            model_data_name = self._make_attachment_name(job_name, self._exchange_format.extension)
+            attachments.append({'name': model_data_name, 'filename': model_file})
+    
+            # prm
+            docloud_parameters = parameters if parameters is not None else mdl.parameters
+            prm_data = self._serialize_parameters(docloud_parameters)
+            prm_name = self._make_attachment_name(job_name, '.prm')
+            attachments.append({'name': prm_name, 'data': prm_data})
+    
+            # warmstart_data
+            # export mipstart solution in CPLEX mst format, if any, else None
+            mdl_mipstarts = mdl.mip_starts
+            if mdl_mipstarts:
+                warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts).encode('utf-8')
+                warmstart_name = self._make_attachment_name(job_name, ".mst")
+                attachments.append({'name': warmstart_name, 'data': warmstart_data})
+    
+            # benders annotation
+            if mdl.has_benders_annotations():
+                anno_data = ModelAnnotationPrinter.print_to_string(mdl).encode('utf-8')
+                anno_name = self._make_attachment_name(job_name, '.ann')
+                attachments.append({'name': anno_name, 'data': anno_data})
+    
+            # info_to_monitor = {'jobid'}
+            # if mdl.progress_listeners:
+            # info_to_monitor.add('progress')
+    
+            def notify_info(info):
+                if "jobid" in info:
+                    mdl.fire_jobid(jobid=info["jobid"])
+                if "progress" in info:
+                    mdl.fire_progress(progress_data=info["progress"])
+    
+            # This block used to be try/catched for DOcloudConnector exceptions
+            # and DOcloudException, but then infrastructure error were not
+            # handled properly. Now we let the exception raise.
+            connector = self._connector
+            mdl.notify_start_solve()
+            connector.submit_model_data(attachments,
+                                        gzip=not self._exchange_format.is_binary,
+                                        info_callback=notify_info,
+                                        info_to_monitor={'jobid', 'progress'})
+    
+            # --- cplex solve details
+            json_details = connector.get_cplex_details()
+            self._solve_details = SolveDetails.from_json(json_details)
+            self._solve_details._quality_metrics = self._compute_quality_metrics(json_details)
+            # ---
+    
+            # --- build a solution object, or None
+            solution_handler = JSONSolutionHandler(connector.results.get('solution.json'))
+            if not solution_handler.has_solution:
+                mdl.notify_solve_failed()
+                solution = None
+            else:
+                solution = self._make_solution(mdl, solution_handler)
+            # ---
+    
+            return solution
+        finally:
+            if os.path.isfile(model_file):
+                os.remove(model_file)
 
     def _var_by_cloud_index(self, cloud_index, cloud_index_name_map):
         # 1 go to cloud name first
@@ -679,4 +734,28 @@ class DOcloudEngine(IndexerEngine):
 
     def get_solve_details(self):
         return self._solve_details
+
+    @classmethod
+    def demangle_metric_name(cls, mname):
+        from docplex.mp.constants import QualityMetric
+        # find last occurence of '.' then identify the enum from the last part
+        dotpos = mname.rfind('.')
+        assert dotpos >= 0
+        return QualityMetric.parse(mname[dotpos+1:], raise_on_error=False)
+
+    def _compute_quality_metrics(self, json_details):
+        qms = {}
+        if json_details:
+            for qk, qv in iteritems(json_details):
+                if 'quality.double' in qk:
+                    qm = self.demangle_metric_name(qk)
+                    if qm:
+                        qms[qm.key] = float(qv)
+                elif 'quality.int' in qk:
+                    qm = self.demangle_metric_name(qk)
+                    if qm:
+                        iqv = int(qv)
+                        if iqv >= 0:
+                            qms[qm.int_key] = iqv
+        return qms
 

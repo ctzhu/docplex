@@ -12,7 +12,7 @@ from docplex.mp.params.parameters import *
 # generating code for group: Barrier_Limits
 def _group_barrier_limits_params(pgroup):
     return dict(corrections=IntParameter(pgroup, "corrections", "CPX_PARAM_BARMAXCOR", 3013, "maximum correction limit", default_value=-1, min_value=-1.0, max_value=9223372036800000000),
-                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1e+12, min_value=1.0, max_value=1e+75),
+                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1000000000000.0, min_value=1.0, max_value=1e+75),
                 iteration=IntParameter(pgroup, "iteration", "CPX_PARAM_BARITLIM", 3012, "barrier iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
                 objrange=NumParameter(pgroup, "objrange", "CPX_PARAM_BAROBJRNG", 3004, "barrier objective range (above and below zero)", default_value=1e+20, min_value=0.0, max_value=1e+75)
                 )
@@ -41,6 +41,32 @@ def _group_barrier_subgroups():
 
 def _group_barrier_make(pgroup):
     return ParameterGroup.make("barrier", _group_barrier_params, _group_barrier_subgroups, pgroup)
+
+
+# generating code for group: Benders_Tolerances
+def _group_benders_tolerances_params(pgroup):
+    return dict(feasibilitycut=NumParameter(pgroup, "feasibilitycut", "CPX_PARAM_BENDERSFEASCUTTOL", 1509, "tolerance for considering a feasibility cut violated", default_value=1e-06, min_value=1e-09, max_value=0.1),
+                optimalitycut=NumParameter(pgroup, "optimalitycut", "CPX_PARAM_BENDERSOPTCUTTOL", 1510, "tolerance for considering an optimality cut violated", default_value=1e-06, min_value=1e-09, max_value=0.1)
+                )
+
+
+def _group_benders_tolerances_make(pgroup):
+    return ParameterGroup.make("tolerances", _group_benders_tolerances_params, None, pgroup)
+
+
+# generating code for group: Benders
+def _group_benders_params(pgroup):
+    return dict(strategy=IntParameter(pgroup, "strategy", "CPX_PARAM_BENDERSSTRATEGY", 1501, "choice of benders decomposition to use", default_value=0, min_value=-1.0, max_value=3.0),
+                workeralgorithm=IntParameter(pgroup, "workeralgorithm", "CPX_PARAM_WORKERALG", 1500, "method for optimizing benders subproblems", default_value=0, min_value=0.0, max_value=5.0)
+                )
+
+
+def _group_benders_subgroups():
+    return dict(tolerances=_group_benders_tolerances_make)
+
+
+def _group_benders_make(pgroup):
+    return ParameterGroup.make("benders", _group_benders_params, _group_benders_subgroups, pgroup)
 
 
 # generating code for group: Conflict
@@ -104,7 +130,7 @@ def _group_feasopt_make(pgroup):
 
 # generating code for group: MIP_Cuts
 def _group_mip_cuts_params(pgroup):
-    return dict(bqp=IntParameter(pgroup, "bqp", "CPX_PARAM_BQPCUTS", 2195, "type of bqp cut generation (only apply to non-convex models solved to global optimality)", default_value=0, min_value=-1.0, max_value=3.0),
+    return dict(bqp=IntParameter(pgroup, "bqp", "CPX_PARAM_BQPCUTS", 2195, "type of BQP cut generation (only applies to non-convex models solved to global optimality)", default_value=0, min_value=-1.0, max_value=3.0),
                 cliques=IntParameter(pgroup, "cliques", "CPX_PARAM_CLIQUES", 2003, "type of clique cut generation", default_value=0, min_value=-1.0, max_value=3.0),
                 covers=IntParameter(pgroup, "covers", "CPX_PARAM_COVERS", 2005, "type of cover cut generation", default_value=0, min_value=-1.0, max_value=3.0),
                 disjunctive=IntParameter(pgroup, "disjunctive", "CPX_PARAM_DISJCUTS", 2053, "type of disjunctive cut generation", default_value=0, min_value=-1.0, max_value=3.0),
@@ -117,6 +143,7 @@ def _group_mip_cuts_params(pgroup):
                 mcfcut=IntParameter(pgroup, "mcfcut", "CPX_PARAM_MCFCUTS", 2134, "type of MCF cut generation", default_value=0, min_value=-1.0, max_value=2.0),
                 mircut=IntParameter(pgroup, "mircut", "CPX_PARAM_MIRCUTS", 2052, "type of mixed integer rounding cut generation", default_value=0, min_value=-1.0, max_value=2.0),
                 pathcut=IntParameter(pgroup, "pathcut", "CPX_PARAM_FLOWPATHS", 2051, "type of flow path cut generation", default_value=0, min_value=-1.0, max_value=2.0),
+                rlt=IntParameter(pgroup, "rlt", "CPX_PARAM_RLTCUTS", 2196, "type of RLT cut generation (only applies to non-convex models solved to global optimality)", default_value=0, min_value=-1.0, max_value=3.0),
                 zerohalfcut=IntParameter(pgroup, "zerohalfcut", "CPX_PARAM_ZEROHALFCUTS", 2111, "type of zero-half cut generation", default_value=0, min_value=-1.0, max_value=2.0)
                 )
 
@@ -201,7 +228,10 @@ def _group_mip_strategy_params(pgroup):
                 search=IntParameter(pgroup, "search", "CPX_PARAM_MIPSEARCH", 2109, "indicator for search method", default_value=0, min_value=0.0, max_value=2.0),
                 startalgorithm=IntParameter(pgroup, "startalgorithm", "CPX_PARAM_STARTALG", 2025, "algorithm to solve initial relaxation", default_value=0, min_value=0.0, max_value=6.0),
                 subalgorithm=IntParameter(pgroup, "subalgorithm", "CPX_PARAM_SUBALG", 2026, "algorithm to solve subproblems", default_value=0, min_value=0.0, max_value=5.0),
-                variableselect=IntParameter(pgroup, "variableselect", "CPX_PARAM_VARSEL", 2028, "variable selection strategy", default_value=0, min_value=-1.0, max_value=4.0)
+                variableselect=IntParameter(pgroup, "variableselect", "CPX_PARAM_VARSEL", 2028, "variable selection strategy", default_value=0, min_value=-1.0, max_value=4.0),
+                submipstartalg=IntParameter(pgroup, "submipstartalg", "CPX_PARAM_SUBMIPSTARTALG", 2205, "algorithm to solve initial relaxation for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                submipsubalg=IntParameter(pgroup, "submipsubalg", "CPX_PARAM_SUBMIPSUBALG", 2206, "algorithm to solve subproblems for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                submipscale=IntParameter(pgroup, "submipscale", "CPX_PARAM_SUBMIPSCAIND", 2207, "type of scaling used for sub-MIPs", default_value=0, min_value=-1.0, max_value=1.0)
                 )
 
 
@@ -286,7 +316,7 @@ def _group_preprocessing_make(pgroup):
 # generating code for group: Read
 def _group_read_params(pgroup):
     return dict(constraints=IntParameter(pgroup, "constraints", "CPX_PARAM_ROWREADLIM", 1021, "constraint read size", default_value=30000, min_value=0.0, max_value=2100000000),
-                datacheck=BoolParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1),
+                datacheck=IntParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1, min_value=0.0, max_value=2.0),
                 fileencoding=StrParameter(pgroup, "fileencoding", "CPX_PARAM_FILEENCODING", 1129, "code page for file reading and writing", default_value="ISO-8859-1"),
                 nonzeros=PositiveIntParameter(pgroup, "nonzeros", "CPX_PARAM_NZREADLIM", 1024, "constraint nonzero read size", default_value=250000, max_value=9223372036800000000),
                 qpnonzeros=PositiveIntParameter(pgroup, "qpnonzeros", "CPX_PARAM_QPNZREADLIM", 4001, "quadratic nonzero read size", default_value=5000, max_value=9223372036800000000),
@@ -302,6 +332,7 @@ def _group_read_make(pgroup):
 # generating code for group: Sifting
 def _group_sifting_params(pgroup):
     return dict(algorithm=IntParameter(pgroup, "algorithm", "CPX_PARAM_SIFTALG", 1077, "algorithm used to solve sifting subproblems", default_value=0, min_value=0.0, max_value=4.0),
+                simplex=BoolParameter(pgroup, "simplex", "CPX_PARAM_SIFTSIM", 1158, "allow sifting to be called from simplex", default_value=1),
                 display=IntParameter(pgroup, "display", "CPX_PARAM_SIFTDISPLAY", 1076, "level of the sifting iteration display", default_value=1, min_value=0.0, max_value=2.0),
                 iterations=IntParameter(pgroup, "iterations", "CPX_PARAM_SIFTITLIM", 1078, "sifting iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000)
                 )
@@ -392,7 +423,7 @@ def _group_cpxparam_params(pgroup):
                 optimalitytarget=IntParameter(pgroup, "optimalitytarget", "CPX_PARAM_OPTIMALITYTARGET", 1131, "type of solution CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=3.0),
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201509044, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201703173, min_value=0.0, max_value=2100000000),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
                 timelimit=NumParameter(pgroup, "timelimit", "CPX_PARAM_TILIM", 1039, "time limit in seconds", default_value=1e+75, min_value=0.0, max_value=1e+75),
@@ -403,6 +434,7 @@ def _group_cpxparam_params(pgroup):
 
 def _group_cpxparam_subgroups():
     return dict(barrier=_group_barrier_make,
+                benders=_group_benders_make,
                 conflict=_group_conflict_make,
                 distmip=_group_distmip_make,
                 emphasis=_group_emphasis_make,
@@ -416,6 +448,6 @@ def _group_cpxparam_subgroups():
                 tune=_group_tune_make)
 
 
-def make_root_params_12630():
-    return RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.6.3.0")
+def make_root_params_12800():
+    return RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.8.0.0")
 #  --- end of generated code ---

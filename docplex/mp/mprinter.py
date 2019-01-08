@@ -11,8 +11,6 @@ import sys
 
 import six
 
-from docplex.mp.error_handler import docplex_fatal
-
 # gendoc: ignore
 
 
@@ -33,7 +31,6 @@ class _NumPrinter(object):
         # 2 -> %.2f
         self._double_format = "%." + ('%df' % nb_digits_for_floats)
 
-
     def to_string(self, num):
         if num >= self.true_infinity:
             return self.__positive_infinity
@@ -41,7 +38,7 @@ class _NumPrinter(object):
             return self.__negative_infinity
         else:
             try:
-                if num.is_integer():    # the is_integer() function is faster than testing: num == int(num)
+                if num.is_integer():  # the is_integer() function is faster than testing: num == int(num)
                     return '%d' % num
                 else:
                     return self._double_format % num
@@ -91,10 +88,11 @@ class ModelPrinter(object):
         else:
             try:
                 self.print_model_to_stream(out, mdl)
-            except AttributeError as ea:  # pragma: no cover
+            except AttributeError:  # pragma: no cover
                 pass  # pragma: no cover
                 # stringio will raise an attribute error here, due to with
                 # print("Cannot use this an output: %s" % str(out))
+        self.post_print_hook(mdl)
 
     def print_model_to_stream(self, out, mdl):
         raise NotImplementedError  # pragma: no cover
@@ -102,14 +100,19 @@ class ModelPrinter(object):
     def get_var_name_encoding(self):  # pragma: no cover
         return None  # default is no encoding
 
+    def post_print_hook(self, model):
+        # this method is called after printing the model
+        # can be redefined for post-print reporting
+        pass
+
+
 class _DisambiguateError(Exception):
     pass
+
 
 # noinspection PyAbstractClass
 class TextModelPrinter(ModelPrinter):
     DEFAULT_ENCODING = "ENCODING=ISO-8859-1"
-
-
 
     def __init__(self, comment_start, indent=1,
                  hide_user_names=False,
@@ -123,21 +126,15 @@ class TextModelPrinter(ModelPrinter):
         # noinspection PyArgumentEqualDefault
 
         self._comment_start = comment_start
-        self._hide_user_names = hide_user_names
+        self._mangle_names = hide_user_names
         self._encoding = encoding  # None is a valid value, in which case no encoding is printed
         # -----------------------
         # TODO: refactor these maps as scope objects...
         self._var_name_map = {}
         self._linct_name_map = {}  # linear constraints
-        self._ic_name_map = {}  # indicators have a seperate index space.
+        self._lc_name_map = {}  # indicators have a seperate index space.
         self._qc_name_map = {}
         self._pwl_name_map = {}
-
-        # created on demand if model is not fully indexed
-        self._local_var_indices = None
-        self._local_linear_ct_indices = None
-        self._local_indicator_ct_indices = None
-        self._local_qct_indices = None
         # ------------------------
 
         self._rangeData = {}
@@ -149,7 +146,7 @@ class TextModelPrinter(ModelPrinter):
         # which translate_method to use
         if six.PY2:
             self._translate_chars = self._translate_chars2
-        else:  #  pragma: no cover
+        else:  # pragma: no cover
             self._translate_chars = self._translate_chars3
 
     def _get_indent_from_level(self, level):
@@ -165,24 +162,19 @@ class TextModelPrinter(ModelPrinter):
     def nb_digits_for_floats(self):  # pragma: no cover
         return self._num_printer.precision
 
-    def _get_hide_user_names(self):  # pragma: no cover
-        """
-        returns true if user names for variables and constraints should be forgotten.
-        If yes, generic names (e.g. x1,x3, c45.. are generated and used everywhere).
-        This is done on purpose to obfuscate the file.
-        :return:
-        """
-        return self._hide_user_names
 
-    def _set_hide_user_names(self, hide):
-        self._hide_user_names = hide
-
-    def encrypt_user_names(self):
+    def mangle_names(self):
         """
         Actually used to decide whether to encryupt or noyt
         :return:
         """
-        return self._hide_user_names
+        return self._mangle_names
+
+    def set_mangle_names(self, mangled):
+        self._mangle_names = mangled
+
+    def is_mangling_names(self):
+        return self._mangle_names
 
     def _print_line_comment(self, out, comment_text):
         out.write("%s %s\n" % (self._comment_start, comment_text))
@@ -217,7 +209,7 @@ class TextModelPrinter(ModelPrinter):
         # candidate_name is already in names
         # we coin successive names with index until the suffixed name is no longer in names
         k = 1
-        disambiguate_fmt =  '%s#%d'
+        disambiguate_fmt = '%s#%d'
         while True:
             cur_name = disambiguate_fmt % (candidate_name, k)
             if cur_name not in names:
@@ -226,27 +218,24 @@ class TextModelPrinter(ModelPrinter):
             if k >= try_max:
                 raise _DisambiguateError
 
-
-    def _precompute_name_dict(self, mobj_seq, local_index_map, prefix):
-        ''' Returns a name dictionary from a sequence of modeling objects.
-        '''
+    def _precompute_name_dict(self, mobj_seq, prefix):
         fixed_name_dir = {}
         all_names = set()
-        hide_names = self.encrypt_user_names()
+        hide_names = self.mangle_names()
 
         try:
-            for mobj in mobj_seq:
-                fixed_name = self.fix_name(mobj, prefix, local_index_map, hide_names)
+            for local_index, mobj in enumerate(mobj_seq):
+                # local_index = local_index_map[mobj] if local_index_map is not None else mobj.unchecked_index
+                fixed_name = self.fix_name(mobj, prefix, local_index, hide_names)
                 if fixed_name:
                     if fixed_name in all_names:  # pragma: no cover
                         fixed_name = self._disambiguate(fixed_name, all_names)
                     # fixed_name_dir[mobj] = fixed_name
-                    fixed_name_dir[mobj._index] = fixed_name    # Use _index attribute as key, which improves performance
+                    fixed_name_dir[mobj._index] = fixed_name  # Use _index attribute as key, which improves performance
                     all_names.add(fixed_name)
         except _DisambiguateError:
             # something wrong occured, we reindex everything
-            return { mo: self._make_prefix_name(mo, prefix, local_index_map) for mo in mobj_seq}
-
+            return {mo: self._make_prefix_name(mo, prefix, local_index) for local_index, mo in enumerate(mobj_seq)}
 
         return fixed_name_dir
 
@@ -255,21 +244,11 @@ class TextModelPrinter(ModelPrinter):
         return self._num_printer.to_string(num)
 
     def prepare(self, model):
-        """
-        :param model: the model being printed
-        """
-        # use printer local indexing for name generation.
-        self._local_var_indices = {dv: k for k, dv in enumerate(model.iter_variables())}
-        self._local_linear_ct_indices = {ct: k for k, ct in enumerate(model.iter_linear_constraints())}
-        self._local_indicator_ct_indices = {ct: k for k, ct in enumerate(model.iter_indicator_constraints())}
-        self._local_qct_indices = {qct: k for k, qct in enumerate(model.iter_quadratic_constraints())}
-        self._local_pwl_indices = {pwl: k for k, pwl in enumerate(model.iter_pwl_constraints())}
-
-        self._var_name_map = self._precompute_name_dict(model.iter_variables(), self._local_var_indices, prefix='x')
-        self._linct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_linear_ct_indices, prefix='c')
-        self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_indicator_ct_indices, prefix='ic')
-        self._qc_name_map = self._precompute_name_dict(model.iter_quadratic_constraints(), self._local_qct_indices, prefix='qc')
-        self._pwl_name_map = self._precompute_name_dict(model.iter_pwl_constraints(), self._local_pwl_indices, prefix='pwl')
+        self._var_name_map = self._precompute_name_dict(model.iter_variables(), prefix='x')
+        self._linct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), prefix='c')
+        self._lc_name_map = self._precompute_name_dict(model.iter_logical_constraints(), prefix='lc')
+        self._qc_name_map = self._precompute_name_dict(model.iter_quadratic_constraints(), prefix='qc')
+        self._pwl_name_map = self._precompute_name_dict(model.iter_pwl_constraints(), prefix='pwl')
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -277,10 +256,10 @@ class TextModelPrinter(ModelPrinter):
             # 1 name ?
             # 2 rhs is lb - constant
             # 3 bounds are (0, ub-lb)
-            varname = 'Rg%s' % self.ct_print_name(rng)
-            rhs = rng.cplex_num_rhs()
+            varname = 'Rg%s' % self.linearct_print_name(rng)
+            rlb = rng.cplex_range_lb()
             ub = rng.ub - rng.lb
-            self._rangeData[rng] = (varname, rhs, ub)
+            self._rangeData[rng] = (varname, rlb, ub)
 
     @staticmethod
     def fix_whitespace(name):
@@ -302,20 +281,21 @@ class TextModelPrinter(ModelPrinter):
             name_to_var_map[self._var_name_map[v._index]] = v
         return name_to_var_map
 
-    def ct_print_name(self, ct):
-        return self._linct_name_map.get(ct._index)
+    def print_name(self, obj, name_dict):
+        return name_dict.get(obj._index)  # default is None
 
-    def ic_print_name(self, indicator):
-        return self._ic_name_map.get(indicator._index)
+    def linearct_print_name(self, ct):
+        return self.print_name(ct, self._linct_name_map)
+
+    def logicalct_print_name(self, indicator):
+        return self.print_name(indicator, self._lc_name_map)
 
     def qc_print_name(self, quad_constraint):
-        return self._qc_name_map.get(quad_constraint._index)
-
+        return self.print_name(quad_constraint, self._qc_name_map)
 
     @staticmethod
-    def _make_prefix_name(mobj, prefix, local_index_map, offset=1):
-        index = local_index_map[mobj] if local_index_map is not None else mobj.unchecked_index
-        prefixed_name = "{0:s}{1:d}".format(prefix, index + offset)
+    def _make_prefix_name(mobj, prefix, local_index, offset=1):
+        prefixed_name = "{0:s}{1:d}".format(prefix, local_index + offset)
         return prefixed_name
 
     from docplex.mp.compat23 import mktrans
@@ -330,6 +310,7 @@ class TextModelPrinter(ModelPrinter):
 
     @staticmethod
     def _translate_chars2(raw_name):
+        # noinspection PyUnresolvedReferences
         if isinstance(raw_name, unicode):
             char_mapping = TextModelPrinter._unicode_translate_table
         else:
@@ -345,11 +326,11 @@ class TextModelPrinter(ModelPrinter):
     def _translate_chars3(raw_name):
         return raw_name.translate(TextModelPrinter._unicode_translate_table)
 
-    def fix_name(self, mobj, prefix, local_index_map, hide_names):
+    def fix_name(self, mobj, prefix, local_index, hide_names):
         # INTERNAL
         raw_name = mobj.name
         if hide_names or mobj.is_generated() or not raw_name:
-            return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
+            return self._make_prefix_name(mobj, prefix, local_index, offset=1)
         else:
             return self._translate_chars(raw_name)
 
@@ -363,11 +344,11 @@ class TextModelPrinter(ModelPrinter):
     def _generate_linear_obj_coefs_smart(model, linear_obj_expr, selected_variables):
         # INTERNAL: used to print unreferenced variables in sos and pwl constraints and their coef in the linear part
         #  of the objective, in addition to variables in the objective
-        for v in model.iter_variables():
-            if v in selected_variables:
-                yield v, linear_obj_expr.unchecked_get_coef(v)
+        for v in selected_variables:
+            yield v, linear_obj_expr.unchecked_get_coef(v)
 
-    def _print_lexpr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False, force_first_plus=False):
+    def _print_lexpr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False,
+                     force_first_plus=False):
         # prints an expr to a stream
         term_iter = expr.iter_sorted_terms()
         k = expr.get_constant() if print_constant else None
@@ -410,21 +391,27 @@ class TextModelPrinter(ModelPrinter):
             wrapper.write(curr_token)
             c += 1
 
+        printed_k = True
         if constant is not None:
             # here constant is a number
-            if 0 != constant:
+            if constant:
                 if constant > 0:
                     if c > 0 or force_first_plus:
                         wrapper.write('+')
                 wrapper.write(num2string_fn(constant))
             elif 0 == c and not allow_empty:
                 wrapper.write('0')
+            else:
+                printed_k = False
 
         else:
             # constant is none here
             if not c and not allow_empty:
                 # expr is empty, if we must print something, print 0
                 wrapper.write('0')
+            else:
+                printed_k = False
+        return c or printed_k
 
     def _print_qexpr_obj(self, wrapper, num_printer, var_name_map, quad_expr, force_initial_plus, use_double=True):
         # writes a quadratic expression
@@ -434,7 +421,8 @@ class TextModelPrinter(ModelPrinter):
         if force_initial_plus:
             wrapper.write('+')
 
-        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_sorted_quads(), use_double=use_double)
+        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_sorted_quads(),
+                                      use_double=use_double)
 
     def _print_qexpr_iter(self, wrapper, num_printer, var_name_map, iter_quads, use_double=False):
         q = 0
@@ -461,7 +449,6 @@ class TextModelPrinter(ModelPrinter):
             # all coefficients must be doubled because of the []/2 pattern.
             abs_qk2 = 2 * abs_qk if use_double else abs_qk
             if abs_qk2 != 1:
-
                 curr_token += num_printer.to_string(abs_qk2)
                 curr_token += ' '
 
@@ -483,13 +470,11 @@ class TextModelPrinter(ModelPrinter):
         return q
 
 
-
 class _ExportWrapper(object):
     """
     INTERNAL.
     """
     __new_line_sep = '\n'
-
 
     def __init__(self, oss, indent_str, line_width=80):
         self._oss = oss
@@ -509,27 +494,22 @@ class _ExportWrapper(object):
         self._wrote = False
         self._curr_line = self._indent_str if indented else ''
 
-
     # The 'write' function is invoked intensively when exporting a model.
     # Any piece of code that can be saved here will improve performance in a visible way.
     def write(self, token, separator=True):
-        try:
+        if token is not None:
             if len(self._curr_line) + len(token) >= self._line_width:
                 # faster to write concatenated string, slightly faster to use '\n' instead of ref to static value
                 self._oss.write(self._curr_line + '\n')
+                #oss.write('\n')
                 self._curr_line = self._indent_str + token
             else:
-                # 1 separator
+                # print one separator --before-- the token to be printed
                 if separator and self._wrote:
                     self._curr_line += (' ' + token)
                 else:
                     self._curr_line += token
             self._wrote = True
-
-        except TypeError:  # pragma: no cover
-            # An exception will occur if token is None. In that case, there is nothing to write and
-            # one can safely return.
-            pass
 
     def flush(self, print_newline=True, reset=False):
         self._oss.write(self._curr_line)

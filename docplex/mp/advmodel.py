@@ -9,7 +9,7 @@ from six import iteritems
 from docplex.mp.model import Model
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.quad import VarPair
-from docplex.mp.utils import is_number, is_iterable, generate_constant,\
+from docplex.mp.utils import is_number, is_iterable, generate_constant, \
     is_pandas_dataframe, is_pandas_series, is_numpy_matrix, is_scipy_sparse, is_ordered_sequence
 from docplex.mp.constants import ComparisonType
 
@@ -19,15 +19,12 @@ from docplex.mp.xcounter import update_dict_from_item_value
 
 
 class AdvAggregator(ModelAggregator):
-
     def __init__(self, linear_factory, quad_factory, ordered, counter_type):
         ModelAggregator.__init__(self, linear_factory, quad_factory, ordered, counter_type)
 
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
-        if not coefs:
-            return self.new_zero_expr()
-        elif not is_iterable(coefs, accept_string=False):
+        if not is_iterable(coefs, accept_string=False):
             checker.typecheck_num(coefs)
             return coefs * self._sum_vars_all_different(terms)
         else:
@@ -38,8 +35,7 @@ class AdvAggregator(ModelAggregator):
             number_validation_fn = checker.get_number_validation_fn()
             if number_validation_fn:
                 for dvar, coef in izip(terms, coefs):
-                    safe_coef = number_validation_fn(coef)
-                    lcc_setitem(lcc, dvar, safe_coef)
+                    lcc_setitem(lcc, dvar, number_validation_fn(coef))
             else:
                 for dvar, coef in izip(terms, coefs):
                     lcc_setitem(lcc, dvar, coef)
@@ -139,16 +135,14 @@ class AdvAggregator(ModelAggregator):
             setitem_fn(v, 1)
         return self._to_expr(qcc=None, lcc=lcc)
 
-    def quad_matrix_sum(self, matrix, dvars, symmetric=False):
+    def quad_matrix_sum(self, matrix, lvars, symmetric=False):
         # assume matrix is a NxN matrix
         # vars is a N-vector of variables
         dcc = self._quad_factory.term_dict_type
         qterms = dcc()
-        checker = self._checker
 
         gen_rows = self._generate_rows(matrix)
-        lvars = AdvModel._to_list(dvars, caller='Model.quad_matrix_sum')
-        checker.typecheck_var_seq(lvars)
+
         for i, mrow in enumerate(gen_rows):
             vi = lvars[i]
             for j, k in enumerate(mrow):
@@ -166,11 +160,29 @@ class AdvAggregator(ModelAggregator):
 
         return self._to_expr(qcc=qterms)
 
+    def _sparse_quad_matrix_sum(self, sp_coef_mat, lvars, symmetric=False):
+        # assume matrix is a NxN matrix
+        # vars is a N-vector of variables
+        dcc = self._quad_factory.term_dict_type
+        qterms = dcc()
+
+        for e in range(sp_coef_mat.nnz):
+            k = sp_coef_mat.data[e]
+            if k:
+                row = sp_coef_mat.row[e]
+                col = sp_coef_mat.col[e]
+                vi = lvars[row]
+                vj = lvars[col]
+                update_dict_from_item_value(qterms, VarPair(vi, vj), k)
+
+        return self._to_expr(qcc=qterms)
+
     def vector_compare(self, left_exprs, right_exprs, sense):
         lfactory = self._linear_factory
         assert len(left_exprs) == len(right_exprs)
         cts = [lfactory._new_binary_constraint(left, sense, right) for left, right in izip(left_exprs, right_exprs)]
         return cts
+
 
 # noinspection PyProtectedMember
 class AdvModel(Model):
@@ -279,7 +291,9 @@ class AdvModel(Model):
         by the product of the i_th and j_th variables in `dvars`; in mathematical terms, the expression formed
         by x'Qx.
 
-        :param matrix: A 2-dimensional list.
+        :param matrix: A accepts either a list of lists of numbers, a numpy array, a pandas dataframe, or
+            a scipy sparse matrix in COO format. T
+            The resulting matrix must be square with size (N,N) where N is the number of variables.
         :param dvars: A list or an iterator on variables.
         :param symmetric: A boolean indicating whether the matrix is symmetric or not (default is False).
             No check is done.
@@ -289,8 +303,19 @@ class AdvModel(Model):
         Note:
            The matrix must be square but not necessarily symmetric. The number of rows of the matrix must be equal
            to the size of the variable sequence.
+
+           The symmetric flag only explores half of the matrix and doubles non-diagonal factors. No actual check is done.
+           This flag has no effect on scipy sparse matrix.
+
+        Example:
+            `Model.quad_matrix_sum([[[1, 2], [3, 4]], [x, y])` returns the expression `x^2+4y^2+5x*yt`.
         """
-        return self._aggregator.quad_matrix_sum(matrix, dvars, symmetric=symmetric)
+        lvars = AdvModel._to_list(dvars, caller='Model.quad_matrix_sum')
+        self._checker.typecheck_var_seq(lvars)
+        if is_scipy_sparse(matrix):
+            return self._aggregator._sparse_quad_matrix_sum(matrix, lvars, symmetric=symmetric)
+        else:
+            return self._aggregator.quad_matrix_sum(matrix, lvars, symmetric=symmetric)
 
     def scal_prod_triple(self, left_terms, right_terms, coefs):
         """
@@ -385,7 +410,7 @@ class AdvModel(Model):
             docplex_fatal('{0} requires ordered sequences: lists, numpy array or Series, got: {1}', caller, type(s))
             return list(s)
 
-    def matrix_constraints(self, coef_mat, dvars, rhs, ctsense='le'):
+    def matrix_constraints(self, coef_mat, dvars, rhs, sense='le'):
         """
         Creates a list of linear constraints
         from a matrix of coefficients, a sequence of variables, and a sequence of numbers.
@@ -396,6 +421,7 @@ class AdvModel(Model):
 
         where A is the coefficient matrix (of size (M,N)), X is the variable sequence (size N),
         and B is the sequence of right-hand side values (of size M).
+
         <op> is the comparison operator that defines the sense of the constraint. By default, this generates
         a 'less-than-or-equal' constraint.
 
@@ -408,7 +434,7 @@ class AdvModel(Model):
             or a `pandas` series. The size of the sequence must match the number of columns in the matrix.
         :param rhs: A sequence of numbers: accepts a Python list, a `numpy` array,
             or a `pandas` series. The size of the sequence must match the number of rows in the matrix.
-        :param ctsense: A constraint sense \; accepts either a
+        :param sense: A constraint sense \; accepts either a
             value of type `ComparisonType` or a string (e.g 'le', 'eq', 'ge').
 
         :returns: A list of linear constraints.
@@ -422,7 +448,8 @@ class AdvModel(Model):
                     X = [x, y, z] where x, y, and z are decision variables (size 3), and
 
                     B = [100, 200], a sequence of numbers (size 2),
-            then
+
+            then:
 
                 `mdl.matrix_constraint(A, X, B, 'GE')` returns a list of two constraints
                 [(x + 2y+3z <= 100), (4x + 5y +6z <= 200)].
@@ -461,26 +488,122 @@ class AdvModel(Model):
         for k in s_rhs:
             checker.typecheck_num(k)
 
-        op = ComparisonType.parse(ctsense)
+        op = ComparisonType.parse(sense)
         # ---
         # check dimensions and whether to transpose or not.
         # ---
         nb_rhs = len(s_rhs)
         nb_vars = len(s_dvars)
         if (nb_rows, nb_cols) != (nb_rhs, nb_vars):
-            self.fatal('Dimension error, matrix is ({0},{1}), expecting ({3}, {2})'.format(nb_rows, nb_cols, nb_vars, nb_rhs))
+            self.fatal(
+                'Dimension error, matrix is ({0},{1}), expecting ({3}, {2})'.format(nb_rows, nb_cols, nb_vars, nb_rhs))
 
         if is_scipy_sparse(coef_mat):
             return self._aggregator._sparse_matrix_constraints(coef_mat, s_dvars, s_rhs, op)
         else:
             return self._aggregator._matrix_constraints(coef_mat, s_dvars, s_rhs, op)
 
+    def matrix_ranges(self, coef_mat, dvars, lbs, ubs):
+        """
+        Creates a list of range constraints
+        from a matrix of coefficients, a sequence of variables, and two sequence of numbers.
+
+        This method returns the list of range constraints built from
+
+            L <= Ax <= U
+
+        where A is the coefficient matrix (of size (M,N)), X is the variable sequence (size N),
+        L and B are sequence of numbers (resp. the lower and upper bounds of the ranges) both with size M.
+
+
+        :param coef_mat: A matrix of coefficients with M rows and N columns. This argument accepts
+            either a list of lists of numbers, a `numpy` array with size (M,N), or a `scipy` sparse matrix.
+        :param dvars: An ordered sequence of decision variables: accepts a Python list, `numpy` array,
+            or a `pandas` series. The size of the sequence must match the number of columns in the matrix.
+        :param lbs: A sequence of numbers: accepts a Python list, a `numpy` array,
+            or a `pandas` series. The size of the sequence must match the number of rows in the matrix.
+        :param ubs: A sequence of numbers: accepts a Python list, a `numpy` array,
+            or a `pandas` series. The size of the sequence must match the number of rows in the matrix.
+
+        :returns: A list of range constraints.
+
+        Example:
+
+            If A is a matrix of coefficients with 2 rows and 3 columns:
+
+                    A = [[1, 2, 3],
+                         [4, 5, 6]],
+                    X = [x, y, z] where x, y, and z are decision variables (size 3), and
+
+                    L = [101. 102], a sequence of numbers (size 2),
+                    U = [201, 202]
+
+            then:
+
+                `mdl.range_constraints(A, X, L, U)` returns a list of two ranges
+                [(101 <= x + 2y+3z <= 102), (201 <= 4x + 5y +6z <= 202)].
+
+        Note:
+            If the dimensions of the matrix and variables or of the matrix and number sequence do not match,
+            an error is raised.
+
+        """
+        checker = self._checker
+        if is_pandas_dataframe(coef_mat) or is_numpy_matrix(coef_mat) or is_scipy_sparse(coef_mat):
+            nb_rows, nb_cols = coef_mat.shape
+        else:
+            # a sequence of sequences
+            a_mat = list(coef_mat)
+            nb_rows = len(a_mat)
+            nb_cols = None
+            try:
+                shared_len = None
+                for r in a_mat:
+                    checker.check_ordered_sequence(r, 'matrix_constraints')
+                    r_len = len(r)
+                    if shared_len is None:
+                        shared_len = r_len
+                    elif r_len != shared_len:
+                        self.fatal('All columns should have same length found  {0} != {1}'.format(shared_len, r_len))
+                nb_cols = shared_len if shared_len is not None else 0
+            except AttributeError:
+                self.fatal('All columns should have a len()')
+
+        s_dvars = self._to_list(dvars, caller='Model.range_constraints()')
+        s_lbs = self._to_list(lbs, caller='Model.range_constraints()')
+        s_ubs = self._to_list(ubs, caller='Model.range_constraints()')
+        # check
+
+        checker.typecheck_var_seq(s_dvars)
+        checker.typecheck_num_seq(s_lbs)
+        checker.typecheck_num_seq(s_ubs)
+
+        # ---
+        # check dimensions and whether to transpose or not.
+        # ---
+        nb_vars = len(s_dvars)
+        nb_lbs = len(s_lbs)
+        nb_ubs = len(s_ubs)
+        if nb_lbs != nb_rows:
+            self.fatal('Incorrect size for range lower bounds, expecting: {1}, got: {0},'.format(nb_lbs, nb_rows))
+        if nb_ubs != nb_rows:
+            self.fatal('Incorrect size for range upper bounds, expecting: {1}, got: {0}'.format(nb_ubs, nb_rows))
+        if nb_cols != nb_vars:
+            self.fatal(
+                'Incorrect number of variables, expecting: {1}, got: {0},  matrix is ({0},{1})'.format(nb_vars, nb_cols,
+                                                                                                       nb_rows,
+                                                                                                       nb_cols))
+
+        if is_scipy_sparse(coef_mat):
+            return self._aggregator._sparse_matrix_ranges(coef_mat, s_dvars, s_lbs, s_ubs)
+        else:
+            return self._aggregator._matrix_ranges(coef_mat, s_dvars, s_lbs, s_ubs)
 
     def vector_compare(self, lhss, rhss, sense):
         l_lhs = self._to_list(lhss, caller='Model.vector.compare')
         l_rhs = self._to_list(rhss, caller='Model.vector.compare')
         if len(l_lhs) != len(l_rhs):
-            self.fatal('Model.vector_compare(0 got sequences with different length, left: {0}, right: {1}'.
+            self.fatal('Model.vector_compare() got sequences with different length, left: {0}, right: {1}'.
                        format(len(l_lhs), len(l_rhs)))
         ctsense = ComparisonType.parse(sense)
         return self._aggregator.vector_compare(l_lhs, l_rhs, ctsense)

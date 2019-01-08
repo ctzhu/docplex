@@ -8,7 +8,6 @@
 
 from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.ppretty import ModelPrettyPrinter
-from docplex.mp.utils import DOcplexException
 
 
 class ModelPrinterFactory(object):
@@ -17,24 +16,18 @@ class ModelPrinterFactory(object):
     default_printer_type = LPModelPrinter
 
     @staticmethod
-    def new_printer(exchange_format, hide_user_names=False, do_raise=True, **kwargs):
+    def new_printer(exchange_format, **kwargs):
         """
         returns a new printer
         :param exchange_format:
-        :param hide_user_names:
-        :param do_raise:
         :return:
         """
         printer_type = ModelPrinterFactory.__printer_ext_map.get(exchange_format)
 
         if not printer_type:
-            if do_raise:
-                raise DOcplexException("Unsupported output format: {0!s}", exchange_format)
-            else:
-                return None
+            return None
         else:
             printer = printer_type(**kwargs)
-            printer.forget_user_names = hide_user_names
             return printer
 
     @staticmethod

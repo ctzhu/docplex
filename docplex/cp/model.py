@@ -64,18 +64,19 @@ from docplex.cp.modeler import *
 from docplex.cp.solution import *
 from docplex.cp.expression import *
 from docplex.cp.function import *
+from docplex.cp.solver.solver_listener import CpoSolverListener
 
 # Imports required locally
 import docplex.cp.expression as expression
 import docplex.cp.modeler as modeler
 from docplex.cp.solver.solver import CpoSolver
 from docplex.cp.cpo_compiler import CpoCompiler
-import docplex.cp.cpo_parser as cpo_parser
 import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
 import sys
 import time
+import copy
 
 
 ###############################################################################
@@ -104,16 +105,14 @@ class CpoModel(object):
         ctx = config.get_default()
         super(CpoModel, self).__init__()
         self.format_version   = None     # Version of the CPO format
-        self.var_list         = []       # List of model variables, in declaration order
-        self.var_set          = set()    # Set of model variables
         self.expr_list        = []       # List of model root expressions as tuples (expression, location)
         self.parameters       = None     # Solving parameters
         self.search_phases    = []       # List of search phases
         self.starting_point   = None     # Starting point
         self.objective        = None     # Objective function
-        self.nb_expr_nodes    = 0        # Number of expression nodes
-        self.all_expr_set     = set()    # Set of all expression ids already in the model
-        self.map_expr         = {}       # Map of expressions by name
+        self.map_expr         = {}       # Dictionary of expressions. Key is expression name.
+        self.kpis             = {}       # Dictionary of KPIs. Key is publish name.
+        self.listeners        = []       # Solver listeners
 
         # Indicate to set in the model information of source location
         self.source_loc       = ctx.get_by_path("model.add_source_location", True)
@@ -204,30 +203,28 @@ class CpoModel(object):
         else:
             loc = None
 
-        # Scan expression to check new variables
-        self._scan_expression(expr)
+        # Check type of expression
         etyp = expr.type
-        if not etyp.is_variable:
-            # Check constraints
-            if etyp in (Type_Constraint, Type_BoolExpr):
-                # Check if expression is named
-                if self.name_constraints and not expr.name:
-                    expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
-                self.expr_list.append((expr, loc))
-            elif etyp is Type_SearchPhase:
-                self.search_phases.append((expr, loc))
-            elif etyp is Type_Objective:
-                if self.objective:
-                    if self.objective is expr:
-                        return
-                    raise CpoException("Only one objective function can be added to the model.")
-                self.objective = expr
-                self.expr_list.append((expr, loc))
-            else:
-                self.expr_list.append((expr, loc))
+        etyp = expr.type
+        if etyp in (Type_Constraint, Type_BoolExpr):
+            # Check if expression is named
+            if self.name_constraints and not expr.name:
+                expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
+            self.expr_list.append((expr, loc))
+        elif etyp is Type_SearchPhase:
+            self.search_phases.append((expr, loc))
+        elif etyp is Type_Objective:
+            if self.objective:
+                if self.objective is expr:
+                    return
+                raise CpoException("Only one objective function can be added to the model.")
+            self.objective = expr
+            self.expr_list.append((expr, loc))
+        else:
+            self.expr_list.append((expr, loc))
 
-            # Add to the map of named expressions
-            self._add_named_expr(expr)
+        # Add to the map of named expressions
+        self._add_named_expr(expr)
 
         # Update last add time
         self.last_add_time = time.time()
@@ -345,16 +342,20 @@ class CpoModel(object):
         for p in phases:
             if not p.is_type(Type_SearchPhase):
                 raise AssertionError("Argument 'phases' should be an array of SearchPhases")
-            self._scan_expression(p)
             self.search_phases.append((p, loc))
 
 
     def add_search_phase(self, phase):
         """ Add a search phase to the list of search phases
 
+        This method is deprecated since release 2.3. Use :meth:`~CpoModel.set_search_phases` or
+        :meth:`~CpoModel.add` instead.
+
         Args:
             phase: Phase to add to the list
         """
+        warnings.warn("Method 'add_search_phase' is deprecated since release 2.4.", DeprecationWarning)
+
         # Check arguments
         assert isinstance(phase, CpoExpr) and phase.is_type(Type_SearchPhase), "Argument 'phase' should be a SearchPhases"
 
@@ -366,8 +367,8 @@ class CpoModel(object):
             loc = None
 
         # Append to list of phases
-        self._scan_expression(phase)
         self.search_phases.append((phase, loc))
+
 
     def get_search_phases(self):
         """ Get the list of search phases.
@@ -402,13 +403,30 @@ class CpoModel(object):
         return self.starting_point
 
 
-    def get_all_variables(self):
-        """ Gets the list of all model variables.
+    def add_kpi(self, var, name=None):
+        # """ Add a a Key Performance Indicator to the model.
+        #
+        # A KPI is a model variable whose value is considered as representative of the global solution.
+        # If the model is solved in a cloud context, these KPIs can be associated to the objective value in the
+        # solve details that are sent periodically to the client.
+        #
+        # Args:
+        #     var:              Model variable to be used as KPI(s).
+        #     name (optional):  Name used to publish this KPI. If absent, variable name is used.
+        # """
+        assert isinstance(var, CpoVariable), "Argument 'var' should be a model variable"
+        if name is None:
+            name = var.get_name()
+        self.kpis[name] = var
 
-        Returns:
-            List of model variables.
-        """
-        return self.var_list
+
+    def get_kpis(self):
+        # """ Returns the dictionary of this model KPIs.
+        #
+        # Returns:
+        #     Dictionary of KPIs. Key is publish name, value is model variable.
+        # """
+        return self.kpis
 
 
     def get_all_expressions(self):
@@ -416,7 +434,7 @@ class CpoModel(object):
 
         Returns:
             List of model expressions
-            Each expression is a tuple (expr, loc, root) where loc is a tuple (source_file, line).
+            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line).
         """
         return self.expr_list
 
@@ -430,6 +448,35 @@ class CpoModel(object):
             Expression, None if not found.
         """
         return self.map_expr.get(name)
+
+
+    def get_all_variables(self):
+        """ Gets the list of all model variables (for debugging purpose only).
+
+        This method goes across all model expressions to identify all variables that are pointed by them.
+        Calling this method on a big model may be slow.
+
+        Returns:
+            List of model variables.
+        """
+        # Initialize stack of expresssions to parse
+        estack = [x for x, l in self.expr_list]
+        estack.extend([x for x, l in self.search_phases])
+        if self.objective:
+            estack.append(self.objective)
+        # Loop while expression stack is not empty
+        varlist = []     # Result list
+        doneset = set()  # Set of expressions already processed
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                doneset.add(eid)
+                if e.type.is_variable:
+                    varlist.append(e)
+                # Stack children expressions
+                estack.extend(e.children)
+        return varlist
 
 
     def get_optimization_expression(self):
@@ -514,21 +561,8 @@ class CpoModel(object):
         sfile = self.get_source_file()
         if sfile:
             out.write(" - source file: {}\n".format(sfile))
-        nbintvar = 0
-        nbintervvar = 0
-        nbsequencevar = 0
-        avars = self.get_all_variables()
         lexpr = self.get_all_expressions()
-        for v in avars:
-            if isinstance(v, CpoIntVar):
-                nbintvar += 1
-            elif isinstance(v, CpoIntervalVar):
-                nbintervvar += 1
-            elif isinstance(v, CpoSequenceVar):
-                nbsequencevar += 1
-        out.write(" - variables: {} (integer: {}, interval: {}, sequence: {})\n"
-                  .format(len(avars), nbintvar, nbintervvar, nbsequencevar))
-        out.write(" - constraints: {}, expression nodes: {}\n".format(len(lexpr), self.nb_expr_nodes))
+        out.write(" - expressions: {}\n".format(len(lexpr)))
         out.write(" - modeling time: {0:.2f} sec\n".format(self.get_modeling_duration()))
 
 
@@ -552,22 +586,24 @@ class CpoModel(object):
            - the optional arguments of this method.
 
         Args:
-            context:   (Optional) Complete solving context.
-                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
-            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
-                       that overwrite those in the solving context.
-            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
-                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
-            (others):  (Optional) Any leaf attribute with the same name in the solving context
-                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
             Model solve result (object of class :class:`~docplex.cp.solution.CpoSolveResult`).
         Raises:
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = CpoSolver(self, **kwargs)
+        solver = self._create_solver(**kwargs)
         return solver.solve()
 
 
@@ -590,22 +626,25 @@ class CpoModel(object):
         recommended parameters are *start_search(SearchType='DepthFirst', Workers=1)*
 
         Args:
-            context:   (Optional) Complete solving context.
-                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
-            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
-                       that overwrite those in the solving context.
-            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
-                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
-            (others):  (Optional) Any leaf attribute with the same name in the solving context
-                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
             Object of class :class:`~docplex.cp.solver.solver.CpoSolver` allowing to iterate over the different solutions.
         Raises:
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        return CpoSolver(self, **kwargs)
+        solver = self._create_solver(**kwargs)
+        return solver
 
 
     def refine_conflict(self, **kwargs):
@@ -640,30 +679,32 @@ class CpoModel(object):
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
 
-        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
+        This function is available on DOcplexcloud and with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
-            context:   (Optional) Complete solving context.
-                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
-            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
-                       that overwrite those in the solving context.
-            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
-                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
-            (others):  (Optional) Any leaf attribute with the same name in the solving context
-                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
             List of constraints that cause the conflict (object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`)
         Raises:
             :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = CpoSolver(self, **kwargs)
+        solver = self._create_solver(**kwargs)
         return solver.refine_conflict()
 
 
-    def propagate(self, **kwargs):
+    def propagate(self, cnstr=None, **kwargs):
         """ This method invokes the propagation on the current model.
 
         Constraint propagation is the process of communicating the domain reduction of a decision variable to
@@ -685,40 +726,115 @@ class CpoModel(object):
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
 
-        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
+        This function is available on DOcplexcloud and with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
-            context:   (Optional) Complete solving context.
-                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
-            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
-                       that overwrite those in the solving context.
-            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
-                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
-            (others):  (Optional) Any leaf attribute with the same name in the solving context
-                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            cnstr (Optional):   Optional constraint to be added to the model before invoking propagation.
+                                If not given, solving context is the default one that is defined in the module
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
         Returns:
             Propagation result (object of class :class:`~docplex.cp.solution.CpoSolveResult`)
         Raises:
             :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = CpoSolver(self, **kwargs)
+        # Check if an optional constraint has been given
+        if cnstr is None:
+            mdl = self
+        else:
+            # Clone the model and add constraint
+            mdl = self.clone()
+            mdl.add(cnstr)
+        # Call propagation
+        solver = mdl._create_solver(**kwargs)
         return solver.propagate()
+
+
+    def run_seeds(self, nbrun, **kwargs):
+        """ This method runs *nbrun* times the CP optimizer search with different random seeds
+        and computes statistics from the result of these runs.
+
+        Result statistics are displayed on the log output that should be activated.
+        If the appropriate configuration variable *context.solver.add_log_to_solution* is set to True (default),
+        log is also available in the *CpoRunResult* result object, accessible as a string using the method
+        :meth:`~docplex.cp.solution.CpoRunResult.get_solver_log`
+
+        Each run of the solver is stopped according to single solve conditions (TimeLimit for example).
+        Total run time is then expected to take *nbruns* times the duration of a single run.
+
+        This function is available only with local CPO solver with release number greater or equal to 12.8.
+
+        Args:
+            nbrun:              Number of runs with different seeds.
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
+        Returns:
+            Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
+        Raises:
+            :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
+        """
+        solver = self._create_solver(**kwargs)
+        return solver.run_seeds(nbrun)
+
+
+    def add_solver_listener(self, lstnr):
+        """ Add a solver listener.
+
+        A solver listener is an object extending the class :class:`~docplex.cp.solver.solver_listener.CpoSolverListener`
+        which provides multiple functions that are called to notify about the different solving steps.
+
+        Args:
+            lstnr:  Solver listener
+        """
+        assert isinstance(lstnr, CpoSolverListener), \
+            "Listener should be an object of class docplex.cp.solver.solver_listener.CpoSolverListener"
+        self.listeners.append(lstnr)
+
+
+    def remove_solver_listener(self, lstnr):
+        """ Remove a solver listener previously added with :meth:`~docplex.cp.model.CpoModel.add_listener`.
+
+        Args:
+            lstnr:  Listener to remove.
+        """
+        self.listeners.remove(lstnr)
 
 
     def export_model(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
         Args:
-            out:                 (Optional) Target output, stream or file name. Default is sys.stdout.
-            context:             (Optional) Global solving context.
-                                 If not given, context is the default context that is set in config.py.
-            params:              (Optional) Solving parameters (CpoParameters) that overwrites those in solving context
-            add_source_location: (Optional) Add source location into generated text
-            length_for_alias:    (Optional) Minimum name length to use shorter alias instead
-            (others):            (Optional) All other context parameters that can be changed
+            out (Optional):     Target output, stream or file name. Default is sys.stdout.
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            add_source_location (Optional): Add source location into generated text
+            length_for_alias (Optional): Minimum name length to use shorter alias instead
+            (others) (Optional): Any leaf attribute with the same name in the solving context
         """
         CpoCompiler(self, **kwargs).print_model(out)
 
@@ -729,6 +845,7 @@ class CpoModel(object):
         Args:
             file:   Input file
         """
+        import docplex.cp.cpo_parser as cpo_parser
         prs = cpo_parser.CpoParser(self)
         prs.parse(file)
 
@@ -769,23 +886,18 @@ class CpoModel(object):
         if not isinstance(other, CpoModel):
             raise CpoException("Other model is not an object of class CpoModel")
 
-        # Compare variables
-        lx1 = self.var_list
-        lx2 = other.var_list
-        if len(lx1) != len(lx2):
-            raise CpoException("Different number of variables, {} vs {}.".format(len(lx1), len(lx2)))
-        for i in range(len(lx1)):
-            if not lx1[i].equals(lx2[i]):
-                raise CpoException("The variable {} differs: {} vs {}".format(i, lx1[i], lx2[i]))
-
-        # Compare expressions
-        lx1 = self.expr_list
-        lx2 = other.expr_list
+        # Compare expressions that are not variables
+        lx1 = [x for x, l in self.expr_list if not isinstance(x, CpoVariable)]
+        #print("Expressions of 1:")
+        #for x in lx1: print("   {}".format(x))
+        lx2 = [x for x, l in other.expr_list if not isinstance(x, CpoVariable)]
+        #print("Expressions of 2:")
+        #for x in lx2: print("   {}".format(x))
         if len(lx1) != len(lx2):
             raise CpoException("Different number of expressions, {} vs {}.".format(len(lx1), len(lx2)))
         for i in range(len(lx1)):
             #print("Check expression {}\n   and\n{}".format(lx1[i][0], lx2[i][0]))
-            if not lx1[i][0].equals(lx2[i][0]):
+            if not lx1[i].equals(lx2[i]):
                 raise CpoException("The expression {} differs: {} vs {}".format(i, lx1[i][0], lx2[i][0]))
 
         # Compare search phases
@@ -820,6 +932,17 @@ class CpoModel(object):
         return True
 
 
+    def clone(self):
+        """ Create a copy of this model """
+        res = copy.copy(self)
+        res.expr_list = list(self.expr_list)
+        if self.parameters is not None:
+            res.parameters = self.parameters.copy()
+        res.search_phases = list(self.search_phases)
+        res.map_expr = dict(self.map_expr)
+        return res
+
+
     def __eq__(self, other):
         """ Check if this model is equal to another
 
@@ -836,6 +959,25 @@ class CpoModel(object):
         return not self.__eq__(other)
 
 
+    def __str__(self):
+        """ Convert the model into string (returns model name) """
+        return self.get_name()
+
+
+    def _create_solver(self, **kwargs):
+        """ Create a new solver instance attached to this model
+
+        Args:
+            kwargs: Parameters to pass to solver creation
+        Returns:
+            New solver properly initialized.
+        """
+        solver = CpoSolver(self, **kwargs)
+        for l in self.listeners:
+            solver.add_listener(l)
+        return solver
+
+
     def _add_named_expr(self, expr):
         """ If named, add an expression to the map of named expressions.
 
@@ -848,51 +990,6 @@ class CpoModel(object):
         if name:
             if (self.map_expr.setdefault(name, expr) is not expr):
                 raise CpoException("An expression named '{}' already exists: {}".format(name, self.map_expr[name]))
-
-
-    def _add_variable(self, var):
-        """ Add a variable to the model
-
-        Args:
-            var: Variable expression to add
-        """
-        # Check if variable already in expressions
-        name = var.name
-        ov = self.map_expr.get(name)
-        if ov is var:
-            return
-        if ov is not None:
-            raise CpoException("Variable name '" + str(name) + "' is already used.")
-        # Add variable in structures
-        self.map_expr[name] = var
-        self.var_set.add(var)
-        self.var_list.append(var)
-
-
-    def _scan_expression(self, expr):
-        """ Scan an expression to add all referenced variables and update statistics
-
-        Args:
-            expr: Expression to scan
-        Raises:
-            CpoException if error detected
-        """
-        # Loop while expression stack is not empty
-        estack = [expr]  
-        eset = self.all_expr_set
-        while estack:
-            # Get expression to check
-            e = estack.pop()
-            t = e.type
-            if not t.is_constant:
-                eid = id(e)
-                if eid not in eset:
-                    eset.add(eid)
-                    self.nb_expr_nodes += 1
-                    if t.is_variable:
-                        self._add_variable(e)
-                    # Stack children expressions
-                    estack.extend(e.children)
 
 
     def _ensure_all_root_constraints_named(self):

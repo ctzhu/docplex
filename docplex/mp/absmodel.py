@@ -12,9 +12,6 @@ from docplex.mp.model import Model
 
 class _AbstractModelMixin(object):
 
-    def __init__(self):
-        pass
-
     def setup_variables(self):
         raise NotImplementedError  # pragma: no cover
 
@@ -50,25 +47,6 @@ class _AbstractModelMixin(object):
     def ensure_setup(self):
         if self._is_empty():
             self.setup()
-
-    def restart(self):
-        """ Called to restart the model in an empty state.
-
-        The underlying model is also restarted to a clean and empty state.
-        All modeling objects previsouly defined and stored in the model are discarded.
-        """
-        self.clear()
-        # if the superclass does not call the parent class, make sure...
-        Model.clear(self)
-        # starts a new engine (same agent)
-        self.refresh_engine()
-
-    def refresh_model(self, do_setup=True):
-        ''' Clears all model elements plus sets a new engine.'''
-        # DEPRECATED
-        self.restart()
-        if do_setup:
-            self.ensure_setup()
 
     def before_solve_hook(self):
         """ This method is called just before solve inside a run.

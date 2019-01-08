@@ -160,7 +160,6 @@ Configuration of the model solving
        * `docloud`, the default agent, for solving a CPO model using the DOcplexcloud service.
        * `local`, the agent allowing to solve models locally using the CP Optimizer Interactive coming with
          versions of COS greater or equal to 12.7.0.
-         For compatibility with prior versions, a cloned copy named 'angel' is also present.
 
     If the CP Optimizer Interactive program *cpoptimizer(.exe)* is detected in the system path, the default solver
     agent is automatically set to *local* instead of *docloud*.
@@ -334,6 +333,9 @@ context.solver.add_log_to_solution = True
 # Indicate to auto-publish solve details and results in environment
 context.solver.auto_publish = True
 
+# Indicate to replace simple solve by a start/next loop
+context.solver.solve_with_start_next = False
+
 # Log prefix
 context.solver.log_prefix = "[Solver] "
 
@@ -386,16 +388,12 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 #-----------------------------------------------------------------------------
 # Local solving agent context
 
-context.solver.local = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverLocal",
+context.solver.local = Context(class_name = "docplex.cp.solver.solver_local.CpoSolverLocal",
                                execfile   = "cpoptimizer" + EXE_EXTENSION,
                                parameters = ['-angel'],
                                log_prefix = "[Local] ")
 
-# Add an alias named 'angel' for ascending compatibility
-context.solver.angel = context.solver.local
-
 LOCAL_CONTEXT = context.clone()
-LOCAL_CONTEXT.solver.angel = LOCAL_CONTEXT.solver.local
 
 LOCAL_CONTEXT.params.pop('TimeLimit')
 LOCAL_CONTEXT.params.pop('Workers')
@@ -485,7 +483,7 @@ def _get_effective_context(**kwargs):
             if (rp is None):
                 rplist.append((k, v))
 
-    # Replace or set remaining fields in parameters
+     # Replace or set remaining fields in parameters
     if rplist:
         params = ctx.params
         chkparams = not ctx.solver.enable_undocumented_params

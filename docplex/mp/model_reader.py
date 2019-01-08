@@ -17,7 +17,7 @@ try:
     from cplex import Cplex
     from cplex._internal._subinterfaces import ObjSense
     from cplex.exceptions import CplexError, CplexSolverError
-    from docplex.mp.cplex_engine import _SafeCplexWrapper
+    from docplex.mp.cplex_engine import _safe_cplex
 
 except ImportError:  # pragma: no cover
     Cplex = None
@@ -38,7 +38,7 @@ class _CplexReaderFileContext(object):
         self._read_method = read_method or ["read"]
 
     def __enter__(self):
-        cpx = _SafeCplexWrapper()
+        cpx = _safe_cplex()
         # no output from CPLEX
         cpx.set_results_stream(None)
         cpx.set_log_stream(None)
@@ -145,14 +145,16 @@ class ModelReader(object):
             else:
                 return None
 
-    def _cplex_read(self, filename, verbose=False):
+    @staticmethod
+    def _cplex_read(filename, verbose=False):
         # print("-> start reading file: {0}".format(filename))
-        cpx = _SafeCplexWrapper()
+        cpx = _safe_cplex()
         # no warnings
-        cpx.set_results_stream(None)
-        cpx.set_log_stream(None)
-        cpx.set_warning_stream(None)
-        cpx.set_error_stream(None)  # remove messages about names
+        if not verbose:
+            cpx.set_results_stream(None)
+            cpx.set_log_stream(None)
+            cpx.set_warning_stream(None)
+            cpx.set_error_stream(None)  # remove messages about names
         try:
             cpx.read(filename)
             return cpx
@@ -301,8 +303,7 @@ class ModelReader(object):
                 if not has_range:
                     expr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
                     op = ComparisonType.parse(sense)
-                    #ct = op(expr, rhs)
-                    ct = lfactory._new_binary_constraint(lhs=expr, rhs=rhs, ctsense=op)
+                    ct = lfactory._new_binary_constraint(lhs=expr, rhs=rhs, sense=op)
                     ct.name = ctname
                     deferred_cts.append(ct)
 
@@ -417,6 +418,7 @@ class ModelReader(object):
             all_ind_linearcts = cpx_indicators.get_linear_components()
             all_ind_senses = cpx_indicators.get_senses()
             all_ind_complemented = cpx_indicators.get_complemented()
+            lfactory = mdl._lfactory
             for i in range(nb_indicators):
                 ind_bvar = all_ind_bvars[i]
                 ind_name = all_ind_names[i] if all_ind_names else None
@@ -430,7 +432,9 @@ class ModelReader(object):
                 ind_linexpr = self._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex, ind_linear)
                 op = ComparisonType.cplex_ctsense_to_python_op(ind_sense)
                 ind_ct = op(ind_linexpr, ind_rhs)
-                mdl._add_indicator(ind_bvar, ind_ct, active_value=1-ind_complemented, name=ind_name)
+                indct = lfactory.new_indicator_constraint(ind_bvar, ind_ct,
+                                                          active_value=1 - ind_complemented, name=ind_name)
+                mdl.add(indct)
 
             # 5. upload Piecewise linear constraints
             try:

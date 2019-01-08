@@ -20,6 +20,8 @@ can not be imported.
 """
 
 from docplex.cp.solution import *
+from docplex.cp.solver.solver_listener import CpoSolverListener
+import os
 try:
     import docplex.util.environment as runenv
     ENVIRONMENT_PRESENT = True
@@ -44,28 +46,79 @@ _SOLVE_STATUS_MAP = {SOLVE_STATUS_FEASIBLE   : _STATUS_FEASIBLE_SOLUTION,
                      SOLVE_STATUS_INFEASIBLE : _STATUS_INFEASIBLE_SOLUTION,
                      SOLVE_STATUS_OPTIMAL    : _STATUS_OPTIMAL_SOLUTION}
 
+
+###############################################################################
+## Classes
+###############################################################################
+
+# Solver listener that interact with environment
+class EnvSolverListener(CpoSolverListener):
+    """ Cpo solver listener that interact with environment.
+    This listener is added by the CpoSolver when it is created, if the environment exists.
+    """
+    def __init__(self):
+        super(EnvSolverListener, self).__init__()
+
+
+    def solver_created(self, solver):
+        """ Notify the listener that the solver object has been created.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        # Check if calling environment is DODS (Decision Optimization for Data Science)
+        env = _get_environment(solver, "solve_details")
+        if env is None:
+            return
+        value = os.environ.get("IS_DODS")
+        if str(value).lower() == "true":
+            # Force solve to be transformed in start/next
+            solver.context.solver.solve_with_start_next = True
+
+
+    def start_solve(self, solver):
+        """ Notify that the solve is started.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        _notify_start_solve(solver)
+
+
+    def end_solve(self, solver):
+        """ Notify that the solve is ended.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        _notify_end_solve(solver)
+
+
+    def solution_found(self, solver, msol):
+        """ Signal that a solution has been found.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            msol:   Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`
+        """
+        _update_solve_details(solver)
+        _publish_solution(solver)
+
+
 ###############################################################################
 ## Public functions
 ###############################################################################
 
-def start_solve(solver):
-    """ Process the start of a model solve
+def get_environment():
+    """ Returns the Environment object that represents the actual execution environment.
 
-    Args:
-       solver: Source CPO solver
+    Returns:
+        Environment descriptor, None if none.
     """
-    _notify_start_solve(solver)
-
-
-def end_solve(solver):
-    """ Process the end of a model solve
-
-    Args:
-       solver: Source CPO solver
-    """
-    _update_solve_details(solver)
-    _publish_solution(solver)
-    _notify_end_solve(solver)
+    # Check if environment available
+    if not ENVIRONMENT_PRESENT:
+        return None
+    return runenv.get_environment()
 
 
 ###############################################################################
@@ -123,10 +176,17 @@ def _update_solve_details(solver):
         sdetails["MODEL_DETAIL_TYPE"] = "CPO CP"
     else:
         sdetails["MODEL_DETAIL_TYPE"] = "CPO Scheduling"
+
     # Set objective if any
     objctv = msol.get_objective_values()
     if objctv is not None:
         sdetails["PROGRESS_CURRENT_OBJECTIVE"] = ';'.join([str(x) for x in objctv])
+
+    # Set KPIs if any
+    kpis = msol.get_kpis()
+    for k, v in kpis.items():
+        sdetails["KPI." + k] = v
+
     # Submit details to environment
     env.update_solve_details(sdetails)
 
@@ -170,7 +230,7 @@ def _notify_end_solve(solver):
 
 
 def _get_environment(solver, prop):
-    """ Get the environment to call
+    """ Get the environment to call, checking if auto-publish is required.
     Args:
         solver: Source CPO solver
         prop:   Auto_publish specific property that should be checked
@@ -188,22 +248,9 @@ def _get_environment(solver, prop):
 
     # Check auto_publish config
     pblsh = solver.context.solver.auto_publish
-    if (pblsh is None) or not((pblsh is True) or pblsh.get_attribute(prop)):
+    if (pblsh is None) or not((pblsh is True) or (isinstance(pblsh, Context) and pblsh.get_attribute(prop))):
         return None
 
     # Return
     return env
 
-
-# Test environment class
-class TestEnvironment(object):
-    def get_input_stream(self, name):
-        return open(name, "rb")
-    def get_output_stream(self, name):
-        return open(name, "wb")
-    def notify_start_solve(self, details):
-        print("Start solve, details: " + str(details))
-    def update_solve_details(self, details):
-        print("Update details, details: " + str(details))
-    def notify_end_solve(self, status):
-        print("End solve, status: " + str(status))

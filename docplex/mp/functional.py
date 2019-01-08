@@ -78,13 +78,14 @@ class _IAdvancedExpr(Expr, LinearOperand):
         return sos1
 
     def _new_generated_indicator(self, binary_var, linear_ct, active_value=1, name=None):
-        ind = self.model._add_indicator(binary_var, linear_ct, active_value, name)
+        ind = self._model._lfactory.new_indicator_constraint(binary_var, linear_ct, active_value, name)
         ind.notify_origin(self)
+        self._model.add(ind)
         return ind
 
     def _post_generated_ct(self, ct):
         # posts a constraint and marks it as generated.
-        ct = self._model._post_constraint(ct, ctname=None)
+        self._model._post_constraint(ct)
         ct.notify_origin(self)
         return ct
 
@@ -131,6 +132,8 @@ class _IAdvancedExpr(Expr, LinearOperand):
     @property
     def functional_var(self):
         return self._get_resolved_f_var()
+
+    as_var = functional_var
 
     def square(self):
         return self.functional_var.square()

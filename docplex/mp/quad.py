@@ -10,7 +10,6 @@ from docplex.mp.constants import UpdateEvent
 from docplex.mp.basic import _SubscriptionMixin
 from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
 from docplex.mp.utils import *
-from docplex.mp.xcounter import FastOrderedDict
 from docplex.mp.xcounter import update_dict_from_item_value
 
 
@@ -259,6 +258,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
            >>> 3
         """
         return len(self._quadterms)
+
+    def size(self):
+        return self.number_of_quadratic_terms + self._linexpr.size()
 
     def is_separable(self):
         """ Checks if all quadratic terms are separable.

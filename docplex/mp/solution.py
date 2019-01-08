@@ -12,9 +12,9 @@ import sys
 
 import six
 
-try:
+try:  # pragma: no cover
     from itertools import zip_longest as izip_longest
-except ImportError:
+except ImportError:  # pragma: no cover
     from itertools import izip_longest
 
 from six import iteritems, iterkeys
@@ -72,7 +72,7 @@ class SolveSolution(object):
         self._name = name
         self._problem_name = model.name
         self._problem_objective_expr = model.objective_expr if model.has_objective() else None
-        self.__objective__ = self.NO_OBJECTIVE_VALUE if obj is None else obj
+        self._objective = self.NO_OBJECTIVE_VALUE if obj is None else obj
         self._solved_by = solved_by
         self.__var_value_map = {}
         self._attribute_map = defaultdict(dict)
@@ -109,7 +109,7 @@ class SolveSolution(object):
         All data related to the model are left unchanged.
         """
         self.__var_value_map = {}
-        self.__objective__ = self.NO_OBJECTIVE_VALUE
+        self._objective = self.NO_OBJECTIVE_VALUE
         self._attribute_map = {}
         self._solve_status = None
 
@@ -151,7 +151,8 @@ class SolveSolution(object):
         return self._name
 
     def set_name(self, solution_name):
-        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True, header='SolveSolution.set_name(): ')
+        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True,
+                                       header='SolveSolution.set_name(): ')
         self._name = solution_name
 
     name = property(get_name, set_name)
@@ -188,16 +189,21 @@ class SolveSolution(object):
             value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_value(var_key, value, keep_zero=True, rounding=False, do_warn_on_non_discrete=True)
+        self._set_var_key_value(var_key, value, keep_zero=True, rounding=False, do_warn_on_non_discrete=True)
 
-    def set_var_value(self, var_key, value, keep_zero, rounding, do_warn_on_rounding):
+    def __setitem__(self, var_key, value):
+        # aleays keep zero, no warnings, no checks
+        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False,
+                                do_warn_on_non_discrete=False)
+
+    def set_var_key_value(self, var_key, value, keep_zero, rounding, do_warn_on_rounding):
         # INTERNAL
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_value(var_key, value, keep_zero, rounding, do_warn_on_rounding)
+        self._set_var_key_value(var_key, value, keep_zero, rounding, do_warn_on_rounding)
 
-    def _set_var_value(self, var_key, value, keep_zero, rounding, do_warn_on_non_discrete):
+    def _set_var_key_value(self, var_key, value, keep_zero, rounding, do_warn_on_non_discrete):
         # INTERNAL: no checks done.
-        if value != 0 or keep_zero:
+        if value or keep_zero:
             var = self._resolve_var(var_key, do_raise=False)
             if var is not None:
                 self._set_var_value_internal(var, value, rounding, do_warn_on_non_discrete=do_warn_on_non_discrete)
@@ -232,6 +238,13 @@ class SolveSolution(object):
         return self.__model
 
     @property
+    def solve_details(self):
+        """
+        This property returns the solve_details associated with the solution.
+        """
+        return self.__model.solve_details
+
+    @property
     def error_handler(self):
         return self.__model.error_handler
 
@@ -244,7 +257,7 @@ class SolveSolution(object):
         Returns:
             float: The value of the objective as defined by the solution.
         """
-        return self.__objective__
+        return self._objective
 
     def set_objective_value(self, obj):
         """
@@ -253,7 +266,7 @@ class SolveSolution(object):
         Args:
             obj (float): The value of the objective in the solution.
         """
-        self.__objective__ = obj
+        self._objective = obj
 
     def has_objective(self):
         """
@@ -262,12 +275,24 @@ class SolveSolution(object):
         Returns:
             Boolean: True if the solution defines an objective value.
         """
-        return self.__objective__ != self.NO_OBJECTIVE_VALUE
+        return self._objective != self.NO_OBJECTIVE_VALUE
 
     def _has_problem_objective(self):
         return self.model.has_objective()
 
-    objective_value = property(get_objective_value, set_objective_value)
+    @property
+    def objective_value(self):
+        """ This property is used to get or set the objective valueof the solution.
+
+        When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
+        To check whether the objective has been set, use :func:`has_objective`.
+
+        """
+        return self._objective
+
+    @objective_value.setter
+    def objective_value(self, new_objvalue):
+        self.set_objective_value(new_objvalue)
 
     @property
     def solve_status(self):
@@ -281,12 +306,8 @@ class SolveSolution(object):
         # INTERNAL
         for e, val in iteritems(key_value_map):
             # need to check var_keys and values
-            self.set_var_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding, do_warn_on_rounding=False)
-
-    def store_slacks(self, slacks):
-        # INTERNAL
-        assert isinstance(slacks, dict)
-        self._attribute_map[SolveAttribute.slacks.name] = slacks
+            self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding,
+                                   do_warn_on_rounding=False)
 
     def store_infeasibilities(self, infeasibilities, infeas_key=INFEAS_KEY):
         assert isinstance(infeasibilities, dict)
@@ -357,7 +378,15 @@ class SolveSolution(object):
             float: The value of the variable in the solution.
         """
         dvar = self._resolve_var(dvar_arg, do_raise=True)
-        return self.__var_value_map.get(dvar, 0) if dvar is not None else 0
+        return self.__var_value_map.get(dvar, 0)
+
+    def get_var_value(self, dvar):
+        self._checker.typecheck_var(dvar)
+        return self._get_var_value(dvar)
+
+    def _get_var_value(self, dvar):
+        # INTERNAL
+        return self.__var_value_map.get(dvar, 0)
 
     def get_values(self, dvars):
         """
@@ -365,20 +394,35 @@ class SolveSolution(object):
         If a variable is not mentioned in the solution,
         the method assumes 0 and does not raise an exception.
 
+        Args:
+            dvars: an ordered sequence of decision variables.
+
         Returns:
             list: A list of float values, in the same order as the variable sequence.
 
         """
-
         checker = self._checker
-        checker.check_ordered_sequence(arg=dvars, header='SolveSolution.get_values() expects ordered sequence of variables')
+        checker.check_ordered_sequence(arg=dvars,
+                                       header='SolveSolution.get_values() expects ordered sequence of variables')
         dvar_seq = checker.typecheck_var_seq(dvars)
         return self._get_values(dvar_seq)
 
     def _get_values(self, dvars):
-        # ginternal: no checks are done.
+        # internal: no checks are done.
         self_value_map = self.__var_value_map
         return [self_value_map.get(dv, 0) for dv in dvars]
+
+    def get_value_dict(self, var_dict, keep_zeros=True, precision=1e-6):
+        # assume var_dict is a key-> variable dictionary
+        if keep_zeros:
+            return {k: self._get_var_value(v) for k, v in iteritems(var_dict)}
+        else:
+            value_dict = {}
+            for key, dvar in iteritems(var_dict):
+                dvar_value = self._get_var_value(dvar)
+                if abs(dvar_value) >= precision:
+                    value_dict[key] = dvar_value
+            return value_dict
 
     @property
     def number_of_var_values(self):
@@ -390,10 +434,38 @@ class SolveSolution(object):
     def __getitem__(self, dvar):
         return self.get_value(dvar)
 
-    def __iter__(self):
-        # INTERNAL: this is necessary to prevent solution from being an iterable.
-        # as it follows getitem protocol, it can mistakenly be interpreted as an iterable
-        raise TypeError
+    def get_status(self, ct):
+        """ Returns the status of a linear constraint in the solution.
+
+        Returns 1 if the constraint is satisfied, else returns 0. This is particularly useful when using
+        the status variable of constraints.
+
+        :param ct: A linear constraint
+        :return: a number (1 or 0)
+        """
+        self._checker.typecheck_linear_constraint(ct)
+        return self._get_status(ct)
+
+    def _get_status(self, ct):
+        # INTERNAL
+        ct_status_var = ct._get_status_var()
+        if ct_status_var:
+            return self.__var_value_map.get(ct_status_var, 0)
+        elif ct.has_valid_index():
+            # a posted constraint is true if there is a solution
+            return 1
+        else:
+            return 1 if ct.is_satisfied(self) else 0
+
+    def find_unsatisfied_constraints(self, tolerance=1e-6):
+        unsats = []
+        for ct in self.model.iter_constraints():
+            if not ct.is_satisfied(self, tolerance):
+                unsats.append(ct)
+        return unsats
+
+    def check(self, tolerance=1e-6):
+        return not (self.find_unsatisfied_constraints(tolerance))
 
     def equals_solution(self, other, check_models=False, check_explicit=False, obj_precision=1e-3, var_precision=1e-6):
         if check_models and (self.model != other.model):
@@ -459,7 +531,7 @@ class SolveSolution(object):
         if self._problem_objective_expr is not None and objective_fmt and self.has_objective():
             obj_prec = self.model.objective_expr.float_precision
             obj_name = self._problem_objective_name()
-            print(objective_fmt.format(obj_name, self.__objective__, prec=obj_prec))
+            print(objective_fmt.format(obj_name, self._objective, prec=obj_prec))
         if iter_vars is None:
             iter_vars = self.iter_variables()
         print_counter = 0
@@ -477,9 +549,9 @@ class SolveSolution(object):
                         else:
                             value_fmt = value_fmt.encode('utf-8')
                     output = value_fmt.format(varname=varname,
-                                               value=var_value,
-                                               prec=dvar.float_precision,
-                                               counter=print_counter)
+                                              value=var_value,
+                                              prec=dvar.float_precision,
+                                              counter=print_counter)
                     try:
                         print(output)
                     except UnicodeEncodeError:
@@ -509,7 +581,7 @@ class SolveSolution(object):
             oss.write("solution for: %s\n" % problem_name)
         if self._problem_objective_expr is not None and self.has_objective():
             obj_name = self._problem_objective_name()
-            oss.write("%s: %g\n" % (obj_name, self.__objective__))
+            oss.write("%s: %g\n" % (obj_name, self._objective))
 
         value_fmt = "{var:s}={value:.{prec}f}"
         for dvar, val in self.iter_var_values():
@@ -530,6 +602,11 @@ class SolveSolution(object):
         s_values = ",".join(["{0!s}:{1:g}".format(var, val) for var, val in iteritems(self.__var_value_map)])
         r = "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
         return str_holo(r, maxlen=72)
+
+    def __iter__(self):
+        # INTERNAL: this is necessary to prevent solution from being an iterable.
+        # as it follows getitem protocol, it can mistakenly be interpreted as an iterable
+        raise TypeError
 
     def print_mst(self):
         """
@@ -686,7 +763,7 @@ class SolveSolution(object):
         See:
             :func: `docplex.mp.model.kpi_by_name`
         '''
-        kpi = self.model.kpi_by_name(name, try_match=True, match_case=False)
+        kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
         return kpi._get_solution_value(self)
 
 

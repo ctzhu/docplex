@@ -35,15 +35,16 @@ MAX_ITERATED_SOLUTIONS = 6
 class CpoSolverSimulatorFail(solver.CpoSolverAgent):
     """ CPO solver simulator that always fail (status unfeasible) """
     
-    def __init__(self, model, params, context):
+    def __init__(self, solver, params, context):
         """ Create a solver simulator
 
         Args:
-            model:    Model to solve
+            solver:   Parent solver
             params:   Solving parameters
             context:  Solver context
         """
-        super(CpoSolverSimulatorFail, self).__init__(model, params, context)
+        super(CpoSolverSimulatorFail, self).__init__(solver, params, context)
+
 
     def solve(self):
         """ Solve the model.
@@ -57,25 +58,51 @@ class CpoSolverSimulatorFail(solver.CpoSolverAgent):
         # Build fake infeasible solution
         msol = CpoSolveResult(self.model)
         msol.solve_status = SOLVE_STATUS_INFEASIBLE
-
-        # Return
         return msol
+
+
+    def refine_conflict(self):
+        """ This method identifies a minimal conflict for the infeasibility of the current model.
+
+        Given an infeasible model, the conflict refiner can identify conflicting constraints and variable domains
+        within the model to help you identify the causes of the infeasibility.
+        In this context, a conflict is a subset of the constraints and/or variable domains of the model
+        which are mutually contradictory.
+        Since the conflict is minimal, removal of any one of these constraints will remove that
+        particular cause for infeasibility.
+        There may be other conflicts in the model; consequently, repair of a given conflict
+        does not guarantee feasibility of the remaining model.
+
+        Returns:
+            Conflict result,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        # Warn about simulator
+        print("WARNING: Solver simulator always returns fail")
+        # Build fake infeasible solution
+        msol = CpoRefineConflictResult(self.model)
+        msol.solve_status = SOLVE_STATUS_INFEASIBLE
+        return msol
+
 
 
 class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
     """ CPO solver simulator that generates a random solution """
 
-    def __init__(self, model, params, context):
+    def __init__(self, solver, params, context):
         """ Create a solver simulator
 
         Args:
-            model:    Model to solve
+            solver:   Parent solver
             params:   Solving parameters
             context:  Solver context
         """
-        super(CpoSolverSimulatorRandom, self).__init__(model, params, context)
+        super(CpoSolverSimulatorRandom, self).__init__(solver, params, context)
         self.max_iterator_solutions = random.randint(0, MAX_ITERATED_SOLUTIONS)
         self.solution_count = 0
+
 
     def solve(self):
         """ Solve the model.
@@ -94,6 +121,38 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         return self._generate_solution()
 
 
+    def refine_conflict(self):
+        """ This method identifies a minimal conflict for the infeasibility of the current model.
+
+        Given an infeasible model, the conflict refiner can identify conflicting constraints and variable domains
+        within the model to help you identify the causes of the infeasibility.
+        In this context, a conflict is a subset of the constraints and/or variable domains of the model
+        which are mutually contradictory.
+        Since the conflict is minimal, removal of any one of these constraints will remove that
+        particular cause for infeasibility.
+        There may be other conflicts in the model; consequently, repair of a given conflict
+        does not guarantee feasibility of the remaining model.
+
+        Returns:
+            Conflict result,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        # Build fake conflict
+        csol = CpoRefineConflictResult(self.model)
+        vars = self.model.get_all_variables()
+        if len(vars) > 0:
+            for i in range(1 + (len(vars) // 2)):
+                csol.member_variables.append(vars[random.randint(0, len(vars) - 1)])
+        ctrs = self.model.get_all_expressions()
+        if len(ctrs) > 0:
+            for i in range(1 + (len(ctrs) // 2)):
+                csol.member_constraints.append(ctrs[random.randint(0, len(ctrs) - 1)][0])
+
+        return csol
+
+
     def start_search(self):
         """ Start a new search. Solutions are retrieved using method search_next().
 
@@ -105,6 +164,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         if self.context.create_cpo:
             self._get_cpo_model_string()
         self.solution_count = 0
+
 
     def search_next(self):
         """ Search the next available solution.
@@ -163,7 +223,9 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
             msol.objective_values = ovals
 
         # Generate a solution for each variable
-        for var in self.model.get_all_variables():
+        allvars = self.model.get_all_variables()
+        seqvars = []
+        for var in allvars:
             if isinstance(var, CpoIntVar):
                 vsol = CpoIntVarSolution(var.name, _random_value_in_complex_domain(var.get_domain()))
                 msol.add_var_solution(vsol)
@@ -203,13 +265,17 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                 msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoSequenceVar):
-                # Build sequence or results
-                lvres = []
-                for v in var.get_interval_variables():
-                    lvres.append(msol.get_var_solution(v.name))
-                random.shuffle(lvres)
-                vsol = CpoSequenceVarSolution(var.name, lvres)
-                msol.add_var_solution(vsol)
+                seqvars.append(var)
+
+        # Generate a solution for sequence variables
+        for var in seqvars:
+            # Build sequence or results
+            lvres = []
+            for v in var.get_interval_variables():
+                lvres.append(msol.get_var_solution(v.name))
+            random.shuffle(lvres)
+            vsol = CpoSequenceVarSolution(var.name, lvres)
+            msol.add_var_solution(vsol)
 
         # Return
         return ssol

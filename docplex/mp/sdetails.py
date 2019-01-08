@@ -50,6 +50,8 @@ class SolveDetails(object):
 
         self._md5 = self._unknown_label
 
+        self._quality_metrics = {}
+
     def as_worker_dict(self):
         # INTERNAL
         # Converts the solve details to a dictionary for python worker...
@@ -303,6 +305,9 @@ class SolveDetails(object):
         return self._solve_status_code in self._limit_statuses
 
 
+    @property
+    def quality_metrics(self):
+        return self._quality_metrics
 
 # cplex.miprelgap: 0
 # cplex.quality.int.CPX_MAX_QCSLACK: -1

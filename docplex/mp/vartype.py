@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 from docplex.mp.utils import is_int
-from docplex.mp.error_handler import docplex_fatal
+
 
 class VarType(object):
     """VarType()
@@ -51,25 +51,25 @@ class VarType(object):
     def get_default_ub(self):
         return self._ub
 
-    def resolve_lb(self, candidate_lb):
+    def resolve_lb(self, candidate_lb, logger):
         if candidate_lb is None:
             return self._lb
         else:
-            return self.compute_lb(candidate_lb)
+            return self.compute_lb(candidate_lb, logger)
 
-    def resolve_ub(self, candidate_ub):
+    def resolve_ub(self, candidate_ub, logger):
         if candidate_ub is None:
             return self._ub
         else:
-            return self.compute_ub(candidate_ub)
+            return self.compute_ub(candidate_ub, logger)
 
-    def compute_lb(self, candidate_lb):
+    def compute_lb(self, candidate_lb, logger):  # pragma: no cover
         # INTERNAL
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
-    def compute_ub(self, candidate_ub):
+    def compute_ub(self, candidate_ub, logger):  # pragma: no cover
         # INTERNAL
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -134,7 +134,7 @@ class VarType(object):
     def __ne__(self, other):
         return type(other) != type(self)
 
-    def hash_vartype(self):   # pragma: no cover
+    def hash_vartype(self):  # pragma: no cover
         return hash(self.get_cplex_typecode())
 
 
@@ -149,29 +149,19 @@ class BinaryVarType(VarType):
     def __init__(self):
         VarType.__init__(self, short_name="binary", lb=0, ub=1, cplex_typecode='B')
 
-    def compute_lb(self, candidate_lb):
+    def compute_lb(self, candidate_lb, logger):
         # INTERNAL
-        return 0 if candidate_lb <= 0 else 1
+        if candidate_lb >= 1 + 1e-6:
+            logger.error('Infeasible lower bound for a binary variable: {0} -expecting >= 0'.format(candidate_lb))
+        # return the user bound anyway
+        return candidate_lb
 
-    def resolve_ub(self, candidate_ub):
-        if candidate_ub is None:
-            return 1
-        elif candidate_ub >= 1:
-            return 1
-        else:
-            return 0
-
-    def resolve_lb(self, candidate_ub):
-        if candidate_ub is None:
-            return 0
-        elif candidate_ub <= 0:
-            return 0
-        else:
-            return 1
-
-    def compute_ub(self, candidate_ub):
+    def compute_ub(self, candidate_ub, logger):
         # INTERNAL
-        return 1 if candidate_ub >= 1 else 0
+        if candidate_ub <= -1e-6:
+            logger.error('Infeasible upper bound for a binary variable: {0} -expecting >= 0'.format(candidate_ub))
+        # return the user bound anyway
+        return candidate_ub
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -208,19 +198,11 @@ class ContinuousVarType(VarType):
         self._plus_infinity = plus_infinity
         self._minus_infinity = - plus_infinity
 
-    def compute_ub(self, candidate_ub):
-        if candidate_ub >= self._plus_infinity:
-            return self._plus_infinity
-        else:
-            return candidate_ub
+    def compute_ub(self, candidate_ub, logger):
+        return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb):
-        if 0 == candidate_lb:
-            return 0
-        elif candidate_lb <= self._minus_infinity:
-            return self._minus_infinity
-        else:
-            return candidate_lb
+    def compute_lb(self, candidate_lb, logger):
+        return max(candidate_lb, self._minus_infinity)
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -259,17 +241,11 @@ class IntegerVarType(VarType):
         self._plus_infinity = plus_infinity
         self._minus_infinity = -plus_infinity
 
-    def compute_ub(self, candidate_ub):
-        if candidate_ub >= self._plus_infinity:
-            return self._plus_infinity
-        else:
-            return candidate_ub
+    def compute_ub(self, candidate_ub, logger):
+        return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb):
-        if candidate_lb <= self._minus_infinity:
-            return self._minus_infinity
-        else:
-            return candidate_lb
+    def compute_lb(self, candidate_lb, logger):
+        return max(candidate_lb, self._minus_infinity)
 
     def is_discrete(self):
         """  Checks if this is a discrete type.
@@ -307,12 +283,12 @@ class SemiContinuousVarType(VarType):
         VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
         self._plus_infinity = plus_infinity
 
-    def compute_ub(self, candidate_ub):
+    def compute_ub(self, candidate_ub, logger):
         return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
 
-    def compute_lb(self, candidate_lb):
+    def compute_lb(self, candidate_lb, logger):
         if candidate_lb <= 0:
-            docplex_fatal(
+            logger.fatal(
                 'semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
 
@@ -359,12 +335,12 @@ class SemiIntegerVarType(VarType):
         VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
         self._plus_infinity = plus_infinity
 
-    def compute_ub(self, candidate_ub):
-        return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
+    def compute_ub(self, candidate_ub, logger):
+        return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb):
+    def compute_lb(self, candidate_lb, logger):
         if candidate_lb <= 0:
-            docplex_fatal('semi-integer variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
+            logger.fatal('semi-integer variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
 
     def is_default_lb(self, domain_lb):

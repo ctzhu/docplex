@@ -13,9 +13,9 @@ from docplex.cp.cpo_tokenizer import *
 from docplex.cp.expression import *
 from docplex.cp.expression import _create_operation
 from docplex.cp.function import *
-import docplex.cp.model
 from docplex.cp.catalog import *
 from docplex.cp.solution import *
+from docplex.cp.model import CpoModel
 import math
 
 
@@ -57,6 +57,7 @@ _OPER_INTERVAL = CpoOperation("_interval", "_interval", "..", 9, (CpoSignature(T
 _ALL_OPERATORS[".."] = _OPER_INTERVAL
 #for kwd in _ALL_OPERATORS:
 #    print("Operator '{}': {}".format(kwd, _ALL_OPERATORS[kwd]))
+
 
 ###############################################################################
 ## Public classes
@@ -101,7 +102,7 @@ class CpoParser(object):
             mdl:  Model to fill, None (default) to create a new one.
         """
         super(CpoParser, self).__init__()
-        self.model = mdl if mdl is not None else docplex.cp.model.CpoModel()
+        self.model = mdl if mdl is not None else CpoModel()
         self.source_file = None
         self.tokenizer = None
         self.token = None
@@ -224,19 +225,19 @@ class CpoParser(object):
         tok = self._next_token()
         if tok.value in ("intVar", "_intVar"):
             v = self._read_int_var(name)
-            self.model._add_variable(v)
+            self.model.add(v)
 
         elif tok.value == "intervalVar":
             v = self._read_interval_var(name)
-            self.model._add_variable(v)
+            self.model.add(v)
 
         elif tok.value == "sequenceVar":
             v = self._read_sequence_var(name)
-            self.model._add_variable(v)
+            self.model.add(v)
 
         elif tok.value == "stateFunction":
             v = self._read_state_function(name)
-            self.model._add_variable(v)
+            self.model.add(v)
 
         else:
             # Read expression

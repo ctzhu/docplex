@@ -243,13 +243,13 @@ def _to_list(arg):
 
 def _build_ordered_sequence_types():
     if __pandas_series_type and __numpy_ndslot_type:
-        return (list, __pandas_series_type, __numpy_ndslot_type)
+        return (list, tuple, __pandas_series_type, __numpy_ndslot_type)
     elif __pandas_series_type:
-        return (list, __pandas_series_type)
+        return (list, tuple, __pandas_series_type)
     elif __numpy_ndslot_type:
-        return (list, __numpy_ndslot_type)
+        return (list, tuple, __numpy_ndslot_type)
     else:
-        return (list,)
+        return (list, tuple)
 
 
 def is_ordered_sequence(arg, type_tuple=_build_ordered_sequence_types()):
@@ -270,11 +270,12 @@ class DOcplexException(Exception):
 
     def _resolve_message(self):
         self.__edited_message = None
+        msg = self.__msg
         if self.__args:
-            if self.__msg.find('%') >= 0:
-                self.__edited_message = self.__msg % self.__args
-            elif self.__msg.find('{') >= 0:
-                self.__edited_message = self.__msg.format(*self.__args)
+            if '%' in msg:
+                self.__edited_message = msg % self.__args
+            elif '{' in msg:
+                self.__edited_message = msg.format(*self.__args)
 
     @property
     def message(self):
@@ -421,6 +422,14 @@ except ImportError:
 def is_scipy_sparse(m):
     return sp and sp.issparse(m)
 
+
+def compute_is_index(seq, obj):
+    # assume obj is iterable multiple times
+    for i, elt in enumerate(seq):
+        if elt is obj:  # use 'is' to identify obj
+            return i
+    else:
+        return None
 
 
 DOCPLEX_CONSOLE_HANDLER = None
@@ -674,11 +683,6 @@ class _SymbolGenerator(object):
         else:
             self._pattern = pattern + '%d'
 
-    def _get_pattern(self):
-        return self._pattern
-
-    pattern = property(_get_pattern, _set_pattern)
-
     def new_index_symbol(self, index):
         return self._pattern % (index + self._offset)
 
@@ -744,6 +748,7 @@ class _IndexScope(_AutomaticSymbolGenerator):
         _AutomaticSymbolGenerator.reset(self)
         self._index_map = None
 
+
     def notify_obj_index(self, obj, index):
         _AutomaticSymbolGenerator.notify_new_index(self, index)
         if self._index_map is not None:
@@ -767,9 +772,11 @@ class _IndexScope(_AutomaticSymbolGenerator):
             obj.set_index(ix)
 
 
-def apply_thread_limitations(parameters, solver_context):
+def apply_thread_limitations(context, solver_context):
     # --- limit threads if needed
+    parameters = context._get_raw_cplex_parameters()
     if getattr(solver_context, 'max_threads', None) is not None:
+        parameters = context.cplex_parameters
         if parameters.threads.get() == 0:
             max_threads = solver_context.max_threads
         else:

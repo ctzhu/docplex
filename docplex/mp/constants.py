@@ -7,7 +7,7 @@
 from enum import Enum
 
 from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.utils import is_string
+from docplex.mp.utils import is_string, is_int
 
 import operator
 
@@ -66,14 +66,14 @@ class ComparisonType(Enum):
     def parse(cls, arg, do_raise=True):
         # INTERNAL
         # noinspection PyTypeChecker
-        for cmp in cls:
-            if arg == cmp or arg == cmp.value:
-                return cmp
+        for op in cls:
+            if arg == op or arg == op.value:
+                return op
             elif is_string(arg):
-                if arg == str(cmp.value) \
-                        or arg.lower() == cmp.name.lower() \
-                    or arg == cmp._cplex_code:
-                    return cmp
+                if arg == str(op.value) \
+                        or arg.lower() == op.name.lower() \
+                        or arg == op._cplex_code:
+                    return op
         else:
             if do_raise:
                 docplex_fatal('cannot convert this to a comparison type: {0!r}'.format(arg))
@@ -88,7 +88,7 @@ class ComparisonType(Enum):
     def almost_compare(cls, lval, op, rval, eps):
         if op is cls.LE:
             # lval <= rval with eps tolerance means lval-rval <= e
-            return lval -rval <= eps
+            return lval - rval <= eps
         elif op is cls.GE:
             # lval >= rval with eps tolerance means lval-rval >= -eps
             return lval - rval >= -eps
@@ -97,6 +97,9 @@ class ComparisonType(Enum):
         else:
             raise TypeError
 
+    @classmethod
+    def almost_equal(cls, lval, rval, eps):
+        return cls.almost_compare(lval, cls.EQ, rval, eps)
 
 
 class RelaxationMode(Enum):
@@ -151,7 +154,7 @@ class ConflictStatus(Enum):
     This enumerated class defines the conflict status types.
     """
     Excluded, Possible_member, Possible_member_lower_bound, Possible_member_upper_bound, \
-        Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
+    Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
 
 
 class SOSType(Enum):
@@ -305,37 +308,150 @@ class ObjectiveSense(Enum):
                 logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
             else:
                 docplex_fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max".format(arg))
-
-        elif arg == 1:
-            return ObjectiveSense.Minimize
-        elif -1 == arg:
-            return ObjectiveSense.Maximize
-
-        elif default_sense:
+        elif is_int(arg):
+            if arg == 1:
+                return ObjectiveSense.Minimize
+            elif -1 == arg:
+                return ObjectiveSense.Maximize
+            else:
+                logger.fatal("cannot convert: <{}> to objective sense", (arg,))
+        elif arg is None:
             return default_sense
         elif logger:
-            if not default_sense:
-                logger.fatal("cannot convert: <{}> to objective sense", (arg,))
-            else:
-                logger.warning("cannot convert: <{0!r}> to objective sense - using default: {1!s}", (arg, default_sense))
+            logger.fatal("cannot convert: <{}> to objective sense", (arg,))
         else:
             docplex_fatal("cannot convert: <{}> to objective sense".format(arg))
 
 
 # noinspection PyPep8
 class CplexScope(Enum):
-
-    def __new__(cls, code, prefix):
+    def __new__(cls, code, prefix, descr):
         obj = object.__new__(cls)
         # predefined
         obj._value_ = code
         obj.prefix = prefix
+        obj.descr = descr
         return obj
+
     # INTERNAL
-    VAR_SCOPE       = 0, 'x'
-    LINEAR_CT_SCOPE = 1, 'c'
-    IND_CT_SCOPE    = 2, 'ic'
-    QUAD_CT_SCOPE   = 3, 'qc'
-    PWL_CT_SCOPE    = 4, 'pwl'
-    SOS_SCOPE       = 5, 'sos'
-    UNKNOWN_SCOPE   = 9999, '?'
+    VAR_SCOPE = 0, 'x', 'variables'
+    LINEAR_CT_SCOPE = 1, 'c', 'linear constraints'
+    IND_CT_SCOPE = 2, 'ic', 'indicators'
+    QUAD_CT_SCOPE = 3, 'qc', 'quadratic constraints'
+    PWL_CT_SCOPE = 4, 'pwl', 'piecewise constraints'
+    SOS_SCOPE = 5, 'sos', 'SOS'
+
+    def is_logical(self):
+        return self.value in {2, 4, 5}
+
+
+class QualityMetric(Enum):
+    def __new__(cls, code, has_int, cpx_codename):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj.has_int = has_int
+        obj.codename = cpx_codename
+        return obj
+
+    @property
+    def cpx_codename(self):
+        return 'CPX_' + self.codename
+
+    @property
+    def code(self):
+        return self._value_
+
+    @property
+    def key(self):
+        return self.codename.lower()
+
+    @property
+    def int_key(self):
+        return '%s.int' % self.codename.lower()
+
+
+    max_primal_infeasibility = 1, 1, 'MAX_PRIMAL_INFEAS'
+    max_scaled_primal_infeasibility = 2, 1, 'MAX_SCALED_PRIMAL_INFEAS'
+    sum_primal_infeasibilities = 3, 0, 'SUM_PRIMAL_INFEAS'
+    sum_scaled_primal_infeasibilities = 4, 0, 'SUM_SCALED_PRIMAL_INFEAS'
+
+    max_dual_infeasibility = 5, 1, 'MAX_DUAL_INFEAS'
+    max_scaled_dual_infeasibility = 6, 1, 'MAX_SCALED_DUAL_INFEAS'
+    sum_dual_infeasibilities = 7, 0, 'SUM_DUAL_INFEAS'
+    sum_scaled_dual_infeasibilities = 8, 0, 'SUM_SCALED_DUAL_INFEAS'
+
+    max_int_infeasibility = 9, 1, 'MAX_INT_INFEAS'
+    sum_integer_infeasibilities = 10, 0, 'SUM_INT_INFEAS'
+
+    max_primal_residual = 11, 1, 'MAX_PRIMAL_RESIDUAL'
+    max_scaled_primal_residual = 12, 1, 'MAX_SCALED_PRIMAL_RESIDUAL'
+    sum_primal_residual = 13, 0, 'SUM_PRIMAL_RESIDUAL'
+    sum_scaled_primal_residual = 14, 0, 'SUM_SCALED_PRIMAL_RESIDUAL'
+
+    max_dual_residual = 15, 1, 'MAX_DUAL_RESIDUAL'
+    max_scaled_dual_residual = 16, 1, 'MAX_SCALED_DUAL_RESIDUAL'
+    sum_dual_residual = 17, 0, 'SUM_DUAL_RESIDUAL'
+    sum_scaled_dual_residual = 18, 0, 'SUM_SCALED_DUAL_RESIDUAL'
+
+    max_comp_slack = 19, 1, 'MAX_COMP_SLACK'  # gap here
+    sum_comp_slack = 21, 0, 'SUM_COMP_SLACK'  # gap here
+
+    max_x = 23, 1, 'MAX_X'
+    max_scaled_x = 24, 1, 'MAX_SCALED_X'
+    max_pi = 25, 1, 'MAX_PI'
+    max_scaled_pi = 26, 1, 'MAX_SCALED_PI'
+    max_slack = 27, 1, 'MAX_SLACK'
+    max_scaled_slack = 28, 1, 'MAX_SCALED_SLACK'
+
+    max_reduced_cost = 29, 1, 'MAX_RED_COST'
+    max_scaled_reduced_cost = 30, 1, 'MAX_SCALED_RED_COST'
+
+    sum_x = 31, 0, 'SUM_X'
+    sum_scaled_x = 32, 0, 'SUM_SCALED_X'
+    sum_pi = 33, 0, 'SUM_PI'
+    sum_scaled_pi = 34, 0, 'SUM_SCALED_PI'
+    sum_slack = 35, 0, 'SUM_SLACK'
+    sum_scaled_slack = 36, 0, 'SUM_SCALED_SLACK'
+
+    sum_reduced_cost = 37, 0, 'SUM_RED_COST'
+    sum_scaled_reduced_cost = 38, 0, 'SUM_SCALED_RED_COST'
+
+    kappa = 39, 0, 'KAPPA'
+    objective_gap = 40, 0, 'OBJ_GAP'
+    dual_objective = 41, 0, 'DUAL_OBJ'
+    primal_objective = 42, 0, 'PRIMAL_OBJ'
+
+    max_quadratic_primal_residual = 43, 1, 'MAX_QCPRIMAL_RESIDUAL'
+    sum_quadratic_primal_residual = 44, 0, 'SUM_QCPRIMAL_RESIDUAL'
+    max_quadratic_slack_infeasibility = 45, 1, 'MAX_QCSLACK_INFEAS'
+    sum_quadratic_slack_infeasibility = 46, 0, 'SUM_QCSLACK_INFEAS'
+    max_quadratic_slack = 47, 1, 'MAX_QCSLACK'
+    sum_quadratic_slack = 48, 0, 'SUM_QCSLACK'
+    max_indicator_slack_infeasibility = 49, 1, 'MAX_INDSLACK_INFEAS'
+    sum_indicator_slack_infeasibility = 50, 0, 'SUM_INDSLACK_INFEAS'
+
+    exact_kappa = 51, 0, 'EXACT_KAPPA'
+    kappa_stable = 52, 0, 'KAPPA_STABLE'
+    kappa_suspicious = 53, 0, 'KAPPA_SUSPICIOUS'
+    kappa_unstable = 54, 0, 'KAPPA_UNSTABLE'
+    kappa_illposed = 55, 0, 'KAPPA_ILLPOSED'
+    kappa_max = 56, 0, 'KAPPA_MAX'
+    kappa_attention = 57, 0, 'KAPPA_ATTENTION'
+
+    @classmethod
+    def parse(cls, txt, raise_on_error=True):
+        for qm in cls:
+            if txt == qm.name:
+                return qm
+            elif txt == qm.value:
+                return qm
+            elif txt == qm.cpx_codename:
+                return qm
+        else:
+            fmt = '* cannot interpret this as a QualityMetric enum: {0!r}'
+            if raise_on_error:
+                docplex_fatal(fmt, txt)
+            else:
+                print(fmt.format(txt))
+                return None

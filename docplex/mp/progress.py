@@ -10,6 +10,7 @@ from docplex.mp.solution import SolveSolution
 from six import iteritems
 from docplex.util.environment import get_environment
 
+
 class ProgressData(object):
     """ A container class to hold data retrived from progress callbacks.
 
@@ -26,6 +27,9 @@ class ProgressData(object):
         self.remaining_nb_nodes = 0
         self.time = -1
         self.det_time = -1
+
+    def get_objective(self, default_obj_value=None):
+        return self.current_objective if self.has_incumbent else default_obj_value
 
     def get_tuple(self):
         return (self.has_incumbent,
@@ -111,6 +115,26 @@ class ProgressListener(object):
         """
         pass  # pragma: no cover
 
+    @staticmethod
+    def static_make_solution(model, obj, engine_name, incumbents):
+        # INTERNAL
+        sol = SolveSolution(model, obj=obj, solved_by=engine_name)
+        for v in model.iter_variables():
+            # incumbent values are provided as a list with indices as positions.
+            incumbent_value = incumbents[v._index]
+            if incumbent_value:
+                # silently round discrete values, just as with engine solutions.
+                sol._set_var_value_internal(v, incumbent_value, rounding=True, do_warn_on_non_discrete=False)
+        return sol
+
+    @classmethod
+    def _is_significant_change(cls, old_value, new_value, min_relative, min_absolute):
+        abs_diff = abs(new_value - old_value)
+        rel_diff = abs_diff / (1.0 + abs(new_value))
+        return rel_diff >= min_relative or abs_diff >= min_absolute
+
+    def reset(self):
+        pass
 
 class _IProgressFilter(object):
     def accept(self, pdata):
@@ -122,6 +146,8 @@ class _IProgressFilter(object):
 
 class _ProgressFilterAcceptAll(_IProgressFilter):
     def accept(self, pdata):
+        return True
+    def has_significant_objective_change(self, pdata):
         return True
 
 
@@ -170,9 +196,7 @@ class _ProgressFilter(object):
                                abs_diff=abs_diff)
 
     def _is_significant_change(self, old_value, new_value):
-        abs_diff = abs(new_value - old_value)
-        rel_diff = abs_diff / (1.0 + abs(new_value))
-        return rel_diff >= self._relative_change or abs_diff >= self._abs_change
+        return ProgressListener._is_significant_change(old_value, new_value, self._relative_change, self._abs_change)
 
     def accept(self, pdata):
         accept = False
@@ -204,6 +228,16 @@ class _ProgressFilter(object):
                 accept = True
 
         return accept
+
+    def has_significant_objective_change(self, pdata):
+        if pdata.has_incumbent:
+            if (self._last_incumbent_obj is None) or self._is_significant_change(self._last_incumbent_obj,
+                                                                                 pdata.current_objective):
+                self._last_incumbent_obj = pdata.current_objective
+                self._last_bound = pdata.best_bound
+                self._last_node = pdata.current_nb_nodes
+                return True
+        return False
 
 
 class TextProgressListener(ProgressListener):
@@ -257,7 +291,6 @@ class TextProgressListener(ProgressListener):
 
 
 class RecordProgressListener(ProgressListener):
-
     def __init__(self, filtering=True, **kwargs):
         ProgressListener.__init__(self)
         self.__recorded = []
@@ -309,10 +342,15 @@ class SolutionListener(ProgressListener):
     be subclassed to memorize *all* intermediate solutions by storing them in a list.
     @PROOFREAD
     """
+
     def __init__(self, model):
         ProgressListener.__init__(self)
         self._model = model
         self._engine_name = model.get_engine()._location()
+        self._current_solution = None
+        self._current_objective = ProgressData.BIGNUM
+
+    def reset(self):
         self._current_solution = None
         self._current_objective = ProgressData.BIGNUM
 
@@ -324,20 +362,13 @@ class SolutionListener(ProgressListener):
         if progress_data.has_incumbent:
             self._current_objective = progress_data.current_objective
 
-    def _make_solution(self, incumbents):
-        # INTERNAL
-        sol = SolveSolution(self._model, obj=self._current_objective, solved_by=self._engine_name)
-        for v in self._model.iter_variables():
-            # incumbent values are provided as a list with indices as positions.
-            incumbent_value = incumbents[v._index]
-            if incumbent_value:
-                # silently round discrete values, just as with engine solutions.
-                sol._set_var_value_internal(v, incumbent_value, rounding=True, do_warn_on_non_discrete=False)
-        return sol
-
     def notify_solution(self, incumbents):
-        sol = self._make_solution(incumbents)
+        sol = self.static_make_solution(model=self._model,
+                                        obj=self._current_objective,
+                                        engine_name=self._engine_name,
+                                        incumbents=incumbents)
         self._current_solution = sol
+        return sol
 
     @property
     def current_solution(self):
@@ -352,40 +383,70 @@ class SolutionListener(ProgressListener):
         return self._current_solution
 
 
-class KpiRecordings(list):
-    def __init__(self):
-        super(KpiRecordings, self).__init__()
+class SolutionHookListener(SolutionListener):
+    def __init__(self, model, sol_hook):
+        SolutionListener.__init__(self, model)
+        self._hook_fn = sol_hook
 
-    def __as_df__(self, **kwargs):
-        try:
-            import pandas
-            c = set()
-            for thing in self:
-                for key in thing.keys():
-                    c.add(key)
-            df = pandas.DataFrame(columns=c)
-            for index, thing in enumerate(self):
-                dfi = pandas.DataFrame(thing, index=[index])
-                df = df.append(dfi)
-            return df
-        except ImportError:
-            raise RuntimeError("convert as DataFrame: This feature requires pandas")
+    def notify_solution(self, incumbents):
+        sol = SolutionListener.notify_solution(self, incumbents)
+        self._hook_fn(sol)
+
+
+def pname(n):
+    # return the name under wich kpi are published
+    return 'KPI.%s' % n
 
 
 class KpiRecorder(SolutionListener):
-    # used to publish kpis on worker
-    def __init__(self, model, publish_kpi=False):
+
+    # used to publish kpis on workera
+    def __init__(self, model, require_improve=True, publish_hook=None):
         super(KpiRecorder, self).__init__(model)
-        self._kpis = KpiRecordings()
-        self.publish_kpi = publish_kpi
+        self.publish_hook = publish_hook
+
+        # all data below are attached to a solve (must be reset when starting a new solve...)
+        self._kpis = []
+        self._filter = _ProgressFilter() if require_improve else _ProgressFilterAcceptAll()
+        self._last_accept = True
+        self._last_time = -1
+
+    def reset(self):
+        self._kpis = []
+        self._last_accept = True
+        self._last_time = -1
+        self._filter.reset()
+
+    def notify_progress(self, pdata):
+        super(KpiRecorder, self).notify_progress(pdata)
+        #
+        self._last_accept = self._filter.has_significant_objective_change(pdata)
+        self._last_time = pdata.time
 
     def notify_solution(self, incumbents):
         super(KpiRecorder, self).notify_solution(incumbents)
+        if self._last_accept:
+            # build a name/value dictionary with builtin values
+            k = self._model.kpis_as_dict(self.current_solution)
+            name_values = {pname(u.name): v for u, v in iteritems(k)}
 
-        k = self._model.kpis_as_dict(self.current_solution)
-        name_values = {u.name: v for u, v in iteritems(k)}
-        name_values.update({'PROGRESS_CURRENT_OBJECTIVE': self.current_solution.objective_value})
-        if self.publish_kpi:
-            env = get_environment()
-            env.update_solve_details(name_values)
-        self._kpis.append(name_values)
+            name_values[pname('_objective')] = self.current_solution.objective_value
+            name_values[pname('_time')] = self._last_time
+
+            # usually publish kpis in environment...
+            if self.publish_hook is not None:
+                self.publish_hook(name_values)
+
+            self._kpis.append(name_values)
+
+    def iter_kpis(self):
+        return iter(self._kpis)
+
+    def __as_df__(self, **kwargs):
+        try:
+            from pandas import DataFrame
+        except ImportError:
+            raise RuntimeError("convert as DataFrame: This feature requires pandas")
+
+        df = DataFrame(self._kpis)
+        return df

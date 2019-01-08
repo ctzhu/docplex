@@ -91,30 +91,6 @@ class open_filename_universal(object):
         return False
 
 
-def is_ignored(what, key):
-    # returns true if key is in what
-    try:
-        # if string, allow comma separated form
-        if isinstance(what, six.string_types):
-            values = what.split(",")
-            if key in values:
-                return True
-        elif what is not None and key in what:
-            return True
-    except AttributeError:
-        # no ignored_keys, just pass
-        pass
-    return False
-
-
-def is_key_ignored(context, key):
-    return is_ignored(context.solver.docloud.ignored_keys, key)
-
-
-def is_url_ignored(context, url):
-    return is_ignored(context.solver.docloud.ignored_urls, url)
-
-
 def is_auto_publishing(context):
     try:
         return context.solver.auto_publish == True
@@ -169,9 +145,8 @@ def check_credentials(context):
     elif not is_string(context.key):
         message = "API key is not a string: {0!s}".format(context.key)
         has_credentials = False
-    # process ignored_keys
     if context.key and has_credentials:
-        has_credentials = not is_ignored(context.ignored_keys, context.key)
+        has_credentials = isinstance(context.key, six.string_types)
     return has_credentials, message
 
 
@@ -300,12 +275,6 @@ class Context(BaseContext):
         solver.docloud: The parent node for attributes controlling the solve on Decision Optimization on Cloud.
         solver.docloud.url: The DOcplexcloud service URL.
         solver.docloud.key: The DOcplexcloud service API key.
-        solver.docloud.ignored_keys: A collection or a string that is a comma-separated list of
-            values to ignore. If any ``key`` passed has a value in this list,
-            the key is ignored.
-        solver.docloud.ignored_urls: A collection or a string that is a comma-separated list of
-            values to ignore. If any ``url`` passed has a value in this list,
-            the url is ignored.
         solver.docloud.run_deterministic: Specific engine parameters are uploaded to keep the
             run deterministic.
         solver.docloud.verbose: Makes the connector verbose.
@@ -348,6 +317,10 @@ class Context(BaseContext):
             if lazy_members and name in lazy_members:
                 self[name] = lazy_members[name](self)
         return self.get_attribute(name)
+
+    def _get_raw_cplex_parameters(self):
+        # NON LAZY: may return None
+        return self.get('cplex_parameters')
 
     @staticmethod
     def make_default_context(file_list=None, logger=None, **kwargs):
@@ -464,6 +437,26 @@ class Context(BaseContext):
                 self.update_key_value(k, value,
                                       create_missing_nodes=create_missing_nodes)
 
+    def update_cplex_parameters(self, arg_params):
+        # INTERNAL
+        if isinstance(arg_params, RootParameterGroup):
+            self.cplex_parameters = arg_params
+        else:
+            new_params = self.cplex_parameters.copy()
+            # try a dictionary of parameter qualified names, parameter values
+            # e.g. cplex_parameters={'mip.tolerances.mipgap': 0.01, 'timelimit': 180}
+            try:
+                for pk, pv in iteritems(arg_params):
+                    p = new_params.find_parameter(key=pk)
+                    if not p:
+                        docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))
+                    else:
+                        p.set(pv)
+                self.cplex_parameters = new_params
+
+            except (TypeError, AttributeError):
+                docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(arg_params))
+
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
         if k is 'docloud_context':
             warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
@@ -472,19 +465,7 @@ class Context(BaseContext):
             if isinstance(value, RootParameterGroup):
                 self.cplex_parameters = value
             else:
-                new_params = self.cplex_parameters.copy()
-                # try a dictionary of parameter keys,parameter values
-                try:
-                    for pk, pv in iteritems(value):
-                        p = new_params.find_parameter(key=pk)
-                        if not p:
-                            docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))
-                        else:
-                            p.set(pv)
-                    self.cplex_parameters = new_params
-
-                except (TypeError, AttributeError):
-                    docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(value))
+                self.update_cplex_parameters(value)
 
         elif k is 'url':
             self.solver.docloud.url = value
@@ -619,5 +600,7 @@ def CreateDefaultDOcloudContext():
     dctx.proxies = None
     # additional job parameters
     dctx.job_parameters = None
+    # mangle names into x<...?>
+    dctx.mangle_names = False
     return dctx
 

@@ -1,8 +1,41 @@
 Changelog
 ---------
 
-Changed in 2.3.44:
+Changed in 2.4.56:
 ``````````````````
+* Both ``docplex.mp`` & ``docplex.cp``:
+   * Support for CPLEX engines 12.8. Some features of docplex2.4 are available only with engines >= 12.8.
+   * Adding new ports (AIX, plinux).
+   * Examples are now available as Zeppelin notebooks.
+
+* In ``docplex.mp``:
+   * Express a linear problem as a scikit-learn tranformer by providing a numpy, a pandas or scipy matrix.
+   * Logical constraints: constratins equivalence, if-then & rshift operator.
+   * Solve hook to add a method to be called at each intermediate solution.
+   * KPIS automatically published at each intermediate solution if running on docplexcloud python worker.
+   * Support for scipy coo & csr matrixes.
+
+* In ``docplex.cp``:
+   * add new method run_seeds() to execute a model multiple times, available with local solver 12.8.
+   * add support of new solver infos 'SearchStatus' eand 'SearchStopCause'.
+   * In method ``docplex.cp.model.CpoModel.propagate()``, add possibility to add an optional constraint to the model.
+   * add domain iterator in integer variables and integer variables solutions, allowing to get domain
+     as a list of individual integers.
+   * add possibility to identify some model variables as KPIs of the model.
+   * add abort_search() method on solver (not supported everywhere)
+   * Rework code generation to enhance performances and remove unused variables that was pointed by removed expressions.
+   * add possibility to add one or more CpoSolverListener to put some callback functions
+     when solve is started, ended, or when a solution is found.
+     Implementation is provided in new python module ``docplex.cp.solver.solver_listener`` that also contains sample
+     listeners SolverProgressPanelListener and AutoStopListener.
+   * Using parameter *context.solver.solve_with_start_next*, enable solve() method to execute a start/next loop instead
+     of standard solve. This enables, for optimization problems, usage of SolveListeners with a greater progress accuracy.
+   * Completely remove deprecated 'angel' to identify local solver.
+  
+  
+Changed in 2.3.44 (2017.09):
+````````````````````````````
+
 * Module ``docplex.cp.model.solver_angel.py`` has been renamed ``solver_local.py``. 
   A shadow copy with previous name still exist to preserve ascending compatibility.
   Module ``docplex.cp.model.config.py`` is modified to refer this new module.

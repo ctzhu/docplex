@@ -284,8 +284,7 @@ def _group_preprocessing_make(pgroup):
 
 # generating code for group: Read
 def _group_read_params(pgroup):
-    return dict(apiencoding=StrParameter(pgroup, "apiencoding", "CPX_PARAM_APIENCODING", 1130, "code page for API strings", default_value="UTF-8"),
-                constraints=PositiveIntParameter(pgroup, "constraints", "CPX_PARAM_ROWREADLIM", 1021, "constraint read size", default_value=30000, max_value=2100000000),
+    return dict(constraints=PositiveIntParameter(pgroup, "constraints", "CPX_PARAM_ROWREADLIM", 1021, "constraint read size", default_value=30000, max_value=2100000000),
                 datacheck=BoolParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1),
                 fileencoding=StrParameter(pgroup, "fileencoding", "CPX_PARAM_FILEENCODING", 1129, "code page for file reading and writing", default_value="ISO-8859-1"),
                 nonzeros=PositiveIntParameter(pgroup, "nonzeros", "CPX_PARAM_NZREADLIM", 1024, "constraint nonzero read size", default_value=250000, max_value=9223372036800000000),

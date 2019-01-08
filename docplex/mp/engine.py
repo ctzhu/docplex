@@ -103,11 +103,14 @@ class ISolver(object):
     def get_solve_details(self):
         raise NotImplementedError  # pragma: no cover
 
+    def get_quality_metrics(self):
+        raise NotImplementedError  # pragma: no cover
+
     def clean_before_solve(self):
         raise NotImplementedError  # pragma: no cover
 
-    def solved_as_lp(self):
-        return False
+    def supports_logical_constraints(self):
+        raise NotImplementedError  # pragma: no cover
 
     def solved_as_lp(self):
         return False
@@ -156,8 +159,15 @@ class IEngine(ISolver):
     def create_indicator_constraint(self, ind):
         raise NotImplementedError  # pragma: no cover
 
-    def create_block_indicator_constraints(self, inds):
+    def create_equivalence_constraint(self, eqct):
         raise NotImplementedError  # pragma: no cover
+
+    def create_batch_equivalence_constraints(self, eqcts):
+        # the default is to iterate and append.
+        return [self.create_equivalence_constraint(eqc) for eqc in eqcts]
+
+    def create_batch_indicator_constraints(self, inds):
+        return [self.create_indicator_constraint(ind) for ind in inds]
 
     def create_quadratic_constraint(self, qct):
         raise NotImplementedError  # pragma: no cover
@@ -204,7 +214,7 @@ class IEngine(ISolver):
     def update_quadratic_constraint(self, qct, event, *args):
         raise NotImplementedError  # pragma: no cover
 
-    def update_indicator_constraint(self, ind, event, *args):
+    def update_logical_constraint(self, logct, event, *args):
         raise NotImplementedError  # pragma: no cover
 
 # noinspection PyAbstractClass
@@ -213,6 +223,9 @@ class DummyEngine(IEngine):
         return -1  # pragma: no cover
 
     def create_indicator_constraint(self, ind):
+        return -1  # pragma: no cover
+
+    def create_equivalence_constraint(self, eqct):
         return -1  # pragma: no cover
 
     def create_quadratic_constraint(self, qct):
@@ -260,7 +273,7 @@ class DummyEngine(IEngine):
     def create_block_linear_constraints(self, ct_seq):
         return [-1] * len(ct_seq)  # pragma: no cover
 
-    def create_block_indicator_constraints(self, ind_seq):
+    def create_batch_indicator_constraints(self, ind_seq):
         return [-1] * len(ind_seq)  # pragma: no cover
 
     def remove_constraint(self, ct):
@@ -324,8 +337,14 @@ class DummyEngine(IEngine):
     def update_quadratic_constraint(self, qct, event, *args):
         pass # pragma: no cover
 
-    def update_indicator_constraint(self, ind, event, *args):
+    def update_logical_constraint(self, logct, event, *args):
         pass  # pragma: no cover
+
+    def get_quality_metrics(self):
+        return {}  # pragma: no cover
+
+    def supports_logical_constraints(self):
+        return True, None
 
 # noinspection PyAbstractClass,PyUnusedLocal
 class IndexerEngine(DummyEngine):
@@ -370,10 +389,13 @@ class IndexerEngine(DummyEngine):
     def create_linear_constraint(self, binaryct):
         return self._create_one_ct()
 
-    def create_block_linear_constraints(self, ct_seq):
+    def create_batch_cts(self, ct_seq):
         old_ct_count = self._ct_counter
         self._increment_cts(len(ct_seq))
         return range(old_ct_count, self._ct_counter)
+
+    def create_block_linear_constraints(self, ct_seq):
+        return self.create_batch_cts(ct_seq)
 
     def create_range_constraint(self, rangect):
         return self._create_one_ct()
@@ -381,10 +403,11 @@ class IndexerEngine(DummyEngine):
     def create_indicator_constraint(self, ind):
         return self._create_one_ct()
 
-    def create_block_indicator_constraints(self, indicators):
-        old_ct_count = self._ct_counter
-        self._increment_cts(len(indicators))
-        return range(old_ct_count, self._ct_counter)
+    def create_equivalence_constraint(self, eqct):
+        return self._create_one_ct()
+
+    def create_batch_indicator_constraints(self, indicators):
+        return self.create_batch_cts(indicators)
 
     def create_quadratic_constraint(self, ind):
         return self._create_one_ct()

@@ -5,7 +5,20 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-"""
-This is an utility package for docplex.
-"""
 
+
+def as_df(what, **kwargs):
+    '''
+    Returns a `pandas.DataFrame` representation of an object.
+
+    Attributes:
+        what: The object to represent as an object.
+        **kwargs: Additional parameters for the conversion.
+    Returns:
+        A `pandas.DataFrame` representation of an object or None if a
+        representation could not be found.
+    '''
+    try:
+        return what.__as_df__(**kwargs)
+    except AttributeError:
+        return None

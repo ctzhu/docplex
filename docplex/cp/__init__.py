@@ -14,17 +14,20 @@ models and their solving using the Decision Optimization cloud services.
 import platform
 import sys
 import docplex.version as dcpv
-
-ERROR_STRING = "docplex is not compatible with this version of Python: only 64 bits on Windows, Linux and Darwin, with python 2.7.9+ and 3.4.x are supported."
+import warnings
 
 # Check platform system
-if platform.system() not in ('Darwin', 'Linux', 'Windows', 'Microsoft'):
-    raise Exception("DOcplex.CP is not supported on this version of your system. Supported versions are Windows, Linux and Darwin.")
+psyst = platform.system()
+if psyst.lower() not in ('darwin', 'linux', 'windows', 'microsoft', 'aix'):
+    msg = "DOcplex.CP is supported on Linux, Windows, Darwin and AIX, not on '{}'. Use it at your own risk.".format(psyst)
+    warnings.warn(msg, RuntimeWarning)
 
 # Check version of Python
 pv = sys.version_info
 if (pv < (2, 7)) or ((pv[0] == 3) and ((pv < (3, 4) or pv >= (3, 7)))):
-    raise Exception("DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x, 3.5.x and 3.6.x")
+    msg = "DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x, 3.5.x and 3.6.x, not '{}'. Use it at your own risk."\
+        .format('.'.join(str(x) for x in pv))
+    warnings.warn(msg, RuntimeWarning)
 
 # Set version information
 __version_info__ = (dcpv.docplex_version_major, dcpv.docplex_version_minor, dcpv.docplex_version_micro)

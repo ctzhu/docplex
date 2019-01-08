@@ -11,7 +11,7 @@ a local CP Optimizer Interactive (cpoptimizer(.exe)).
 """
 
 from docplex.cp.solution import *
-from docplex.cp.utils import CpoException, StringIO
+from docplex.cp.utils import CpoException
 import docplex.cp.solver.solver as solver
 
 import subprocess
@@ -19,6 +19,7 @@ import sys
 import time
 import threading
 import json
+import signal, os
 
 
 ###############################################################################
@@ -34,9 +35,10 @@ CMD_SEARCH_NEXT     = "SearchNext"     # Get next solution (no data)
 CMD_END_SEARCH      = "EndSearch"      # End search (no data)
 CMD_REFINE_CONFLICT = "RefineConflict" # Refine conflict (no data)
 CMD_PROPAGATE       = "Propagate"      # Propagate (no data)
+CMD_RUN_SEEDS       = "RunSeeds"       # Run with multiple seeds.
 
 # List of events received from solver
-EVT_VERSION_INFO       = "VersionInfo"     # Angel version info (String in JSON format)
+EVT_VERSION_INFO       = "VersionInfo"     # Local solver version info (String in JSON format)
 EVT_SUCCESS            = "Success"         # Success in last command execution
 EVT_ERROR              = "Error"           # Error (data is error string)
 EVT_TRACE              = "DebugTrace"      # Debugging trace
@@ -46,12 +48,16 @@ EVT_SOLVER_ERR_STREAM  = "ErrorStream"     # Solver error stream
 EVT_SOLVE_RESULT       = "SolveResult"     # Solver result in JSON format
 EVT_CONFLICT_RESULT    = "ConflictResult"  # Conflict refiner result in JSON format
 EVT_PROPAGATE_RESULT   = "PropagateResult" # Propagate result in JSON format
+EVT_RUN_SEEDS_RESULT   = "RunSeedsResult"  # Run seeds result (no data, all is in log)
 
 # Max possible received data size in one message
 _MAX_RECEIVED_DATA_SIZE = 1000000
 
-# Python 3 indicator
+# Python 2 indicator
 IS_PYTHON_2 = (sys.version_info[0] == 2)
+
+# Version of this client
+CLIENT_VERSION = 3
 
 
 ###############################################################################
@@ -72,19 +78,19 @@ class LocalSolverException(CpoException):
 class CpoSolverLocal(solver.CpoSolverAgent):
     """ Interface to a local solver through an external process """
 
-    def __init__(self, model, params, context):
+    def __init__(self, solver, params, context):
         """ Create a new solver that solves locally with CP Optimizer Interactive.
 
         Args:
-            model:    Model to solve
+            solver:   Parent solver
             params:   Solving parameters
             context:  Proxy solver context
         Raises:
             CpoException if proxy executable does not exists
         """
         # Call super
-        super(CpoSolverLocal, self).__init__(model, params, context)
         self.process = None
+        super(CpoSolverLocal, self).__init__(solver, params, context)
 
         # Check if executable file exists
         if context.execfile is None:
@@ -98,7 +104,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         cmd = [context.execfile]
         if context.parameters is not None:
             cmd.extend(context.parameters)
-        context.log(2, "Angel exec command: '", ' '.join(cmd), "'")
+        context.log(2, "Solver exec command: '", ' '.join(cmd), "'")
         try:
             self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, stdout=subprocess.PIPE, universal_newlines=False)
         except:
@@ -107,15 +113,16 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         self.pin = self.process.stdout
 
         # Read initial version info from process
-        self.version = None
-        timer = threading.Timer(1, lambda: self.process.kill() if self.version is None else None)
+        self.version_info = None
+        timer = threading.Timer(1, lambda: self.process.kill() if self.version_info is None else None)
         timer.start()
         evt, data = self._read_message()
         timer.cancel()
         if evt != EVT_VERSION_INFO:
-            raise LocalSolverException("Unexpected event {} received instead of version number event {}.".format(evt, EVT_VERSION_INFO))
-        self.version = json.loads(data.decode('utf-8'))
-        context.log(3, "Angel version: '", self.version, "'")
+            raise LocalSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
+        self.version_info = json.loads(data.decode('utf-8'))
+        self.available_command = self.version_info['AvailableCommands']
+        context.log(3, "Local solver info: '", self.version_info, "'")
 
         # Convert model into CPO format
         cpostr = self._get_cpo_model_string()
@@ -260,6 +267,43 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         return self._create_result_object(CpoSolveResult, jsol)
 
 
+    def run_seeds(self, nbrun):
+        """ This method runs *nbrun* times the CP optimizer search with different random seeds
+        and computes statistics from the result of these runs.
+
+        This method does not return anything. Result statistics are displayed on the log output
+        that should be activated.
+
+        Each run of the solver is stopped according to single solve conditions (TimeLimit for example).
+        Total run time is then expected to take *nbruns* times the duration of a single run.
+
+        Args:
+            nbrun: Number of runs with different seeds.
+        Returns:
+            Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
+        Raises:
+            CpoNotSupportedException: method not available in local solver.
+        """
+        # Check command availability
+        if CMD_RUN_SEEDS not in self.available_command:
+            raise CpoNotSupportedException("Method 'run_seeds' is not available in local solver '{}'".format(self.context.execfile))
+
+        # Request run seeds
+        nbfrm = bytearray(4)
+        nbfrm[0] = (nbrun >> 24) & 0xFF
+        nbfrm[1] = (nbrun >> 16) & 0xFF
+        nbfrm[2] = (nbrun >> 8)  & 0xFF
+        nbfrm[3] = nbrun         & 0xFF
+
+        self._write_message(CMD_RUN_SEEDS, data=nbfrm)
+
+        # Wait result
+        self._wait_event(EVT_RUN_SEEDS_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoRunResult)
+
+
     def end(self):
         """ End solver and release all resources.
         """
@@ -268,7 +312,6 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                 self._write_message(CMD_EXIT)
             except:
                 pass
-            time.sleep(0.300)
             try:
                 self.pout.close()
             except:
@@ -279,6 +322,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                 pass
             try:
                 self.process.kill()
+            except:
+                pass
+            try:
+                self.process.wait()
             except:
                 pass
             self.process = None
@@ -292,7 +339,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         Returns:
             Message data
         Raises:
-            AngelException if an error occurs
+            LocalSolverException if an error occurs
         """
         # Initialize first error string to enrich exception if any
         firsterror = None
@@ -304,8 +351,11 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             if evt == xevt:
                 return data
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
-                if self.log_enabled and data:
-                    self._add_log_data(data.decode('utf-8'))
+                if data:
+                    # Warn parent solver
+                    # Store log if required
+                    if self.log_enabled:
+                        self._add_log_data(data.decode('utf-8'))
             elif evt == EVT_SOLVER_ERR_STREAM:
                 if data:
                     ldata = data.decode('utf-8')
@@ -325,7 +375,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                 raise LocalSolverException("Solver error: " + errmsg)
             else:
                 self.end()
-                raise LocalSolverException("Unknown event received from solver angel: " + str(evt))
+                raise LocalSolverException("Unknown event received from local solver: " + str(evt))
 
         # Return
         return data
@@ -427,7 +477,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         data = self.pin.read(nbb)
         if len(data) != nbb:
             if len(data) == 0:
-                raise LocalSolverException("Nothing to read from angel process.")
+                raise LocalSolverException("Nothing to read from local solver process. Possibly stopped because cplex dll is not accessible.")
             else:
                 raise LocalSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
         # Return
@@ -436,9 +486,39 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         return data
 
 
-# For ascending compatibility
-CpoSolverAngel = CpoSolverLocal
+###############################################################################
+##  Public classes
+###############################################################################
 
+from docplex.cp.model import CpoModel
+
+def get_solver_info():
+    """ Get the information data of the local CP solver that is target by the solver configuration.
+
+    This method creates a CP solver to retrieve this information, and end it immediately.
+    It returns a dictionary with various information, as in the following example:
+    ::
+    {
+       "AngelVersion" : 5,
+       "SourceDate" : "Sep 12 2017",
+       "SolverVersion" : "12.8.0.0",
+       "IntMin" : -9007199254740991,
+       "IntMax" : 9007199254740991,
+       "IntervalMin" : -4503599627370494,
+       "IntervalMax" : 4503599627370494,
+       "AvailableCommands" : ["Exit", "SetCpoModel", "SolveModel", "StartSearch", "SearchNext", "EndSearch", "RefineConflict", "Propagate", "RunSeeds"]
+    }
+
+    Returns:
+        Solver information dictionary, or None if not available.
+    """
+    try:
+        with solver.CpoSolver(CpoModel()) as slvr:
+            if isinstance(slvr.agent, CpoSolverLocal):
+                return slvr.agent.version_info
+    except:
+        pass
+    return None
 
 
 

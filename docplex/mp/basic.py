@@ -171,7 +171,7 @@ class ModelingObject(ModelingObjectBase):
             self._origin = origin
 
     def origin(self):
-        return self._origin
+        return getattr(self, '_origin', None)
 
     def __hash__(self):
         return id(self)
@@ -188,6 +188,9 @@ class ModelingObject(ModelingObjectBase):
 
     def has_valid_index(self):
         return self._index >= 0
+
+    def _set_invalid_index(self):
+        self._index = self._invalid_index
 
     @property
     def safe_index(self):
@@ -458,11 +461,12 @@ class _SubscriptionMixin(object):
         self._subscribers.append(user)
 
     def notify_unsubscribed(self, subscriber):
-        try:
-            self._subscribers.remove(subscriber)
-        except (KeyError, ValueError):
-            # in debug mode, we should trace this
-            pass
+        # 1 find index
+        sx = None
+        for s, sc in enumerate(self._subscribers):
+            if sc is subscriber:
+                del self._subscribers[s]
+                break
 
     def clear_subscribers(self):
         self._subscribers = []
@@ -472,7 +476,11 @@ class _SubscriptionMixin(object):
 
     def is_used_by(self, obj):
         # lists are not optimal here, but we favor insertion: append is faster than set.add
-        return obj in self._subscribers
+        for sc in self._subscribers:
+            if obj is sc:
+                return True
+        else:
+            return False
 
     def notify_modified(self, event):
         for s in self._subscribers:

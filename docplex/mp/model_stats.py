@@ -34,6 +34,7 @@ class ModelStatistics(object):
         self._number_of_eq_constraints = 0
         self._number_of_range_constraints = 0
         self._number_of_indicator_constraints = 0
+        self._number_of_equivalence_constraints = 0
         self._number_of_quadratic_constraints = 0
 
     def as_tuple(self):
@@ -47,6 +48,7 @@ class ModelStatistics(object):
                 self._number_of_eq_constraints,
                 self._number_of_range_constraints,
                 self._number_of_indicator_constraints,
+                self._number_of_equivalence_constraints,
                 self._number_of_quadratic_constraints)
 
     def equal_stats(self, other):
@@ -80,6 +82,7 @@ class ModelStatistics(object):
         stats._number_of_ge_constraints = linct_count[ComparisonType.GE]
         stats._number_of_range_constraints = mdl.number_of_range_constraints
         stats._number_of_indicator_constraints = mdl.number_of_indicator_constraints
+        stats._number_of_equivalence_constraints = mdl.number_of_equivalence_constraints
         stats._number_of_quadratic_constraints = mdl.number_of_quadratic_constraints
         return stats
 
@@ -185,6 +188,16 @@ class ModelStatistics(object):
         return self._number_of_indicator_constraints
 
     @property
+    def number_of_equivalence_constraints(self):
+        """ This property returns the number of equivalence constraints.
+
+        See Also:
+            :class:`docplex.mp.constr.EquivalenceConstraint`
+
+        """
+        return self._number_of_equivalence_constraints
+
+    @property
     def number_of_quadratic_constraints(self):
         """ This property returns the number of quadratic constraints.
 
@@ -198,7 +211,8 @@ class ModelStatistics(object):
     def number_of_constraints(self):
         return self.number_of_linear_constraints +\
                self.number_of_quadratic_constraints +\
-               self.number_of_indicator_constraints
+               self.number_of_indicator_constraints +\
+               self._number_of_equivalence_constraints
 
     def print_information(self):
         """ Prints model statistics in readable format.
@@ -218,10 +232,13 @@ class ModelStatistics(object):
         ct_fmt = '   - linear={0}'
         if 0 != self._number_of_indicator_constraints:
             ct_fmt += ', indicator={1}'
+        if 0 != self._number_of_equivalence_constraints:
+            ct_fmt += ', equiv={2}'
         if 0 != self._number_of_quadratic_constraints:
-            ct_fmt += ', quadratic={2}'
+            ct_fmt += ', quadratic={3}'
         print(ct_fmt.format(self.number_of_linear_constraints,
                             self.number_of_indicator_constraints,
+                            self.number_of_equivalence_constraints,
                             self.number_of_quadratic_constraints))
 
     def to_string(self):
@@ -235,16 +252,20 @@ class ModelStatistics(object):
                                  self.number_of_continuous_variables,
                                  self._number_of_semicontinuous_variables
                                  ))
+        oss.write('\n')
         nb_constraints = self.number_of_constraints
-        oss.write(' - number of constraints: {0}'.format(nb_constraints))
+        oss.write(' - number of constraints: {0}\n'.format(nb_constraints))
         if nb_constraints:
             ct_fmt = '   - linear={0}'
             if 0 != self._number_of_indicator_constraints:
                 ct_fmt += ', indicator={1}'
+            if 0 != self._number_of_equivalence_constraints:
+                ct_fmt += ', equiv={2}'
             if 0 != self._number_of_quadratic_constraints:
-                ct_fmt += ', quadratic={2}'
+                ct_fmt += ', quadratic={3}'
             oss.write(ct_fmt.format(self.number_of_linear_constraints,
                                     self.number_of_indicator_constraints,
+                                    self.number_of_equivalence_constraints,
                                     self.number_of_quadratic_constraints))
         return oss.getvalue()
 

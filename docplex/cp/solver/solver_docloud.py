@@ -33,11 +33,11 @@ _STATUS_WITH_RESULT = (solution.SOLVE_STATUS_FEASIBLE,
 class CpoSolverDocloud(solver.CpoSolverAgent):
     """ Solver of CPO model using DOcplexcloud services. """
     
-    def __init__(self, model, params, context):
+    def __init__(self, solver, params, context):
         """ Create a new solver using DOcplexcloud web service
 
         Args:
-            model:    Model to solve
+            solver:   Parent solver
             params:   Solving parameters
             context:  DOcplexcloud Solver context
         Raises:
@@ -45,8 +45,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         """
         if (context.key is None) or (' ' in context.key):
             raise CpoException("Your DOcplexcloud key has not been set")
-        super(CpoSolverDocloud, self).__init__(model, params, context)
-        self.log_data = []
+        super(CpoSolverDocloud, self).__init__(solver, params, context)
+
 
     def solve(self):
         """ Solve the model

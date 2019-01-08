@@ -13,52 +13,6 @@ import warnings
 from docplex.mp.context import check_credentials
 
 
-def get_key_in_kwargs(__context, kwargs_dict):
-    """Returns the overloaded value of api_key in the specified dict.
-
-    If a 'key'  is found, it is returned. If 'key' is not found, this
-    looks up 'api_key' (compatibility mode with versions < 1.0)
-
-    """
-    key = kwargs_dict.get('key')
-    if not key:
-        key = kwargs_dict.get('api_key')
-    if key:
-        try:
-            ignored_keys = __context.solver.docloud.ignored_keys
-            # if string, allow comma separated form
-            if isinstance(ignored_keys, six.string_types):
-                values = ignored_keys.split(",")
-                if key in values:
-                    return None
-            elif key in ignored_keys:
-                return None
-        except AttributeError:
-            # no ignored_keys, just pass
-            pass
-    return key
-
-
-def get_url_in_kwargs(__context, kwargs_dict):
-    """Returns the overloaded value of url in the specified dict.
-    """
-    url = kwargs_dict.get('url')
-    if url:
-        try:
-            ignored_urls = __context.solver.docloud.ignored_urls
-            # if string, allow comma separated form
-            if isinstance(ignored_urls, six.string_types):
-                values = ignored_urls.split(",")
-                if url in values:
-                    return None
-            elif url in ignored_urls:
-                return None
-        except AttributeError:
-            # no ignored_urls, just pass
-            pass
-    return url
-
-
 def is_in_docplex_worker():
     try:
         import docplex.worker.solvehook as worker_env

@@ -46,8 +46,10 @@ class CpoCompiler(object):
                  'min_name_length_for_rename', # Minimum variable name length to replace it by an alias
                  'identifier_strings',         # Dictionary of printable string for each identifier
                  'last_location',              # Last source location (file, line)
-                 'compiled_expressions',       # Set of ids of named expressions already compiled
                  'rename_map',                 # Dictionary of variables rename (key=new name, value = original name)
+                 'list_vars',                  # List of variables
+                 'list_exprs',                 # List of model expressions
+                 'list_phases',                # List of search phases
                  )
 
     def __init__(self, model, **kwargs):
@@ -159,9 +161,10 @@ class CpoCompiler(object):
         Args:
             out: target output
         """
-        # Expand model expressions if not done
+        # Expand model expressions (share sub-expressions)
         model = self.model
-        self.compiled_expressions = set()
+        list_vars, list_exprs, list_phases = self._expand_all_expressions()
+
         self.last_location = None
 
         # Write header
@@ -186,7 +189,6 @@ class CpoCompiler(object):
             out.write(u"}\n")
 
         # Get working variables
-        all_vars = model.get_all_variables()
         idstrings = self.identifier_strings
 
         # Rename variables if required
@@ -195,7 +197,8 @@ class CpoCompiler(object):
             # Rename variables whose name is too long
             rename_gen = IdAllocator('_R_', IdAllocator.LETTERS_AND_DIGITS)
             renmap = self.rename_map if self.rename_map else {}
-            for v in all_vars:
+            for lx in list_vars:
+                v = lx[0]
                 # Compute CPO printable variable name
                 vname = v.name
                 vpname = self._get_id_string(vname)
@@ -208,8 +211,8 @@ class CpoCompiler(object):
 
         # Write variables
         out.write(u"\n//--- Variables ---\n")
-        for v in all_vars:
-            self._write_expression(out, v, None)
+        for lx in list_vars:
+            self._write_expression(out, lx)
 
         # If aliases are requested, print as comment list of aliases
         mnl = self.min_name_length_for_alias
@@ -217,7 +220,8 @@ class CpoCompiler(object):
             # Preload string map with aliases when relevant
             aliasfound = False
             alias_gen = IdAllocator('_A_', IdAllocator.LETTERS_AND_DIGITS)
-            for v in all_vars:
+            for lx in list_vars:
+                v = lx[0]
                 # Compute CPO printable variable name
                 vname = v.name
                 vpname = strname = self._get_id_string(vname)
@@ -235,16 +239,15 @@ class CpoCompiler(object):
         # Write expressions
         out.write(u"\n//--- Expressions ---\n")
         self.last_location = None
-        for x, loc in model.get_all_expressions():
-            self._write_expression(out, x, loc)
+        for lx in list_exprs:
+            self._write_expression(out, lx)
 
         # Write search phases 
-        phases = model.get_search_phases()
-        if phases:
+        if list_phases:
             out.write(u"\n//--- Search phases ---\n")
             out.write(u"search {\n")
-            for x, loc in phases:
-                self._write_expression(out, x, loc)
+            for lx in list_phases:
+                self._write_expression(out, lx)
             out.write(u"}\n")
 
         # Write starting point
@@ -274,14 +277,16 @@ class CpoCompiler(object):
         out.flush()
 
 
-    def _write_expression(self, out, expr, loc):
+    def _write_expression(self, out, locexpr):
         """ Write model expression
 
         Args:
             out:   Target output
-            expr:  Expression
-            loc:   Location (file, line), None if unknown
+            locexpr: Located expression, tuple (expr, loc, sub_expressions, already_compiled)
         """
+        # Retrieve expression elements
+        expr, loc, sexprs, compiled = locexpr
+
         # Trace location if required
         lloc = self.last_location
         if self.add_source_location and (loc is not None) and (loc != lloc):
@@ -293,13 +298,16 @@ class CpoCompiler(object):
             self.last_location = loc
 
         # Write sub-expressions if any
-        for sx in self._get_all_sub_expressions(expr):
+        for sx in sexprs:
             self._write_sub_expression(out, sx)
 
-        # Write expression label (for constraints)
-        if expr.name and not expr.type.is_variable:
-            out.write(self._get_id_string(expr.name) + u";\n")
+        # Write expression
+        if not compiled:
+            self._write_sub_expression(out, expr)
 
+        # Write expression label (for constraints)
+        if expr.name and expr.type in (Type_Constraint, Type_BoolExpr, Type_SearchPhase):
+            out.write(self._get_id_string(expr.name) + u";\n")
 
     def _write_sub_expression(self, out, expr):
         """ Write model expression
@@ -713,7 +721,7 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _get_all_sub_expressions(self, expr):
+    def _expand_expression(self, expr, doneset):
         """ Get the list of all sub-expressions required to compile an expression.
 
         Sub-expressions are named expressions. Cause may be:
@@ -721,18 +729,21 @@ class CpoCompiler(object):
          * explicitly named by end-user
 
         Args:
-            expr:  Expression to compile
+            expr:    Expression to compile
+            doneset: Set of already done expressions
         Returns:
             List of sub-expressions to compile, in compilation order.
-            Last expression should be the root expression, only if not already compiled.
+            Root expression is NOT included in this list
         """
-        # Expand expressions
-        exprset = self.compiled_expressions  # Set of named expressions already compiled
-        estack = [expr]
+        # Expand children expressions
+        estack = []
+        for e in expr.children:
+            if not id(e) in doneset:
+                estack.append(e)
         enx = 0
         while enx < len(estack):
             for e in estack[enx].children:
-                if not id(e) in exprset:
+                if not id(e) in doneset:
                     estack.append(e)
             enx += 1
 
@@ -741,21 +752,79 @@ class CpoCompiler(object):
         while estack:
             e = estack.pop()
             eid = id(e)
-            if not eid in exprset:
+            if not eid in doneset:  # Test again is mandatory because same sub-expr can be used twice
                 if e.name:
                    subexpr.append(e)
-                   exprset.add(eid)
-                elif e is expr:
-                    if e.reference_count > 1:
+                   doneset.add(eid)
+                elif e.reference_count > 1:
+                    if not e.name:
                         e.name = e._generate_name()
                     subexpr.append(e)
-                    exprset.add(eid)
-                elif e.reference_count > 1:
-                    e.name = e._generate_name()
-                    subexpr.append(e)
-                    exprset.add(eid)
+                    doneset.add(eid)
 
         return subexpr
+
+
+    def _expand_all_expressions(self):
+        """ Expand model expressions and sort them in variables, expressions and phases.
+
+        Sub-expressions are named expressions. Cause may be:
+         * used multiple times,
+         * explicitly named by end-user
+
+        Result is a tuple (list_vars, list_exprs, list_phases) where each element is a tuple
+        (expre, loc, sub_exprs)
+        """
+        # Initialize result
+        list_vars = []
+        list_exprs = []
+        list_phases = []
+
+        # Inirialize set of expressions already expanded
+        doneset = set()
+
+        # Expand expressions
+        for expr, loc in self.model.get_all_expressions():
+            lsexpr = self._expand_expression(expr, doneset)
+            nlsexpr = []
+            # Process variables in children
+            for v in lsexpr:
+                xtyp = v.type
+                if xtyp in (Type_IntVar, Type_IntervalVar):
+                    self.model._add_named_expr(v)
+                    list_vars.append((v, None, (), False))
+                elif xtyp == Type_StepFunction:
+                    list_vars.append((v, None, (), False))
+                else:
+                    nlsexpr.append(v)
+            # Add to list of expressions
+            if expr.type in (Type_IntVar, Type_IntervalVar):
+                self.model._add_named_expr(expr)
+                list_vars.append((expr, None, (), id(expr) in doneset))
+            else:
+                list_exprs.append((expr, loc, nlsexpr, id(expr) in doneset))
+            doneset.add(id(expr))
+
+        # Expand phases
+        for expr, loc in self.model.get_search_phases():
+            lsexpr = self._expand_expression(expr, doneset)
+            nlsexpr = []
+            # Process variables in children
+            for v in lsexpr:
+                xtyp = v.type
+                if xtyp in (Type_IntVar, Type_IntervalVar, Type_StepFunction):
+                    self.model._add_named_expr(v)
+                    list_vars.append((v, None, (), False))
+                elif xtyp == Type_StepFunction:
+                    list_vars.append((v, None, (), False))
+                else:
+                    nlsexpr.append(v)
+            # Add to list of phases
+            list_phases.append((expr, loc, nlsexpr, id(expr) in doneset))
+            doneset.add(id(expr))
+
+        # Return final result
+        return (list_vars, list_exprs, list_phases)
 
 
 ###############################################################################

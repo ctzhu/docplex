@@ -282,8 +282,8 @@ class Relaxer(object):
             self._prioritizer = MatchNamePrioritizer(override=override)
         elif isinstance(prioritizer, dict):
             self._prioritizer = MappingPrioritizer(priority_mapping=prioritizer, override=override)
-        # elif prioritizer == 'named':
-        #     self._prioritizer = NamedPrioritizer()
+        elif prioritizer == 'named':
+            self._prioritizer = NamedPrioritizer()
         elif prioritizer is None or prioritizer is 'all':
             self._prioritizer = UniformPrioritizer(override=override)
         elif is_function(prioritizer):
@@ -391,17 +391,32 @@ class Relaxer(object):
         priority_map = defaultdict(list)
         nb_prioritized_cts = 0
         mdl_priorities = set()
+        mandatory_justifier = None
+        nb_mandatories = 0
         for ct in mdl.iter_constraints():
             prio = self._prioritizer.get_priority(ct)
-            if not prio.is_mandatory():
+            if prio.is_mandatory():
+                nb_mandatories += 1
+                if mandatory_justifier is None:
+                    mandatory_justifier = ct
+            else:
                 priority_map[prio].append(ct)
                 nb_prioritized_cts += 1
                 mdl_priorities.add(prio)
+
         sorted_priorities = sorted(list(mdl_priorities), key=lambda p: p.value)
 
         if 0 == nb_prioritized_cts:
             mdl.error("Relaxation algorithm found no relaxable constraints - exiting")
             return None
+        if nb_mandatories:
+            assert mandatory_justifier is not None
+            mdl.warning('{0} constraint(s) will not be relaxed (e.g.: {1!s})', nb_mandatories, mandatory_justifier)
+
+        relax_verbose = kwargs.pop('verbose', False)
+        temp_listener = VerboseRelaxationListener() if relax_verbose and not self._verbose else None
+        if temp_listener:
+            self.add_listener(temp_listener)
 
         # relaxation loop
         all_groups = []
@@ -414,8 +429,6 @@ class Relaxer(object):
             used_relax_mode = RelaxationMode.parse(relax_mode)
         if not mdl.is_optimized():
             used_relax_mode = RelaxationMode.get_no_optimization_mode(used_relax_mode)
-        # print("-- using relaxation mode: {0!s}".format(relax_mode))
-        # ---
 
         # save this for restore later
         saved_context_log_output = mdl.context.solver.log_output
@@ -439,13 +452,16 @@ class Relaxer(object):
                 mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
                           relax_context.solver.docloud)
 
+        if self.verbose:
+            print("-- starting relaxation. mode: {0!s}, precision={1}".format(used_relax_mode.name, self._precision))
+
         try:
             # mdl.context has been saved in saved_context above
             mdl.context = relax_context
             mdl.set_log_output(mdl.context.solver.log_output)
 
             # engine parameters, if needed to
-            parameters = apply_thread_limitations(relax_context.cplex_parameters, relax_context.solver)
+            parameters = apply_thread_limitations(relax_context, relax_context.solver)
 
             mdl._apply_parameters_to_engine(parameters)
 
@@ -519,6 +535,8 @@ class Relaxer(object):
             mdl.context = saved_context
             if transient_engine:
                 del relax_engine
+            if temp_listener:
+                self.remove_listener(temp_listener)
 
         return relaxed_sol
 
@@ -556,6 +574,10 @@ class Relaxer(object):
             arg = rct.name if rct.has_user_name() else str(rct)
             print(" - relaxed: {0}, with relaxation: {1}".format(arg, relaxation))
         print("* total absolute relaxation: {0}".format(self.get_total_relaxation()))
+
+    def as_dict(self):
+        rxd = {rct.name or str(rct): relaxed for rct, relaxed in self.iter_relaxations()}
+        return rxd
 
     @property
     def relaxed_objective_value(self):

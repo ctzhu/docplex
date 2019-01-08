@@ -17,7 +17,7 @@ class _SolveHook(object):
         """ Notifies the start of a solve.
 
         Args:
-            attributes: A dictionary of string->values with various data attributes of the model.
+            model_statistics: A dictionary of string->values with various data attributes of the model.
 
         """
         pass  # pragma: no cover

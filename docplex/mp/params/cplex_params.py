@@ -9,6 +9,7 @@ from docplex.mp.params.parameter_hierarchy_12620 import make_root_params_12620
 from docplex.mp.params.parameter_hierarchy_12630 import make_root_params_12630
 from docplex.mp.params.parameter_hierarchy_12700 import make_root_params_12700
 from docplex.mp.params.parameter_hierarchy_12710 import make_root_params_12710
+from docplex.mp.params.parameter_hierarchy_12800 import make_root_params_12800
 
 def _make_default_parameters():
     # when cloudcplex switches to 12.7.1 use this.
@@ -30,5 +31,7 @@ def get_params_from_cplex_version(cpx_version):
         return make_root_params_12700()
     elif cpx_version.startswith("12.7.1"):
         return make_root_params_12710()
+    elif cpx_version.startswith("12.8.0"):
+        return make_root_params_12800()
     else:
         return _make_default_parameters()

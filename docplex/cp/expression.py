@@ -583,6 +583,13 @@ class CpoVariable(CpoExpr):
 
 class CpoIntVar(CpoVariable):
     """ This class represents an *integer variable* that can be used in a CPO model.
+
+    This object should not be created explicitly, but using one of the following factory method:
+
+    * :meth:`integer_var`, :meth:`integer_var_list`, :meth:`integer_var_dict` to create integer variable(s),
+    * :meth:`binary_var`, :meth:`binary_var_list`, :meth:`binary_var_dict` to create integer variable(s)
+      with value in [0..1],
+
     """
     __slots__ = ('domain',  # Variable domain
                  )
@@ -612,7 +619,7 @@ class CpoIntVar(CpoVariable):
             domain: List of integers or interval tuples representing the variable domain.
         """
         self.domain = _build_int_var_domain(None, None, domain)
-    
+
     def get_domain(self):
         """ Gets the domain of the variable.
 
@@ -620,6 +627,14 @@ class CpoIntVar(CpoVariable):
             List of integers or interval tuples representing the variable domain.
         """
         return self.domain
+
+    def domain_iterator(self):
+        """ Iterator on the individual values of an integer variable domain.
+
+        Returns:
+            Value iterator on the domain of this variable.
+        """
+        return _domain_iterator(self.domain)
 
     def equals(self, other):
         """ Checks if this expression is equivalent to another
@@ -656,6 +671,9 @@ _PRES_OPTIONAL  = "optional"  # Present or absent, choice made by the solver
 
 class CpoIntervalVar(CpoVariable):
     """ This class represents an *interval variable* that can be used in a CPO model.
+
+    This object should not be created explicitly, but using one of the following factory method
+    :meth:`interval_var`, :meth:`interval_var_list`, or :meth:`interval_var_dict`.
     """
     __slots__ = ('start',        # Start domain
                  'end',          # End domain
@@ -998,10 +1016,6 @@ class CpoSequenceVar(CpoVariable):
         # List of variables is processed as expression children
         return True
 
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "SequenceVar({}, types={})".format(self.vars, self.types)
-
     def __len__(self):
         """ Get the length of the sequence variable (number of variables) """
         return len(self.children)
@@ -1111,10 +1125,6 @@ class CpoTransitionMatrix(CpoValue):
         assert is_int(value) and value >= 0, "Value should be a positive integer"
         self.value[from_state][to_state] = value
 
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "TransitionMatrix" + to_string(self.value)
-
 
 class CpoStateFunction(CpoVariable):
     """ This class represents a *state function* expression node.
@@ -1183,9 +1193,6 @@ class CpoStateFunction(CpoVariable):
         return super(CpoStateFunction, self)._equals(other)
         # Transition matrix is checked as children
 
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "StateFunction" + to_string(self.get_transition_matrix())
 
 
 ###############################################################################
@@ -1347,22 +1354,37 @@ def binary_var_dict(keys, name=None):
     return integer_var_dict(keys, _BINARY_DOMAIN, name=name)
 
 
-def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
+def interval_var(start=None, end=None, length=None, size=None,
                  intensity=None, granularity=None, optional=False, name=None):
     """ Creates an interval variable.
 
-    Represents an interval of integers. Interval variables are used mostly for scheduling to represent a
-    task as an interval of time.
-    In its most basic form, an interval variable can be seen as a pair of two integer variables start and end
-    such that start < end.
-    However there is an important difference: the interval variable can be absent to represent the fact that the
-    interval does not exist at all (which is different from a zero-length interval).
+    An interval decision variable represents an unknown of a scheduling problem, in particular an interval of time
+    during which something happens (an activity is carried out) whose position in time is unknown.
+    An interval is characterized by a start value, an end value and a size.
+    The start and end of an interval variable must be in [INTERVAL_MIN..INTERVAL_MAX].
+    An important feature of interval decision variables is that they can be optional, that is, it is possible
+    to model that an interval variable can be absent from the solution schedule.
+
+    Sometimes the intensity of work is not the same during the whole interval.
+    For example, consider a worker who does not work during weekends (his work intensity during weekends is 0%)
+    and on Friday he works only for half a day (his intensity during Friday is 50%).
+    For this worker, 7 man-days work will span for longer than just 7 days.
+    In this example 7 man-days represent what is called the size of the interval: that is, the length of the
+    interval would be if the intensity function was always at 100%.
+    To model such situations, a range for the size of an interval variable and an integer stepwise intensity
+    function can be specified.
+    The length of the interval will be at least long enough to cover the work requirements
+    given by the interval size, taking into account the intensity function.
 
     Args:
         start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         end (optional):         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         length (optional):      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         size (optional):        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         intensity (optional):   StepFunction that specifies relation between size and length of the interval.
         granularity (optional): Scale of the intensity function.
         optional (optional):    Optional presence indicator.
@@ -1380,7 +1402,7 @@ def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_IN
     return CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name)
 
 
-def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
+def interval_var_list(asize, start=None, end=None, length=None, size=None,
                  intensity=None, granularity=None, optional=False, name=None):
     """ Creates a list of interval variables.
 
@@ -1390,9 +1412,13 @@ def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, lengt
     Args:
         asize:                  Size of the list of variables
         start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         end (optional):         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         length (optional):      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         size (optional):        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         intensity (optional):   StepFunction that specifies relation between size and length of the interval.
         granularity (optional): Scale of the intensity function.
         optional (optional):    Optional presence indicator.
@@ -1415,7 +1441,7 @@ def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, lengt
     return res
 
 
-def interval_var_dict(keys, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
+def interval_var_dict(keys, start=None, end=None, length=None, size=None,
                  intensity=None, granularity=None, optional=False, name=None):
     """ Creates a list of interval variables.
 
@@ -1425,9 +1451,13 @@ def interval_var_dict(keys, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length
     Args:
         keys:                   Iterable of variable keys.
         start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         end (optional):         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         length (optional):      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         size (optional):        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
+                                Default value is [0..INTERVAL_MAX].
         intensity (optional):   StepFunction that specifies relation between size and length of the interval.
         granularity (optional): Scale of the intensity function.
         optional (optional):    Optional presence indicator.
@@ -1749,7 +1779,7 @@ def _create_cpo_array_expr(val):
     # Determine type
     typ = _get_cpo_array_type(val)
     if typ is None:
-        raise CpoException("Impossible to build a CPO expression with python value '" + to_string(val) + "'")
+        raise CpoException("Impossible to build a CPO expression with value '" + to_string(val) + "'")
 
     # Convert array elements if required
     if typ.is_array_of_expr:
@@ -1989,6 +2019,11 @@ def _check_arg_interval(arg, name):
     Raises:
         Exception if argument has the wrong format
     """
+    # Check default interval
+    if arg is None:
+        return DEFAULT_INTERVAL
+
+    # Check single value
     if is_int(arg):
         assert INTERVAL_MIN <= arg <= INTERVAL_MAX, "Argument '{}' should be in [INTERVAL_MIN , INTERVAL_MAX]".format(name)
         return (arg, arg)
@@ -2224,6 +2259,30 @@ def _is_equal_values(v1, v2):
         return isinstance(v2, dict) and (len(v1) == len(v2)) and all(_is_equal_values(v1[k], v2[k]) for k in v1)
     # Check finally basic equality
     return v1 == v2
+
+
+def _domain_iterator(d):
+    """ Iterator on the individual values of an integer variable domain.
+
+    Args:
+        d: Domain to iterate
+    Returns:
+        Domain iterator
+    """
+    if isinstance(d, (list, tuple)):
+        for x in d:
+            if isinstance(x, (list, tuple)):
+                min = x[0]
+                max = x[1]
+                if min == max:
+                    yield min
+                else:
+                    for v in range(min, max + 1):
+                        yield v
+            else:
+                yield x
+    else:
+        yield d
 
 
 import docplex.cp.cpo_compiler as compiler

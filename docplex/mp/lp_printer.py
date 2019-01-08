@@ -35,6 +35,8 @@ class LPModelPrinter(TextModelPrinter):
 
     float_precision_32 = 9
     float_precision_64 = 12  #
+    _nb_noncompliant_ids = 0
+    _noncompliant_justifier = None
 
     def __init__(self, hide_user_names=False, **kwargs):
         nb_digits = self.float_precision_64 if env_is_64_bit() else self.float_precision_32
@@ -53,12 +55,8 @@ class LPModelPrinter(TextModelPrinter):
     def get_format(self):
         return LP_format
 
-    def encrypt_user_names(self):
-        """
-        Encrypt either if expliclity asked for or if some name is not LP-compliant
-        :return:
-        """
-        return TextModelPrinter.encrypt_user_names(self) or self._noncompliant_varname
+    def mangle_names(self):
+        return TextModelPrinter.mangle_names(self) or self._noncompliant_varname
 
     def _print_ct_name(self, ct, name_map):
         lp_ctname = name_map.get(ct._index)
@@ -91,29 +89,17 @@ class LPModelPrinter(TextModelPrinter):
         wrapper.write('=')
         wrapper.write(self._num_to_string(rhs))
 
-    def _print_indicator_ct(self, wrapper, num_printer, var_name_map, indicator_ct):
-        """
-        Prints an indicator ct in LP
-        :param wrapper:
-        :param indicator_ct:
-        :return:
-        """
-        indicator_symbol = " -> "
-        binary_var = indicator_ct.indicator_var
 
-        wrapper.write(self._var_print_name(binary_var))
-        wrapper.write(" = ")
-        wrapper.write("%d" % indicator_ct.logical_rhs)
-        wrapper.write(indicator_symbol)
-        self._print_binary_ct(wrapper, num_printer, var_name_map, indicator_ct.linear_constraint)
+    def _print_logical_ct(self, wrapper, num_printer, var_name_map, logical_ct,
+                          logical_symbol):
+        wrapper.write(self._var_print_name(logical_ct.binary_var))
+        wrapper.write("=")
+        wrapper.write("%d" % logical_ct.active_value)
+        wrapper.write(logical_symbol)
+        self._print_binary_ct(wrapper, num_printer, var_name_map, logical_ct.linear_constraint)
+
 
     def _print_quadratic_ct(self, wrapper, num_printer, var_name_map, qct):
-        """
-        Prints an indicator ct in LP
-        :param wrapper:
-        :param qct
-        :return:
-        """
         q = self._print_qexpr_iter(wrapper, num_printer, var_name_map, qct.iter_net_quads())
         # force a '+' ?
         has_quads = q > 0
@@ -137,7 +123,7 @@ class LPModelPrinter(TextModelPrinter):
         wrapper.write('%s' % num2string_fn(pwl_def.postslope))
 
     def _print_constraint_label(self, wrapper, ct, name_map):
-        if self._hide_user_names:
+        if self._mangle_names:
             wrapper.set_indent('')
         else:
             indent_str, ct_label = self._print_ct_name(ct, name_map=name_map)
@@ -157,9 +143,14 @@ class LPModelPrinter(TextModelPrinter):
         elif isinstance(ct, RangeConstraint):
             self._print_constraint_label(wrapper, ct, name_map=self._linct_name_map)
             self._print_ranged_ct(wrapper, num_printer, var_name_map, ct)
-        elif isinstance(ct, IndicatorConstraint):
-            self._print_constraint_label(wrapper, ct, name_map=self._ic_name_map)
-            self._print_indicator_ct(wrapper, num_printer, var_name_map, ct)
+        elif ct.is_logical():
+            is_eq = ct.is_equivalence()
+            logical_symbol = '<->' if is_eq else '->'
+            self._print_constraint_label(wrapper, ct, name_map=self._lc_name_map)
+            self._print_logical_ct(wrapper, num_printer, var_name_map, ct,
+                                   logical_symbol=logical_symbol,
+                                   # avoid printing active value for equivalence with active=1
+                                   )
         elif isinstance(ct, QuadraticConstraint):
             self._print_constraint_label(wrapper, ct, name_map=self._qc_name_map)
             self._print_quadratic_ct(wrapper, num_printer, var_name_map, ct)
@@ -226,6 +217,11 @@ class LPModelPrinter(TextModelPrinter):
                 fixed_name = '_' + raw_name
                 if  self._is_lp_compliant(fixed_name):
                     return fixed_name
+            # -- stats
+            self._nb_noncompliant_ids += 1
+            if not self._noncompliant_justifier:
+                self._noncompliant_justifier = raw_name
+            # --
             self._non_compliant_lp_name_stop_here(raw_name)
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
@@ -273,43 +269,18 @@ class LPModelPrinter(TextModelPrinter):
         for (v, coeff) in expr_iter:
             var_set.add(v)
 
-    def _get_unreferenced_variables(self, model, objlin):   # pragma: no cover
-        # First: build set of all variables that are not referenced in constraints in the "Subject To" section,
-        #  nor in the linear objective
-        unreferenced_variables = set([dvar for dvar in model.iter_variables()])
-        unreferenced_variables.add(dvar for (dvar, _) in objlin.iter_sorted_terms())
-        for ct in model.iter_constraints():
-            if isinstance(ct, LinearConstraint):
-                if not ct.is_trivial_feasible():
-                    iter_diff_coeffs = ct.iter_net_linear_coefs()
-                    self._update_variables_set(iter_diff_coeffs, unreferenced_variables)
-            elif isinstance(ct, RangeConstraint):
-                term_iter = ct.expr.iter_sorted_terms()
-                self._update_variables_set(term_iter, unreferenced_variables)
-            elif isinstance(ct, IndicatorConstraint):
-                binary_var = ct.indicator_var
-                unreferenced_variables.discard(binary_var)
-                iter_diff_coeffs = ct.linear_constraint.iter_net_linear_coefs()
-                self._update_variables_set(iter_diff_coeffs, unreferenced_variables)
-            elif isinstance(ct, QuadraticConstraint):
-                iter_quads = ct.iter_net_quads()
-                self._update_variables_set(iter_quads, unreferenced_variables)
-                iter_diff_coeffs = ct.iter_net_linear_coefs()
-                self._update_variables_set(iter_diff_coeffs, unreferenced_variables)
-            elif isinstance(ct, PwlConstraint):
-                # Variables referenced only in Pwl constraints are not referenced explicitly
-                pass
-            else:
-                ct.error("ERROR: unexpected constraint not handled: {0!s}".format(ct))  # pragma: no cover
-        # Second: keep only these non-referenced variables that occur in SOS and PWL constraints
-        sos_and_pwl_variables = set()
+
+    def _get_forced_predeclared_variables(self, model):
+        # compute predeclared variables
+        predeclared_variables = set()
         for sos in model.iter_sos():
             for sos_var in sos.iter_variables():
-                sos_and_pwl_variables.add(sos_var)
+                predeclared_variables.add(sos_var)
         for pwl in model.iter_pwl_constraints():
-            sos_and_pwl_variables.add(pwl.y)
-            sos_and_pwl_variables.add(pwl.expr)
-        return sos_and_pwl_variables & unreferenced_variables
+            predeclared_variables.add(pwl.y)
+            for pwv in pwl.expr.iter_variables():
+                predeclared_variables.add(pwv)
+        return predeclared_variables
 
     def _get_all_referenced_variables(self, model, objlin):
         referenced_variables = set()
@@ -322,7 +293,7 @@ class LPModelPrinter(TextModelPrinter):
                 term_iter = ct.expr.iter_sorted_terms()
                 self._add_to_variables_set(term_iter, referenced_variables)
             elif isinstance(ct, IndicatorConstraint):
-                binary_var = ct.indicator_var
+                binary_var = ct.binary_var
                 referenced_variables.add(binary_var)
                 iter_diff_coeffs = ct.linear_constraint.iter_net_linear_coefs()
                 self._add_to_variables_set(iter_diff_coeffs, referenced_variables)
@@ -351,29 +322,37 @@ class LPModelPrinter(TextModelPrinter):
     def _has_sos_or_pwl_constraints(model):
         return model.number_of_sos > 0 or model.number_of_pwl_constraints > 0
 
-    def _get_full_objectif_vars_smart(self, model, objlin):
-        referenced_variables = self._get_all_referenced_variables(model, objlin)
-        variables_to_display = referenced_variables | set(v for v, _ in objlin.iter_sorted_terms())
-        return self._generate_linear_obj_coefs_smart(model, objlin, variables_to_display), \
-               len(variables_to_display) > 0
+    def _iter_completed_linear_obj_terms(self, model, objlin):
+        obj_variables = set(v for v, _ in objlin.iter_terms()) # unsorted
+        predeclared_variables = self._get_forced_predeclared_variables(model)
+        variables_to_display = predeclared_variables | obj_variables
+        # sort by index
+        sorted_display_vars = list(variables_to_display)
+        sorted_display_vars.sort(key=lambda dv: dv._index)
+        for v in sorted_display_vars:
+            yield v, objlin.unchecked_get_coef(v)
 
-    # def _get_full_objectif_vars_smart(self, model, objlin):
-    #     if self._has_sos_or_pwl_constraints(model):
-    #         unreferenced_variables = self._get_unreferenced_variables(model, objlin)
-    #         variables_to_display = unreferenced_variables | set(
-    #             v for v, _ in self._get_full_objectif_vars(model, objlin))
-    #         # variables_to_display = unreferenced_variables | set(v for v, _ in objlin.iter_sorted_terms())
-    #         return self._generate_linear_obj_coefs_smart(model, objlin, variables_to_display), \
-    #                len(variables_to_display) > 0
-    #
-    #     return self._get_full_objectif_vars(model, objlin), True
-    #     # return objlin.iter_sorted_terms(), False
+    def _iter_full_linear_obj_terms(self, model, objlin):
+        # INTERNAL: print all variables and their coef in the linear part of the objective
+        for v in model.iter_variables():
+            yield v, objlin.unchecked_get_coef(v)
 
-    def _get_full_objectif_vars(self, model, objlin):
-        return self._generate_linear_obj_coefs(model, objlin)
+    def post_print_hook(self, model):
+        nb_non_compliants = self._nb_noncompliant_ids
+        if nb_non_compliants:
+            try:
+                model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
+                                   nb_non_compliants, self._noncompliant_justifier)
+            except UnicodeEncodeError:
+                model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
+                                   nb_non_compliants, self._noncompliant_justifier.encode('utf-8'))
 
     #  @profile
     def print_model_to_stream(self, out, model):
+        # reset noncompliant stats
+        self._nb_noncompliant_ids = 0
+        self._noncompliant_justifier = None
+
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
             sys.__stdout__.write("\DOcplex: refine variable names\n")
@@ -404,18 +383,22 @@ class LPModelPrinter(TextModelPrinter):
         else:
             objlin = objexpr
 
+
         if self._print_full_obj:
-            iter_obj_coefs, non_empty_vars = self._get_full_objectif_vars_smart(model, objlin)
-            self._print_expr_iter(wrapper, self_num_printer, var_name_map, expr_iter=iter_obj_coefs, accept_zero=True,
-                                  allow_empty=True)
-            printed = not objlin.is_constant() or non_empty_vars
+            iter_linear_terms = self._iter_full_linear_obj_terms(model, objlin)
+
+        elif self._has_sos_or_pwl_constraints(model):
+            iter_linear_terms = self._iter_completed_linear_obj_terms(model, objlin)
+
+
         else:
             # write the linear part first
-            self._print_lexpr(wrapper, self_num_printer, var_name_map, objlin,
-                              print_constant=False,
-                              allow_empty=True,
-                              force_first_plus=False)
-            printed = not objlin.is_constant()
+            # prints an expr to a stream
+            iter_linear_terms = objlin.iter_sorted_terms()
+
+        printed= self._print_expr_iter(wrapper, self_num_printer, var_name_map, iter_linear_terms,
+                              allow_empty=True, accept_zero=True)
+
 
         if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
             self._print_qexpr_obj(wrapper, self_num_printer, var_name_map,
@@ -436,6 +419,10 @@ class LPModelPrinter(TextModelPrinter):
 
         for ct in model.iter_constraints():
             self._print_constraint(wrapper, self_num_printer, var_name_map, ct)
+        for lct in model.iter_implicit_equivalence_cts():
+            wrapper.begin_line(True)
+            self._print_logical_ct(wrapper, self_num_printer, var_name_map, lct, '<->')
+            wrapper.flush(print_newline=True, reset=True)
 
         out.write("\nBounds\n")
         symbolic_num_printer = self._num_printer

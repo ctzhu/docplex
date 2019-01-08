@@ -181,9 +181,18 @@ class DOcloudConnector(object):
             try:
                 # now upload data
                 for a in attachments:
+                    pos = 0
+                    if 'data' in a:
+                        att_data = {'data': a['data']}
+                    elif 'file' in a:
+                        att_data = {'file': a['file']}
+                        pos = a['file'].tell()
+                    elif 'filename' in a:
+                        att_data = {'filename': a['filename']}
+
                     client.upload_job_attachment(jobid,
                                                  attid=a['name'],
-                                                 data=a['data'])
+                                                 **att_data)
                     self.log("Attachment: %s has been uploaded" % a['name'])
                     if self.docloud_context.debug_dump_dir:
                         target_dir = self.docloud_context.debug_dump_dir
@@ -191,10 +200,14 @@ class DOcloudConnector(object):
                             os.makedirs(target_dir)
                         self.log("Dumping input attachment %s to dir %s" % (a['name'], target_dir))
                         with open(os.path.join(target_dir, a['name']), "wb") as f:
-                            if isinstance(a['data'], bytes):
-                                f.write(a['data'])
+                            if 'data' in 'a':
+                                if isinstance(a['data'], bytes):
+                                    f.write(a['data'])
+                                else:
+                                    f.write(a['data'].encode('utf-8'))
                             else:
-                                f.write(a['data'].encode('utf-8'))
+                                a['file'].seek(pos)
+                                f.write(a['file'])
                 # execute job
                 client.execute_job(jobid)
                 self.log("DOcplexcloud execute submitted has been started")

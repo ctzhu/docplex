@@ -12,7 +12,7 @@ from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
-    IndicatorConstraint, PwlConstraint
+    IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range
@@ -82,7 +82,7 @@ def compile_naming_function(keys, user_name, arity=1, key_format=None, _default_
                                    .format(len(keys), len(list_names)))
         key_to_names_dict = {k: nm for k, nm in izip(keys, list_names)}
         # use a closure
-        return lambda k: key_to_names_dict[k] #if k in key_to_names_dict else default_fn()
+        return lambda k: key_to_names_dict[k]  # if k in key_to_names_dict else default_fn()
 
     else:
         raise DOcplexException('Cannot use this for naming variables: {0!r} - expecting string, function or iterable'
@@ -96,6 +96,10 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(_AbstractModelFactory):
+    @staticmethod
+    def float_or_default(bound, default_bound):
+        return default_bound if bound is None else float(bound)
+
     def is_free_lb(self, var_lb):
         return var_lb <= - self.infinity
 
@@ -142,9 +146,11 @@ class ModelFactory(_AbstractModelFactory):
     def new_var(self, vartype, lb=None, ub=None, varname=None):
         self_model = self._model
         self._checker.check_var_domain(lb, ub, varname)
-        rlb = vartype.resolve_lb(lb)
-        rub = vartype.resolve_ub(ub)
-        var = Var(self_model, vartype, varname, rlb, rub)
+        logger = self_model.logger
+        rlb = vartype.resolve_lb(lb, logger)
+        rub = vartype.resolve_ub(ub, logger)
+        used_varname = None if self_model.ignore_names else varname
+        var = Var(self_model, vartype, used_varname, rlb, rub, _safe_lb=True, _safe_ub=True)
 
         idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
         self_model._register_one_var(var, idx, varname)
@@ -154,7 +160,14 @@ class ModelFactory(_AbstractModelFactory):
         # INTERNAL
         model = self._model
         binary_vartype = model.binary_vartype
-        varname = '_Bool{{{0!s}}}'.format(ct)  if not model.deploy else None
+        if model.ignore_names:
+            varname = None
+        else:
+            # use name if any else use truncated ct string representation
+            base_varname = '[{0:s}]'.format(ct.name or str_holo(ct, maxlen=20))
+            # if name is already taken, use unique index at end to disambiguate
+            varname = model._get_non_ambiguous_varname(base_varname)
+
         svar = Var(model, binary_vartype, lb=0, ub=1, _safe_lb=True, _safe_ub=1, name=varname)
         svar.notify_origin(ct)  # generated
 
@@ -192,16 +205,16 @@ class ModelFactory(_AbstractModelFactory):
         return used_name, used_keys
 
     def _expand_names(self, keys, user_name, arity, key_format):
-        if user_name is None or  self._model.deploy:
+        if user_name is None or self._model.ignore_names:
             # no automatic names, ever
             return []
         else:
-            #default_naming_fn = self._model._create_automatic_varname
+            # default_naming_fn = self._model._create_automatic_varname
             actual_naming_fn = compile_naming_function(keys, user_name, arity, key_format)
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
-    def _expand_bounds(self, keys, var_bound, default_bound, size, is_lb_or_ub):
+    def _expand_bounds(self, keys, var_bound, default_bound, size, true_if_lb):
         ''' Converts raw bounds data (either LB or UB) to CPLEX-compatible bounds list.
             If lbs is None, this is the default, return [].
             If lbs is [] take the default again.
@@ -215,7 +228,7 @@ class ModelFactory(_AbstractModelFactory):
 
         elif is_number(var_bound):
             self._checker.typecheck_num(var_bound, caller='in variable bound')
-            if is_lb_or_ub:
+            if true_if_lb:
                 if var_bound == default_bound:
                     return []
                 else:
@@ -234,10 +247,11 @@ class ModelFactory(_AbstractModelFactory):
                 self.fatal("Variable bounds list is too small, expecting: %d, got: %d" % (size, nb_bounds))
             else:
                 for b, b_value in enumerate(var_bound):
-                    if not is_number(b_value):
+                    if b_value is not None and not is_number(b_value):
                         self.fatal("Variable bounds list expects numbers, got: {0!r} (pos: #{1})",
                                    b_value, b)
-                float_bounds = [float(bv) for bv in var_bound]
+                float_bounds = [self.float_or_default(bv, default_bound) for bv in var_bound]
+
                 if nb_bounds > size:
                     self.warning(
                         "Variable bounds list is too large, required: %d, got: %d." % (size, nb_bounds))
@@ -255,9 +269,14 @@ class ModelFactory(_AbstractModelFactory):
             # try a function?
             try:
                 _computed_bounds = [var_bound(k) for k in keys]
-                for b in _computed_bounds:
-                    if not is_number(b):
-                        self.fatal("computed bound expects a number, got: {0!s}", b)
+                for b, bnd in enumerate(_computed_bounds):
+                    if bnd is None:
+                        _computed_bounds[b] = default_bound
+                    elif not is_number(bnd):
+                        self.fatal("computed bound expects a number, got: {0!s}", bnd)
+                    else:
+                        # conversion to float()
+                        _computed_bounds[b] = float(bnd)
                 return _computed_bounds
 
             except TypeError:
@@ -307,8 +326,8 @@ class ModelFactory(_AbstractModelFactory):
         default_lb = vartype.default_lb
         default_ub = vartype.default_ub
 
-        xlbs = self._expand_bounds(key_seq, lb, default_lb, number_of_vars, is_lb_or_ub=True)
-        xubs = self._expand_bounds(key_seq, ub, default_ub, number_of_vars, is_lb_or_ub=False)
+        xlbs = self._expand_bounds(key_seq, lb, default_lb, number_of_vars, true_if_lb=True)
+        xubs = self._expand_bounds(key_seq, ub, default_ub, number_of_vars, true_if_lb=False)
         # at this point both list are either [] or have size numberOfVars
 
         all_names = self._expand_names(key_seq, name, arity, key_format)
@@ -347,9 +366,8 @@ class ModelFactory(_AbstractModelFactory):
                 k = self_number_validation_fn(cst) if self_number_validation_fn else cst
             return LinearExpr(self._model, e=None, constant=k, safe=True)
 
-    def linear_expr(self, arg=0, constant=0, name=None, safe=False):
-        expr = LinearExpr(self._model, arg, constant, name, safe=safe)
-        return expr
+    def linear_expr(self, arg=None, constant=0, name=None, safe=False):
+        return LinearExpr(self._model, arg, constant, name, safe=safe)
 
     # def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
     #     return self._checker.to_valid_number(e, checked_num, context_msg, infinity)
@@ -357,12 +375,15 @@ class ModelFactory(_AbstractModelFactory):
     _operand_types = (AbstractLinearExpr, Var, ZeroExpr)
 
     @staticmethod
-    def _is_operand(arg, accept_numbers=True):
+    def _is_operand(arg, accept_numbers=False):
         return isinstance(arg, Operand) or (accept_numbers and is_number(arg))
 
     def _to_linear_operand(self, e, force_clone=False, context=None):
         if isinstance(e, LinearOperand):
-            return e
+            if force_clone:
+                return e.clone()
+            else:
+                return e
         elif is_number(e):
             return self.constant_expr(cst=e, context=context, force_clone=force_clone, safe_number=False)
         else:
@@ -373,7 +394,7 @@ class ModelFactory(_AbstractModelFactory):
                 return self.linear_expr(e)
 
     def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False, context=None):
-        # INTERNAL
+        # TODO: replace by to_linear_operand
         if isinstance(e, linexpr_class):
             if force_clone:
                 return e.clone()
@@ -402,16 +423,16 @@ class ModelFactory(_AbstractModelFactory):
             except AttributeError:
                 self.fatal("cannot convert to expression: {0!r}", e)
 
-    def new_binary_constraint(self, lhs, op, rhs, name=None):
-        cmp_op = ComparisonType.parse(op)
-        return self._new_binary_constraint(lhs, cmp_op, rhs, name)
+    def new_binary_constraint(self, lhs, sense, rhs, name=None):
+        ctsense = ComparisonType.parse(sense)
+        return self._new_binary_constraint(lhs, ctsense, rhs, name)
 
-    def _new_binary_constraint(self, lhs, ctsense, rhs, name=None):
+    def _new_binary_constraint(self, lhs, sense, rhs, name=None):
         # noinspection PyPep8
-        left_expr  = self._to_linear_operand(lhs, context="LinearConstraint.left_expr")
+        left_expr = self._to_linear_operand(lhs, context="LinearConstraint.left_expr")
         right_expr = self._to_linear_operand(rhs, context="LinearConstraint.right_expr")
         self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
-        ct = LinearConstraint(self._model, left_expr, ctsense, right_expr, name)
+        ct = LinearConstraint(self._model, left_expr, sense, right_expr, name)
         return ct
 
     def new_le_constraint(self, e, rhs, ctname=None):
@@ -426,19 +447,51 @@ class ModelFactory(_AbstractModelFactory):
     def _check_range_feasibility(self, lb, ub, expr):
         # INTERNAL
         if not lb <= ub:
-            self._model.error("infeasible range constraint, lb={0}, ub={1}, expr={2}", lb, ub, expr)
+            self._model.warning("infeasible range constraint, lb={0}, ub={1}, expr={2}", lb, ub, expr)
 
-    def new_range_constraint(self, lb, expr, ub, ctname=None):
+    def new_range_constraint(self, lb, expr, ub, name=None, check_feasible=True):
         self._check_range_feasibility(lb, ub, expr)
         linexpr = self._to_linear_operand(expr)
-        rng = RangeConstraint(self._model, linexpr, lb, ub, ctname)
+        rng = RangeConstraint(self._model, linexpr, lb, ub, name)
         linexpr.notify_used(rng)
         return rng
 
-    def new_indicator_constraint(self, binary_var, linear_ct, active_value=1, ctname=None):
+    def new_indicator_constraint(self, binary_var, linear_ct, active_value=1, name=None):
         # INTERNAL
-        indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, active_value, ctname)
+        indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, active_value, name)
         return indicator_ct
+
+    def new_equivalence_constraint(self, binary_var, linear_ct, active_value=1, name=None):
+        # INTERNAL
+        equiv_ct = EquivalenceConstraint(self._model, binary_var, linear_ct, active_value, name)
+        return equiv_ct
+
+    def new_if_then_constraint(self, if_ct, then_ct, negate=False):
+        # INTERNAL
+        indicator_ct = IfThenConstraint(self._model, if_ct, then_ct, negate=negate)
+        return indicator_ct
+
+    def new_batch_equivalence_constraints(self, bvars, linear_cts, active_values, names):
+        return [self.new_equivalence_constraint(bv, lct, active, name)
+                for bv, lct, active, name in izip(bvars, linear_cts, active_values, names)]
+
+    def new_batch_indicator_constraints(self, bvars, linear_cts, active_values, names):
+        return [self.new_indicator_constraint(bv, lct, active, name)
+                for bv, lct, active, name in izip(bvars, linear_cts, active_values, names)]
+
+    def new_constraint_or(self, ct1, ct2):
+        status1 = ct1.get_resolved_status_var()
+        status2 = ct2.get_resolved_status_var()
+        orexpr = self.new_logical_or_expr([status1, status2])
+        orct = self._new_binary_constraint(lhs=orexpr, sense=ComparisonType.EQ, rhs=1)
+        return orct
+
+    def new_constraint_and(self, ct1, ct2):
+        status1 = ct1.get_resolved_status_var()
+        status2 = ct2.get_resolved_status_var()
+        and_expr = self.new_logical_and_expr([status1, status2])
+        and_ct = self._new_binary_constraint(lhs=and_expr, rhs=1, sense=ComparisonType.EQ)
+        return and_ct
 
     # updates
 
@@ -446,16 +499,26 @@ class ModelFactory(_AbstractModelFactory):
         self._engine.update_linear_constraint(ct, UpdateEvent.LinearConstraintGlobal)
 
     def update_indicator_constraint_expr(self, ind, expr, event):
-        self._engine.update_indicator_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
+        self._engine.update_logical_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
+
+    def _check_logical_ct_edited(self, linct, new_expr):
+        log_ct = linct.get_super_logical_ct()
+        if log_ct is not None:
+            # check that expression is discrete
+            if log_ct.is_equivalence() and not new_expr.is_discrete():
+                self.fatal(
+                    'Linear constraint: {0} is used in equivalence, cannot be modified with non-integer expr: {1}',
+                    linct, new_expr)
+            self._engine.update_logical_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
 
     def set_linear_constraint_expr_from_pos(self, lct, pos, new_expr, update_subscribers=True):
         # INTERNAL
         # pos is 0 for left, 1 for right
-        ct_ind = lct.get_indicator()
-        if ct_ind is not None:
-            self._engine.update_indicator_constraint(ct_ind, event=UpdateEvent.IndicatorLinearConstraint)
-        old_expr = lct.get_expr_from_pos(pos)
         new_operand = self._to_linear_operand(e=new_expr, force_clone=False)
+        self._check_logical_ct_edited(lct, new_operand)
+
+        old_expr = lct.get_expr_from_pos(pos)
+
         exprs = [lct._left_expr, lct._right_expr]
         exprs[pos] = new_operand
         # -- event
@@ -484,20 +547,21 @@ class ModelFactory(_AbstractModelFactory):
             ct._internal_set_sense(new_sense)
 
     def set_range_constraint_lb(self, rngct, new_lb):
-        # assuming the new bound has been typechecked already..
-        ub = rngct.ub
-        self._check_range_feasibility(new_lb, ub, rngct.expr)
-        self._engine.update_range_constraint(rngct, UpdateEvent.RangeConstraintBounds, new_lb, ub)
-        # update lb
-        rngct._internal_set_lb(new_lb)
+        self.set_range_constraint_bounds(rngct, new_lb, None)
 
     def set_range_constraint_ub(self, rngct, new_ub):
+        self.set_range_constraint_bounds(rngct, None, new_ub)
+
+    def set_range_constraint_bounds(self, rngct, new_lb, new_ub):
+        lb_to_use = rngct.lb if new_lb is None else new_lb
+        ub_to_use = rngct.ub if new_ub is None else new_ub
         # assuming the new bound has been typechecked already..
-        lb = rngct.lb
-        self._check_range_feasibility(lb, new_ub, rngct.expr)
-        self._engine.update_range_constraint(rngct, UpdateEvent.RangeConstraintBounds, lb, new_ub)
-        # update lb
-        rngct._internal_set_ub(new_ub)
+        self._engine.update_range_constraint(rngct, UpdateEvent.RangeConstraintBounds, lb_to_use, ub_to_use)
+        if new_lb is not None:
+            rngct._internal_set_lb(new_lb)
+        if new_ub is not None:
+            rngct._internal_set_ub(new_ub)
+        self._check_range_feasibility(lb_to_use, ub_to_use, rngct.expr)
 
     def set_range_constraint_expr(self, rngct, new_expr):
         new_op = self._to_linear_operand(new_expr)
@@ -560,7 +624,7 @@ class ModelFactory(_AbstractModelFactory):
             # do not call create_one_var public API
             # or resync would loop
             idx = self_engine.create_one_variable(var.vartype, var.lb, var.ub, var.name)
-            if idx != var.get_index():  #  pragma: no cover
+            if idx != var.get_index():  # pragma: no cover
                 print("index discrepancy: {0!s}, new index= {1}, old index={2}"
                       .format(var, idx, var.get_index()))
 
@@ -595,7 +659,7 @@ class ModelFactory(_AbstractModelFactory):
             return PwlExpr(self_model, pwl_func, e, usage_counter, add_counter_suffix=add_counter_suffix,
                            resolve=resolve)
         else:
-            return PwlExpr(self_model, pwl_func, self._to_linear_expr(e), usage_counter,
+            return PwlExpr(self_model, pwl_func, self._to_linear_operand(e), usage_counter,
                            add_counter_suffix=add_counter_suffix, resolve=resolve)
 
     def new_pwl_constraint(self, pwl_expr, ctname=None):
@@ -618,7 +682,7 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_constraint_block(self, cts, names):
         # INTERNAL
-        if names is not None and not self._model.deploy:
+        if names is not None and not self._model.ignore_names:
             return self._new_constraint_block2(cts, names)
         else:
             return self._new_constraint_block1(cts)
@@ -630,10 +694,11 @@ class ModelFactory(_AbstractModelFactory):
         check_trivials = checker.check_trivial_constraints()
 
         for ct, ctname in izip(cts, ctnames):
-            checker.typecheck_linear_constraint(ct)
+            checker.typecheck_linear_constraint(ct, accept_ranges=False)
             if prepfn(ct, ctname, check_for_trivial_ct=check_trivials):
                 posted_cts.append(ct)
-        return self._post_constraint_block(posted_cts)
+        self._post_constraint_block(posted_cts)
+        return posted_cts
 
     def _new_constraint_block1(self, cts):
         posted_cts = []
@@ -656,22 +721,39 @@ class ModelFactory(_AbstractModelFactory):
 
         if tuple_mode:
             for ct, ctname in ctseq:
-                checker.typecheck_linear_constraint(ct)
+                checker.typecheck_linear_constraint(ct, accept_ranges=False)
                 checker.typecheck_string(ctname, accept_empty=True)
                 if prepfn(ct, ctname, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         else:
             for ct in ctseq:
-                checker.typecheck_linear_constraint(ct)
+                checker.typecheck_linear_constraint(ct, accept_ranges=True)
                 if prepfn(ct, ctname=None, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
-        return self._post_constraint_block(posted_cts)
+        self._post_constraint_block(posted_cts)
+        return posted_cts
 
     def _post_constraint_block(self, posted_cts):
         if posted_cts:
             ct_indices = self._engine.create_block_linear_constraints(posted_cts)
-            self._model._register_block_cts(posted_cts, ct_indices, safe_names=True)
-        return posted_cts
+            self._model._register_block_cts(self._model._linct_scope, posted_cts, ct_indices)
+
+
+    # --- range block
+
+    def new_range_block(self, lbs, exprs, ubs, names):
+        try:
+            n_exprs = len(exprs)
+            if n_exprs != len(lbs):
+                self.fatal('incorrect number of expressions: expecting {0}, got: {1}'.format(len(lbs), n_exprs))
+        except TypeError:
+            pass  # no len available.
+        if names:
+            ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in izip(lbs, exprs, ubs, names)]
+        else:
+            ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
+        self._post_constraint_block(ranges)
+        return ranges
 
     def new_solution(self, var_value_dict=None, name=None):
         return SolveSolution(model=self._model, var_value_map=var_value_dict, name=name)
@@ -681,14 +763,14 @@ class ModelFactory(_AbstractModelFactory):
         ctn = _VariableContainer(vartype, key_list, lb, ub, name)
         old_varctn_counter = self._var_container_counter
         ctn._index = old_varctn_counter
-        ctn._index_offset = self._model.number_of_variables #  nb of variables before ctn
+        ctn._index_offset = self._model.number_of_variables  # nb of variables before ctn
         self._var_container_counter = old_varctn_counter + 1
 
         self._model._add_var_container(ctn)
         return ctn
 
-class _VariableContainer(object):
 
+class _VariableContainer(object):
     def __init__(self, vartype, key_seq, lb, ub, name):
         self._index = 0
         self._index_offset = 0
@@ -696,17 +778,21 @@ class _VariableContainer(object):
         self._keys = key_seq
         self._lb = lb
         self._ub = ub
-        self._namer = name
+        self._name = name
+        self._name_str = None
 
     @property
     def index(self):
         return self._index
 
     def copy(self, target_model):
-        copied_ctn = self.__class__(self.vartype, self._keys, self.lb, self.ub, self._namer)
+        copied_ctn = self.__class__(self.vartype, self._keys, self.lb, self.ub, self._name)
         return copied_ctn
 
-    @property
+    def copy_relaxed(self, target_model):
+        copied_ctn = self.__class__(target_model.continuous_vartype, self._keys, self.lb, self.ub, self._name)
+        return copied_ctn
+
     def keys(self):
         return self._keys
 
@@ -720,7 +806,7 @@ class _VariableContainer(object):
 
     @property
     def namer(self):
-        return self._namer
+        return self._name
 
     @property
     def lb(self):
@@ -733,53 +819,51 @@ class _VariableContainer(object):
     @property
     def name(self):
         """
-        Try to extract a name string from a naming function.
-        :return: A string or None.
-        """
-        if isinstance(self._namer, str):
-            raw_name = self._namer
-            # drop opl-style formats
-            raw_name = raw_name.replace("({%s})", "")
-            # purge fields
-            pos_pct = raw_name.find('%')
-            if pos_pct >= 0:
-                return raw_name[:pos_pct - 1]
-            elif raw_name.find('{') > 0:
-                pos = raw_name.find('{')
-                return raw_name[:pos - 1]
-            else:
-                return raw_name
+        Try to extract a name string from the initial container name.
+        handles strings with or without formats, arrays, function.
 
+        :return: A string.
+        """
+        return self._lazy_compute_name_string()
+        
+    def _lazy_compute_name_string(self):
+        if self._name_str is not None:
+            return self._name_str
+        else:
+            raw_name = self._name
+            if is_string(raw_name):
+                # drop opl-style formats
+                s_name = raw_name.replace("({%s})", "")
+                # purge fields
+                pos_pct = raw_name.find('%')
+                if pos_pct >= 0:
+                    s_name = raw_name[:pos_pct - 1]
+                elif raw_name.find('{') > 0:
+                    pos = raw_name.find('{')
+                    s_name = raw_name[:pos - 1]
+            elif is_iterable(raw_name):
+                from os.path import commonprefix
+                s_name = commonprefix(raw_name)
+            else:
+                # try a function
+                from os.path import commonprefix
+                try:
+                    all_names = [raw_name(k) for k in self._keys]
+                    s_name = commonprefix(all_names)
+                except TypeError:
+                    s_name = ''
+            self._name_str = s_name
+            return s_name
 
     def get_var_key(self, dvar):
+        # INTERNAL
+        # containers store expanded keys (as tuples).
         dvar_index = dvar.get_index()
-        relative_index = dvar_index - self._index_offset
-        if 1 == self.nb_dimensions:
-            try:
-                return self._keys[relative_index]
-            except IndexError:
-                return None
-        else:
-            # return a tuple
-            self_shape = self.shape()
-            size = len(self_shape)
-            cur = relative_index
-            indices = []
-            for l in reversed(self_shape):
-                ix = cur % l
-                indices.append(int(ix))
-                cur = cur // l  # integer division
-
-            assert len(indices) == size
-            indices = list(reversed(indices))
-            self_keys = self._keys
-            try:
-                kt = tuple( self_keys[d][indices[d]] for d in range(size))
-            except IndexError:
-                kt = None
-            return kt
-
-
+        relative_offset = dvar_index - self._index_offset
+        try:
+            return self._keys[relative_offset]
+        except IndexError:
+            return None
 
     def size(self, dim_index):
         return len(self._keys[dim_index]) if dim_index < self.nb_dimensions else 0
@@ -795,7 +879,7 @@ class _VariableContainer(object):
     def to_string(self):
         # dvar xxx
         dim_string = self.dimension_string
-        ctname = self._namer or 'x'
+        ctname = self._name or 'x'
         return "dvar {0} {1} {2}".format(self.vartype.short_name, ctname, dim_string)
 
     def __str__(self):

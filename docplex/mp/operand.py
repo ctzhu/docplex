@@ -34,7 +34,7 @@ class Operand(object):
     # ---
 
     def keep(self):
-        pass
+        return self
 
     def resolve(self):
         # used for lazy expansions
@@ -59,11 +59,9 @@ class Operand(object):
 
 class LinearOperand(Operand):
     # no ctor as used in multiple inheritance
-    __slots__ = ()
-
 
     def unchecked_get_coef(self, dvar):
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError('unchecked_get_coef missing for class: {0}'.format(self.__class__))  # pragma: no cover
 
     def iter_variables(self):
         """
@@ -83,6 +81,9 @@ class LinearOperand(Operand):
 
     def number_of_terms(self):
         return sum(1 for _ in self.iter_terms())
+
+    def size(self):
+        return self.number_of_terms()
 
     def iter_quads(self):
         return iter_emptyset()
@@ -117,3 +118,9 @@ class LinearOperand(Operand):
 
     def contains_var(self, dvar):
         raise NotImplementedError  # pragma: no cover
+
+    def lock_discrete(self):
+        pass
+
+    def is_discrete_locked(self):
+        return False

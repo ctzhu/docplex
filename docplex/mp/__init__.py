@@ -15,10 +15,10 @@ import sys
 
 from sys import version_info
 
-ERROR_STRING = "docplex is not compatible with this version of Python: only 64 bits on Windows, Linux and Darwin, with Python 2.7.9+, 3.4.x and 3.5.x are supported."
+ERROR_STRING = "docplex is not compatible with this version of Python: only 64 bits on Windows, Linux, Darwin and AIX, with Python 2.7.9+, 3.4+ are supported."
 
 platform_system = platform.system()
-if platform_system in ('Darwin', 'Linux', 'Windows', 'Microsoft'):
+if platform_system in ('Darwin', 'Linux', 'Windows', 'Microsoft', 'AIX'):
     if version_info[0] == 3:
         if version_info < (3, 4, 0):
             raise Exception(ERROR_STRING)

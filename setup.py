@@ -22,7 +22,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.3'
+    readme = 'DOcplex 2.4'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -38,9 +38,10 @@ setup(
                'docplex.mp',
                'docplex.mp.internal',
                'docplex.mp.params',
+               'docplex.mp.sktrans',
                'docplex.mp.worker',
                'docplex.util'],
-    version = '2.3.44',  # replaced at build time
+    version = '2.4.56',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

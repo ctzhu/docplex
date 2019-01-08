@@ -145,7 +145,7 @@ class Context(dict):
             raise AttributeError
         ctx = self
         while True:
-            res = ctx.get(name, None)
+            res = ctx.get(name)
             if res is not None:
                 return res
             ctx = ctx.get_parent()
@@ -174,7 +174,8 @@ class Context(dict):
     def search_and_replace_attribute(self, name, value, path=""):
         """ Replace an existing attribute.
 
-        The attribute is searched recursively in children contexts if any.
+        The attribute is searched first as a value in this context node.
+        If not found, it is searched recursively in children contexts, in alphabetical order.
 
         Args:
             name:  Attribute name
@@ -183,20 +184,27 @@ class Context(dict):
         Return:
             Full path of the attribute that has been found and replaced, None if not found
         """
-        for k, v in self.items():
-            npath = path + "." + k
-            if k == name:
-                ov = self.get_attribute(name)
-                if (ov is not None):
-                    if isinstance(value, Context):
-                        if not isinstance(ov, Context):
-                            raise Exception("Attribute '" + npath + "' is a Context and can only be replaced by a Context")
-                self.set_attribute(name, value)
-                return npath
-            elif isinstance(v, Context):
-                apth = v.search_and_replace_attribute(name, value, path=npath)
-                if apth:
-                    return apth
+        sctxs = []  # List of subcontexts
+        # Search first in atomic values
+        for k in sorted(self.keys()):
+            v = self[k]
+            if isinstance(v, Context):
+                sctxs.append((k, v))
+            else:
+                npath = path + "." + k
+                if k == name:
+                    ov = self.get_attribute(name)
+                    if (ov is not None):
+                        if isinstance(value, Context):
+                            if not isinstance(ov, Context):
+                                raise Exception("Attribute '" + npath + "' is a Context and can only be replaced by a Context")
+                    self.set_attribute(name, value)
+                    return npath
+        # Search then in sub-contexts
+        for (k, v) in sctxs:
+            apth = v.search_and_replace_attribute(name, value, path=npath)
+            if apth:
+                return apth
         return None
 
     def get_parent(self):
@@ -229,7 +237,6 @@ class Context(dict):
             Cloned copy of this context.
         """
         res = type(self)()
-        #vars(res)['parent'] = vars(self)['parent']
         for k, v in self.items():
             if isinstance(v, Context):
                 v = v.clone()

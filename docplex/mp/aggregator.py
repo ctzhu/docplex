@@ -116,14 +116,13 @@ class ModelAggregator(object):
         if is_iterator(sum_args):
             return self._sum_with_iter(sum_args)
 
-        elif isinstance(sum_args, dict):
-            # handle dict: sum all values
-            return self._sum_with_iter(itervalues(sum_args))
-
-        if is_numpy_ndarray(sum_args):
+        elif is_numpy_ndarray(sum_args):
             return self._sum_with_iter(sum_args.flat)
         elif is_pandas_series(sum_args):
             return self.sum(sum_args.values)
+        elif isinstance(sum_args, dict):
+            # handle dict: sum all values
+            return self._sum_with_iter(itervalues(sum_args))
         elif is_iterable(sum_args):
             return self._sum_with_seq(sum_args)
 
@@ -184,6 +183,8 @@ class ModelAggregator(object):
             varsum_terms = linear_term_dict_type()
             linear_terms_setitem = linear_term_dict_type.__setitem__
             for v in var_list:
+                if not isinstance(v, Var):
+                    print('bingo')
                 linear_terms_setitem(varsum_terms, v, 1)
         else:
             # there are repeated variables.
@@ -279,16 +280,19 @@ class ModelAggregator(object):
         for r in npm:
             yield r.tolist()[0]
 
+    def _sparse_make_exprs(self, sp_mat, dvars, nb_exprs):
+        lfactory = self._linear_factory
+        exprs = [lfactory.linear_expr() for _ in range(nb_exprs)]
+        coo_mat = sp_mat.tocoo()
+        for coef, row, col in izip(coo_mat.data, coo_mat.row, coo_mat.col):
+            exprs[row]._add_term(dvars[col], coef)
+        return exprs
+
     def _sparse_matrix_constraints(self, sp_coef_mat, svars, srhs, op):
         range_cts = range(len(srhs))
         lfactory = self._linear_factory
-        exprs = [lfactory.linear_expr() for _ in range_cts]
-        for e in range(sp_coef_mat.nnz):
-            coef = sp_coef_mat.data[e]
-            row = sp_coef_mat.row[e]
-            col = sp_coef_mat.col[e]
-            exprs[row]._add_term(svars[col], coef)
-        cts = [lfactory._new_binary_constraint(exprs[r], ctsense=op, rhs=srhs[r]) for r in range_cts]
+        exprs = self._sparse_make_exprs(sp_coef_mat, svars, len(srhs))
+        cts = [lfactory._new_binary_constraint(exprs[r], sense=op, rhs=srhs[r]) for r in range_cts]
         return cts
 
     def _generate_rows(self, coef_mat):
@@ -302,7 +306,22 @@ class ModelAggregator(object):
 
     def _matrix_constraints(self, coef_mat, svars, srhs, op):
         row_gen = self._generate_rows(coef_mat)
+        lfactory = self._linear_factory
 
-        return [self._linear_factory._new_binary_constraint(lhs=self._scal_prod(svars, row), ctsense=op, rhs=rhs)
+        return [lfactory._new_binary_constraint(lhs=self._scal_prod(svars, row), sense=op, rhs=rhs)
                 for row, rhs in izip(row_gen, srhs)]
 
+    def _matrix_ranges(self, coef_mat, svars, lbs, ubs):
+        row_gen = self._generate_rows(coef_mat)
+        lfactory = self._linear_factory
+
+        return [lfactory.new_range_constraint(expr=self._scal_prod(svars, row), lb=lb, ub=ub)
+                for row, lb, ub in izip(row_gen, lbs, ubs)]
+
+    def _sparse_matrix_ranges(self, sp_coef_mat, svars, lbs, ubs):
+        assert len(lbs) == len(ubs)
+        range_ranges = range(len(lbs))
+        lfactory = self._linear_factory
+        exprs = self._sparse_make_exprs(sp_coef_mat, svars, nb_exprs=len(lbs))
+        rgs = [lfactory.new_range_constraint(lbs[r], exprs[r], ubs[r], check_feasible=False) for r in range_ranges]
+        return rgs

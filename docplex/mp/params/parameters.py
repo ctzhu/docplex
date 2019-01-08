@@ -437,7 +437,6 @@ class Parameter(object):
             An exception if the value is not valid.
         """
         accepted_value = self._check_value(new_value)
-        # do not use if accepted value here as 0 evalutes to False in Python!
         if accepted_value is not None:
             self._current_value = accepted_value
         return accepted_value

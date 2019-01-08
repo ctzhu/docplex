@@ -7,49 +7,16 @@
 # gendoc: ignore
 
 
-from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
-    is_ordered_sequence, is_iterator
-from docplex.mp.compat23 import izip
-from docplex.mp.error_handler import docplex_fatal
-
-from docplex.mp.vartype import VarType
-from docplex.mp.linear import Var, Expr
-from docplex.mp.constr import AbstractConstraint
-from docplex.mp.progress import ProgressListener
-
 import math
 
-
-class StaticTypeChecker(object):
-
-    @staticmethod
-    def typecheck_as_power(mdl, e, power):
-        # INTERNAL: checks <power> is 0,1,2
-        if power < 0 or power > 2:
-            mdl.fatal("Cannot raise {0!s} to the power {1}. A variable's exponent must be 0, 1 or 2.", e, power)
-
-    @staticmethod
-    def cannot_be_used_as_denominator_error(mdl, denominator, numerator):
-        mdl.fatal("{1!s} / {0!s} : operation not supported, only numbers can be denominators", denominator, numerator)
-
-    @classmethod
-    def typecheck_as_denominator(cls, mdl, denominator, numerator):
-        if not is_number(denominator):
-            cls.cannot_be_used_as_denominator_error(mdl, denominator, numerator)
-        else:
-            float_e = float(denominator)
-            if 0 == float_e:
-                mdl.fatal("Zero divide on {0!s}", numerator)
-            else:
-                # ok
-                pass
-
-    @classmethod
-    def logical_method_empty_args_error(cls, mdl, method_name):
-        msg = '{0:s} requires a non-empty sequence of binary variables'.format(method_name)
-        mdl.fatal(msg)
-
-
+from docplex.mp.compat23 import izip
+from docplex.mp.constr import AbstractConstraint, LinearConstraint
+from docplex.mp.error_handler import docplex_fatal
+from docplex.mp.linear import Var, Expr
+from docplex.mp.progress import ProgressListener
+from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
+    is_ordered_sequence, is_iterator
+from docplex.mp.vartype import VarType
 
 
 class IDocplexTypeChecker(object):
@@ -65,10 +32,16 @@ class IDocplexTypeChecker(object):
     def typecheck_var(self, obj):
         raise NotImplementedError  # pragma: no cover
 
+    def typecheck_binary_var(self, obj):
+        raise NotImplementedError  # pragma: no cover
+
     def typecheck_var_seq(self, seq, vtype=None):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_num_seq(self, seq):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_operand(self, obj, accept_numbers=True, caller=None):
@@ -80,10 +53,10 @@ class IDocplexTypeChecker(object):
     def typecheck_ct_to_add(self, ct, mdl, header):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_linear_constraint(self, obj):
+    def typecheck_linear_constraint(self, obj, accept_ranges=True):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts):
+    def typecheck_constraint_seq(self, cts, ctype=None):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
@@ -126,6 +99,9 @@ class IDocplexTypeChecker(object):
     def check_trivial_constraints(self):
         raise NotImplementedError  # pragma: no cover
 
+    def check_solution_hook(self, mdl, sol_hook_fn):
+        raise NotImplementedError
+
 
 # noinspection PyAbstractClass
 class DOcplexLoggerTypeChecker(IDocplexTypeChecker):
@@ -167,6 +143,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if not isinstance(obj, Var):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
 
+    def typecheck_binary_var(self, obj):
+        self.typecheck_var(obj)
+        if obj.vartype.get_cplex_typecode() != 'B':
+            self.fatal('Expecting binary variable, but variable {0!s} has type: {1}'.format(obj,
+                                                                                            obj.vartype.short_name))
+
     def typecheck_var_seq(self, seq, vtype=None):
         # build a list to avoid consuming an iterator
         checked_var_list = list(seq)
@@ -178,6 +160,13 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                            vtype.short_name, x, i)
 
         return checked_var_list
+
+    def typecheck_num_seq(self, seq):
+        # build a list to avoid consuming an iterator
+        checked_num_list = list(seq)
+        for x in checked_num_list:
+            self.typecheck_num(x)
+        return checked_num_list
 
     def typecheck_var_seq_all_different(self, seq):
         # return the checked sequence, so take the list
@@ -203,17 +192,21 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Expecting constraint, got: {0!r} with type: {1!s}", ct, type(ct))
         self.typecheck_in_model(mdl, ct, header)
 
-    def typecheck_linear_constraint(self, obj):
-        if not isinstance(obj, AbstractConstraint):
-            self.fatal("Expecting constraint, got: {0!r}", obj)
-        if not obj.is_linear():
-            self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
+    def typecheck_linear_constraint(self, obj, accept_ranges=True):
+        if accept_ranges:
+            if not isinstance(obj, AbstractConstraint):
+                self.fatal("Expecting linear constraint, got: {0!r}", obj)
+            if not obj.is_linear():
+                self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
+        else:
+            if not isinstance(obj, LinearConstraint):
+                self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
 
-    def typecheck_constraint_seq(self, cts):
-        # build a list to avoid consuming an iterator
+    def typecheck_constraint_seq(self, cts, ctype=None):
         checked_cts_list = list(cts)
+        expected_type = ctype or AbstractConstraint
         for i, ct in enumerate(checked_cts_list):
-            if not isinstance(ct, AbstractConstraint):
+            if not isinstance(ct, expected_type):
                 self.fatal("Expecting sequence of constraints, got: {0!r} at position {1}", ct, i)
         return checked_cts_list
 
@@ -316,6 +309,13 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if not is_ordered_sequence(arg) and not is_iterator(arg):
             self.fatal("{0}, got: {1!s}", header, type(arg).__name__)
 
+    def check_solution_hook(self, mdl, sol_hook_fn):
+        try:
+            dummy_s = mdl.new_solution()
+            sol_hook_fn(dummy_s)
+        except TypeError:
+            self.fatal('Solution hook requires a function taking a solution as argument')
+
 
 class NumericTypeChecker(StandardTypeChecker):
     def __init__(self, logger):
@@ -369,7 +369,13 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_var(self, obj):
         pass  # pragma: no cover
 
+    def typecheck_binary_var(self, obj):
+        pass  # pragma: no cover
+
     def typecheck_var_seq(self, seq, vtype=None):
+        return seq  # pragma: no cover
+
+    def typecheck_num_seq(self, seq):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
@@ -384,10 +390,10 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_ct_to_add(self, ct, mdl, header):
         pass  # pragma: no cover
 
-    def typecheck_linear_constraint(self, obj):
+    def typecheck_linear_constraint(self, obj, accept_ranges=True):
         pass  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts):
+    def typecheck_constraint_seq(self, cts, ctype=None):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
@@ -431,15 +437,21 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def get_number_validation_fn(self):
         return None
 
+    def check_solution_hook(self, mdl, sol_hook_fn):
+        pass
 
 
-_tck_map = {'default': StandardTypeChecker,
+#  ------------------------------
+# noinspection PyPep8
+_tck_map = {'default' : StandardTypeChecker,
             'standard': StandardTypeChecker,
-            'std': StandardTypeChecker,
-            'on': StandardTypeChecker,
-            'numeric': NumericTypeChecker,
-            'off': DummyTypeChecker,
-            'deploy': DummyTypeChecker,
+            'std'     : StandardTypeChecker,
+            'on'      : StandardTypeChecker,
+            # --
+            'numeric' : NumericTypeChecker,
+            # --
+            'off'      : DummyTypeChecker,
+            'deploy'   : DummyTypeChecker,
             'no_checks': DummyTypeChecker}
 
 

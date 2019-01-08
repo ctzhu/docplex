@@ -61,10 +61,12 @@ from docplex.cp.utils import CpoException, CpoNotSupportedException, make_direct
 import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
 import docplex.cp.solver.environment_client as runenv
-from docplex.cp.solution import CpoProcessInfos
+from docplex.cp.solution import *
+from docplex.cp.solver.solver_listener import CpoSolverListener
 
 import time, importlib, inspect
-
+import traceback
+import threading
 
 ###############################################################################
 ##  Public constants
@@ -73,11 +75,16 @@ import time, importlib, inspect
 # Solver statuses
 STATUS_IDLE              = "Idle"             # Solver created but inactive
 STATUS_RELEASED          = "Released"         # Solver stopped with resources released.
+STATUS_ABORTED           = "Aborted"          # Solver has been aborted.
 STATUS_SOLVING           = "SolveRunning"     # Simple solve in progress
 STATUS_SEARCH_WAITING    = "SearchWaiting"    # Search started or waiting to call next
 STATUS_SEARCH_RUNNING    = "NextRunning"      # Search of next solution in progress
 STATUS_REFINING_CONFLICT = "RefiningConflict" # Solver refine conflict in progress
 STATUS_PROPAGATING       = "Propagating"      # Propagation in progress
+STATUS_RUNNING_SEEDS     = "RunningSeeds"     # Run seeds in progress
+
+# Set of statuses that end solver
+_ENDING_STATUSES = frozenset((STATUS_RELEASED, STATUS_ABORTED))
 
 
 ###############################################################################
@@ -89,23 +96,24 @@ class CpoSolverAgent(object):
     to be called by :class:`CpoSolver` to solve a CPO model.
     """
 
-    def __init__(self, model, params, context):
+    def __init__(self, solver, params, context):
         """ Constructor
 
         Args:
-            model:    Model to solve
+            solver:   Parent solver
             params:   Solving parameters
             context:  Solver agent context
         Raises:
             CpoException if jar file does not exists
         """
         super(CpoSolverAgent, self).__init__()
-        self.model = model             # Source model
-        self.params = params           # Model parameters
-        self.context = context         # Solve context
-        self.last_json_result = None   # Last result
-        self.log_data = []             # Log data (list of strings)
-        self.rename_map = None         # Map of renamed variables. Key is new name, value is original name
+        self.solver = solver             # Parent solver
+        self.model = solver.get_model()  # Source model
+        self.params = params             # Model parameters
+        self.context = context           # Solve context
+        self.last_json_result = None     # Last result
+        self.log_data = []               # Log data (list of strings)
+        self.rename_map = None           # Map of renamed variables. Key is new name, value is original name
         self.process_infos = CpoProcessInfos()
 
         # Initialize log
@@ -204,9 +212,32 @@ class CpoSolverAgent(object):
         self._raise_not_supported()
 
 
+    def run_seeds(self, nbrun):
+        """ This method runs *nbrun* times the CP optimizer search with different random seeds
+        and computes statistics from the result of these runs.
+
+        Result statistics are displayed on the log output that should be activated.
+        If the appropriate configuration variable *context.solver.add_log_to_solution* is set to True (default),
+        log is also available in the *CpoRunResult* result object, accessible as a string using the method
+        :meth:`~docplex.cp.solution.CpoRunResult.get_solver_log`
+
+        Each run of the solver is stopped according to single solve conditions (TimeLimit for example).
+        Total run time is then expected to take *nbruns* times the duration of a single run.
+
+        Args:
+            nbrun: Number of runs with different seeds.
+        Returns:
+            Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        self._raise_not_supported()
+
+
     def end(self):
         """ End solver agent and release all resources.
         """
+        self.solver = None
         self.model = None
         self.params = None
         self.context = None
@@ -260,6 +291,7 @@ class CpoSolverAgent(object):
         Args:
             data:  Data to log (String)
         """
+        self.solver._notify_new_log(data)
         if self.log_enabled:
             if self.log_print:
                 self.log_output.write(data)
@@ -287,11 +319,11 @@ class CpoSolverAgent(object):
         return self.last_json_result
 
 
-    def _create_result_object(self, rclass, jsol):
+    def _create_result_object(self, rclass, jsol=None):
         """ Create a new result object and fill it with necessary data
         Args:
-            rclass: Result object class
-            jsol:   JSON solution string
+            rclass:            Result object class
+            jsol (optional):   JSON solution string
         Returns:
             New result object preinitialized
         """
@@ -338,11 +370,13 @@ class CpoSolver(object):
     It create the appropriate :class:`CpoSolverAgent` that actually implements solving functions, depending
     on the value of the configuration parameter *context.solver.agent*.
     """
-    __slots__ = ('model',     # Model to solve
-                 'context',   # Solving context
-                 'agent',     # Solver agent
-                 'status',    # Current solver status
-                 'last_sol',  # Last returned solution
+    __slots__ = ('model',       # Model to solve
+                 'context',     # Solving context
+                 'agent',       # Solver agent
+                 'status',      # Current solver status
+                 'last_sol',    # Last returned solution
+                 'listeners',   # List of solve listeners
+                 'status_lock', # Lock protecting status change
                 )
 
     def __init__(self, model, **kwargs):
@@ -357,22 +391,26 @@ class CpoSolver(object):
            - the optional arguments of this method.
 
         Args:
-            model:     Model to solve
-            context:   (Optional) Complete solving context.
-                       If not given, solving context is the default one that is defined in the module :mod:`~docplex.cp.config`.
-            params:    (Optional) Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
-                       that overwrite those in the solving context.
-            url:       (Optional) URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key:       (Optional) Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (param):   (Optional) Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
-                       (for example *TimeLimit*, *Workers*, *SearchType*, etc).
-            (others):  (Optional) Any leaf attribute with the same name in the solving context
-                       (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
+                                the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
+            (listeners) (Optional): List of solution listeners
         """
         super(CpoSolver, self).__init__()
         self.agent = None
         self.last_sol = None
         self.status = STATUS_IDLE
+        self.status_lock = threading.Lock()
+        self.listeners = []
 
         # Build effective context from args
         context = config._get_effective_context(**kwargs)
@@ -393,6 +431,11 @@ class CpoSolver(object):
         # Determine appropriate solver agent
         self.agent = self._get_solver_agent()
 
+        # Add solver listener for environment
+        env = runenv.get_environment()
+        if env is not None:
+            self.add_listener(runenv.EnvSolverListener())
+
 
     def __iter__(self):
         """  Define solver as an iterator """
@@ -402,6 +445,25 @@ class CpoSolver(object):
     def __del__(self):
         # End solver
         self.end()
+
+
+    def __enter__(self):
+        # For usage in with
+        return self
+
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        # End solver
+        self.end()
+
+
+    def get_model(self):
+        """ Returns the model solved by this solver.
+
+        Returns:
+            Model solved by this solver
+        """
+        return self.model
 
 
     def solve(self):
@@ -415,19 +477,39 @@ class CpoSolver(object):
         The function returns an object of the class CpoSolveResult (see docplex.cp.solution) that contains the solution
         if exists, plus different information on the solving process.
 
+        If the context parameter *solve_with_start_next* (or config parameter *context.solver.solve_with_start_next*)
+        is set to True, the call to solve() is replaced by loop start/next which returns the last solution found.
+        If a solver listener has been added to the solver, it is warned of all intermediate solutions.
+
         Returns:
             Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoException: (or derived) if error.
         """
-        # Notify start solve to environment
-        runenv.start_solve(self)
+        # Check solve with start/next
+        if self.context.solver.solve_with_start_next:
+            return self._solve_with_start_next()
+
+        # Notify listeners
+        for lstnr in self.listeners:
+            lstnr.start_solve(self)
 
         # Solve model
         stime = time.time()
-        self.status = STATUS_SOLVING
-        msol = self.agent.solve()
-        self.status = STATUS_IDLE
+        self._set_status(STATUS_SOLVING)
+        try:
+            msol = self.agent.solve()
+        except Exception as e:
+            if self.status == STATUS_ABORTED:
+                # Search has been aborted externally
+                for lstnr in self.listeners:
+                    lstnr.end_solve(self)
+                self._set_status(STATUS_RELEASED)
+                return self._create_solution_aborted()
+            else:
+                traceback.print_exc()
+                raise e
+        self._set_status(STATUS_IDLE)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
         msol.process_infos[CpoProcessInfos.SOLVE_TOTAL_TIME] = stime
@@ -439,8 +521,10 @@ class CpoSolver(object):
         # Store last solution
         self.last_sol = msol
 
-        # Notify end solve to environment
-        runenv.end_solve(self)
+        # Notify listeners
+        for lstnr in self.listeners:
+            lstnr.solution_found(self, msol)
+            lstnr.end_solve(self)
 
         # Return solution
         return msol
@@ -459,19 +543,37 @@ class CpoSolver(object):
         """
         # Initiate search if needed
         if self.status == STATUS_IDLE:
+            # Notify listeners about start of search
             self.agent.start_search()
-            self.status = STATUS_SEARCH_WAITING
+            self._set_status(STATUS_SEARCH_WAITING)
+            for lstnr in self.listeners:
+                lstnr.start_solve(self)
+        # Check if status is aborted (may be caused by listener)
+        if self.status == STATUS_ABORTED:
+            for lstnr in self.listeners:
+                lstnr.end_solve(self)
+            self._set_status(STATUS_RELEASED)
+            return self._create_solution_aborted()
         else:
             self._check_status(STATUS_SEARCH_WAITING)
 
-        # Notify start solve to environment
-        runenv.start_solve(self)
-
         # Solve model
         stime = time.time()
-        self.status = STATUS_SEARCH_RUNNING
-        msol = self.agent.search_next()
-        self.status = STATUS_SEARCH_WAITING
+        self._set_status(STATUS_SEARCH_RUNNING)
+        try:
+            msol = self.agent.search_next()
+        except BaseException as e:
+            sys.stdout.flush()
+            if self.status == STATUS_ABORTED:
+                # Search has been aborted externally
+                for lstnr in self.listeners:
+                    lstnr.end_solve(self)
+                self._set_status(STATUS_RELEASED)
+                return self._create_solution_aborted()
+            else:
+                #traceback.print_exc()
+                raise e
+        self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")
 
@@ -479,16 +581,19 @@ class CpoSolver(object):
         if msol.get_solve_time() == 0:
             msol._set_solve_time(stime)
 
-        # End search if needed
-        if not msol:
-            self.agent.end_search()
-            self.status = STATUS_IDLE
-
         # Store last solution
         self.last_sol = msol
 
-        # Notify end solve to environment
-        runenv.end_solve(self)
+        # Notify listeners
+        for lstnr in self.listeners:
+            lstnr.solution_found(self, msol)
+
+        # End search if needed
+        if not msol:
+            self.agent.end_search()
+            self._set_status(STATUS_IDLE)
+            for lstnr in self.listeners:
+                lstnr.end_solve(self)
 
         # Return solution
         return msol
@@ -507,7 +612,9 @@ class CpoSolver(object):
         """
         self._check_status(STATUS_SEARCH_WAITING)
         msol = self.agent.end_search()
-        self.status = STATUS_IDLE
+        self._set_status(STATUS_IDLE)
+        for lstnr in self.listeners:
+            lstnr.end_solve(self)
         return msol
 
 
@@ -545,9 +652,9 @@ class CpoSolver(object):
             CpoNotSupportedException: if method not available in the solver agent.
         """
         self._check_status(STATUS_IDLE)
-        self.status = STATUS_REFINING_CONFLICT
+        self._set_status(STATUS_REFINING_CONFLICT)
         msol = self.agent.refine_conflict()
-        self.status = STATUS_IDLE
+        self._set_status(STATUS_IDLE)
         return msol
 
 
@@ -570,30 +677,66 @@ class CpoSolver(object):
         Returns:
             Propagation result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
-            CpoNotSupportedException: method not available in this solver agent.
+            CpoNotSupportedException: method not available in configured solver agent.
         """
         self._check_status(STATUS_IDLE)
-        self.status = STATUS_PROPAGATING
+        self._set_status(STATUS_PROPAGATING)
         psol = self.agent.propagate()
-        self.status = STATUS_IDLE
+        self._set_status(STATUS_IDLE)
         return psol
+
+
+    def run_seeds(self, nbrun):
+        """ This method runs *nbrun* times the CP optimizer search with different random seeds
+        and computes statistics from the result of these runs.
+
+        Result statistics are displayed on the log output that should be activated.
+        If the appropriate configuration variable *context.solver.add_log_to_solution* is set to True (default),
+        log is also available in the *CpoRunResult* result object, accessible as a string using the method
+        :meth:`~docplex.cp.solution.CpoRunResult.get_solver_log`
+
+        Each run of the solver is stopped according to single solve conditions (TimeLimit for example).
+        Total run time is then expected to take *nbruns* times the duration of a single run.
+
+        Args:
+            nbrun: Number of runs with different seeds.
+        Returns:
+            Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
+        Raises:
+            CpoNotSupportedException: method not available in configured solver agent.
+        """
+        self._check_status(STATUS_IDLE)
+        self._set_status(STATUS_RUNNING_SEEDS)
+        rsol = self.agent.run_seeds(nbrun)
+        self._set_status(STATUS_IDLE)
+        return rsol
 
 
     def get_last_solution(self):
         """ Get the last solution returned by this solver
 
         Returns:
-            Last solution returned by this solver
+            Last solution returned by this solver (object of class :class:`~docplex.cp.solution.CpoModelSolution`)
         """
         return self.last_sol
 
 
+    def abort_search(self):
+        # Abort current search if any. Temporarily, end the process
+        self._set_status(STATUS_ABORTED)
+        agt = self.agent
+        self.agent = None
+        if (agt is not None):
+            agt.end()
+
+
     def end(self):
         # End this solver and release associated resources
-        if (self.agent is not None) and (self.status != STATUS_RELEASED):
-            self.agent.end()
-            self.agent = None
-            self.status = STATUS_RELEASED
+        agt = self.agent
+        self.agent = None
+        self._set_status(STATUS_RELEASED)
+        if (agt is not None):
+            agt.end()
 
 
     def next(self):
@@ -602,7 +745,7 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution (object of class CpoModelSolution)
+            Next model solution (object of class :class:`~docplex.cp.solution.CpoModelSolution`)
         """
         # Return solution
         msol = self.search_next()
@@ -617,9 +760,78 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution (object of class  CpoModelSolution)
+            Next model solution (object of class CpoModelSolution)
         """
         return self.next()
+
+
+    def add_listener(self, lstnr):
+        """ Add a solver listener.
+
+        A solver listener is an object extending the class :class:`~docplex.cp.solver.solver_listener.CpoSolverListener`
+        which provides multiple functions that are called to notify about the different solving steps.
+
+        Args:
+            lstnr:  Solver listener
+        """
+        assert isinstance(lstnr, CpoSolverListener), \
+            "Listener should be an object of class docplex.cp.solver.solver_listener.CpoSolverListener"
+        self.listeners.append(lstnr)
+        # Notify listener
+        lstnr.solver_created(self)
+
+
+    def remove_listener(self, lstnr):
+        """ Remove a solver listener previously added with :meth:`~docplex.cp.solver.solver.CpoSolver.add_listener`.
+
+        Args:
+            lstnr:  Listener to remove.
+        """
+        self.listeners.remove(lstnr)
+
+
+    def _set_status(self, status):
+        """ Change solve status, only if allowed
+
+        Args:
+            status: New solve status
+        """
+        with self.status_lock:
+            if (status in _ENDING_STATUSES) or (not self.status in _ENDING_STATUSES):
+                self.status = status
+
+
+    def _notify_new_log(self, data):
+        """ Notify new log data (called by agent)
+
+        Args:
+            data: Log data as a string
+        """
+        # Notify listeners
+        for lstnr in self.listeners:
+            lstnr.new_log_data(self, data)
+
+
+    def _solve_with_start_next(self):
+        """ Solve the model using a start/next loop instead of standard solve.
+
+        Raise:
+            Last model solution
+        """
+        last_sol = None
+        while True:
+            # Search for next solution
+            msol = self.search_next()
+
+            # Check successful search
+            if msol:
+                last_sol = msol
+            else:
+                if last_sol is None:
+                    return msol
+                # Merge last valid solution with last solve infos
+                last_sol.solver_infos = msol.solver_infos
+                return last_sol
 
 
     def _check_status(self, ests):
@@ -634,6 +846,17 @@ class CpoSolver(object):
            raise CpoException("Unexpected solver status. Should be '{}' instead of '{}'".format(ests, self.status))
 
 
+    def _create_solution_aborted(self):
+        """ Create an empty solution with aborted status
+        """
+        res = CpoSolveResult(self.model)
+        res.solve_status = SOLVE_STATUS_JOB_ABORTED
+        res.fail_status = FAIL_STATUS_ABORT
+        res.search_status = SEARCH_STATUS_STOPPED
+        res.stop_cause = STOP_CAUSE_ABORT
+        return res
+
+
     def _get_solver_agent(self):
         """ Get the solver agent instance that is used to solve the model.
 
@@ -644,6 +867,7 @@ class CpoSolver(object):
         """
         # Determine selectable agent(s)
         sctx = self.context.solver
+
         alist = sctx.agent
         if alist is None:
             alist = 'docloud'
@@ -688,6 +912,9 @@ class CpoSolver(object):
         sctx = self.context.solver.get(aname)
         if not isinstance(sctx, Context):
             raise CpoException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
+        if sctx.is_log_enabled(3):
+            sctx.log(3, "Context for solving agent '", aname, "':")
+            sctx.print_context(out=sctx.get_log_output())
         cpath = sctx.class_name
         if cpath is None:
             raise CpoException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")
@@ -715,7 +942,7 @@ class CpoSolver(object):
             raise CpoException("Solver agent class '" + cpath + "' does not extend CpoSolverAgent.")
 
         # Create agent instance
-        agent = sclass(self.model, sctx.params, sctx)
+        agent = sclass(self, sctx.params, sctx)
         return agent
 
 
@@ -776,7 +1003,4 @@ def _replace_names_in_json_dict(jdict, renmap):
             if nk:
                 jdict[nk] = jdict[k]
                 del jdict[k]
-
-
-
 

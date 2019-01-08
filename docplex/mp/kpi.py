@@ -4,6 +4,11 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
+from docplex.mp.linear import Var
+from docplex.mp.basic import Expr
+
+from docplex.mp.utils import is_function
+
 
 class KPI(object):
     """ Abstract class for key performance indicators (KPIs).
@@ -24,6 +29,9 @@ class KPI(object):
             string: The published name of the KPI, a non-empty, unique string.
         """
         raise NotImplementedError  # pragma: no cover
+
+    def set_name(self, new_name):
+        pass
 
     def get_model(self):
         """
@@ -46,7 +54,7 @@ class KPI(object):
 
     def requires_solution(self):
         """ KPIs based on decision expressions or variables require a successful solution
-        to be computed. KPIs based on functions may not require a solution.
+        to be computed.
 
         Returns:
            Boolean: True if the KPI requires a valid solution.
@@ -59,6 +67,26 @@ class KPI(object):
     def clone(self):
         raise NotImplementedError  # pragma: no cover
 
+    @staticmethod
+    def new_kpi(model, kpi_arg, kpi_name):
+        # static factory method to build a new concrete instance of KPI
+
+        if isinstance(kpi_arg, Expr):
+            return DecisionKPI(kpi_arg, kpi_name)
+        elif isinstance(kpi_arg, Var):
+            return DecisionKPI(kpi_arg, kpi_name)
+        elif isinstance(kpi_arg, KPI):
+            if not kpi_name:
+                return kpi_arg
+            else:
+                cloned = kpi_arg.clone()
+                cloned.name = kpi_name
+                return cloned
+        elif is_function(kpi_arg):
+            return FunctionalKPI(kpi_arg, model, kpi_name)
+        else:
+            model.fatal("Cannot interpret this as a KPI: {0!r}. expecting expression, variable or function", kpi_arg)
+
 
 class DecisionKPI(KPI):
     """ Specialized class of Key Performance Indicator, based on expressions.
@@ -69,14 +97,20 @@ class DecisionKPI(KPI):
     """
     def __init__(self, decision_obj, name=None):
         KPI.__init__(self)
-        self._dobj = decision_obj.to_linear_expr()
+        if decision_obj.is_quad_expr():
+            self._dobj = decision_obj
+        else:
+            self._dobj = decision_obj.to_linear_expr()
         self._name = name or decision_obj.name
         self._check_name(self._name)
 
     def get_name(self):
         return self._name
 
-    name = property(get_name)
+    def set_name(self, new_name):
+        self._name = new_name
+
+    name = property(get_name, set_name)
 
     def get_model(self):
         return self._dobj.model
@@ -85,7 +119,7 @@ class DecisionKPI(KPI):
         """ Redefinition of the abstract `compute()` method.
 
         Returns:
-            The value of the decision expression at the solution.
+            float: The value of the decision expression at the solution.
 
         Raises:
             Evaluating this KPI raises an exception if the underlying model has not been solved successfully.
@@ -98,12 +132,18 @@ class DecisionKPI(KPI):
     def as_expression(self):
         return self._dobj
 
+    def to_linear_expr(self):
+        return self._dobj
+
     def copy(self, new_model, var_map):
         dobj_copy = self._dobj.copy(new_model, var_map)
         return DecisionKPI(decision_obj=dobj_copy, name=self.name)
 
     def clone(self):
         return DecisionKPI(self._dobj, self._name)
+
+    def __repr__(self):
+        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str(self._dobj))
 
 
 class FunctionalKPI(KPI):
@@ -120,7 +160,10 @@ class FunctionalKPI(KPI):
     def get_name(self):
         return self._name
 
-    name = property(get_name)
+    def set_name(self, new_name):
+        self._name = new_name
+
+    name = property(get_name, set_name)
 
     def get_model(self):
         return self._model

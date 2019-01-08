@@ -120,7 +120,7 @@ class CpoCompiler(object):
         out.write("\n//--- Variables ---\n")
         vlist = model.get_all_variables()
         for (v, loc) in self._expand_expressions(vlist):
-            self._write_expression(out, v, loc)
+            self._write_expression(out, v, None)
 
         # If aliases are requested, print as comment list of aliases
         mnl = self.alias_min_name_length

@@ -155,6 +155,7 @@ class ModelReader(object):
         # print("-> start reading file: {0}".format(filename))
         cpx = Cplex()
         # no warnings
+        cpx.set_results_stream(None)
         cpx.set_log_stream(None)
         cpx.set_warning_stream(None)
         cpx.set_error_stream(None)  # remove messages about names
@@ -166,14 +167,15 @@ class ModelReader(object):
             return None
 
         range_map = {}
+        final_output_level = kwargs.get("output_level", "info")
 
         #  print("-> end CPLEX read file: {0}".format(filename))
         try:
 
             mdl = Model(name=name_to_use, **kwargs)
-            mdl.set_quiet()
-            vartype_cont = mdl.vartype_continuous
-            vartype_map = {'B': mdl.vartype_binary, 'I': mdl.vartype_integer, 'C': mdl.vartype_continuous}
+            mdl.set_quiet()  # output level set to ERROR
+            vartype_cont = mdl.continuous_vartype
+            vartype_map = {'B': mdl.binary_vartype, 'I': mdl.integer_vartype, 'C': mdl.continuous_vartype}
             # 1 upload variables
             nb_vars = cpx.variables.get_num()
             all_names = cpx.variables.get_names()
@@ -215,8 +217,6 @@ class ModelReader(object):
             deferred_cts = []
             deferred_ctnames = []
             postpone = self._use_block_constraints
-            # if postpone:
-            #     print("* all constraints will be added in one pass")
 
             for c in range(nb_linear_cts):
                 row = all_rows[c]
@@ -315,13 +315,22 @@ class ModelReader(object):
             cpx_obj = cpx.objective
             cpx_sense = cpx_obj.get_sense()
             obj_expr = mdl.linear_expr()
+            # for v in range(nb_vars):
+            #     if v in idx_to_var_map:
+            #         obj_coef = cpx_obj.get_linear(v)
+            #         obj_expr._add_term(idx_to_var_map[v], obj_coef)
+
+            cpx_all_obj_coeffs = cpx_obj.get_linear()
+            all_obj_vars  = []
+            all_obj_coefs = []
+
             for v in range(nb_vars):
                 if v in idx_to_var_map:
-                    obj_coef = cpx_obj.get_linear(v)
-                    if obj_coef != 0:
-                        obj_expr._add_term(idx_to_var_map[v], obj_coef)
-                else:
-                    pass
+                    obj_coeff = cpx_all_obj_coeffs[v]
+                    all_obj_coefs.append(obj_coeff)
+                    all_obj_vars.append(idx_to_var_map[v])
+                    #obj_expr._add_term(idx_to_var_map[v], cpx_all_obj_coeffs[v])
+            obj_expr = mdl.dot(all_obj_vars, all_obj_coefs)
             is_maximize = cpx_sense == ObjSense.maximize
 
             if not obj_expr.is_constant():
@@ -346,6 +355,7 @@ class ModelReader(object):
             # clean up CPLEX instance...
             del cpx
 
+        mdl.output_level = final_output_level
         return mdl
 
 

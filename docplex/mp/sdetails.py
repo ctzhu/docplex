@@ -3,15 +3,16 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.utils import StringIO, has_unicode_type
+from docplex.mp.compat23 import StringIO, has_unicode_type
 
+from math import isnan
 
 class SolveDetails(object):
     """
     The :class:`SolveDetails` class contains the details of a solve.
 
     This class should never be instantiated. You get an instance of this class from
-    the model by calling the property :attr:`Model.solve_details`.
+    the model by calling the property :data:`docplex.mp.model.Model.solve_details`.
     """
 
     _unknown_label = "*unknown*"
@@ -37,6 +38,19 @@ class SolveDetails(object):
 
         self._md5 = self._unknown_label
 
+    def as_dict(self):
+        # INTERNAL
+        # Converts the solve details to a dictionary (keys may change)
+        self_as_dict = {"time": self._time,
+                        "status": self._solve_status,
+                        "problem_type": self._problem_type,
+                        "ncolumns": self._ncolumns,
+                        "linear_nonzeros": self._linear_nonzeros
+                        }
+        if not isnan(self._miprelgap):
+            self_as_dict["mipgap"] = self._miprelgap
+        return self_as_dict
+
     _problemtype_map = {0: "LP",
                         1: "MILP",
                         3: "fixed_MILP",
@@ -50,9 +64,12 @@ class SolveDetails(object):
                         12: "node_QCP"}
 
     @staticmethod
-    def _convert_problemtype(probtype, probtype_map=_problemtype_map):
-        iprobe_type = int(probtype)
-        return probtype_map.get(iprobe_type, "unknown")
+    def _convert_problemtype(probtype, probtype_map=_problemtype_map, unknown_probtype="unknown"):
+        try:
+            iprobe_type = int(probtype)
+            return probtype_map.get(iprobe_type, unknown_probtype)
+        except ValueError:
+            return unknown_probtype
 
     @staticmethod
     def to_plain_str(arg_s):
@@ -197,7 +214,7 @@ class SolveDetails(object):
 
     # linear nonzeros
     def get_nb_linear_nonzeros(self):
-        """ This property returns the number of linear nonzeros in the matrix solved.
+        """ This property returns the number of linear non-zeros in the matrix solved.
 
         """
         return self._linear_nonzeros
@@ -209,7 +226,7 @@ class SolveDetails(object):
         """ This property returns the MIP relative gap.
 
         Note:
-            * This property returns a NaN when the problem is not a MIP.
+            * This property returns NaN when the problem is not a MIP.
             * The gap is returned as a floating-point value, not as a percentage.
         """
         return self._miprelgap
@@ -248,8 +265,10 @@ class SolveDetails(object):
 
     def has_hit_limit(self):
         """
+        Checks if the solve details indicate that the solve has hit a limit.
+
         Returns:
-          True if the solve details indicate that the solve has hit a limit.
+          Boolean: True if the solve details indicate that the solve has hit a limit.
 
         """
         return self._solve_status_code in self._limit_statuses

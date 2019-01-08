@@ -6,14 +6,13 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module allows to solve a model expressed as a CPO file using DOcloud services.
+This module allows to solve a model expressed as a CPO file using DOcplexcloud services.
 """
 
 import docplex.cp.config as config
 import docplex.cp.solution as solution
 from docplex.cp.docloud_client import JobClient
 from docplex.cp.utils import CpoException
-import docplex.cp.cpo_compiler as cpo_compiler
 import docplex.cp.solver as solver
 
 
@@ -22,22 +21,22 @@ import docplex.cp.solver as solver
 ###############################################################################
 
 class CpoSolverDocloud(solver.CpoSolverAgent):
-    """ Solver of CPO model using DOcloud services. """
+    """ Solver of CPO model using DOcplexcloud services. """
     
     def __init__(self, model, params, context):
-        """ Create a new solver using DOcloud web service
+        """ Create a new solver using DOcplexcloud web service
 
         Args:
             model:    Model to solve
             params:   Solving parameters
-            context:  DOcloud Solver context
+            context:  DOcplexcloud Solver context
         Raises:
             CpoException if jar file does not exists
         """
         if (context.key is None) or (' ' in context.key):
-            raise CpoException("Your DOcloud key has not been set")
+            raise CpoException("Your DOcplexcloud key has not been set")
         super(CpoSolverDocloud, self).__init__(model, params, context)
-        self.log_records = []
+        self.log_data = []
 
     def solve(self):
         """ Solve the model
@@ -45,8 +44,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         According to the value of the context parameter 'verbose', the following information is logged
         if the log output is set:
          * 1: Total time spent to solve the model
-         * 2: Calls to DOcloud solving
-         * 3: Detailed DOcloud job information
+         * 2: Calls to DOcplexcloud solving
+         * 3: Detailed DOcplexcloud job information
          * 4: REST requests and response codes
 
         Returns:
@@ -54,7 +53,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         Raises:
             CpoException if error occurs
         """
-        # Create DOcloud client
+        # Create DOcplexcloud client
         ctx = self.context
         client = JobClient(ctx)
 
@@ -72,7 +71,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             # Wait job termination
             lgntf = None
             if self._is_log_required():
-                self.log_records = []
+                self.log_data = []
                 lgntf = (lambda recs: self._log_records(recs))
             client.wait_job_termination(maxwait=maxwait, lognotif=lgntf)
             jinfo = client.get_info()
@@ -107,9 +106,9 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
                 ctx.log(3, "JSON solution:\n", jsol)
 
             # Get log
-            if lgntf:
-                logstr = '\n'.join([rec['message'] for rec in self.log_records])
-                self._set_solver_log(logstr, msol)
+            if self.context.add_log_to_solution:
+                logstr = '\n'.join([rec['message'] for rec in self.log_data])
+                msol._set_solver_log(logstr)
 
         finally:
             # Delete job
@@ -128,9 +127,14 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         Args:
             records: List of new records
         """
-        self.log_records.extend(records)
-        if self.context.trace_log:
-            out = self.context.log_output
+        # Append to list of log records
+        ctx = self.context
+        if ctx.add_log_to_solution:
+            self.log_data.extend(records)
+
+        # Trace on output if required
+        if ctx.trace_log:
+            out = ctx.log_output
             if out is not None:
                 for rec in records:
                     out.write(rec['message'])
@@ -149,8 +153,8 @@ def _add_solve_status(msol, dcest, dcsst):
     """ Add the solve status in the solution
     Args:
         msol:  Model solution to fill
-        dcest: DOcloud execution status
-        dcsst: DOcloud solve status
+        dcest: DOcplexcloud execution status
+        dcsst: DOcplexcloud solve status
     """
     s = solution.SOLVE_STATUS_UNKNOWN
     if (dcest == "INTERRUPTED"):           s = solution.SOLVE_STATUS_JOB_ABORTED

@@ -6,13 +6,13 @@
 
 # gendoc: ignore
 
-import threading
-
-__before_dict_ready = threading.Event()
-__results_ready = threading.Event()
-__before_solve_dict = {}
-__after_solve_dict = {}
-__solve_status = None
-__has_solution = False
-__objective_value = None
-solve_hook = None
+# import threading
+#
+# __before_dict_ready = threading.Event()
+# __results_ready = threading.Event()
+# __before_solve_dict = {}
+# __after_solve_dict = {}
+# __solve_status = None
+# __has_solution = False
+# __objective_value = None
+# solve_hook = None

@@ -12,7 +12,8 @@ import sys
 from six import iteritems, iterkeys
 from docloud.status import JobSolveStatus
 
-from docplex.mp.utils import is_iterable, is_number, is_string, StringIO
+from docplex.mp.compat23 import StringIO
+from docplex.mp.utils import is_iterable, is_number, is_string
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
 
@@ -59,15 +60,35 @@ class SolveSolution(object):
         if var_value_map is not None:
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
+    @staticmethod
+    def make_engine_solution(model, var_value_map=None, obj=None, engine_name=None):
+        # INTERNAL
+        sol = SolveSolution(model,
+                            var_value_map=var_value_map, obj=obj,
+                            engine_name=engine_name,
+                            rounding=True,
+                            keep_zeros=False)
+        return sol
+
     def _get_var_by_name(self, varname):
         return self.__model.get_var_by_name(varname)
+
+    def clear(self):
+        """ Clears all solve result data.
+
+        All data related to the model are left unchanged.
+        """
+        self.__var_value_map = {}
+        self.__objective__ = self.NO_OBJECTIVE_VALUE
+        self.__attr_map = {}
+        self._solve_status = JobSolveStatus.UNKNOWN
 
     def is_empty(self):
         """
         Checks whether the solution is empty.
 
         Returns:
-            True if the solution is empty; in other words, it has no defined objective and no variable value.
+            Boolean: True if the solution is empty; in other words, the solution has no defined objective and no variable value.
         """
         return not self.has_objective() and not self.__var_value_map
 
@@ -101,11 +122,11 @@ class SolveSolution(object):
             self.model.fatal("{0} expects either Var or string, got: {1!r}", caller, var_key)
 
     def add_var_value(self, var_key, value):
-        """ Adds a new pair of (var, value) to this solution.
+        """ Adds a new (variable, value) pair to this solution.
 
         Args:
-            var_key: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (a string).
-            value: A number, the value of the variable in the solution.
+            var_key: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
+            value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
         self._set_var_value(var_key, value, keep_zero=True, rounding=False, do_warn_on_non_discrete=True)
@@ -132,7 +153,7 @@ class SolveSolution(object):
                 if do_warn_on_non_discrete:
                     if rounding:
                         self.error_handler.warning(
-                            "Trying to asign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
+                            "Trying to assign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
                             (var, value, stored_value))
                     else:
                         self.error_handler.warning(
@@ -147,7 +168,7 @@ class SolveSolution(object):
     @property
     def model(self):
         """
-        A property that gets the model associated with the solution.
+        This property returns the model associated with the solution.
         """
         return self.__model
 
@@ -159,10 +180,10 @@ class SolveSolution(object):
         """
         Gets the objective value as defined in the solution.
         When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
-        You can check whether the objective has been set using :func:`has_objective`.
+        To check whether the objective has been set, use :func:`has_objective`.
 
         Returns:
-            The value of the objective as defined by the solution.
+            float: The value of the objective as defined by the solution.
         """
         return self.__objective__
 
@@ -171,14 +192,16 @@ class SolveSolution(object):
         Sets the objective value of the solution.
         
         Args:
-            obj (float): The value of the objective in the solution (a floating-point number).
+            obj (float): The value of the objective in the solution.
         """
         self.__objective__ = obj
 
     def has_objective(self):
         """
+        Checks whether or not the objective has been set.
 
-        :return: True if the solution defines an objective value.
+        Returns:
+            Boolean: True if the solution defines an objective value.
         """
         return self.__objective__ != self.NO_OBJECTIVE_VALUE
 
@@ -227,7 +250,7 @@ class SolveSolution(object):
         """Iterates over the (variable, value) pairs in the solution.
 
         Returns:
-            A dict-style iterator which returns a two-component tuple (variable, value)
+            iterator: A dict-style iterator which returns a two-component tuple (variable, value)
             for all variables mentioned in the solution.
         """
         return iteritems(self.__var_value_map)
@@ -236,21 +259,22 @@ class SolveSolution(object):
         """Iterates over all variables mentioned in the solution.
 
         Returns:
-           An iterator object.
+           iterator: An iterator object over all variables mentioned in the solution.
         """
         return iterkeys(self.__var_value_map)
 
     def contains(self, dvar):
         """
         Checks whether or not a decision variable is mentioned in the solution.
-        Note that this predicate can also be used in the form `var in solution`, because the
+
+        This predicate can also be used in the form `var in solution`, because the
         :func:`__contains_` method has been redefined for this purpose.
 
         Args:
             dvar (:class:`docplex.mp.linear.Var`): The variable to check.
 
         Returns:
-            True if the variable is mentioned in the solution.
+            Boolean: True if the variable is mentioned in the solution.
         """
         return dvar in self.__var_value_map
 
@@ -266,17 +290,17 @@ class SolveSolution(object):
         because the :func:`__getitem__` method has been overloaded.
 
         Args:
-            dvar_arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (a string).
+            dvar_arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
 
         Returns:
-            A floating-point number, the value of the variable in the solution.
+            float: The value of the variable in the solution.
         """
         dvar = self._resolve_var(dvar_arg, do_raise=True)
         return self.__var_value_map.get(dvar, 0) if dvar is not None else 0
 
     @property
     def number_of_var_values(self):
-        """ Returns the number of variable values stored in this solution.
+        """ This property returns the number of variable values stored in this solution.
 
         """
         return len(self.__var_value_map)
@@ -404,7 +428,7 @@ class SolveSolution(object):
             s_obj = "obj={0:g}".format(self.objective_value)
         else:
             s_obj = "obj=N/A"
-        s_values = ",".join(["{0}:{1:g}".format(var, val) for var, val in iteritems(self.__var_value_map)])
+        s_values = ",".join(["{0}:{1:g}".format(var.name, val) for var, val in iteritems(self.__var_value_map)])
         return "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
 
     def print_mst(self):
@@ -431,7 +455,7 @@ class SolveSolution(object):
                 If passed a string format (either with %s or {0}), this format is used to format the
                 model name to produce the basename of the written file.
 
-            path: A path to write file, expects a string path or None.
+            path: A path to write the file, expects a string path or None.
                 Can be a directory, in which case the basename
                 that was computed with the basename argument is appended to the directory to produce
                 the file.
@@ -446,7 +470,7 @@ class SolveSolution(object):
 
             ``sol.export_as_mst(path="c:/temp/myprob1.mst")`` will write file "c:/temp/myprob1.mst".
 
-            ``sol.export_as_mst(basename="my_%s_mipstart", path ="z:/home/)`` will write "z:/home/my_prob_mipstart.mst".
+            ``sol.export_as_mst(basename="my_%s_mipstart", path ="z:/home/")`` will write "z:/home/my_prob_mipstart.mst".
 
         """
         mst_path = make_output_path2(actual_name=self._problem_name,
@@ -458,15 +482,18 @@ class SolveSolution(object):
 
 
     def check_as_mip_start(self, error_handler=None):
-        """
-        Checks that this solution is a valid MIP start.
+        """Checks that this solution is a valid MIP start.
+
         To be valid, it must have:
+
             * at least one discrete variable (integer or binary), and
-            * the value for integer/binary variables should be consistent with the type.
+            * the values for decision variables should be consistent with the type.
 
         Args:
             error_handler: An instance of an error handler or None.
 
+        Returns:
+            Boolean: True if this solution is a valid MIP start.
         """
         if 0 == len(self.__var_value_map):
             if error_handler:

@@ -249,8 +249,8 @@ class CpoModel(object):
         Args:
             context (optional):   Complete solving context. If not given, context is the default context that is set in config.py.
             params (optional):    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url (optional):       URL of the DOcloud service that overwrites the one defined in the solving context.
-            key (optional):       Authentication key of the DOcloud service that overwrites the one defined in the solving context.
+            url (optional):       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key (optional):       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
             (others) (optional):  All other context parameters that can be changed.
         Returns:
             Model solution (type CpoModelSolution).

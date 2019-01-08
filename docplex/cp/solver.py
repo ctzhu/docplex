@@ -12,7 +12,7 @@ The solver is created passing the source model as first parameter.
 The solving itself is performed by calling the solve() method.
 
 Solving is executed as defined in the configuration (see config.py module to see how to customize it).
-For an execution on DOcloud, the configuration must contain the target URL and the authentication key.
+For an execution on DOcplexcloud, the configuration must contain the target URL and the authentication key.
 """
 
 import docplex.cp.config as config
@@ -34,12 +34,12 @@ class CpoSolverAgent(object):
     """
 
     def __init__(self, model, params, context):
-        """ Create a new solver using DOcloud web service
+        """ Create a new solver using DOcplexcloud web service
 
         Args:
             model:    Model to solve
             params:   Solving parameters
-            context:  DOcloud Solver context
+            context:  Solver context
         Raises:
             CpoException if jar file does not exists
         """
@@ -47,7 +47,6 @@ class CpoSolverAgent(object):
         self.model = model
         self.params = params
         self.context = context
-
 
     def solve(self):
         """ Solve the model
@@ -94,24 +93,6 @@ class CpoSolverAgent(object):
         """
         return self.context.add_log_to_solution or self.context.trace_log
 
-    def _set_solver_log(self, logstr, msol):
-        """ Notify the content of the log, for storing in solution and tracing if required
-
-        Args:
-            logstr:  Solver log
-            msol:    Model solution
-        """
-        '''
-        lout = self.context.log_output
-        if lout and (self.context.trace_log):
-            lout.write("Model '" + str(self.model.get_name()) + "' solver log:\n")
-            lout.write(logstr)
-            lout.write("\n")
-            lout.flush()
-        '''
-        if self.context.add_log_to_solution:
-            msol._set_solver_log(logstr)
-
 
 class CpoSolver(object):
     """ Generic CPO model solver
@@ -128,8 +109,6 @@ class CpoSolver(object):
             context:        Global solving context. If not given, context is the default context that is set in config.py.
         Optional args:
             params:         Solving parameters (CpoParameters) that overwrites those in solving context
-            url:            URL of the DOcloud service that overwrites the one defined in solving context.
-            key:            Authentication key of the DOcloud service that overwrites the one defined in solving context.
             etc             All other context parameters that can be changed
         """
         super(CpoSolver, self).__init__()
@@ -138,6 +117,15 @@ class CpoSolver(object):
         if context is DEFAULT:
             context = config.context
         context = _update_context(context, kwargs)
+
+        # If defined, limit the number of threads
+        mxt = context.solver.max_threads
+        if isinstance(mxt, int):
+            # Maximize number of workers
+            nbw = context.params.Workers
+            if (nbw is None) or (nbw > mxt):
+                context.params.Workers = mxt
+                print("WARNING: Number of workers has been reduced to " + str(mxt) + " to comply with platform limitations.")
 
         # Save attributes
         self.model = model

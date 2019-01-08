@@ -8,6 +8,7 @@ from six import iteritems
 from collections import defaultdict
 
 from docplex.mp.basic import Priority
+from docplex.mp.linear import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
@@ -158,6 +159,36 @@ class NamePrioritizer(IConstraintPrioritizer):
                         best_prio = prio
             return best_prio
 
+class CustomPrioritizer(IConstraintPrioritizer):
+    """
+    Constraint prioritizer based on a dictionary constraint -> priority.
+
+    Inituialized from a dictionary and an optional default priority.
+
+    Args:
+        priority_mapping: a dict, with constraints as keys and priorities as values.
+
+        default_priority: an optional priority, used when a constraint is not explicitly mentioned
+            in the mapping. The default value is MANDATORY, meaning that any constraint not mentioned
+            in the mapping will not be relaxed.
+    """
+    def __init__(self, priority_mapping, default_priority=Priority.MANDATORY):
+        # --- typecheck that this dict is a a {ct: prio} mapping.
+        if not isinstance(priority_mapping, dict):
+            raise TypeError
+        for k, v in iteritems(priority_mapping):
+            if not isinstance(k, AbstractConstraint):
+                raise TypeError
+            if not isinstance(v, Priority):
+                raise TypeError
+        # ---
+
+        self._mapping = priority_mapping
+        self._default_priority = default_priority
+
+    def get_priority(self, ct):
+        return self._mapping.get(ct, self._default_priority)
+
 
 class Relaxer(object):
     ''' This class is an asbtract algorithm, in the sense that it operates on interfaces.
@@ -187,9 +218,14 @@ class Relaxer(object):
             self.__prioritizer = prioritizer
         elif prioritizer == 'name':
             self.__prioritizer = NamePrioritizer()
-        else:
+        elif isinstance(prioritizer, dict):
+            self.__prioritizer = CustomPrioritizer(priority_mapping=prioritizer)
+        elif prioritizer is None or prioritizer == 'default':
             relax_unnamed = kwargs.get("relax_unnamed", True)
             self.__prioritizer = DefaultPrioritizer(relax_unnamed=relax_unnamed)
+        else:
+            print("Cannot deduce a prioritizer from: {0!r} - expecting \"name\"|\"default\"| dict", prioritizer)
+            raise TypeError
 
         self._ordered_priorities = Priority.all_sorted()
         self._cumulative = cumulative
@@ -314,10 +350,29 @@ class Relaxer(object):
         context = mdl.prepare_actual_context(**solve_kwargs)
 
         try:
+            # mdl.context has been saved in saved_context above
             mdl.context = context
             mdl.set_log_output(mdl.context.solver.log_output)
-            # apply parameters after the context has been updated by kwargs
-            mdl._apply_parameters_to_engine(context.cplex_parameters)
+
+            # engine parameters, if needed to
+            parameters = context.cplex_parameters
+            # limit threads if needed
+            if getattr(context.solver, 'max_threads', None) is not None:
+                if parameters.threads.get() == 0:
+                    max_threads = context.solver.max_threads
+                else:
+                    max_threads = min(context.solver.max_threads,
+                                      parameters.threads.get())
+                # we don't want to duplicate parameters unnecessary
+                if max_threads != parameters.threads.get():
+                    parameters = parameters.copy()
+                    parameters.threads = max_threads
+                    out_stream = context.solver.log_output_as_stream
+                    if out_stream:
+                        out_stream.write("WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
+
+
+            mdl._apply_parameters_to_engine(parameters)
 
             for prio in self._ordered_priorities:
                 if prio in priority_map:

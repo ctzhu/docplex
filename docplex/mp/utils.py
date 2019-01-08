@@ -14,36 +14,15 @@ import tempfile
 import threading
 import time
 
-from six import iteritems, itervalues
+from six import itervalues
 
-# py2/py3 compatibility
-try:
-    from Queue import Queue
-except ImportError:
-    # noinspection PyUnresolvedReferences
-    from queue import Queue
+from docplex.mp.compat23 import Queue, StringIO, has_unicode_type
 
-# copy_reg is copyreg in Py3
-try:
-    import copy_reg as copyreg
-except ImportError:  # pragma: no cover
-    import copyreg
-
-# we want StringIO to process strings in Py2 and Py3
-try:
-    from cStringIO import StringIO
-except ImportError:  # pragma: no cover
-    from io import StringIO  # pragma: no cover
-
-try:
-    from string import maketrans as mktrans  # Python 2
-except ImportError:  # pragma: no cover
-    def mktrans(a, b):  # pragma: no cover
-        return str.maketrans(a, b)  # pragma: no cover
 
 __int_types = {int}
 __float_types = {float}
 __numpy_ndslot_types = set()
+__pandas_series_type = None
 
 try:
     type(long)
@@ -76,6 +55,13 @@ try:
 except ImportError:  # pragma: no cover
     _numpy_is_available = False  # pragma: no cover
 
+try:
+    from pandas import Series
+
+    __pandas_series_type = Series
+except ImportError:
+    __pandas_series_type = None
+
 
 def is_int(s):
     type_of_s = type(s)
@@ -86,11 +72,7 @@ __all_num_types = __float_types.union(__int_types)
 
 
 def is_number(s):
-    type_of_s = type(s)
-    if type_of_s in __all_num_types:
-        return True
-    else:
-        return _numpy_is_available and _is_numpy_ndslot(s)
+    return type(s) in __all_num_types or (_numpy_is_available and _is_numpy_ndslot(s))
 
 
 def _is_numpy_ndslot(s):
@@ -104,26 +86,12 @@ def _is_numpy_ndslot(s):
     return type(s) in __numpy_ndslot_types and s.shape == () and s.dtype.type in __all_num_types
 
 
-_all_zeros = frozenset({0, 0.0})
-
-
-def is_zero(x):
-    return is_number(x) and x in _all_zeros
+def is_pandas_series(s):
+    return __pandas_series_type is not None and type(s) is __pandas_series_type
 
 
 def is_numpy_ndarray(s):
     return type(s) in __numpy_ndslot_types
-
-
-try:
-    type(unicode)
-    _unicode_type = True
-except NameError:
-    _unicode_type = False
-
-
-def has_unicode_type():
-    return _unicode_type
 
 
 def is_string(e):
@@ -131,11 +99,10 @@ def is_string(e):
         return False
     elif isinstance(e, str):
         return True
-    elif _unicode_type:
+    elif has_unicode_type():
         return isinstance(e, unicode)
     else:
         return False
-
 
 
 def has_len(e):
@@ -144,22 +111,6 @@ def has_len(e):
         return True
     except TypeError:
         return False
-
-
-def str_holo(arg, maxlen):
-    """ Returns a truncated string representation of arg
-
-    If maxlen is positive (or null), returns str(arg) up to maxlen chars.
-
-    :param arg:
-    :param maxlen:
-    :return:
-    """
-    s = str(arg)
-    if maxlen < 0 or len(s) <= maxlen:
-        return s
-    else:
-        return "{}..".format(s[:maxlen])
 
 
 def is_indexable(e):
@@ -194,30 +145,6 @@ def is_function(e):
     return isinstance(e, Callable)
 
 
-def fix_format_string(fmt, dimen=1, key_format='_%s'):
-    ''' Fixes a format string so that it contains dimen slots with %s inside
-        arguments are:
-         --- dimen is th enumber of slots we need
-         --- key_format is the format in which the %s is embedded. By default '_%s'
-             for example if each item has to be surrounded by {} set key_format to _{%s}
-    '''
-    assert (dimen >= 1)
-    actual_nb_slots = 0
-    curpos = 0
-    str_size = len(fmt)
-    while curpos < str_size and actual_nb_slots < dimen:
-        new_pos = fmt.find('%', curpos)
-        if new_pos < 0:
-            break
-        actual_nb_slots += 1
-        if actual_nb_slots >= dimen:
-            break
-        curpos = new_pos + 2
-    # how much slots do we need to add to the end of the string??
-    nb_missing = max(0, dimen - actual_nb_slots)
-    return fmt + nb_missing * (key_format % '%s')
-
-
 class DOcplexException(Exception):
     """ Base class for modeling exceptions 
     """
@@ -245,68 +172,32 @@ class DOcplexException(Exception):
 
 class DOCplexSolutionValueError(DOcplexException):
     def __init__(self, vartype, raw_value, tolerance):
-        msg = "Cannot process value: %g to type: %s, tolerance: %f" % (raw_value, vartype.short_name, tolerance)
+        msg = "Cannot process value: {0:s} to type: {1!s}, tolerance: {2:g}".format(raw_value, vartype, tolerance)
         DOcplexException.__init__(self, msg)
 
 
 class DOCplexQuadraticNotImplementedError(DOcplexException):
     def __init__(self, first, second):
-        msg = "Cannot multiply {0} by {1}: quadratic programming not supported".format(first, second)
+        msg = "Cannot multiply {0!s} by {1!s}: quadratic programming not supported".format(first, second)
         DOcplexException.__init__(self, msg)
 
 
-_default_key_format = '_%s'
+class DOCPlexQuadraticArithException(Exception):
+    pass
 
 
-def __map_to_str(key_tuple):
-    return tuple((str(z) for z in key_tuple))
-
-
-def compile_naming_function(keys, user_name, default_fn, dimen=1, key_format=None):
-    # INTERNAL
-    # builds a naming rule from an input , a dimension, and an optional meta-format
-    # Makes sure the format string does contain the right number of format slots
-    if user_name is None:
-        return lambda k: default_fn()
-
-    elif isinstance(user_name, str):
-        if key_format is None:
-            used_key_format = _default_key_format
-        elif isinstance(key_format, str):
-            used_key_format = key_format
-        else:
-            raise DOcplexException("key format accepts None or string, got: {0!r}".format(key_format))
-        fixed_format_string = fix_format_string(user_name, dimen, used_key_format)
-        if 1 == dimen:
-            return lambda k: fixed_format_string % str(k)
-        else:
-            # here keys are tuples of size >= 2
-            return lambda key_tuple: fixed_format_string % __map_to_str(key_tuple)
-
-    elif is_function(user_name):
-        return user_name
-
-    elif is_iterable(user_name):
-        key_to_names_dict = dict(zip(keys, user_name))
-        # use a closure
-        return lambda k: key_to_names_dict[k] if k in key_to_names_dict else default_fn()
-
-    else:
-        raise DOcplexException('Cannot use this for naming variables: {0!r} - expecting string, function or iterable'
-                               .format(user_name))
-
-
-def normalize(s, force_lowercase=True):
-    l = s.lower() if force_lowercase else s
-    table = mktrans(" -+/\\<>", "_mpd___")
-    return l.translate(table)
+# def normalize(s, force_lowercase=True):
+#     l = s.lower() if force_lowercase else s
+#     table = mktrans(" -+/\\<>", "_mpd___")
+#     return l.translate(table)
 
 
 def normalize_basename(s, force_lowercase=True):
     # replace all whietspaces by _
     l = s.lower() if force_lowercase else s
-    table = mktrans(" ", "_")
-    return l.translate(table)
+    # table = mktrans(" ", "_")
+    # return l.translate(table)
+    return l.replace(" ", "_")
 
 
 def make_output_path2(actual_name, extension, basename_arg, path=None):
@@ -365,6 +256,22 @@ def resolve_pattern(pattern, args):
         return pattern
 
 
+def str_holo(arg, maxlen):
+    """ Returns a truncated string representation of arg
+
+    If maxlen is positive (or null), returns str(arg) up to maxlen chars.
+
+    :param arg:
+    :param maxlen:
+    :return:
+    """
+    s = str(arg)
+    if maxlen < 0 or len(s) <= maxlen:
+        return s
+    else:
+        return "{}..".format(s[:maxlen])
+
+
 DOCPLEX_CONSOLE_HANDLER = None
 
 
@@ -388,76 +295,10 @@ def get_logger(name, verbose=False):
     return logger
 
 
-try:
-    xrange(2)
-    fast_range = xrange
-except NameError:  # pragma: no cover
-    fast_range = range  # pragma: no cover
-
-import math
-
-from collections import Counter
-
-
-class ExprCounter(Counter):
-    """
-    A subclass of Counter which does not require a dictionary to be updated
-    Can be updated from an item (assumed to be a key)
-    or from a key and a value
-    SEE how to remember the order in which objects are added.
-    """
-
-    def update_from_item(self, item, _dict_get=dict.get):
-        """
-        Adds one item occurence
-        :param item:
-        :return:
-        """
-        self[item] = _dict_get(self, item, 0) + 1
-
-    def update_from_item_value(self, item, value, _dict_get=dict.get):
-        """
-        This differs from standard Counter when a dict instance is required.
-        :param item: the key to be updated
-        :param value: the associated value
-        :return:
-        """
-        if value:
-            self[item] = _dict_get(self, item, 0) + value
-
-    def update_from_scaled_dict(self, other_dict, factor, _dict_get=dict.get):
-        """
-        Updates counter from a dict instance, but with an inflation factor.
-        Does nothing if factor is 0
-        """
-        if factor is 0:
-            # nothin to do
-            pass
-        elif factor is 1:
-            # standard update
-            self.update(other_dict)
-        else:
-            # update by scaled value
-            for item, value in iteritems(other_dict):
-                if value:
-                    self[item] = _dict_get(self, item, 0) + value * factor
-
-    def normalize(self, _dict_get=dict.get):
-        """
-        Removes all entries with zero value
-        :return:
-    """
-        doomed_keys = [k for k in self if _dict_get(self, k) is 0]
-        for dk in doomed_keys:
-            del self[dk]
-        return self
-
-
 import sys
 
 
 class RedirectedOutputContext(object):
-
     def __init__(self, new_out, error_handler=None):
         if new_out is not None:
             self._of = new_out
@@ -481,7 +322,6 @@ class RedirectedOutputContext(object):
 
 
 class RedirectedOutputToStringContext(RedirectedOutputContext):
-
     def __init__(self, error_handler=None):
         self._oss = StringIO()
         RedirectedOutputContext.__init__(self, new_out=self._oss, error_handler=error_handler)
@@ -497,79 +337,6 @@ class RedirectedOutputToStringContext(RedirectedOutputContext):
     def __del__(self):
         # kill the stringio on deletion
         self._oss = None
-
-
-# numeric utilities
-def round_nearest_halfway_from_zero(x, infinity=1e+20):
-    """ Rounds the argument to the nearest integer.
-
-    For values like 1.5 the intetger with greater absolute value is returned.
-    This treats positive and negative values in a symmetric manner.
-    This is called "round half away from zero"
-
-
-    Args:
-        x: the value to round
-        infinity: the model's infinity value. All values above infinity are set to +INF
-
-    Returns:
-        an integer value
-
-    Example:
-        round_nearest(0) = 0
-        round_nearest(1.1) = 1
-        round_nearest(1.5) = 2
-        round_nearest(1.49) = 1
-    """
-    if x == 0:
-        return 0
-    elif x >= infinity:
-        return infinity
-    elif x <= -infinity:
-        return -infinity
-    else:
-        raw_nearest = my_round_even(x)  # math.floor(x + 0.5)
-        return int(raw_nearest)
-
-
-def my_round_even(number):
-    """
-    Simplified version from future
-    """
-    from decimal import Decimal, ROUND_HALF_EVEN
-
-    d = Decimal.from_float(number).quantize(1, rounding=ROUND_HALF_EVEN)
-    return int(d)
-
-
-def round_nearest_towards_infinity(x, infinity=1e+20):
-    """ Rounds the argument to the nearest integer.
-
-    For ties like 1.5 the ceiling integer is returned.
-    This is called "round towards infinity"
-
-    Args:
-        x: the value to round
-        infinity: the model's infinity value. All values above infinity are set to +INF
-
-    Returns:
-        an integer value
-
-    Example:
-        round_nearest(0) = 0
-        round_nearest(1.1) = 1
-        round_nearest(1.5) = 2
-        round_nearest(1.49) = 1
-    """
-    if x == 0:
-        return 0
-    elif x >= infinity:
-        return infinity
-    elif x <= -infinity:
-        return -infinity
-    else:
-        raw_nearest = math.floor(x + 0.5)
-        return int(raw_nearest)
 
 
 def open_universal_newline(filename, mode):
@@ -598,6 +365,7 @@ class CyclicLoop(object):
     Attributes:
         stopped: True if the loop is stopped.
     """
+
     class Task(object):
         """This class stores information needed to manage tasks.
 
@@ -703,6 +471,7 @@ class ThreadedCyclicLoop(object):
     Attributes:
         stopped: True if the loop is stopped.
     """
+
     class Task(threading.Thread):
         """
         Attributes:
@@ -711,6 +480,7 @@ class ThreadedCyclicLoop(object):
             action: The action function to call at ``interval``
             argument: The arguments for the action function
         """
+
         def __init__(self, loop, interval, priority, action, argument=()):
             super(ThreadedCyclicLoop.Task, self).__init__()
             self.loop = loop

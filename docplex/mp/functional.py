@@ -15,9 +15,16 @@ from docplex.mp.utils import is_iterable, is_iterator
 
 # noinspection PyAbstractClass
 class _IAdvancedExpr(Expr):
+    # INTERNAL class
+    # parent class for all nonlinear expressions.
+    __slots__ = ("_f_var",)
+
     def __init__(self, model, name=None):
         Expr.__init__(self, model, name)
         self._f_var = None
+
+    def iter_terms(self):
+        yield self._get_resolved_f_var(), 1
 
     def _new_generated_free_continuous_var(self, name=None):
         # INTERNAL
@@ -82,12 +89,15 @@ class _IAdvancedExpr(Expr):
     def functional_var(self):
         return self._get_resolved_f_var()
 
+    def square(self):
+        return self.functional_var.square()
+
     def _resolve(self):
-        raise NotImplementedError  # pragma : no cover
+        raise NotImplementedError  # pragma: no cover
 
     def _get_function_symbol(self):
         # redefine this to get the function symbol
-        raise NotImplementedError  # pragma : no cover
+        raise NotImplementedError  # pragma: no cover
 
     @property
     def function_symbol(self):
@@ -97,7 +107,7 @@ class _IAdvancedExpr(Expr):
         return self.to_string()
 
     def to_string(self, **kwargs):
-        raise NotImplementedError  # pragma : no cover
+        raise NotImplementedError  # pragma: no cover
 
     # -- arithmetic operators
     def __mul__(self, e):
@@ -105,6 +115,17 @@ class _IAdvancedExpr(Expr):
 
     def __rmul__(self, e):
         return self.functional_var.__mul__(e)
+
+    def __div__(self, e):
+        return self.divide(e)
+
+    def __truediv__(self, e):
+        # for py3
+        # INTERNAL
+        return self.divide(e)  # pragma: no cover
+
+    def divide(self, e):
+        return self.functional_var.divide(e)
 
     def __add__(self, e):
         return self.functional_var.__add__(e)
@@ -141,8 +162,8 @@ class _IAdvancedExpr(Expr):
         try:
             if arg_expr.is_variable():
                 arg_var = next(arg_expr.iter_variables())
-        except AttributeError:
-            arg_var = None
+        except AttributeError:  # pragma: no cover
+            arg_var = None      # pragma: no cover
 
         if arg_var is None:
             arg_var = self._new_generated_free_continuous_var()
@@ -163,26 +184,13 @@ class FunctionalExpr(_IAdvancedExpr):
         return self._argument_expr
 
     def eval(self, numarg):
-        raise NotImplementedError  # pragma : no cover
+        raise NotImplementedError  # pragma: no cover
 
     def is_discrete(self):
         return self._argument_expr.is_discrete()
 
     def to_string(self):
         return "{0:s}({1!s})".format(self.function_symbol, self._argument_expr)
-
-    def contains_var(self, dvar):
-        return dvar == self.functional_var or self._argument_expr.contains_var(dvar)
-
-    def iter_variables(self):
-        return self.generate_variables()
-
-    def generate_variables(self):
-        self_functional_var = self.functional_var
-        if self_functional_var is not None:
-            yield self_functional_var
-        for v in self._argument_expr.iter_variables():
-            yield v
 
 
 class AbsExpr(FunctionalExpr):
@@ -275,7 +283,7 @@ class _SequenceExpr(_IAdvancedExpr):
         return self._round_if_discrete(raw_value=raw)
 
     def compute_solution_value(self):
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class MinimumExpr(_SequenceExpr):

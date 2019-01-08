@@ -8,7 +8,8 @@ from __future__ import print_function
 
 from six import iteritems
 
-from docplex.mp.utils import is_int, StringIO, is_number
+from docplex.mp.utils import is_int, is_number
+from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.utils import RedirectedOutputContext
 
@@ -63,7 +64,7 @@ class ParameterGroup(object):
         """ Iterates over the group's own parameters.
 
         Returns:
-            An iterator over the group's parameters, non-recursively.
+            iterator: An non-recursive iterator over the group's parameters.
         """
         return iter(self._params)
 
@@ -78,7 +79,7 @@ class ParameterGroup(object):
         Includes all parameters of subgroups recursively.
 
         Returns:
-           The total number of parameters inside the group.
+           integer: The total number of parameters inside the group.
         """
         subparams = sum(g.total_number_of_params() for g in self._subgroups)
         return subparams + self.number_of_params
@@ -99,7 +100,7 @@ class ParameterGroup(object):
 
     @property
     def parent_group(self):
-        """ This property returns the parent group (An instance of :class:`ParameterGroup`), or None for the root group.
+        """ This property returns the parent group (an instance of :class:`ParameterGroup`), or None for the root group.
         """
         return self._parent
 
@@ -115,7 +116,7 @@ class ParameterGroup(object):
         """ Checks whether the group is the root group, in other words, has no parent group.
 
         Returns:
-            True if the group is the root group.
+            Boolean: True if the group is the root group.
         """
         return self._parent is None
 
@@ -132,10 +133,10 @@ class ParameterGroup(object):
             `parameter mip.mip_cuts.Cover` returns "mip.mip_cuts.Covers".
 
         Args:
-            sep (str): The separator string. Default is ".".
+            sep (string): The separator string. Default is ".".
 
         Returns:
-            A string representation of the parameter hierarchy.
+            string: A string representation of the parameter hierarchy.
         """
         self_parent = self._parent
         if not self_parent:
@@ -198,7 +199,7 @@ class ParameterGroup(object):
         """ Resets all parameters in the group.
 
         Args:
-            recursive (bool): If True, also resets the subgroups.
+            recursive (Boolean): If True, also resets the subgroups.
         """
         for p in self.iter_params():
             p.reset()
@@ -214,7 +215,7 @@ class ParameterGroup(object):
 
         The generator yields all parameters from the group
         and also from its subgroups, recursively.
-        Called from the root parameter group, returns all parameters.
+        When called from the root parameter group, it returns all parameters.
 
         Returns:
             A generator object.
@@ -249,7 +250,7 @@ class ParameterGroup(object):
 
         This generator function traverses the group and its subgroup tree,
         yielding those parameters with a non-default value, one at a time.
-        A parameter is non-default as soon as its value differs from the default.
+        A parameter is non-default when its value differs from the default.
 
         Returns:
             A generator object.
@@ -284,7 +285,7 @@ class ParameterGroup(object):
 class Parameter(object):
     """ Base class for all parameters.
 
-    This class is not meant to be instantiated, but subclassed.
+    This class is not meant to be instantiated but subclassed.
 
     """
 
@@ -342,7 +343,7 @@ class Parameter(object):
             new_value: The candidate value.
 
         Returns:
-            True if acceptable, else False.
+            Boolean: True if acceptable, else False.
 
         """
         raise NotImplementedError()  # pragma: no cover
@@ -367,6 +368,9 @@ class Parameter(object):
 
         Args:
             new_value: The new value for the parameter.
+
+        Raises:
+            An exception if the value is not valid.
         """
         accepted_value = self.check_value(new_value)
         if accepted_value is not None:
@@ -376,7 +380,7 @@ class Parameter(object):
     def get(self):
         """
         Returns:
-           The current value of the parameter.
+           float: The current value of the parameter.
         """
         return self._current_value
 
@@ -389,7 +393,7 @@ class Parameter(object):
         """ Checks if the current value of the parameter does not equal its default.
 
         Returns:
-           True if the current value of the parameter does not equal its default.
+           Boolean: True if the current value of the parameter does not equal its default.
 
         """
         return self.get() != self._default_value
@@ -398,7 +402,7 @@ class Parameter(object):
         """  Checks if the current value of the parameter equals its default.
 
         Returns:
-            True if the current value of the parameter equals its default.
+            Boolean: True if the current value of the parameter equals its default.
         """
         return self.get() == self.default_value
 
@@ -662,11 +666,8 @@ class RootParameterGroup(ParameterGroup):
         Note:
             This method has no side effects on the parameters.
 
-        See Also:
-            :func:`export_prm`
-
         Returns:
-            A string, in CPLEX PRM format.
+            string: A string in CPLEX PRM format.
         """
         oss = StringIO()
         self.export_prm(oss, overload_params)
@@ -685,9 +686,6 @@ class RootParameterGroup(ParameterGroup):
 
         Note:
             This method has no side effects on the parameters.
-
-        See Also:
-            :func:`export_prm`
 
         Returns:
             A string.
@@ -734,7 +732,7 @@ class RootParameterGroup(ParameterGroup):
         if not isinstance(other_params, RootParameterGroup):
             docplex_fatal("Parameter.update expects  RootParameterGroup, got: {0!s}", other_params)
         elif self._cplex_version != other_params.cplex_version:
-            docplex_fatal("Parameter.update expectes same cple version, self: {0}, other: {1}",
+            docplex_fatal("Parameter.update expects same CPLEX version, self: {0}, other: {1}",
                           format(self.cplex_version, other_params.cplex_version))
         else:
             self_qdict = self.as_dict()

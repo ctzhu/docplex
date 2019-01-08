@@ -23,10 +23,6 @@ then cpo_config.py and finally cpo_config_<hostname>.py.
 These modules should be visible from the PYTHONPATH and are loaded in
 this order to overwrite default values.
 
-For compatibility with CPLEX DOcloud configuration, if the DOcloud
-key and url are not set in cpo_config_*.py files, the file.docplexrc is loaded
-from the user home directory.
-
 If called as main, this module prints the configuration on standard output.
 """
 
@@ -89,6 +85,9 @@ context.solver.trace_cpo = False
 
 # Indicate to trace solver log on log_output.
 context.solver.trace_log = False
+
+# Max number of threads allowed for model solving
+context.solver.max_threads = 4
 
 # Indicate to add solver log to the solution
 context.solver.add_log_to_solution = True
@@ -176,8 +175,8 @@ def _load_properties(ppf):
 
 
 # Initialize default list of files to load
-FILE_LIST = (os.path.expanduser("~") + os.path.sep + ".docplexrc",
-             "cpo_config_local.py",  # For upward compatibility
+FILE_LIST = (# os.path.expanduser("~") + os.path.sep + ".docplexrc",
+             # "cpo_config_local.py",  # For upward compatibility
              "cpo_config.py",
              "cpo_config_" + socket.gethostname() + ".py",
              "docloud_config.py")

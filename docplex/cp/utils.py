@@ -276,9 +276,13 @@ class Context(dict):
             if isinstance(v, Context):
                 sctxs.append((k, v))
             else:
-                vstr = str(v)
                 if isinstance(v, str):
-                    vstr = '"' + vstr + '"'
+                    # Check if value must be masked
+                    if (k in ("key", "secret")):
+                        v = "**********" + v[-4:]
+                    vstr = '"' + v + '"'
+                else:
+                    vstr = str(v)
                 out.write(indent + str(k) + " = " + vstr + "\n")
         # Print sub-contexts
         for (k, v) in sctxs:
@@ -485,6 +489,41 @@ class Chrono(object):
             String of the chrono elapsed time
         """
         return str(self.get_elapsed())
+
+class Barrier:
+    """ Barrier blocking multiple threads
+
+    This class implements a simple barrier with no timeout.
+    Implemented here because not available in Python 2
+    """
+    __slots__ = ('parties',  # Chrono start time
+                 'count',    # Number of waiting parties
+                 'lock',     # Counters protection lock
+                 'barrier'   # Threads blocking lock
+                 )
+    def __init__(self, parties):
+        """ Create a new barrier
+        Args:
+
+        parties:  Number of parties required before unlocking the barrier
+        """
+        self.parties = parties
+        self.count = 0
+        self.lock = threading.Lock()
+        self.barrier = threading.Lock()
+        self.barrier.acquire()
+
+    def wait(self):
+        """ Wait for the barrier
+        This method blocks the calling thread until required number of threads has called this method.
+        """
+        self.lock.acquire()
+        self.count += 1
+        self.lock.release()
+        if self.count < self.parties:
+           self.barrier.acquire()
+        self.barrier.release()
+
 
 
 ###############################################################################

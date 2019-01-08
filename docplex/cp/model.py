@@ -9,12 +9,17 @@
 CPO Model representation
 """
 
+# Following imports required to allow modeling just importing this module
 from docplex.cp.expression import *
 from docplex.cp.function import *
 from docplex.cp.modeler import *
+from docplex.cp.solution import *
+
+# Imports required locally
 import docplex.cp.expression as expression
-from docplex.cp.solver import CpoSolver
+from docplex.cp.solver.solver import CpoSolver
 from docplex.cp.cpo_compiler import CpoCompiler
+import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
 import sys
@@ -24,19 +29,30 @@ import sys
 ##  Public classes
 ###############################################################################
 
+_CONSTRAINT_ID_ALLOCATOR = SafeIdAllocator('_CTRST_')
+def _allocate_constraint_identifier():
+    """ Allocate a new constraint identifier
+    Returns:
+        New identifier
+    """
+    return _CONSTRAINT_ID_ALLOCATOR.allocate()
+
+
 class CpoModel(object):
     """ Root class for constraint programming models. """
-    __slots__ = ('name',         # Name of the model
-                 'sourcefile',   # Name of the python source file
-                 'varList',      # List of model variables, in declaration order
-                 'varSet',       # Set of model variables
-                 'exprList',     # List of model root expressions (tuples (expression, location))
-                 'srch_phases',  # List of search phases
-                 'nameSet',      # Set of variable names
-                 'nbExprNodes',  # Number of expression nodes
-                 'allExprSet',   # Set of all expression ids already in the model
-                 'sourceloc',    # Indicate to set in the model information of source location
-                 'mapExpr',      # Map of expressions having a name
+    __slots__ = ('name',             # Name of the model
+                 'sourcefile',       # Name of the python source file
+                 'varList',          # List of model variables, in declaration order
+                 'varSet',           # Set of model variables
+                 'exprList',         # List of model root expressions (tuples (expression, location, root))
+                 'search_phases',    # List of search phases
+                 'starting_point',   # Starting point
+                 'name_set',         # Set of variable names
+                 'nb_expr_nodes',    # Number of expression nodes
+                 'all_expr_set',     # Set of all expression ids already in the model
+                 'source_loc',       # Indicate to set in the model information of source location
+                 'name_constraints', # Indicate to always name added constraints (for conflict refiner)
+                 'map_expr',         # Map of expressions having a name
                 )
 
     def __init__(self, name=None, sfile=None):
@@ -46,16 +62,19 @@ class CpoModel(object):
             name:  Model name, None for automatic (source file name).
             sfile: Source file, None for automatic.
         """
+        ctx = config.get_default()
         super(CpoModel, self).__init__()
-        self.varList         = []
-        self.varSet          = set()
-        self.exprList        = []
-        self.srch_phases     = []
-        self.nameSet         = set()
-        self.nbExprNodes     = 0
-        self.allExprSet      = set()
-        self.sourceloc       = True
-        self.mapExpr         = {}
+        self.varList          = []
+        self.varSet           = set()
+        self.exprList         = []
+        self.search_phases    = []
+        self.starting_point   = None
+        self.name_set         = set()
+        self.nb_expr_nodes    = 0
+        self.all_expr_set     = set()
+        self.source_loc       = ctx.get_by_path("model.add_source_location", True)
+        self.name_constraints = ctx.get_by_path("model.name_all_constraints", False)
+        self.map_expr         = {}
         
         # Store filename of the calling Python source
         if sfile is None:
@@ -89,7 +108,7 @@ class CpoModel(object):
         assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of " + str(type(expr))
         
         # Determine calling location
-        if self.sourceloc:
+        if self.source_loc:
             f = inspect.currentframe().f_back
             loc = (f.f_code.co_filename, f.f_lineno)
         else:
@@ -98,13 +117,21 @@ class CpoModel(object):
         # Scan expression to check new variables
         self._scan_expression(expr, loc)
         
-        # Append to the map of named expressions    
-        if expr.has_name():
-            self._add_named_expr(expr)
-
         # Append to the list of expressions
         if not expr.is_variable():
-            self.exprList.append((expr, loc))
+            # Check named expression
+            if expr.has_name():
+                # Not a constraint
+                self.exprList.append((expr, loc, False))
+            else:
+                # Add name if required
+                if self.name_constraints:
+                    expr.set_name(_allocate_constraint_identifier())
+                self.exprList.append((expr, loc, True))
+
+        # Append to the map of named expressions
+        if expr.has_name():
+            self._add_named_expr(expr)
 
 
     def remove(self, expr):
@@ -118,11 +145,11 @@ class CpoModel(object):
         Returns:
             True if expression has been removed, False if not found
         """
-        for ix, (x, l) in enumerate(self.exprList):
+        for ix, (x, l, r) in enumerate(self.exprList):
             if x is expr:
                 del self.exprList[ix]
                 if expr.has_name():
-                    del self.mapExpr[expr.get_name()]
+                    del self.map_expr[expr.get_name()]
 
                 return True
         return False
@@ -138,28 +165,50 @@ class CpoModel(object):
         assert is_array(phases), "Argument 'phases' should be a list of SearchPhases"
 
         # Determine calling location
-        if self.sourceloc:
+        if self.source_loc:
             f = inspect.currentframe().f_back
             loc = (f.f_code.co_filename, f.f_lineno)
         else:
             loc = None
 
         # Set list of phases
-        self.srch_phases = []
+        self.search_phases = []
         for p in phases:
             if p.get_type() is not Type_SearchPhase:
                 raise AssertionError("Argument 'phases' should be an array of SearchPhases")
             self._scan_expression(p, loc)
-            self.srch_phases.append((p, loc))
+            self.search_phases.append((p, loc, None))
 
     def get_search_phases(self):
-        """ Returns list of search phases.
+        """ Get the list of search phases.
 
         Returns:
             List of search phases (pairs (expression, location)), [] if none.
         """
-        return self.srch_phases
-        
+        return self.search_phases
+
+    def set_starting_point(self, stpoint):
+        """ Set a model starting point.
+
+        A starting point specifies a (possibly partial) solution that could be used by CP Optimizer
+        to start the search.
+
+        Starting point is available starting with CPO solver version 13.0.0.
+
+        Args:
+            stpoint: Starting point, object of class CpoModelSolution
+        """
+        assert (stpoint is None) or isinstance(stpoint, CpoModelSolution), "Argument 'stpoint' should be None or an object of class CpoModelSolution"
+        self.starting_point = stpoint
+
+    def get_starting_point(self):
+        """ Get the model starting point
+
+        Returns:
+            Model starting point, None if none
+        """
+        return self.starting_point
+
     def set_source_location(self, sl):
         """ Sets the indicator allowing to attach Python source line
         to model expressions.
@@ -167,7 +216,7 @@ class CpoModel(object):
         Args:
             sl: Adds the source location indicator. Default value is True.
         """
-        self.sourceloc = sl
+        self.source_loc = sl
                 
     def get_all_variables(self):
         """ Gets the list of all model variables.
@@ -183,7 +232,7 @@ class CpoModel(object):
 
         Returns:
             List of model expressions
-            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line).
+            Each expression is a tuple (expr, loc, root) where loc is a tuple (source_file, line).
         """
         return self.exprList
 
@@ -195,7 +244,7 @@ class CpoModel(object):
         Returns:
             Expression, None if not found.
         """
-        return self.mapExpr.get(name, None)
+        return self.map_expr.get(name)
 
     def get_optimization_expression(self):
         """ Gets the optimization expression (maximization or minimization).
@@ -204,7 +253,7 @@ class CpoModel(object):
             Optimization expression, None if satisfaction problem.
         """
         # Search last optimization expression
-        for (x, l) in reversed(self.get_expressions()):
+        for (x, l, r) in reversed(self.get_expressions()):
             if isinstance(x, CpoFunctionCall) and x.get_operation().is_optim():
                 return x
         return None
@@ -264,7 +313,7 @@ class CpoModel(object):
         out.write(" (integer: " + str(nbintvar))
         out.write(", interval: " + str(nbintervvar))
         out.write(", sequence: " + str(nbsequencevar) + ")\n")
-        out.write(" - constraints: " + str(len(lexpr)) + ", expression nodes: " + str(self.nbExprNodes) + "\n")
+        out.write(" - constraints: " + str(len(lexpr)) + ", expression nodes: " + str(self.nb_expr_nodes) + "\n")
 
     def solve(self, **kwargs):
         """ Solves the model.
@@ -272,40 +321,45 @@ class CpoModel(object):
         This method solves the model using the appropriate solver according to the optional parameters
         and/or configuration attributes.
 
-        Args:
-            context (optional):   Complete solving context. If not given, context is the default context that is set in config.py.
-            params (optional):    Solving parameters (CpoParameters) that overwrite those in the solving context
-            url (optional):       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (optional):       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
-            (others) (optional):  All other context parameters that can be changed.
+        Optional args:
+            context:   Complete solving context. If not given, context is the default context that is set in config.py.
+            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
+            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (others):  All other context parameters that can be changed.
         Returns:
             Model solution (type CpoModelSolution).
         """
         solver = CpoSolver(self, **kwargs)
         return solver.solve()
 
-    def export_as_cpo(self, out=None, srcloc=False):
+    def export_as_cpo(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
         Args:
             out:    Target output, stream or file name. Default is sys.stdout.
-            srcloc: Indicates to add the model source location information. Default is False.
+        Optional args:
+            context:             Global solving context. If not given, context is the default context that is set in config.py.
+            params:              Solving parameters (CpoParameters) that overwrites those in solving context
+            add_source_location: Add source location into generated text
+            length_for_alias:    Minimum name length to use shorter alias instead
+            (others):            All other context parameters that can be changed
         """
-        cplr = CpoCompiler(self)
-        cplr.set_source_location(srcloc)
-        cplr.print_model(out)
+        CpoCompiler(self, **kwargs).print_model(out)
 
-    def get_cpo_string(self, srcloc=False):
+    def get_cpo_string(self, **kwargs):
         """ Compiles the model in CPO file format into a string.
 
-        Args:
-            srcloc: Indicates to add the model source location information. Default is False.
+        Optional args:
+            context:             Global solving context. If not given, context is the default context that is set in config.py.
+            params:              Solving parameters (CpoParameters) that overwrites those in solving context
+            add_source_location: Add source location into generated text
+            length_for_alias:    Minimum name length to use shorter alias instead
+            (others):            All other context parameters that can be changed
         Returns:
             String containing the model.
         """
-        cplr = CpoCompiler(self)
-        cplr.set_source_location(srcloc)
-        return cplr.get_as_string()
+        return CpoCompiler(self, **kwargs).get_as_string()
 
     def equals(self, other):
         """ Checks if this model is equal to another.
@@ -349,9 +403,9 @@ class CpoModel(object):
         Raises:
             CpoException if name already used.
         """
-        if (name in self.nameSet):
+        if (name in self.name_set):
             raise CpoException("Variable name '" + str(name) + "' can not be used twice")
-        self.nameSet.add(name) 
+        self.name_set.add(name)
 
     def _add_named_expr(self, expr):
         """ Add an expression to the map of named expressions.
@@ -362,9 +416,9 @@ class CpoModel(object):
             CpoException if name already used.
         """
         name = expr.get_name()
-        if name in self.mapExpr:
+        if name in self.map_expr:
             raise CpoException("Expression with name '" + name + "' already exists")
-        self.mapExpr[name] = expr
+        self.map_expr[name] = expr
 
     def _add_variable(self, var, loc):
         """ Add a variable to the model
@@ -381,7 +435,7 @@ class CpoModel(object):
                 var.set_name(name)
             self._add_var_name(name)
             self.varSet.add(var)
-            self.varList.append((var, loc))
+            self.varList.append(var)
         return(var)
             
     def _scan_expression(self, expr, loc):
@@ -395,7 +449,7 @@ class CpoModel(object):
         """
         # Loop while expression stack is not empty
         estack = [expr]  
-        eset = self.allExprSet
+        eset = self.all_expr_set
         while estack:
             # Get expression to check
             e = estack.pop()
@@ -404,7 +458,7 @@ class CpoModel(object):
                 eid = id(e)
                 if eid not in eset:
                     eset.add(eid)
-                    self.nbExprNodes += 1
+                    self.nb_expr_nodes += 1
                     if (t.is_variable()):
                         self._add_variable(e, loc)
                     else:

@@ -1382,3 +1382,6 @@ class CpoParameters(Context):
 
     Workers = property(get_Workers, set_Workers)
 
+
+# List of all available parameter names
+ALL_PARAMETER_NAMES = ("AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit", "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit", "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit", "CountDifferentInferenceLevel", "CountInferenceLevel", "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing", "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch", "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod", "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel", "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed", "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel", "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "WarningLevel", "Workers",)

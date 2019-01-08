@@ -37,7 +37,7 @@ class ISolver(object):
         '''
         raise NotImplementedError  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         """
         Runs feasopt-like algorithm with a set of relaxable cts with preferences
         :param relaxable_groups:
@@ -132,9 +132,6 @@ class IEngine(ISolver):
     def set_objective(self, sense, expr):
         raise NotImplementedError  # pragma: no cover
 
-    def clear_objective(self, expr):
-        raise NotImplementedError  # pragma: no cover
-
     def end(self):
         raise NotImplementedError  # pragma: no cover
 
@@ -153,6 +150,8 @@ class IEngine(ISolver):
     def rename_var(self, var, new_name):
         raise NotImplementedError  # pragam: no cover
 
+    def set_var_type(self, var, new_type):
+        raise NotImplementedError  # pragam: no cover
 
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
@@ -187,6 +186,9 @@ class DummyEngine(IEngine):
         pass
 
     def rename_var(self, var, new_name):
+        pass  # nothing to do, except in cplex...
+
+    def set_var_type(self, var, new_type):
         pass  # nothing to do, except in cplex...
 
     def get_var_attribute(self, var, attr_name):  # pragma: no cover
@@ -228,7 +230,7 @@ class DummyEngine(IEngine):
     def get_solve_status(self):
         return JobSolveStatus.UNKNOWN  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         raise NotImplementedError  # pragma: no cover
 
     def get_infeasibilities(self, cts):
@@ -239,9 +241,6 @@ class DummyEngine(IEngine):
 
     def get_solutions(self, dvars):
         return {}  # pragma: no cover
-
-    def clear_objective(self, expr):
-        pass  # pragma: no cover
 
     def get_cplex(self):
         raise DOcplexException("No CPLEX is available.")  # pragma: no cover
@@ -358,7 +357,7 @@ class NoSolveEngine(IndexerEngine):
         mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: model cannot be solved!")
         return None
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwite_params, parameters=None):
         mdl.fatal("No CPLEX DLL: model cannot be relaxed!")
         return False, 0
 
@@ -417,14 +416,13 @@ class ZeroSolveEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         params = parameters or mdl.parameters
         self._last_solved_parameters = params
         self.show_parameters(params)
         return True, 0  # pragma: no cover
 
     def get_solve_details(self):
-        # 1 is cplex status optimal...
         return SolveDetails.make_fake_details(time=0, feasible=True)
 
 
@@ -444,7 +442,7 @@ class FakeFailEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         return False, 0  # pragma: no cover
 
     def get_solve_status(self):
@@ -474,7 +472,7 @@ class TerminatedEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         self.terminate()
         return False, 0  # pragma: no cover
 
@@ -507,7 +505,7 @@ class RaiseErrorEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
         self._simulate_error()
         return False, 0  # pragma: no cover
 

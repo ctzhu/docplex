@@ -6,16 +6,14 @@
 
 # gendoc: ignore
 
-from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr
-from docplex.mp.basic import ZeroExpr
+import math
+
+from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr
 from docplex.mp.linear import _DummyFeasibleConstraint, _DummyInfeasibleConstraint
 from docplex.mp.linear import LinearConstraintType, LinearConstraint, RangeConstraint, IndicatorConstraint
-
-from docplex.mp.functional import _IAdvancedExpr, MaximumExpr, MinimumExpr, AbsExpr
-
-from docplex.mp.compat23 import izip, fast_range
+from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr
+from docplex.mp.compat23 import fast_range
 from docplex.mp.utils import *
-
 
 
 def fix_format_string(fmt, dimen=1, key_format='_%s'):
@@ -80,8 +78,8 @@ def compile_naming_function(keys, user_name, default_fn, arity=1, key_format=Non
 
 class _AbstractModelFactory(object):
     def __init__(self, model):
-        self.model = model
-        self.error_handler = model.error_handler
+        self._model = model
+        self._error_handler = model.error_handler
 
 
 class ModelFactory(object):
@@ -92,26 +90,28 @@ class ModelFactory(object):
         return var_ub >= self.infinity
 
     def __init__(self, model, engine):
-        self.__model = model
+        self._model = model
         self.__engine = engine
         self.infinity = engine.get_infinity()
-        self.zero_expr = 0  # assigned to an expr later on.
-
-    def init(self):
-        model = self.__model
         self.zero_expr = ZeroExpr(model)
+        self.one_expr = None
 
-    def new_trivial_feasible_ct(self):
-        return _DummyFeasibleConstraint(self.__model, self.zero_expr)
+    def get_one_expr(self):
+        if self.one_expr is None:
+            self.one_expr = LinearExpr(self._model, e=None, constant=1, safe=True)
+        return self.one_expr
+
+    def new_trivial_feasible_ct(self, name=None):
+        return _DummyFeasibleConstraint(self._model, self.zero_expr, name=name)
 
     def new_trivial_infeasible_ct(self):
-        return _DummyInfeasibleConstraint(self.__model, self.zero_expr)
+        return _DummyInfeasibleConstraint(self._model, self.zero_expr, self.get_one_expr())
 
     def fatal(self, msg, *args):
-        self.__model.fatal(msg, args)
+        self._model.fatal(msg, args)
 
     def warning(self, msg, *args):
-        self.__model.warning(msg, args)
+        self._model.warning(msg, args)
 
     def update_engine(self, engine):
         # the model has already disposed the old engine, if any
@@ -119,15 +119,15 @@ class ModelFactory(object):
         self.infinity = engine.get_infinity()
 
     def new_var(self, vartype, lb=None, ub=None, varname=None):
-        self_model = self.__model
+        self_model = self._model
         actual_name = varname or self_model._create_automatic_varname()
         var = Var(self_model, vartype, actual_name, lb, ub, is_automatic_name=not bool(varname))
-        idx = self.__engine.create_one_variable(vartype, var.lb, var.ub, actual_name)
+        idx = self.__engine.create_one_variable(vartype, float(var.get_lb()), float(var.get_ub()), actual_name)
         self_model._register_one_var(var, idx, varname)
         return var
 
     def _expand_names(self, keys, user_name, arity, key_format):
-        default_naming_fn = self.__model._create_automatic_varname
+        default_naming_fn = self._model._create_automatic_varname
         actual_naming_fn = compile_naming_function(keys, user_name, default_naming_fn, arity, key_format)
         computed_names = [str(actual_naming_fn(key)) for key in keys]
         # if is_function(user_name):
@@ -155,13 +155,13 @@ class ModelFactory(object):
                 if var_bound == default_bound:
                     return []
                 else:
-                    return [var_bound] * size
+                    return [float(var_bound)] * size
             else:
                 # ub
                 if var_bound >= default_bound:
                     return []
                 else:
-                    return [var_bound] * size
+                    return [float(var_bound)] * size
 
         elif isinstance(var_bound, str):
             self._bad_bounds_fatal(var_bound)
@@ -223,7 +223,7 @@ class ModelFactory(object):
             if any((k is None for k in keys)):
                 self.fatal("A variable key cannot be None, see: {0!s}", keys)
 
-        mdl = self.__model
+        mdl = self._model
 
         # compute defaults once
         default_lb = vartype.default_lb
@@ -267,26 +267,48 @@ class ModelFactory(object):
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
-    def constant_expr(self, cst):
+    def constant_expr(self, cst, context=None):
         if 0 == cst:
             return self.zero_expr
         else:
-            return LinearExpr(self.__model, e=cst)
+            k = self.to_valid_number(cst, context=context)
+            return LinearExpr(self._model, e=None, constant=k, safe=True)
 
     def linear_expr(self, e=0, constant=0, name=None):
-        # handle here the special case for 0.
-        expr = LinearExpr(self.__model, e, constant, name)
+        expr = LinearExpr(self._model, e, constant, name)
         return expr
 
-    def _to_linear_expr(self, e):
-        return self._to_linear_expr_internal(e)
+    def to_valid_number(self, e, context=None, infinity=1e+20):
+        if not is_number(e):
+            self.fatal("Not a number: {}".format(e))
+        elif math.isnan(e):
+            msg = "NaN value found in expression"
+            try:
+                msg = "{0}: {1}".format(context(), msg)
+            except TypeError:
+                msg = "{0}: {1}".format(context, msg)
+            self.fatal(msg)
+        elif -infinity <= e <= infinity:
+            return e
+        elif e >= infinity:
+            return infinity
+        else:
+            return -infinity
 
-    def _to_linear_expr_internal(self, e, linexpr_class=LinearExpr):
+    def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False, context=None):
         # INTERNAL
         if isinstance(e, linexpr_class):
-            return e
+            if force_clone:
+                return e.clone()
+            elif force_clone:
+                return e.clone()
+            else:
+                # print('-- not cloning: {0!s}'.format(e))
+                return e
+        elif isinstance(e, (AbstractLinearExpr, Var, ZeroExpr)):
+            return e.to_linear_expr()
         elif is_number(e):
-            return self.constant_expr(cst=e)
+            return self.constant_expr(cst=e, context=context)
         else:
             try:
                 return e.to_linear_expr()
@@ -306,7 +328,6 @@ class ModelFactory(object):
             except DOCPlexQuadraticArithException:
                 return e
             except AttributeError:
-                # delegate to the factory
                 pass
             self.fatal("cannot convert to expression: {0!r}", e)
 
@@ -315,134 +336,16 @@ class ModelFactory(object):
         if 0 == coef:
             return self.zero_expr
         else:
-            return MonomialExpr(self.__model, dvar, coef)
-
-    def scal_prod(self, terms, coefs=1.0):
-        # Testing anumpy array for its logical value will not work:
-        # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
-        # we would have to trap the test for ValueError then call any()
-        #
-        if is_number(coefs):
-            if 0 == coefs:
-                return self.zero_expr
-            else:
-                sum_expr = self.sum(terms)
-                return sum_expr * coefs
-        else:
-            self.__model.typecheck_iterable(coefs)
-
-        if not is_iterable(terms):
-            terms = [terms]
-
-        return self._scal_prod(terms, coefs)
-
-    def _scal_prod(self, terms, coefs, cc_type=LinearExpr.counter_type):
-        # INTERNAL
-        total_num = 0
-        fcc = cc_type()
-
-        for item, coef in izip(terms, coefs):
-            if 0 == coef:
-                pass
-            elif isinstance(item, Var):
-                fcc.update_from_item_value(item, coef)
-
-            elif isinstance(item, AbstractLinearExpr):
-                total_num += coef * item.constant
-                for lv, lk in item.iter_terms():
-                    fcc.update_from_item_value(lv, lk * coef)
-
-            # elif is_number(item) and item:
-            #     total_num += coef * item
-
-            # --- all is lost ---
-            else:
-                self.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
-
-        sorted_terms = LinearExpr._sort_terms_if_needed(mdl=self.__model, counter=fcc)
-        scalprod_expr = LinearExpr(self.__model, e=sorted_terms, constant=total_num, safe=True)
-        return scalprod_expr
-
-    def sum(self, sum_args):
-        if is_iterable(sum_args):
-            if is_iterator(sum_args):
-                return self._sum_with_iter(sum_args)
-
-            elif isinstance(sum_args, dict):
-                # handle dict: sum all values
-                return self._sum_with_seq(sum_args.values())
-
-            elif is_indexable(sum_args):
-                if has_len(sum_args) and 0 == len(sum_args):
-                    return self.zero_expr
-
-                elif is_numpy_ndarray(sum_args):
-                    return self._sum_with_iter(sum_args.flat)
-                elif is_pandas_series(sum_args):
-                    return self.sum(sum_args.values)
-                else:
-                    return self._sum_with_seq(sum_args)
-            else:
-                return self._sum_with_seq(sum_args)
-        elif is_number(sum_args):
-            return sum_args
-        else:
-            return self._to_linear_expr(sum_args)
-
-    def _sum_with_iter(self, args, cctype=LinearExpr.counter_type):
-        accumulated_ct = 0
-        acc = cctype()
-        for item in args:
-            if isinstance(item, Var):
-                acc.update_from_item_value(item)
-            elif isinstance(item, MonomialExpr):
-                acc.update_from_item_value(item._dvar, item._coef)
-            elif isinstance(item, LinearExpr):
-                acc.update(item._get_terms_dict())
-                accumulated_ct += item.constant
-            elif isinstance(item, _IAdvancedExpr):
-                acc.update_from_item_value(item.functional_var)
-            elif isinstance(item, ZeroExpr):
-                pass
-            elif is_number(item):
-                accumulated_ct += item
-            else:
-                self.fatal("Model.sum() expects numbers/variables/expressions, got: {0!s}", item)
-
-        res_terms = LinearExpr._sort_terms_if_needed(mdl=self.__model, counter=acc)
-        if res_terms or accumulated_ct:
-            return LinearExpr(self.__model, e=res_terms, constant=accumulated_ct, safe=True)
-        else:
-            return self.zero_expr
-        #return sum_x
-
-    def _varlist_to_terms(self, var_list,
-                          cc_type=LinearExpr.counter_type,
-                          term_dict_type=LinearExpr.term_dict_type):
-        # INTERNAL: converts a sum of vars to a dict, sorting if needed.
-        if self.__model._keep_ordering:
-            varsum_terms = term_dict_type([(v, 1) for v in var_list])
-        else:
-            varsum_terms = cc_type(var_list)
-        return varsum_terms
-
-    # @profile
-    def _sum_with_seq(self, x_list):
-        for z in x_list:
-            if not isinstance(z, Var):
-                x_seq_all_variables = False
-                break
-        else:
-            x_seq_all_variables = True
-
-        if x_seq_all_variables:
-            sumvars_terms = self._varlist_to_terms(x_list)
-            return LinearExpr(self.__model, e=sumvars_terms, safe=True)
-        else:
-            return self._sum_with_iter(args=x_list)
+            return MonomialExpr(self._model, dvar, coef)
 
     def _new_binary_constraint(self, lhs, ctype, rhs, name=None):
-        ct = LinearConstraint(self.__model, lhs, ctype, rhs, name)
+        # noinspection PyPep8
+        left_expr  = self._to_linear_expr(lhs, context="LinearConstraint.left_expr")
+        right_expr = self._to_linear_expr(rhs, context="LinearConstraint.right_expr")
+        self._model._check_both_in_selfmodel(left_expr, right_expr, "new_binary_constraint")
+        ct = LinearConstraint(self._model, left_expr, ctype, right_expr, name)
+        left_expr.notify_used(ct)
+        right_expr.notify_used(ct)
         return ct
 
     def new_le_constraint(self, e, rhs, ctname=None):
@@ -456,12 +359,14 @@ class ModelFactory(object):
 
     def new_range_constraint(self, lb, expr, rhs, ctname=None):
         # INTERNAL
-        rng = RangeConstraint(self.__model, expr, lb, rhs, ctname)
+        linexpr = self._to_linear_expr(expr)
+        rng = RangeConstraint(self._model, linexpr, lb, rhs, ctname)
+        linexpr.notify_used(rng)
         return rng
 
     def new_indicator_constraint(self, binary_var, linear_ct, active_value=1, ctname=None):
         # INTERNAL
-        indicator_ct = IndicatorConstraint(self.__model, binary_var, linear_ct, active_value, ctname)
+        indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, active_value, ctname)
         return indicator_ct
 
     def new_max_expr(self, *args):
@@ -471,7 +376,7 @@ class ModelFactory(object):
         elif 1 == nb_args:
             return args[0]
         else:
-            return MaximumExpr(self.__model, args)
+            return MaximumExpr(self._model, args)
 
     def new_min_expr(self, *args):
         nb_args = len(args)
@@ -480,17 +385,17 @@ class ModelFactory(object):
         elif 1 == nb_args:
             return args[0]
         else:
-            return MinimumExpr(self.__model, args)
+            return MinimumExpr(self._model, args)
 
     def new_abs_expr(self, e):
         if is_number(e):
             return abs(e)
         else:
-            self_model = self.__model
+            self_model = self._model
             return AbsExpr(self_model, self._to_linear_expr(e))
 
     def resync_whole_model(self):
-        self_model = self.__model
+        self_model = self._model
         self_engine = self.__engine
 
         for var in self_model.iter_variables():
@@ -513,57 +418,3 @@ class ModelFactory(object):
 
         # send objective
         self_engine.set_objective(self_model.objective_sense, self_model.objective_expr)
-
-
-class IQuadFactory(_AbstractModelFactory):
-    # INTERNAL
-
-    def new_product(self, factor1, factor2):
-        raise NotImplementedError
-
-    def new_var_product(self, var, factor):
-        raise NotImplementedError
-
-    def new_monomial_product(self, monexpr, factor):
-        raise NotImplementedError
-
-    def new_linexpr_product(self, linexpr, factor):
-        raise NotImplementedError
-
-    def new_var_square(self, var):
-        raise NotImplementedError
-
-    def new_square(self, e):
-        raise NotImplementedError
-
-
-class NotImplementedQuadFactory(IQuadFactory):
-    def __init__(self, model):
-        _AbstractModelFactory.__init__(self, model)
-
-    # noinspection PyMethodMayBeStatic
-    def _quads_not_implemented_error(self, factor1, factor2):
-        raise DOCplexQuadraticNotImplementedError(factor1, factor2)
-
-    def new_product(self, factor1, factor2):
-        self._quads_not_implemented_error(factor1, factor2)
-
-    def new_var_product(self, var, factor):
-        assert isinstance(var, Var)
-        self._quads_not_implemented_error(var, factor)
-
-    def new_monomial_product(self, monexpr, factor):
-        assert isinstance(monexpr, MonomialExpr)
-        self._quads_not_implemented_error(monexpr, factor)
-
-    def new_linexpr_product(self, linexpr, factor):
-        assert isinstance(linexpr, LinearExpr)
-        self._quads_not_implemented_error(linexpr, factor)
-
-    def new_var_square(self, var):
-        self._quads_not_implemented_error(var, var)
-
-    def new_square(self, e):
-        self._quads_not_implemented_error(e, e)
-
-

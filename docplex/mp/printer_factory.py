@@ -21,7 +21,6 @@ class ModelPrinterFactory(object):
         """
         returns a new printer
         :param exchange_format:
-        :param error_handler:
         :param hide_user_names:
         :return:
         """

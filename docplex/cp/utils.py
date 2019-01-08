@@ -15,7 +15,6 @@ import time
 import logging
 import sys
 import threading
-from inspect import isfunction
 
 ###############################################################################
 ## Constants
@@ -102,6 +101,18 @@ class CpoException(Exception):
         super(Exception, self).__init__(msg)
 
 
+class CpoNotSupportedException(CpoException):
+    """ Exception thrown when a CPO function is not supported.
+    """
+    def __init__(self, msg):
+        """ Create a new exception
+
+        Args:
+            msg: Error message
+        """
+        super(CpoException, self).__init__(msg)
+
+
 class Context(dict):
     """ Class handling miscellaneous list of parameters """
     def __init__(self, **kwargs):
@@ -148,6 +159,9 @@ class Context(dict):
     def get_attribute(self, name, default=None):
         """ Get a context attribute.
 
+        This method search first attribute in this context. If not found, it moves up to
+        parent context, and continues as long as not found or root is reached.
+
         Args:
             name:    Attribute name
             default: Optional, default value if attribute is not found
@@ -165,7 +179,7 @@ class Context(dict):
             if ctx is None:
                 return default
 
-    def get_attribute_by_path(self, path, default=None):
+    def get_by_path(self, path, default=None):
         """ Get a context attribute using its path.
 
         Attribute path is a sequence of attribute names separated by dots.
@@ -203,9 +217,6 @@ class Context(dict):
                     if isinstance(value, Context):
                         if not isinstance(ov, Context):
                             raise Exception("Attribute '" + npath + "' is a Context and can only be replaced by a Context")
-                    else:
-                        if isinstance(ov, Context):
-                            raise Exception("Attribute '" + npath + "' is a simple value and can not be replaced by a Context")
                 self.set_attribute(name, value)
                 return npath
             elif isinstance(v, Context):
@@ -646,6 +657,17 @@ def is_array_of_type(val, typ):
         True if value is an array with all elements with expected type
     """
     return isinstance(val, (list, tuple)) and (all(isinstance(x, typ) for x in val))
+
+
+def is_interval_tuple(val):
+    """ Check if a value is a tuple representing an integer interval
+
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a tuple representing an interval
+    """
+    return isinstance(val, tuple) and (len(val) == 2) and is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])
 
 
 def assert_arg_int_interval(val, mn, mx, name=None):

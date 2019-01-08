@@ -3,9 +3,11 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.compat23 import StringIO, has_unicode_type
+from docplex.mp.compat23 import StringIO
 
 from math import isnan
+
+from six import PY2 as six_py2
 
 
 class SolveDetails(object):
@@ -71,7 +73,7 @@ class SolveDetails(object):
 
     @staticmethod
     def to_plain_str(arg_s):
-        if has_unicode_type():  # we are in py2: docloud returns unicode.
+        if six_py2:  # we are in py2: docloud returns unicode.
             try:
                 return arg_s.encode()  # if unicode strings , come from cplex worker
             except AttributeError:

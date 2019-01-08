@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 from six import iteritems
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 
 from docplex.mp.basic import Priority
 from docplex.mp.linear import AbstractConstraint
@@ -190,6 +190,7 @@ class CustomPrioritizer(IConstraintPrioritizer):
     def get_priority(self, ct):
         return self._mapping.get(ct, self._default_priority)
 
+TRelaxableGroup = namedtuple("_TRelaxableGroup", ["preference", "relaxables"])
 
 class Relaxer(object):
     ''' This class is an asbtract algorithm, in the sense that it operates on interfaces.
@@ -374,17 +375,20 @@ class Relaxer(object):
 
 
             mdl._apply_parameters_to_engine(parameters)
+            overwrite_params = self.make_overwrite_param_dict(parameters=parameters,
+                                                              optimize=is_model_optimized,
+                                                              limits=relaxation_limits)
 
             for prio in self._ordered_priorities:
                 if prio in priority_map:
                     cts = priority_map[prio]
                     if not cts:
                         # this should not happen...
-                        continue  # pragma : no cover
+                        continue  # pragma: no cover
 
                     pref = prio.get_geometric_preference_factor()
                     # build a new group
-                    relax_group = [pref, cts]
+                    relax_group = TRelaxableGroup(pref, cts)
 
                     # relaxing new batch of cts:
                     if not is_cumulative:
@@ -401,10 +405,16 @@ class Relaxer(object):
                     # - a sequence of constraints
                     for l in self._listeners:
                         l.notify_start_relaxation(prio, all_relaxable_cts)
+
+                    # ----
+                    # call the engine.
+                    # ---
                     try:
-                        (relax_ok, relax_obj) = engine.solve_relaxed(mdl, all_groups, is_model_optimized, relaxation_limits)
+                        (relax_ok, relax_obj) = engine.solve_relaxed(mdl, prio.name, all_groups, is_model_optimized, overwrite_params)
                     finally:
                         self._last_relaxation_details = engine.get_solve_details()
+                    # ---
+
                     if relax_ok:
                         self._last_successful_relaxed_priority = prio
                         self._last_relaxation_status = True
@@ -420,6 +430,7 @@ class Relaxer(object):
     
                         for l in self._listeners:
                             l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
+                        # now get out
                         break
                     else:
                         # relaxation has failed, notify the listeners
@@ -509,3 +520,37 @@ class Relaxer(object):
         """
         self._check_successful_relaxation()
         return self._relaxations[ct] if ct in self._relaxations else 0
+
+
+    def make_overwrite_param_dict(self, parameters, optimize, limits):
+        # INTERNAL
+        relax_gap, relax_max_nb_sol, relax_pass_time_limit = limits
+
+        feasopt_mode_min_sum = 0
+        feasopt_mode_opt_sum = 1
+        feasopt_mode_min_inf = 2
+        feasopt_mode_opt_inf = 3
+        # which forced mode for feasopt? switch this flag for testing
+        # with 12.67.2 and nurse, INF is very slow...
+        use_sum_or_nb = True
+        if use_sum_or_nb:
+            if optimize:
+                new_mode = feasopt_mode_opt_sum
+            else:
+                new_mode = feasopt_mode_min_sum
+        else:
+            if optimize:
+                new_mode = feasopt_mode_opt_inf
+            else:
+                new_mode = feasopt_mode_min_inf
+
+        overwritten_param_dict = {parameters.feasopt.mode: new_mode}
+        if relax_gap > 0:
+            overwritten_param_dict[parameters.mip.tolerances.mipgap] = relax_gap
+        if relax_max_nb_sol >= 1:
+            overwritten_param_dict[parameters.mip.limits.solutions] = relax_max_nb_sol
+        if relax_pass_time_limit >= 1:  # no less than 1s.
+            overwritten_param_dict[parameters.timelimit] = relax_pass_time_limit
+
+        # ---
+        return overwritten_param_dict

@@ -9,8 +9,6 @@
 # This file contains all compatibility stuff between py2/py3
 
 
-import sys
-
 # py2/py3 compatibility
 try:
     from Queue import Queue
@@ -47,14 +45,3 @@ try:
     from itertools import izip
 except ImportError:  # pragma : no cover
     izip = zip       # pragma : no cover
-
-try:
-    type(unicode)
-    _unicode_type = True
-except NameError:
-    _unicode_type = False
-
-
-def has_unicode_type():
-    return _unicode_type
-

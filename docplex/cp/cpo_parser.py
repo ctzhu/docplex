@@ -178,7 +178,7 @@ class CpoParser(object):
             expr = self._read_expression()
             self._push_token('')
             if not(isinstance(expr, CpoExpr)):
-                expr = create_cpo_expr(expr)
+                expr = build_cpo_expr(expr)
             expr.set_name(name)
             self.model.add(expr)
         self._check_token_value(self._next_token(), ';')
@@ -446,7 +446,7 @@ class CpoParser(object):
             self._check_token_value(self._next_token(), '=')
             value = self._next_token()
             self._check_token_value(self._next_token(), ';')
-            self.params.set_attribute(vname, value)
+            self.params.set_attribute(vname, value.get_string())
             tok = self._next_token()
 
     def _read_section_internals(self):

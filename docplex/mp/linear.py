@@ -13,10 +13,10 @@ from six import iteritems
 
 from enum import Enum
 
-from docplex.mp.basic import ModelingObject, Expr, ZeroExpr
+from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
-from docplex.mp.xcounter import ExprCounter
+from docplex.mp.xcounter import ExprCounter, FastOrderedDict
 
 
 class Var(ModelingObject):
@@ -169,6 +169,13 @@ class Var(ModelingObject):
         """
         return self._vartype
 
+    def get_vartype(self):
+        return self._vartype
+
+    def set_vartype(self, new_vartype):
+        return self._model.set_var_type(self, new_vartype)
+
+
     def has_type(self, vartype):
         # internal
         return type(self._vartype) == vartype
@@ -306,7 +313,7 @@ class Var(ModelingObject):
 
     def __rsub__(self, e):
         # e - self
-        expr = self.model._to_linear_expr(e)  # makes a clone.
+        expr = self._get_model()._to_linear_expr(e, force_clone=True)  # makes a clone.
         return expr.subtract(self)
 
     def divide(self, e):
@@ -334,7 +341,7 @@ class Var(ModelingObject):
 
     def __neg__(self):
         # the "-e" unary minus returns a linear expression
-        return self.model._monomial_expr(self, -1)
+        return self.model._lfactory.new_monomial_expr(self, -1)
 
     def __pow__(self, power):
         # INTERNAL
@@ -415,6 +422,10 @@ class Var(ModelingObject):
 
         """
         return self.to_string()
+
+    def _set_vartype_internal(self, new_vartype):
+        # INTERNAL
+        self._vartype = new_vartype
 
     def _name_marker(self):
         if self.is_generated():
@@ -533,6 +544,7 @@ class AbstractLinearExpr(Expr):
         return self._get_model().ge_constraint(self, other)
 
 
+
 class MonomialExpr(AbstractLinearExpr):
     def _get_solution_value(self):
         raw = self.coef * self._dvar.solution_value
@@ -546,7 +558,7 @@ class MonomialExpr(AbstractLinearExpr):
         self._model = model  # faster than to call recursively init methods...
         self._name = None
         self._dvar = dvar
-        self._coef = coeff
+        self._coef = model._lfactory.to_valid_number(coeff, context=lambda: dvar.name + ".times()")
 
     def number_of_variables(self):
         return 1
@@ -617,9 +629,7 @@ class MonomialExpr(AbstractLinearExpr):
             return e.rminus(self)
 
     def times(self, e):
-        if e is 1:
-            return self
-        elif is_number(e):
+        if is_number(e):
             # e might be a fancy numpy type
             if 1 == e:
                 return self
@@ -627,7 +637,7 @@ class MonomialExpr(AbstractLinearExpr):
                 return self.zero_expr()
             else:
                 # return a fresh instance
-                return self.model._monomial_expr(self._dvar, self._coef * e)
+                return self.model._lfactory.new_monomial_expr(self._dvar, self._coef * e)
         elif isinstance(e, LinearExpr):
             return e.times(self)
         elif isinstance(e, Var):
@@ -646,7 +656,7 @@ class MonomialExpr(AbstractLinearExpr):
     def quotient(self, e):
         self.model.typecheck_as_denominator(e, self)
         inverse = 1.0 / float(e)
-        return self.model._monomial_expr(self._dvar, self._coef * inverse)
+        return self.model._lfactory.new_monomial_expr(self._dvar, self._coef * inverse)
 
     def __add__(self, e):
         return self.plus(e)
@@ -738,18 +748,12 @@ class LinearExpr(AbstractLinearExpr):
     either using operators or using `Model.linear_expr()`.
 
     """
-    _private_instance_counter = 0
-    _private_clone_counter = 0
 
     # what type to use for merging dicts
     counter_type = ExprCounter
 
     # what type to use for storing terms
     term_dict_type = OrderedDict
-
-    @staticmethod
-    def number_of_instances():
-        return LinearExpr._private_instance_counter  # pragma: no cover
 
 
     @staticmethod
@@ -799,17 +803,18 @@ class LinearExpr(AbstractLinearExpr):
         # INTERNAL: builds a new terms dict.
         return dict_type(*args)
 
-    __slots__ = ("_constant", "__terms", "private_instance_counter", "_transient")
+    __slots__ = ('_constant', '__terms', '_transient', '_refcnt')
 
     def __init__(self, model, e=None, constant=0, name=None, safe=False):
         Expr.__init__(self, model, name)
         # a global counter for performance measurement
-        LinearExpr._private_instance_counter += 1
+        model._linexpr_instance_counter += 1
         # "calling LinearExpr ctor, k=%d" % LinearExpr.InstanceCounter)
         if not safe and 0 != constant:
             model.typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
         self._transient = False
+        self._refcnt = 0
 
         if isinstance(e, dict):
             if safe:
@@ -826,7 +831,9 @@ class LinearExpr(AbstractLinearExpr):
         else:
             self.__terms = self._new_terms_dict()
 
-        if isinstance(e, Var):
+        if e is None:
+            pass
+        elif isinstance(e, Var):
             self.__terms[e] = 1
         elif is_number(e):
             self._constant += e
@@ -853,14 +860,24 @@ class LinearExpr(AbstractLinearExpr):
                 model.typecheck_var(o)
                 self.__terms[o] = 1
 
-        elif e is None:
-            pass
         else:
             self.fatal("Cannot convert {1!s} to docplex.mp.LinearExpr, instance: {0!s}", repr(e), type(e).__name__)
 
+    def _check_mutable(self):
+        # INTERNAL
+        if self._refcnt > 0:
+            self.fatal("An expression used in constraints is not mutable: {0!s}", self)
+
+    def notify_used(self, user):
+        # INTERNAL
+        self._refcnt += 1
+
+    def _is_mutable(self):
+        return 0 == self._refcnt
+
     def clone_if_necessary(self):
         #  INTERNAL
-        if self._transient and not self._model._clone_transient_exprs:
+        if self._transient and not self._model._clone_transient_exprs and self._is_mutable():
             return self
         else:
             return self.clone()
@@ -885,9 +902,9 @@ class LinearExpr(AbstractLinearExpr):
         Returns:
             A copy of the expression on the same model.
         """
-        LinearExpr._private_clone_counter += 1
+        self._model._linexpr_clone_counter += 1
         cloned_terms = self.term_dict_type(self.__terms)  # faster than copy() on OrderedDict()
-        cloned = LinearExpr(model=self.model, e=cloned_terms, constant=self._constant, safe=True)
+        cloned = LinearExpr(model=self._model, e=cloned_terms, constant=self._constant, safe=True)
         return cloned
 
     def copy(self, target_model, var_mapping):
@@ -912,6 +929,7 @@ class LinearExpr(AbstractLinearExpr):
             The modified self.
 
         """
+        self._check_mutable()
         self._constant = - self._constant
         self_terms = self.__terms
         for v, k in iteritems(self_terms):
@@ -923,6 +941,7 @@ class LinearExpr(AbstractLinearExpr):
 
         All variables and coefficients are removed and the constant term is set to zero.
         """
+        self._check_mutable()
         self._constant = 0
         self.__terms = self._new_terms_dict()
 
@@ -986,6 +1005,7 @@ class LinearExpr(AbstractLinearExpr):
         return self
 
     def _add_term(self, dvar, coef=1):
+        self._check_mutable()
         # INTERNAL
         if coef != 0:
             self_terms = self.__terms
@@ -999,6 +1019,7 @@ class LinearExpr(AbstractLinearExpr):
                     del self_terms[dvar]
 
     def _add_var(self, dvar):
+        self._check_mutable()
         old_coeff = self.__terms.get(dvar, 0)
         new_coef = 1 + old_coeff
         if new_coef:  # nonzero is True
@@ -1021,6 +1042,7 @@ class LinearExpr(AbstractLinearExpr):
         return self
 
     def _remove_term(self, dvar):
+        self._check_mutable()
         # INTERNAL
         del self.__terms[dvar]
 
@@ -1031,6 +1053,7 @@ class LinearExpr(AbstractLinearExpr):
         return self._constant
 
     def set_constant(self, numval):
+        self._check_mutable()
         self._constant = numval
 
     constant = property(get_constant, set_constant)
@@ -1129,6 +1152,7 @@ class LinearExpr(AbstractLinearExpr):
         :param other_expr:
         :return:
         """
+        self._check_mutable()
         self.constant += other_expr.constant
         # merge term dictionaries
         for v, k in other_expr.iter_terms():
@@ -1136,6 +1160,7 @@ class LinearExpr(AbstractLinearExpr):
             self._add_term(v, k)
 
     def _add_expr_scaled(self, expr, factor):
+        self._check_mutable()
         # INTERNAL
         if 0 != factor:
             self.constant += expr.constant * factor
@@ -1162,16 +1187,17 @@ class LinearExpr(AbstractLinearExpr):
 
         PROOFREAD
         """
+        self._check_mutable()
         if isinstance(e, Var):
             self._add_var(e)
-        elif is_number(e):
-            self._constant += e
         elif isinstance(e, LinearExpr):
             self._add_expr(e)
         elif isinstance(e, MonomialExpr):
             self._add_term(e._dvar, e._coef)
         elif isinstance(e, ZeroExpr):
             pass
+        elif is_number(e):
+            self._constant += e
         elif isinstance(e, Expr) and e.is_quad_expr():
             raise DOCPlexQuadraticArithException
         else:
@@ -1207,6 +1233,7 @@ class LinearExpr(AbstractLinearExpr):
 
         PROOFREAD
         """
+        self._check_mutable()
         if isinstance(e, Var):
             self._add_term(e, -1)
         elif is_number(e):
@@ -1237,6 +1264,7 @@ class LinearExpr(AbstractLinearExpr):
     def _scale(self, factor):
         # INTERNAL: used my multiply
         # this method modifies self.
+        self._check_mutable()
         if 0 == factor:
             self._clear()
         elif factor != 1:
@@ -1262,6 +1290,7 @@ class LinearExpr(AbstractLinearExpr):
 
         PROOFREAD
         """
+        self._check_mutable()
         if is_number(e):
             self._scale(e)
         elif isinstance(e, LinearExpr):
@@ -1277,7 +1306,7 @@ class LinearExpr(AbstractLinearExpr):
                 return self.model._qfactory.new_var_product(e, self)
         elif isinstance(e, MonomialExpr):
             if self.is_constant():
-                return self.model._monomial_expr(e._dvar, e._coef * self._constant)
+                return self.model._lfactory.new_monomial_expr(e._dvar, e._coef * self._constant)
             else:
                 return self.model._qfactory.new_linexpr_product(self, e)
         elif isinstance(e, ZeroExpr):
@@ -1592,6 +1621,8 @@ class AbstractConstraint(ModelingObject):
 class AbstractLinearConstraint(AbstractConstraint):
     # INTERNAL:  base class for linear constraints
 
+    __slots__ = ()
+
     def __init__(self, model, name=None):
         AbstractConstraint.__init__(self, model, name)
 
@@ -1624,10 +1655,9 @@ class LinearConstraint(AbstractLinearConstraint):
         AbstractLinearConstraint.__init__(self, model, name)
         self._ctype = ctype
         # noinspection PyPep8
-        self._left_expr  = model._to_linear_expr(left_expr)
-        self._right_expr = model._to_linear_expr(right_expr)
+        self._left_expr  = left_expr
+        self._right_expr = right_expr
 
-        model._check_both_in_selfmodel(self._left_expr, self._right_expr, "linear constraint")
 
     def is_trivial(self):
         # Checks whether the constraint is equivalent to a comparison between numbers.
@@ -1822,8 +1852,13 @@ class LinearConstraint(AbstractLinearConstraint):
 
 class _DummyFeasibleConstraint(LinearConstraint):
     # INTERNAL
-    def __init__(self, model, zero_expr):
-        LinearConstraint.__init__(self, model, zero_expr, LinearConstraintType.EQ, 0, "_dummy_feasible_ct_")
+    def __init__(self, model, zero_expr, name=None):
+        ctname = name or "dummy_feasible_ct"
+        LinearConstraint.__init__(self, model,
+                                  left_expr=zero_expr,
+                                  ctype=LinearConstraintType.EQ,
+                                  right_expr=zero_expr,
+                                  name=ctname)
 
     def __repr__(self):
         return "docplex.mp.linear.LinearConstraint._TrivialFeasible"
@@ -1831,8 +1866,12 @@ class _DummyFeasibleConstraint(LinearConstraint):
 
 class _DummyInfeasibleConstraint(LinearConstraint):
     # INTERNAL
-    def __init__(self, model, zero):
-        LinearConstraint.__init__(self, model, zero, LinearConstraintType.EQ, 1, "_dummy_infeasible_ct_")
+    def __init__(self, model, zero, one):
+        LinearConstraint.__init__(self, model,
+                                  left_expr=zero,
+                                  ctype=LinearConstraintType.EQ,
+                                  right_expr=one,
+                                  name="_dummy_infeasible_ct_")
 
     def __repr__(self):
         return "docplex.mp.linear.LinearConstraint.TrivialInfeasible"
@@ -1856,7 +1895,7 @@ class RangeConstraint(AbstractLinearConstraint):
         model.typecheck_num(ub, 'RangeConstraint.ub')
         self.__ub = ub
         self.__lb = lb
-        self.__expr = model._to_linear_expr(expr)
+        self.__expr = expr
 
     def equals(self, other):
         if type(other) != RangeConstraint:
@@ -2101,3 +2140,139 @@ def _docplex_sum_with_seq(x_list):
     else:
         # try a python sum ?
         return sum(x_list)
+
+
+class ZeroExpr(AbstractLinearExpr):
+
+    def _get_solution_value(self):
+        return 0
+
+    def is_zero(self):
+        return True
+
+    # INTERNAL
+    __slots__ = ()
+
+    def __init__(self, model):
+        ModelingObjectBase.__init__(self, model)
+
+    def clone(self):
+        return self  # this is not cloned.
+
+    def copy(self, target_model, var_map):
+        return ZeroExpr(target_model)
+
+    def to_linear_expr(self):
+        return self  # this is a linear expr.
+
+    def number_of_variables(self):
+        return 0
+
+    def iter_variables(self):
+        return iter_emptyset()
+
+    def iter_terms(self):
+        return iter_emptyset()
+
+    def is_constant(self):
+        return True
+
+    def is_discrete(self):
+        return True
+
+    def unchecked_get_coef(self, dvar):
+        return 0
+
+    def contains_var(self, dvar):
+        return False
+
+    @property
+    def constant(self):
+        # for compatibility
+        return 0
+
+
+    def negate(self):
+        pass
+
+    # noinspection PyMethodMayBeStatic
+    def plus(self, e):
+        return e
+
+
+    def times(self, _):
+        return self
+
+    # noinspection PyMethodMayBeStatic
+    def minus(self, e):
+        return -e
+        # expr = e.to_linear_expr().clone()
+        # expr.negate()
+        # return expr
+
+    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
+        return "0"
+
+    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
+        oss.write(self.to_string())
+
+    # arithmetic
+    def __sub__(self, e):
+        return self.minus(e)
+
+    def __rsub__(self, e):
+        # e - 0 = e !
+        return e
+
+    def __neg__(self):
+        return self
+
+    def __add__(self, other):
+        return other
+
+    def __radd__(self, other):
+        return other
+
+    def __mul__(self, other):
+        return self
+
+    def __rmul__(self, other):
+        return self
+
+    def __div__(self, other):
+        return self._divide(other)
+
+    def __truediv__(self, e):
+        # for py3
+        # INTERNAL
+        return self.__div__(e)  # pragma: no cover
+
+    def _divide(self, other):
+        self.model.typecheck_as_denominator(numerator=self, denominator=other)
+        return self
+
+    def __repr__(self):
+        return "docplex.mp.linear.ZeroExpr()"
+
+    def equals_expr(self, other):
+        return isinstance(other, ZeroExpr)
+
+    def __ge__(self, other):
+        return self._get_model().ge_constraint(self, other)
+
+    def __le__(self, other):
+        return self._get_model().le_constraint(self, other)
+
+    def __eq__(self, other):
+        return self._get_model().eq_constraint(self, other)
+
+    def square(self):
+        return self
+
+    # arithmetci to self
+    add = plus
+    subtract = minus
+    tmultiply = times
+
+    def _scale(self, factor):
+        return self

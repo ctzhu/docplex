@@ -6,7 +6,7 @@
 from enum import Enum
 
 from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import is_number, is_string, str_holo, iter_emptyset
+from docplex.mp.utils import is_number, is_string, str_holo
 
 
 class ModelingObjectBase(object):
@@ -285,6 +285,10 @@ class Expr(ModelingObjectBase):
         # INTERNAL: compute solutoion value.
         raise NotImplementedError  # pragma: no cover
 
+    def notify_used(self, ct):
+        # INTERNAL
+        pass
+
     @property
     def solution_value(self):
         self._check_model_has_solution()
@@ -433,137 +437,4 @@ class ObjectiveSense(Enum):
                 logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
 
 
-class ZeroExpr(Expr):
-
-    def _get_solution_value(self):
-        return 0
-
-    def is_zero(self):
-        return True
-
-    # INTERNAL
-    __slots__ = ()
-
-    def __init__(self, model):
-        ModelingObjectBase.__init__(self, model)
-
-    def clone(self):
-        return self  # this is not cloned.
-
-    def copy(self, target_model, var_map):
-        return ZeroExpr(target_model)
-
-    def to_linear_expr(self):
-        return self  # this is a linear expr.
-
-    def number_of_variables(self):
-        return 0
-
-    def iter_variables(self):
-        return iter_emptyset()
-
-    def iter_terms(self):
-        return iter_emptyset()
-
-    def is_constant(self):
-        return True
-
-    def is_discrete(self):
-        return True
-
-    def unchecked_get_coef(self, dvar):
-        return 0
-
-    def contains_var(self, dvar):
-        return False
-
-    @property
-    def constant(self):
-        # for compatibility
-        return 0
-
-
-    def negate(self):
-        pass
-
-    # noinspection PyMethodMayBeStatic
-    def plus(self, e):
-        return e
-
-
-    def times(self, _):
-        return self
-
-    # noinspection PyMethodMayBeStatic
-    def minus(self, e):
-        return -e
-        # expr = e.to_linear_expr().clone()
-        # expr.negate()
-        # return expr
-
-    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
-        return "0"
-
-    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
-        oss.write(self.to_string())
-
-    # arithmetic
-    def __sub__(self, e):
-        return self.minus(e)
-
-    def __rsub__(self, e):
-        # e - 0 = e !
-        return e
-
-    def __neg__(self):
-        return self
-
-    def __add__(self, other):
-        return other
-
-    def __radd__(self, other):
-        return other
-
-    def __mul__(self, other):
-        return self
-
-    def __rmul__(self, other):
-        return self
-
-    def __div__(self, other):
-        return self._divide(other)
-
-    def __truediv__(self, e):
-        # for py3
-        # INTERNAL
-        return self.__div__(e)  # pragma: no cover
-
-    def _divide(self, other):
-        self.model.typecheck_as_denominator(numerator=self, denominator=other)
-        return self
-
-    def __repr__(self):
-        return "docplex.mp.linear.ZeroExpr()"
-
-    def equals_expr(self, other):
-        return isinstance(other, ZeroExpr)
-
-    def __ge__(self, other):
-        return self._get_model().ge_constraint(self, other)
-
-    def __le__(self, other):
-        return self._get_model().le_constraint(self, other)
-
-    def __eq__(self, other):
-        return self._get_model().eq_constraint(self, other)
-
-    def square(self):
-        return self
-
-    # arithmetci to self
-    add = plus
-    subtract = minus
-    tmultiply = times
-
-    def _scale(self, factor):
-        return self
+# noinspection PyUnusedLocal

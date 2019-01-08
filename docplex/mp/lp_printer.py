@@ -11,6 +11,7 @@ from __future__ import print_function
 import re
 
 from docplex.mp.linear import *
+from docplex.mp.environment import env_is_64_bit
 from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper
 
 from docplex.mp.format import LP_format
@@ -28,12 +29,17 @@ class LPModelPrinter(TextModelPrinter):
     __new_line_sep = '\n'
     __expr_prefix = ' ' * 6
 
+    float_precision_32 = 9
+    float_precision_64 = 12  #
+
     def __init__(self, hide_user_names=False, indent_level=1):
         TextModelPrinter.__init__(self,
                                   indent=indent_level,
                                   comment_start='\\',
                                   hide_user_names=hide_user_names,
-                                  nb_digits_for_floats=9)
+                                  nb_digits_for_floats=\
+                                      self.float_precision_64 if env_is_64_bit() else
+                                  self.float_precision_32)
 
         self.wrapper = self.create_wrapper(line_width=79, initial_indent=1)
 
@@ -253,6 +259,10 @@ class LPModelPrinter(TextModelPrinter):
 
     TRUNCATE = 200
 
+    @staticmethod
+    def _non_compliant_lp_name_stop_here(name):
+        pass
+
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
         raw_name = mobj.name
 
@@ -260,6 +270,7 @@ class LPModelPrinter(TextModelPrinter):
         if hide_names or mobj.has_automatic_name() or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         elif not self._is_lp_compliant(raw_name):
+            self._non_compliant_lp_name_stop_here(raw_name)
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             # swap blanks with underscores
@@ -310,38 +321,42 @@ class LPModelPrinter(TextModelPrinter):
         # print objective
         out.write(model.objective_sense.name)
         self._newline(out)
-        objexpr = model.objective_expr
-        obj_constant = objexpr.constant
-        # the new dummy var has name 'x' + (max_index+2
-        # why +2 because name indices start from 1 and CPLEX start from 0
-
-        if 0 != objexpr.constant:
-            obj_constant_term_varname = self.get_extra_var_name(model, pattern='x%d')
-        else:
-            obj_constant_term_varname = None
-
         wrapper = _ExportWrapper(out, self.__expr_prefix)
         wrapper.write(' obj:')
-        if objexpr.is_quad_expr():
-            objlin = objexpr.linear_part
+        objexpr = model.objective_expr
+        obj_offset = objexpr.constant
+        obj_constant_term_varname = None
+        if objexpr.is_constant():
+            if obj_offset:
+                wrapper.write(self._num_to_string(obj_offset))
         else:
-            objlin = objexpr
+            # if objexpr is constant just print nothing.
 
-        if not objlin.is_constant():
-            # write the linear part first
-            self._print_expr(wrapper, self_num_printer, var_name_map, objlin)
-            # for the constant part, one day remove this...
-            if obj_constant_term_varname:
-                wrapper.write(' + %s' % obj_constant_term_varname)
-        elif obj_constant_term_varname:
-            wrapper.write(obj_constant_term_varname)
+            # the new dummy var has name 'x' + (max_index+2
+            # why +2 because name indices start from 1 and CPLEX start from 0
+            if 0 != obj_offset:
+                obj_constant_term_varname = self.get_extra_var_name(model, pattern='x%d')
 
-        if objexpr.is_quad_expr() and objexpr.is_quadratic():
-            # is there a linear part?
-            self._print_qexpr(wrapper, self_num_printer, var_name_map, quad_expr=objexpr, force_initial_plus=not objlin.is_zero())
+            if objexpr.is_quad_expr():
+                objlin = objexpr.linear_part
+            else:
+                objlin = objexpr
+
+            if not objlin.is_constant():
+                # write the linear part first
+                self._print_expr(wrapper, self_num_printer, var_name_map, objlin)
+                # for the constant part, one day remove this...
+                if obj_constant_term_varname:
+                    wrapper.write(' + %s' % obj_constant_term_varname, separator=False)
+            elif obj_constant_term_varname:
+                wrapper.write(obj_constant_term_varname)
+
+            if objexpr.is_quad_expr() and objexpr.is_quadratic():
+                # is there a linear part?
+                self._print_qexpr(wrapper, self_num_printer, var_name_map, quad_expr=objexpr, force_initial_plus=not objlin.is_zero())
 
         wrapper.flush(print_newline=True)
-        # 6 is len("obj: ") + 1
+
         out.write("Subject To\n")
 
         for ct in model.iter_constraints():
@@ -367,7 +382,7 @@ class LPModelPrinter(TextModelPrinter):
                     self._print_var_bounds(out, self_num_printer, lp_varname, var_lb, var_ub)
         # add constant term
         if obj_constant_term_varname:
-            self._print_var_bounds(out, self_num_printer, obj_constant_term_varname, obj_constant, obj_constant)
+            self._print_var_bounds(out, self_num_printer, obj_constant_term_varname, obj_offset, obj_offset)
         # add ranged cts vars
         for rng in model.iter_range_constraints():
             (varname, _, ub) = self._rangeData[rng]

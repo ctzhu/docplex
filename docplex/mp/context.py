@@ -14,11 +14,18 @@ import sys
 import warnings
 from os.path import isfile, isabs
 
+from docplex.util.environment import get_environment
+
 from docplex.mp.format import ExchangeFormat
 from docplex.mp.utils import is_string, open_universal_newline
 from docplex.mp.environment import Environment
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.utils import DOcplexException
+
+try:
+    from docplex.worker.solvehook import get_solve_hook
+except ImportError:
+    get_solve_hook = None
 
 # some utility methods
 def _get_value_as_int(d, option):
@@ -106,6 +113,31 @@ def is_url_ignored(context, url):
     return is_ignored(context.solver.docloud.ignored_urls, url)
 
 
+def is_auto_publishing_solve_details(context):
+    if get_solve_hook() == None:
+        return False  # not in a worker
+    try:
+        auto_publish_details = context.solver.auto_publish.solve_details
+    except AttributeError:
+        try:
+            auto_publish_details = context.solver.auto_publish
+        except AttributeError:
+            auto_publish_details = False
+    return auto_publish_details
+
+
+def is_auto_publishing_json_solution(context):
+    if get_solve_hook() == None:
+        return False  # not in a worker
+    try:
+        auto_publish = context.solver.auto_publish.json_solution
+    except AttributeError:
+        try:
+            auto_publish = context.solver.auto_publish
+        except AttributeError:
+            auto_publish = False
+    return auto_publish
+
 class BaseContext(dict):
     # Class for handling the list of parameters.
     def __init__(self, **kwargs):
@@ -141,6 +173,10 @@ class SolverContext(BaseContext):
     def __init__(self, **kwargs):
         super(SolverContext, self).__init__(**kwargs)
         self.log_output = False
+        self.max_threads = get_environment().get_available_core_count()
+        self.auto_publish = BaseContext()
+        self.auto_publish.solve_details = True
+        self.auto_publish.json_solution = True
 
     def __deepcopy__(self, memo):
         # We override deepcopy here just to make sure that we don't deepcopy
@@ -198,6 +234,16 @@ class Context(BaseContext):
         cplex_parameters: A
            :class:`docplex.mp.params.parameters.RootParameterGroup` to store
            CPLEX parameters.
+        solver.auto_publish: If ``True``, :meth:`docplex.mp.model.Model.solve` will do as if every
+            automatically publishable item (``solve_details``, ``json_solution``) must be published
+            when the code is run on the DOcplexcloud Python worker.
+        solver.auto_publish.solve_details: If ``True``, automatically publish solve details
+            when :meth:`docplex.mp.model.Model.solve` is called and code is run on the DOcplexcloud
+            Python worker. The default value is ``True``.
+        solver.auto_publish.json_solution: If ``True``, automatically publish the solution
+            when :meth:`docplex.mp.model.Model.solve` is called and code is run on hte DOcplexcloud
+            Python worker. The solution is saved as an output attachment which name is ``solution.json``.
+            The default value is ``True``.
         solver.log_output: This attribute can have the following values:
 
             * True: When True, logs are printed to sys.out.

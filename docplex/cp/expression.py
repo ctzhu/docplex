@@ -50,18 +50,13 @@ INT_MIN = -INT_MAX
 """ Minimum integer value. """
 
 class CpoExpr(object):
-    """ Root constraint programming model expression.
-
-    This class represents a CPO expression atom. It does not contain links to children expressions
-    that are implemented in extending classes. However, access to children is provided with default
-    return value.
-    """
+    """ Root constraint programming model expression. """
     # To force possible numpy operators overloading to get CPO expressions as main operand
     __array_priority__ = 100
 
     __slots__ = ('type',       # Expression result type
                  'name',       # Name of the expression (None if none)
-                 'nbrefs',     # Number of references on this expression
+                 'nbrefs'      # Number of references on this expression
                 )
 
     def __init__(self, type, name):
@@ -298,7 +293,7 @@ class CpoValue(CpoExpr):
         Returns:
             True if this expression is an atomic constant.
         """
-        return (self.type in (Type_Int, Type_Float, Type_Bool))
+        return (self.type in (Type_Int, Type_Float))
 
     def equals(self, other):
         """ Checks equality of this expression with another.
@@ -558,9 +553,9 @@ DEFAULT_INTERVAL = (0, INTERVAL_MAX)
 """ Default interval. """
 
 # Different interval variable presence states
-_PRES_PRESENT   = "present"   # Always present
-_PRES_ABSENT    = "absent"    # Always absent
-_PRES_OPTIONAL  = "optional"  # Present or absent, choice made by the solver
+_PRES_ALWAYS_PRESENT = 0  # Always present
+_PRES_ALWAYS_ABSENT  = 1  # Always absent
+_PRES_OPTIONAL       = 2  # Present or absent, choice made by the solver
 
 
 class CpoIntervalVar(CpoVariable):
@@ -717,7 +712,7 @@ class CpoIntervalVar(CpoVariable):
 
     def set_present(self):
         """ Specifies that this IntervalVar must be present. """
-        self.presence = _PRES_PRESENT
+        self.presence = _PRES_ALWAYS_PRESENT
 
     def is_present(self):
         """ Check if this interval variable must be present.
@@ -725,11 +720,11 @@ class CpoIntervalVar(CpoVariable):
         Returns:
             True if this interval variable must be present, False otherwise.
         """
-        return self.presence == _PRES_PRESENT
+        return self.presence == _PRES_ALWAYS_PRESENT
 
     def set_absent(self):
         """ Specifies that this interval variable must be absent. """
-        self.presence = _PRES_ABSENT
+        self.presence = _PRES_ALWAYS_ABSENT
 
     def is_absent(self):
         """ Check if this interval variable must be absent.
@@ -737,7 +732,7 @@ class CpoIntervalVar(CpoVariable):
         Returns:
             True if this interval variable must be absent, False otherwise.
         """
-        return self.presence == _PRES_ABSENT
+        return self.presence == _PRES_ALWAYS_ABSENT
 
     def set_optional(self):
         """ Specifies that this interval variable is optional. """
@@ -1120,7 +1115,7 @@ def integer_var_dict(keys, min, max=None, name=None):
 
 
 def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                 intensity=None, granularity=None, optional=False, name=None, present=True):
+                  intensity=None, granularity=None, optional=False, name=None, present=True):
     """ Creates an interval variable.
 
     Represents an interval of integers. Interval variables are used mostly for scheduling to represent a
@@ -1149,7 +1144,7 @@ def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_IN
     length = _check_arg_interval(length, "length")
     size   = _check_arg_interval(size,   "size")
     _check_arg_intensity(intensity, granularity)
-    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_ALWAYS_PRESENT
     return CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name)
 
 
@@ -1180,7 +1175,7 @@ def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, lengt
     length = _check_arg_interval(length, "length")
     size   = _check_arg_interval(size,   "size")
     _check_arg_intensity(intensity, granularity)
-    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_ALWAYS_PRESENT
     if name is None:
         name = _allocate_var_name() + "_"
     res = []
@@ -1254,13 +1249,86 @@ def state_function(trmtx=None, name=None):
 ##  Public Functions
 ###############################################################################
 
+def create_cpo_expr(value):
+    """ Create a new CP expression from a given Python value
+
+    Args:
+        value:  Operation descriptor
+    Returns:
+        New expression
+    Raises:
+        CpoException if it is not possible.
+    """
+    # Determine type
+    typ = _get_cpo_type(value)
+    if typ is None:
+        raise CpoException("Impossible to build a CPO expression with python value '" + to_string(value) + "'")
+
+    # Check special types
+    if typ == Type_TupleSet:
+        res = CpoTupleSet()
+        res.add_set(value)
+    elif typ == Type_BoolInt:
+        res = CpoFunctionCall((Oper_true if value else Oper_false).signatures[0], ())
+    else:
+        # Check if array of exprs contains only expressions
+        if typ.is_array_of_expr():
+            if not all(isinstance(x, CpoExpr) for x in value):
+                nval = []
+                for v in value:
+                    if isinstance(v, CpoExpr):
+                        nval.append(v)
+                    else:
+                        nval.append(create_cpo_expr(v))
+                value = nval
+        res = CpoValue(value, typ)
+    # Return
+    return res
+
+
+def _create_operation(oper, params):
+    """ Create a new expression that matches an operation descriptor
+
+    Search in the signatures which one matches a set or arguments
+    and then create an instance of the returned expression
+
+    Args:
+        oper:   Operation descriptor
+        params: List of expression parameters
+    Returns:
+        New expression 
+    Raises:
+        CpoException if no operation signature matches arguments
+    """
+    assert isinstance(oper, CpoOperation)
+
+    # Convert arguments in CPO expressions
+    args = tuple(map(_build_cpo_expr, params))
+      
+    # Search corresponding signature
+    s = _get_matching_signature(oper, args)
+    if s is None:
+        raise CpoException("The combination of parameters (" + ", ".join(map(_get_cpo_type_str, args))
+                           + ") is not allowed for operation '" + oper.get_py_name() + "'")
+    
+    # Check arguments values when applicable
+    # TODO (range currently not in parameters)
+    
+    # Create result expression
+    return CpoFunctionCall(s, args)
+
+
+###############################################################################
+##  Private Functions
+###############################################################################
+
 # Map of CPO expressions corresponding to Python values
 _CPO_VALUES_FROM_PYTHON = KeyIdDict()
 
 # Lock to protect the map
 _CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
 
-def build_cpo_expr(val):
+def _build_cpo_expr(val):
     """ Builds an expression from a given Python value.
 
     This method uses a cache to return the same CpoExpr for the same constant.
@@ -1299,91 +1367,10 @@ def build_cpo_expr(val):
     return cpval
 
 
-# Constant for True and False
-_CONSTANT_TRUE  = CpoValue(True, Type_Bool)
-_CONSTANT_FALSE = CpoValue(False, Type_Bool)
-
-def create_cpo_expr(value):
-    """ Create a new CP expression from a given Python value
-
-    Args:
-        value:  Operation descriptor
-    Returns:
-        New expression
-    Raises:
-        CpoException if it is not possible.
-    """
-    # Determine type
-    typ = _get_cpo_type(value)
-    if typ is None:
-        raise CpoException("Impossible to build a CPO expression with python value '" + to_string(value) + "'")
-
-    # Check special types
-    if typ == Type_TupleSet:
-        res = CpoTupleSet()
-        res.add_set(value)
-    elif typ == Type_Bool:
-        #res = CpoFunctionCall((Oper_true if value else Oper_false).signatures[0], ())
-        res = _CONSTANT_TRUE if value else _CONSTANT_FALSE
-    else:
-        # Check if array of exprs contains only expressions
-        if typ.is_array_of_expr():
-            if not all(isinstance(x, CpoExpr) for x in value):
-                nval = []
-                for v in value:
-                    if isinstance(v, CpoExpr):
-                        nval.append(v)
-                    else:
-                        nval.append(create_cpo_expr(v))
-                value = nval
-        res = CpoValue(value, typ)
-
-    # Return
-    return res
-
-
-def _create_operation(oper, params):
-    """ Create a new expression that matches an operation descriptor
-
-    Search in the signatures which one matches a set or arguments
-    and then create an instance of the returned expression
-
-    Args:
-        oper:   Operation descriptor
-        params: List of expression parameters
-    Returns:
-        New expression 
-    Raises:
-        CpoException if no operation signature matches arguments
-    """
-    assert isinstance(oper, CpoOperation)
-
-    # Check if the operation contains a single signature
-
-    # Convert arguments in CPO expressions
-    args = tuple(map(build_cpo_expr, params))
-      
-    # Search corresponding signature
-    s = _get_matching_signature(oper, args)
-    if s is None:
-        raise CpoException("The combination of parameters (" + ", ".join(map(_get_cpo_type_str, args))
-                           + ") is not allowed for operation '" + oper.get_py_name() + "'")
-    
-    # Check arguments values when applicable
-    # TODO (range currently not in parameters)
-    
-    # Create result expression
-    return CpoFunctionCall(s, args)
-
-
-###############################################################################
-##  Private Functions
-###############################################################################
-
 # Mapping of Python types to CPO types
 _PYTHON_TO_CPO_TYPE = {}
 for t in BOOL_TYPES:
-    _PYTHON_TO_CPO_TYPE[t] = Type_Bool
+    _PYTHON_TO_CPO_TYPE[t] = Type_BoolInt
 for t in INTEGER_TYPES:
     _PYTHON_TO_CPO_TYPE[t] = Type_Int
 for t in FLOAT_TYPES:
@@ -1394,6 +1381,16 @@ _PYTHON_TO_CPO_TYPE[CpoSequenceVar]      = Type_SequenceVar
 _PYTHON_TO_CPO_TYPE[CpoTransitionMatrix] = Type_TransitionMatrix
 _PYTHON_TO_CPO_TYPE[CpoTupleSet]         = Type_TupleSet
 _PYTHON_TO_CPO_TYPE[CpoStateFunction]    = Type_StateFunction
+
+
+def _is_interval_tuple(val):
+    """ Check if a value is a tuple representing an integer interval
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a tuple representing an interval
+    """
+    return isinstance(val, tuple) and (len(val) == 2) and is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])
 
 
 def _check_arg_boolean(arg, name):
@@ -1439,7 +1436,7 @@ def _check_arg_domain(val, name):
     assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
     for v in val:
         if not is_int(v):
-            assert is_interval_tuple(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+            assert _is_interval_tuple(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
     return val
 
 
@@ -1508,7 +1505,7 @@ def _check_and_expand_interval_tuples(name, arr):
             if res:
                 res.append(v)
         else:
-            assert is_interval_tuple(v), "Argument '" + name + "' should be a list of integers or intervals"
+            assert _is_interval_tuple(v), "Argument '" + name + "' should be a list of integers or intervals"
             if not res:
                 res = arr[:i]
             res.extend(range(v[0], v[1] + 1))
@@ -1547,7 +1544,7 @@ def _get_cpo_type(val):
     gt = None
     for v in val:
         # Determine type of element
-        if is_interval_tuple(v):
+        if _is_interval_tuple(v):
             # Special case for intervals
             nt = Type_Int
         else:

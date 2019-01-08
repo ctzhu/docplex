@@ -10,22 +10,15 @@
 import json
 
 from datetime import datetime
-from six import iteritems, string_types
+from six import iteritems
 from requests.exceptions import ConnectionError
 
 from docloud.job import JobClient, DOcloudInterruptedException, DOcloudNotFoundError
 from docloud.status import JobSolveStatus, JobExecutionStatus
 
 from docplex.mp.progress import ProgressData
-from docplex.mp.utils import resolve_pattern, get_logger
+from docplex.mp.utils import resolve_pattern, get_logger, normalize_basename
 from docplex.mp.utils import CyclicLoop
-
-
-def key_as_string(key):
-    """For keys, we don't want the key to appear in INFO log outputs.
-    Instead, we display the first 4 chars and the last 4 chars.
-    """
-    return (key[:4]+"*******"+ key[-4:]) if isinstance(key, string_types) else str(key)
 
 
 class DOcloudConnectorException(Exception):
@@ -55,15 +48,15 @@ class DOcloudConnector(object):
     # json keys
     JSON_LINEAR_CTS_KEY = 'linearConstraints'
 
-    def __init__(self, docloud_context, log_output=None):
-        """ Starts a connector which URL and authorization are stored in the
-        specified context, along with other connection parameters
-
+    def __init__(self, docloud_context, verbose=False, log_output=None):
+        """ Starts a connector which URL and authorization are stored in the specified context, 
+        along with other connection parameters
+        
         Args:
             log_output: The log output stream
         """
         if docloud_context is None or not docloud_context.has_credentials():
-            raise DOcloudConnectorException("Please provide DOcplexcloud credentials")
+            raise DOcloudConnectorException("Please provide DOcloud credentials")
 
         # store this for future usage
         self.docloud_context = docloud_context
@@ -71,27 +64,36 @@ class DOcloudConnector(object):
         url = docloud_context.url
         auth = docloud_context.key
 
-        self.logger = get_logger('DOcloudConnector', self.docloud_context.verbose)
+        self._verbose = verbose or docloud_context.verbose
 
-        self.logger.info("DOcplexcloud connection using url = " + str(url) + " api_key = " + key_as_string(auth))
-        self.logger.info("DOcplexcloud SSL verification = " + str(docloud_context.verify))
+        self.logger = get_logger('DOcloudConnector', self._verbose)
 
-        self.logger.info("   waittime = " + str(docloud_context.waittime))
+        self.logger.info("DOcloud connection using url = " + str(url) + " api_key = " + str(auth))
+
+        self.logger.info("DOcloud SSL verification = " + str(docloud_context.verify))
+
+        self.waittime = docloud_context.waittime
+        self.logger.info("   waittime = " + str(self.waittime))
+
         self.logger.info("   timeout = " + str(docloud_context.timeout))
 
         self.json = ""
         self.jobInfo = None
         self.run_deterministic = docloud_context.run_deterministic
         self.log_output = log_output
-        self._hasSolution = False  # submit_model_data change this
+        self._hasSolution = False  # _submit_job change this
         self.__vars = None
 
     def _check_nonempty_json(self):
         if not self.json:
             raise DOcloudConnectorException("* empty JSON result!")
 
+    @property
+    def is_verbose(self):
+        return self._verbose
+
     def log(self, msg, *args):
-        if self.docloud_context.verbose:
+        if self.is_verbose:
             log_msg = "* {0}".format(resolve_pattern(msg, args))
             self.logger.info(log_msg)
             if self.log_output is not None:
@@ -103,24 +105,22 @@ class DOcloudConnector(object):
             resp_content_as_string = content.decode('utf-8')
         return resp_content_as_string
 
-    def submit_model_data(self,
-                          attachments=None,
-                          gzip=False,
-                        info_callback=None,
-                        info_to_monitor=None):
+    def _submit_job(self, model_data, job_name=None, gzip=False,
+                    prm_data=None,
+                    warmstart_data=None,
+                    warmstart_name=None,
+                    info_callback=None,
+                    info_to_monitor=None):
         """Submits a job to the cloud service.
 
         Args:
-            attachments: A list of attachments. Each attachement is a dict with
-                the following keys:
-                   - 'name' : the name of the attachment
-                   - 'data' : the data for the attachment
+            model_data: The model data
+            job_name: The name of the job
             gzip: If ``True``, data is gzipped before sent over the network
+            prm_data: cplex prm to be used
             info_callback: A call back to be called when some info are available.
                 That callback takes one parameter that is a dict containing
                 the info as they are available.
-            info_to_monitor: A set of information to monitor with info_callback.
-                Currently, can be ``jobid`` and ``progress``.
         """
         self._hasSolution = False
         self.__vars = None
@@ -140,9 +140,15 @@ class DOcloudConnector(object):
 
         try:
             try:
-                # Extract the list of attachment names
-                att_names = [a['name'] for a in attachments]
-
+                # job attachment names
+                # job name
+                att_names = [{'name': job_name}]
+                # prm
+                if prm_data:
+                    att_names.append({'name': 'file.prm'})
+                # warmstart
+                if warmstart_data:
+                    att_names.append({'name': warmstart_name})
                 # create job
                 jobid = client.create_job(attachments=att_names)
                 self.log("job creation submitted, id is: {0!s}".format(jobid))
@@ -152,16 +158,29 @@ class DOcloudConnector(object):
                 raise DOcloudConnectorException("Cannot connect to {0}, error: {1}".format(self.docloud_context.url, str(c_e)))
 
             try:
-                # now upload data
-                for a in attachments:
+                # upload prm
+                if prm_data is not None:
+                    encoded_prm_data = prm_data.encode('utf-8')
+                    client.upload_job_attachment(jobid, attid="file.prm",
+                                                 data=encoded_prm_data, gzip=gzip)
+                    self.log("CPLEX parameters file has been uploaded")
+
+                # upload model
+                client.upload_job_attachment(jobid, attid=job_name,
+                                             data=model_data, gzip=gzip)
+                self.log("model data '{attid}' has been uploaded".format(attid=job_name))
+
+                # upload warmstart
+                if warmstart_data:
                     client.upload_job_attachment(jobid,
-                                                 attid=a['name'],
-                                                 data=a['data'])
-                    self.log("Attachment: %s has been uploaded" % a['name'])
+                                                 attid=warmstart_name,
+                                                 data=warmstart_data.encode('utf-8'),
+                                                 gzip=gzip)
+                    self.log("Warmstart data uploaded")
 
                 # execute job
                 client.execute_job(jobid)
-                self.log("DOcplexcloud execute submitted has been started")
+                self.log("DOcloud execute submitted has been started")
                 # get job execution status until it's processed or failed
                 timedout = False
                 try:
@@ -176,7 +195,7 @@ class DOcloudConnector(object):
                 self.jobInfo = client.get_job(jobid)
                 if timedout:
                     self._hasSolution = False
-                    self.log("Solve timed out after {waittime} sec".format(waittime=self.docloud_context.waittime))
+                    self.log("Solve timed out after {waittime} sec".format(waittime=self.waittime))
                     return None
                 # get solution
                 try:
@@ -188,7 +207,6 @@ class DOcloudConnector(object):
                     self._hasSolution = False
                     self.log("no solution in attachment")
                 self.log("docloud results have been received")
-                self.json = myjson
                 return myjson
 
             finally:
@@ -198,6 +216,37 @@ class DOcloudConnector(object):
         finally:
             client.close()
 
+    def submit_model_data(self, mdl_name, mdl_data, extension,
+                          prm_data=None,
+                          warmstart_data=None,
+                          gzip=None,
+                          info_callback=None,
+                          info_to_monitor=None):
+        """Submits a model to the cloud service.
+        
+        Args:
+            mdl_name: The name of the model
+            mdl_data: The data for the model
+            extension: The extension of the model (".lp", ".sav" etc...)
+            gzip: If ``True``, data is gzipped before sent over the network
+            prm_data: cplex prm to be used
+            info_callback: A call back to be called when some info are available.
+                That callback takes one parameter that is a dict containing
+                the info as they are available.
+            info_to_monitor: A set of information to monitor with info_callback.
+                Currently, can be ``jobid`` and ``progress``.
+        """
+        job_name = normalize_basename(mdl_name) + extension  # use extension or not ?
+        warmstart_name = normalize_basename(mdl_name) + ".mst"
+        self.json = self._submit_job(model_data=mdl_data,
+                                     prm_data=prm_data,
+                                     warmstart_name=warmstart_name,
+                                     warmstart_data=warmstart_data,
+                                     job_name=job_name,
+                                     gzip=gzip,
+                                     info_callback=info_callback,
+                                     info_to_monitor=info_to_monitor)
+        return self.json
 
     def wait_for_completion(self, client, jobid,
                             info_callback=None, info_to_monitor=None):
@@ -316,9 +365,9 @@ class DOcloudConnector(object):
 
         # If there's a waittime, configure an event to stop the loop after
         # ``waittime``
-        if self.docloud_context.waittime:
-            loop.enter(self.docloud_context.waittime, 1, waittime_timeout, (loop, ))
-            self.log("waiting for job completion with a wait time of {waittime} sec".format(waittime=self.docloud_context.waittime))
+        if self.waittime:
+            loop.enter(self.waittime, 1, waittime_timeout, (loop, ))
+            self.log("waiting for job completion with a wait time of {waittime} sec".format(waittime=self.waittime))
         else:
             self.log("waiting for job completion with no wait time")
 
@@ -345,7 +394,7 @@ class DOcloudConnector(object):
 
         if loop.timed_out:
             self.log("Job Timed out")
-            raise DOcloudInterruptedException("Timeout after {0}".format(self.docloud_context.waittime), jobid=jobid)
+            raise DOcloudInterruptedException("Timeout after {0}".format(self.waittime), jobid=jobid)
 
         return loop.status
 
@@ -383,7 +432,7 @@ class DOcloudConnector(object):
 
     def _getvars(self):
         if self.__vars is None:
-            self.__vars = self.json.get('variables', [])
+            self.__vars = self.json['variables']
         return self.__vars
 
     def variable_results(self):
@@ -423,7 +472,7 @@ class DOcloudConnector(object):
             return None
 
     def _rest_callback(self, method, url, *args, **kwargs):
-        """The callback called by the DOcplexcloud client to log REST operations
+        """The callback called by the DOcloud client to log REST operations
         """
         self.logger.info("{0} {1}".format(method, url))
         if len(args) > 0:

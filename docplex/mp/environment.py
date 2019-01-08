@@ -9,12 +9,9 @@ import os
 import sys
 
 
-def env_is_64_bit():
-    return sys.maxsize > 2**32
-
 # noinspection PyPep8
 class Environment(object):
-    """ This class detects and contains information regarding other modules of interest, such as
+    """ This class detects and holds all information regarding other modules of interest, such as
         whether CPLEX, `numpy`, and `matplotlib` are installed.
     """
     def __init__(self, start_auto_configure=True):
@@ -30,7 +27,6 @@ class Environment(object):
         self._numpy_hook = None
 
         self._found_pandas = None
-        self._pandas_version = ''
         self._found_matplotlib = None
         self._matplotlib_version = None
 
@@ -88,7 +84,7 @@ class Environment(object):
     def has_matplotlib(self):
         """
          Returns:
-             Boolean: True if the `matplotlib` libraries are available.
+             Boolean: True if the matplotlib libraries are available.
         """
         if self._found_matplotlib is None:
             self.__check_matplotlib()
@@ -98,15 +94,11 @@ class Environment(object):
     def has_pandas(self):
         """
         Returns:
-            Boolean: True if the `pandas` libraries are available.
+            Boolean: True if the pandas libraries are available.
         """
-        self.__check_pandas()
+        if self._found_pandas is None:
+            self.__check_pandas()
         return self._found_pandas
-
-    @property
-    def pandas_version(self):
-        self.__check_pandas()
-        return self._pandas_version
 
     @property
     def cplex_location(self):
@@ -120,9 +112,10 @@ class Environment(object):
     def has_numpy(self):
         """
          Returns:
-             Boolean: True if the `numpy` libraries are available.
+             Boolean: True if the numpy libraries are available.
         """
-        self._check_numpy()
+        if self._found_numpy is None:
+            self._check_numpy()
         return self._found_numpy
 
     def is_64bit(self):
@@ -152,19 +145,18 @@ class Environment(object):
             self._found_cplex = False
 
     def _check_numpy(self):
-        if self._found_numpy is None:
-            try:
-                import numpy.version as npv
-                self._found_numpy = True
-                self._numpy_version = npv.version
+        try:
+            import numpy.version as npv
+            self._found_numpy = True
+            self._numpy_version = npv.version
 
-                self_numpy_hook = self._numpy_hook
-                if self_numpy_hook is not None:
-                    # lazy call the hook once at first check time.
-                    self_numpy_hook()
+            self_numpy_hook = self._numpy_hook
+            if self_numpy_hook is not None:
+                # lazy call the hook once at first check time.
+                self_numpy_hook()
 
-            except ImportError:
-                self._found_numpy = False
+        except ImportError:
+            self._found_numpy = False
 
         return self._found_numpy
 
@@ -178,13 +170,11 @@ class Environment(object):
 
 
     def __check_pandas(self):
-        if self._found_pandas is None:
-            try:
-                import pandas
-                self._found_pandas = True
-                self._pandas_version = pandas.__version__
-            except ImportError:
-                self._found_pandas = False
+        try:
+            import pandas
+            self._found_pandas = True
+        except ImportError:
+            self._found_pandas = False
 
     @staticmethod
     def _display_feature(is_present, feature_name, feature_version, location=None):

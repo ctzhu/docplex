@@ -6,16 +6,13 @@
 
 from __future__ import print_function
 
-import json
 import math
-import six
 import sys
 
 from six import iteritems, iterkeys
 from docloud.status import JobSolveStatus
 
-from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import is_iterable, is_number, is_string
+from docplex.mp.utils import is_iterable, is_number, is_string, StringIO
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
 
@@ -33,22 +30,15 @@ class SolveSolution(object):
     def _is_discrete_value(v):
         return v == int(v)
 
-    def __init__(self, model, var_value_map=None, obj=None, name=None, engine_name=None, keep_zeros=True,
-                 rounding=False):
-        """ SolveSolution(model, var_valeu_map, obj, name)
+    def __init__(self, model, var_value_map=None, obj=None, engine_name=None, keep_zeros=True, rounding=False):
+        """ Creates a new solution object, associated to a a model.
 
-        Creates a new solution object, associated to a a model.
-
-        Args:
-            model: The model to which the solution is associated. This model cannot be changed.
-
-            obj: The value of the objective in the solution. A value of None means the objective is not defined at the
-                time the solution is created, and will be set later.
-
-            var_value_map: a Python dictionary containing associtaions of variables to values.
-
-            name: a name for the solution. The default is None, in which case the solution is named after the
-                model name.
+        :param model: The model to which the solution is associated. This model cannot be changed.
+        :param obj: The value of the objective in the solution. A value of None mans the objective is not defined at the
+        time the solution is created, and will be set later.
+        :param var_value_map:
+        :param engine_name:
+        :param keep_zeros:
 
         :return: A solution object.
         """
@@ -57,8 +47,6 @@ class SolveSolution(object):
         assert obj is None or is_number(obj)
 
         self.__model = model
-        self._checker = model
-        self._name = name
         self._problem_name = model.name
         self._problem_objective_expr = model.objective_expr if model.has_objective() else None
         self.__objective__ = self.NO_OBJECTIVE_VALUE if obj is None else obj
@@ -71,56 +59,21 @@ class SolveSolution(object):
         if var_value_map is not None:
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
-    @staticmethod
-    def make_engine_solution(model, var_value_map=None, obj=None, engine_name=None):
-        # INTERNAL
-        sol = SolveSolution(model,
-                            var_value_map=var_value_map, obj=obj,
-                            engine_name=engine_name,
-                            rounding=True,
-                            keep_zeros=False)
-        return sol
-
     def _get_var_by_name(self, varname):
         return self.__model.get_var_by_name(varname)
-
-    def clear(self):
-        """ Clears all solve result data.
-
-        All data related to the model are left unchanged.
-        """
-        self.__var_value_map = {}
-        self.__objective__ = self.NO_OBJECTIVE_VALUE
-        self.__attr_map = {}
-        self._solve_status = JobSolveStatus.UNKNOWN
 
     def is_empty(self):
         """
         Checks whether the solution is empty.
 
         Returns:
-            Boolean: True if the solution is empty; in other words, the solution has no defined objective and no variable value.
+            True if the solution is empty; in other words, it has no defined objective and no variable value.
         """
         return not self.has_objective() and not self.__var_value_map
 
     @property
     def problem_name(self):
         return self._problem_name
-
-    def get_name(self):
-        """ This property allows to get/set a name on the solution.
-
-        In some cases , it might be interesting to build different solutions for the same model,
-        in this case, use the name property to disinguish them.
-
-        """
-        return self._name
-
-    def set_name(self, solution_name):
-        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True)
-        self._name = solution_name
-
-    name = property(get_name, set_name)
 
 
     def _resolve_var(self, var_key, do_raise):
@@ -138,21 +91,21 @@ class SolveSolution(object):
             if do_raise:
                 self.model.fatal("Expecting variable or name, got: {0!r}", var_key)
             else:
-                self.model.warning("Expecting variable or name, got: {0!r} - ignored", var_key)
+                self.model.warning("Expecting variable or name, got: {0!r} - ignoring", var_key)
         return var
 
     def _typecheck_var_key_value(self, var_key, value, caller):
         # INTERNAL
-        self._checker.typecheck_num(value, caller=caller)
+        self.model.typecheck_num(value, caller=caller)
         if not is_string(var_key) and not isinstance(var_key, Var):
             self.model.fatal("{0} expects either Var or string, got: {1!r}", caller, var_key)
 
     def add_var_value(self, var_key, value):
-        """ Adds a new (variable, value) pair to this solution.
+        """ Adds a new pair of (var, value) to this solution.
 
         Args:
-            var_key: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
-            value (number): The value of the variable in the solution.
+            var_key: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (a string).
+            value: A number, the value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
         self._set_var_value(var_key, value, keep_zero=True, rounding=False, do_warn_on_non_discrete=True)
@@ -179,7 +132,7 @@ class SolveSolution(object):
                 if do_warn_on_non_discrete:
                     if rounding:
                         self.error_handler.warning(
-                            "Trying to assign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
+                            "Trying to asign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
                             (var, value, stored_value))
                     else:
                         self.error_handler.warning(
@@ -194,7 +147,7 @@ class SolveSolution(object):
     @property
     def model(self):
         """
-        This property returns the model associated with the solution.
+        A property that gets the model associated with the solution.
         """
         return self.__model
 
@@ -206,10 +159,10 @@ class SolveSolution(object):
         """
         Gets the objective value as defined in the solution.
         When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
-        To check whether the objective has been set, use :func:`has_objective`.
+        You can check whether the objective has been set using :func:`has_objective`.
 
         Returns:
-            float: The value of the objective as defined by the solution.
+            The value of the objective as defined by the solution.
         """
         return self.__objective__
 
@@ -218,16 +171,14 @@ class SolveSolution(object):
         Sets the objective value of the solution.
         
         Args:
-            obj (float): The value of the objective in the solution.
+            obj (float): The value of the objective in the solution (a floating-point number).
         """
         self.__objective__ = obj
 
     def has_objective(self):
         """
-        Checks whether or not the objective has been set.
 
-        Returns:
-            Boolean: True if the solution defines an objective value.
+        :return: True if the solution defines an objective value.
         """
         return self.__objective__ != self.NO_OBJECTIVE_VALUE
 
@@ -276,7 +227,7 @@ class SolveSolution(object):
         """Iterates over the (variable, value) pairs in the solution.
 
         Returns:
-            iterator: A dict-style iterator which returns a two-component tuple (variable, value)
+            A dict-style iterator which returns a two-component tuple (variable, value)
             for all variables mentioned in the solution.
         """
         return iteritems(self.__var_value_map)
@@ -285,22 +236,21 @@ class SolveSolution(object):
         """Iterates over all variables mentioned in the solution.
 
         Returns:
-           iterator: An iterator object over all variables mentioned in the solution.
+           An iterator object.
         """
         return iterkeys(self.__var_value_map)
 
     def contains(self, dvar):
         """
         Checks whether or not a decision variable is mentioned in the solution.
-
-        This predicate can also be used in the form `var in solution`, because the
+        Note that this predicate can also be used in the form `var in solution`, because the
         :func:`__contains_` method has been redefined for this purpose.
 
         Args:
             dvar (:class:`docplex.mp.linear.Var`): The variable to check.
 
         Returns:
-            Boolean: True if the variable is mentioned in the solution.
+            True if the variable is mentioned in the solution.
         """
         return dvar in self.__var_value_map
 
@@ -316,17 +266,17 @@ class SolveSolution(object):
         because the :func:`__getitem__` method has been overloaded.
 
         Args:
-            dvar_arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
+            dvar_arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (a string).
 
         Returns:
-            float: The value of the variable in the solution.
+            A floating-point number, the value of the variable in the solution.
         """
         dvar = self._resolve_var(dvar_arg, do_raise=True)
         return self.__var_value_map.get(dvar, 0) if dvar is not None else 0
 
     @property
     def number_of_var_values(self):
-        """ This property returns the number of variable values stored in this solution.
+        """ Returns the number of variable values stored in this solution.
 
         """
         return len(self.__var_value_map)
@@ -454,7 +404,7 @@ class SolveSolution(object):
             s_obj = "obj={0:g}".format(self.objective_value)
         else:
             s_obj = "obj=N/A"
-        s_values = ",".join(["{0}:{1:g}".format(var.name, val) for var, val in iteritems(self.__var_value_map)])
+        s_values = ",".join(["{0}:{1:g}".format(var, val) for var, val in iteritems(self.__var_value_map)])
         return "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
 
     def print_mst(self):
@@ -481,7 +431,7 @@ class SolveSolution(object):
                 If passed a string format (either with %s or {0}), this format is used to format the
                 model name to produce the basename of the written file.
 
-            path: A path to write the file, expects a string path or None.
+            path: A path to write file, expects a string path or None.
                 Can be a directory, in which case the basename
                 that was computed with the basename argument is appended to the directory to produce
                 the file.
@@ -496,7 +446,7 @@ class SolveSolution(object):
 
             ``sol.export_as_mst(path="c:/temp/myprob1.mst")`` will write file "c:/temp/myprob1.mst".
 
-            ``sol.export_as_mst(basename="my_%s_mipstart", path ="z:/home/")`` will write "z:/home/my_prob_mipstart.mst".
+            ``sol.export_as_mst(basename="my_%s_mipstart", path ="z:/home/)`` will write "z:/home/my_prob_mipstart.mst".
 
         """
         mst_path = make_output_path2(actual_name=self._problem_name,
@@ -506,65 +456,23 @@ class SolveSolution(object):
         if mst_path:
             self.print_mst_to_stream(mst_path)
 
-    def get_printer(self, key):
-        printers = {'json': SolutionJSONPrinter,
-            'xml': SolutionMSTPrinter
-            }
-        printer = printers.get(key.lower())
-        if not printer:
-            raise ValueError("format must be one of {}".format(self.printers.keys()))
-        return printer
-
-
-    def export(self, file_or_filename, format="json"):
-        """ Export this solution.
-        
-        Args:
-            file_or_filename: If ``file_or_filename`` is a string, this argument contains the filename to
-                write to. If this is a file object, this argument contains the file object to write to.
-            format: The format of the solution. The format can be:
-                - json
-                - xml
-        """
-
-        printer = self.get_printer(format)
-
-        if isinstance(file_or_filename, six.string_types):
-            fp = open(file_or_filename, "w")
-            close_fp = True
-        else:
-            fp = file_or_filename
-            close_fp = False
-        try:
-            printer.print_to_stream(self, fp)
-        finally:
-            if close_fp:
-                fp.close()
-
-    def export_as_string(self, format="json"):
-        oss = StringIO()
-        self.export(oss, format=format)
-        return oss.getvalue()
-
 
     def check_as_mip_start(self, error_handler=None):
-        """Checks that this solution is a valid MIP start.
-
+        """
+        Checks that this solution is a valid MIP start.
         To be valid, it must have:
-
             * at least one discrete variable (integer or binary), and
-            * the values for decision variables should be consistent with the type.
+            * the value for integer/binary variables should be consistent with the type.
 
         Args:
             error_handler: An instance of an error handler or None.
 
-        Returns:
-            Boolean: True if this solution is a valid MIP start.
         """
         if 0 == len(self.__var_value_map):
             if error_handler:
                 error_handler.error("MIP start solution is empty, provide at least one intere/boolean variable value")
             return False
+
 
         discrete_vars = (dv for dv in self.iter_variables() if dv.is_discrete())
         count_values = 0
@@ -641,7 +549,7 @@ class SolutionMSTPrinter(object):
         # <header
         # problemName="foo"
         # objectiveValue="42"
-        # />
+        #     />
         out.write(" <header\n   problemName=\"{0}\"\n".format(sol.problem_name))
         if sol.has_objective():
             out.write("   objectiveValue=\"{0}:g\"\n".format(sol.objective_value))
@@ -703,91 +611,4 @@ class SolutionMSTPrinter(object):
         oss = StringIO()
         cls.print_to_stream(solutions, out=oss)
         return oss.getvalue()
-
-
-from json import JSONEncoder
-
-
-class SolutionJSONEncoder(JSONEncoder):
-    def default(self, solution):
-        n = {'CPLEXSolution': self.encode_solution(solution)}
-        return n
-
-    def encode_solution(self, solution):
-        n = {}
-        n["version"] = "1.0"
-        n["header"] = self.encode_header(solution)
-        n["variables"] = self.encode_variables(solution)
-        return n
-
-    def encode_header(self, solution):
-        n = {}
-        n["problemName"] = solution.problem_name
-        if solution.has_objective():
-            n["objectiveValue"] = "{}".format(solution.objective_value)
-        return n
-
-    def encode_variables(self, sol):
-        n = []
-        for dvar, val in sol.iter_var_values():
-            v = {"index": "{}".format(dvar.index),
-                 "name": dvar.name,
-                 "value": "{}".format(sol[dvar])}
-            n.append(v)
-        return n
-
-
-class SolutionJSONPrinter(object):
-    json_extension = ".json"
-
-    @classmethod
-    def print(cls, out, solutions, indent=None):
-        # solutions can be either a plain solution or a sequence or an iterator
-        if not is_iterable(solutions):
-            cls.print_one_solution(solutions, out, indent=indent)
-        else:
-            sol_seq = list(solutions)
-            nb_solutions = len(sol_seq)
-            assert nb_solutions > 0
-            if 1 == nb_solutions:
-                cls.print_one_solution(sol_seq[0], out, indent=indent)
-            else:
-                cls.print_many_solutions(sol_seq, out, indent=indent)
-
-    @classmethod
-    def print_one_solution(cls, sol, out, indent=None):
-        out.write(json.dumps(sol, cls=SolutionJSONEncoder, indent=indent))
-
-    @classmethod
-    def print_many_solutions(cls, sol_seq, out, indent=None):
-        encoder = SolutionJSONEncoder()
-        n = {"CPLEXSolutions": [encoder.default(sol) for sol in sol_seq]}
-        out.write(json.dumps(n, indent=indent))
-
-    @classmethod
-    def print_to_stream(cls, solutions, out, extension=json_extension, indent=None):
-        if out is None:
-            # prints on standard output
-            cls.print(sys.stdout, solutions, indent=indent)
-        elif isinstance(out, str):
-            # a string is interpreted as a path name
-            path = out if out.endswith(extension) else out + extension
-            with open(path, "w") as of:
-                cls.print_to_stream(solutions, of, indent=indent)
-                # print("* file: %s overwritten" % path)
-        else:
-            try:
-                cls.print(out, solutions, indent=indent)
-
-            except AttributeError:  # pragma: no cover
-                pass  # pragma: no cover
-                # stringio will raise an attribute error here, due to with
-                # print("Cannot use this an output: %s" % str(out))
-
-    @classmethod
-    def print_to_string(cls, solutions, indent=None):
-        oss = StringIO()
-        cls.print_to_stream(solutions, out=oss, indent=indent)
-        return oss.getvalue()
-
 

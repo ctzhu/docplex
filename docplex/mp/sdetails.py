@@ -3,11 +3,7 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.compat23 import StringIO
-
-from math import isnan
-
-from six import PY2 as six_py2
+from docplex.mp.utils import StringIO, has_unicode_type
 
 
 class SolveDetails(object):
@@ -15,7 +11,7 @@ class SolveDetails(object):
     The :class:`SolveDetails` class contains the details of a solve.
 
     This class should never be instantiated. You get an instance of this class from
-    the model by calling the property :data:`docplex.mp.model.Model.solve_details`.
+    the model by calling the property :attr:`Model.solve_details`.
     """
 
     _unknown_label = "*unknown*"
@@ -37,19 +33,9 @@ class SolveDetails(object):
         self._solution_method = -1
         # --
         self._miprelgap = self._NO_GAP if miprelgap is None else miprelgap
+        self._mipitcount = 0
 
         self._md5 = self._unknown_label
-
-    def as_worker_dict(self):
-        # INTERNAL
-        # Converts the solve details to a dictionary for python worker...
-        # using "legacy' keys from drop-solve
-        worker_dict = {"MODEL_DETAIL_TYPE": self._problem_type,
-                       "MODEL_DETAIL_NONZEROS": self._linear_nonzeros
-                       }
-        if not isnan(self._miprelgap):
-            worker_dict["PROGRESS_GAP"] = self._miprelgap
-        return worker_dict
 
     _problemtype_map = {0: "LP",
                         1: "MILP",
@@ -64,22 +50,19 @@ class SolveDetails(object):
                         12: "node_QCP"}
 
     @staticmethod
-    def _convert_problemtype(probtype, probtype_map=_problemtype_map, unknown_probtype="unknown"):
-        try:
-            iprobe_type = int(probtype)
-            return probtype_map.get(iprobe_type, unknown_probtype)
-        except ValueError:
-            return unknown_probtype
+    def _convert_problemtype(probtype, probtype_map=_problemtype_map):
+        iprobe_type = int(probtype)
+        return probtype_map.get(iprobe_type, "unknown")
 
     @staticmethod
     def to_plain_str(arg_s):
-        if six_py2:  # we are in py2: docloud returns unicode.
+        if has_unicode_type():  # we are in py2: docloud returns unicode.
             try:
                 return arg_s.encode()  # if unicode strings , come from cplex worker
             except AttributeError:
                 return str(arg_s)
         else:
-            return arg_s  # in py3 do nothing.
+            return arg_s # in py3 do nothing.
 
     # ---
     # list of fields to be retrived from the details
@@ -94,6 +77,7 @@ class SolveDetails(object):
                     ("_ncolumns", "cplex.columns", int, 0),
                     ("_linear_nonzeros", "MODEL_DETAIL_NON_ZEROS", int, 0),
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),
+                    ("_mipitcount", "cplex.mipitcount", int, 0),
                     ("_md5", "cplex.model.md5", str, "")
                     )
 
@@ -213,7 +197,7 @@ class SolveDetails(object):
 
     # linear nonzeros
     def get_nb_linear_nonzeros(self):
-        """ This property returns the number of linear non-zeros in the matrix solved.
+        """ This property returns the number of linear nonzeros in the matrix solved.
 
         """
         return self._linear_nonzeros
@@ -225,7 +209,7 @@ class SolveDetails(object):
         """ This property returns the MIP relative gap.
 
         Note:
-            * This property returns NaN when the problem is not a MIP.
+            * This property returns a NaN when the problem is not a MIP.
             * The gap is returned as a floating-point value, not as a percentage.
         """
         return self._miprelgap
@@ -264,10 +248,8 @@ class SolveDetails(object):
 
     def has_hit_limit(self):
         """
-        Checks if the solve details indicate that the solve has hit a limit.
-
         Returns:
-          Boolean: True if the solve details indicate that the solve has hit a limit.
+          True if the solve details indicate that the solve has hit a limit.
 
         """
         return self._solve_status_code in self._limit_statuses

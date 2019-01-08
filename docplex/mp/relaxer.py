@@ -5,10 +5,9 @@
 # --------------------------------------------------------------------------
 
 from six import iteritems
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 
 from docplex.mp.basic import Priority
-from docplex.mp.linear import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
@@ -160,38 +159,6 @@ class NamePrioritizer(IConstraintPrioritizer):
             return best_prio
 
 
-class CustomPrioritizer(IConstraintPrioritizer):
-    """
-    Constraint prioritizer based on a dictionary constraint -> priority.
-
-    Inituialized from a dictionary and an optional default priority.
-
-    Args:
-        priority_mapping: a dict, with constraints as keys and priorities as values.
-
-        default_priority: an optional priority, used when a constraint is not explicitly mentioned
-            in the mapping. The default value is MANDATORY, meaning that any constraint not mentioned
-            in the mapping will not be relaxed.
-    """
-    def __init__(self, priority_mapping, default_priority=Priority.MANDATORY):
-        # --- typecheck that this dict is a a {ct: prio} mapping.
-        if not isinstance(priority_mapping, dict):
-            raise TypeError
-        for k, v in iteritems(priority_mapping):
-            if not isinstance(k, AbstractConstraint):
-                raise TypeError
-            if not isinstance(v, Priority):
-                raise TypeError
-        # ---
-
-        self._mapping = priority_mapping
-        self._default_priority = default_priority
-
-    def get_priority(self, ct):
-        return self._mapping.get(ct, self._default_priority)
-
-TRelaxableGroup = namedtuple("_TRelaxableGroup", ["preference", "relaxables"])
-
 class Relaxer(object):
     ''' This class is an asbtract algorithm, in the sense that it operates on interfaces.
     
@@ -220,14 +187,9 @@ class Relaxer(object):
             self.__prioritizer = prioritizer
         elif prioritizer == 'name':
             self.__prioritizer = NamePrioritizer()
-        elif isinstance(prioritizer, dict):
-            self.__prioritizer = CustomPrioritizer(priority_mapping=prioritizer)
-        elif prioritizer is None or prioritizer == 'default':
+        else:
             relax_unnamed = kwargs.get("relax_unnamed", True)
             self.__prioritizer = DefaultPrioritizer(relax_unnamed=relax_unnamed)
-        else:
-            print("Cannot deduce a prioritizer from: {0!r} - expecting \"name\"|\"default\"| dict", prioritizer)
-            raise TypeError
 
         self._ordered_priorities = Priority.all_sorted()
         self._cumulative = cumulative
@@ -352,43 +314,21 @@ class Relaxer(object):
         context = mdl.prepare_actual_context(**solve_kwargs)
 
         try:
-            # mdl.context has been saved in saved_context above
             mdl.context = context
             mdl.set_log_output(mdl.context.solver.log_output)
-
-            # engine parameters, if needed to
-            parameters = context.cplex_parameters
-            # limit threads if needed
-            if getattr(context.solver, 'max_threads', None) is not None:
-                if parameters.threads.get() == 0:
-                    max_threads = context.solver.max_threads
-                else:
-                    max_threads = min(context.solver.max_threads,
-                                      parameters.threads.get())
-                # we don't want to duplicate parameters unnecessary
-                if max_threads != parameters.threads.get():
-                    parameters = parameters.copy()
-                    parameters.threads = max_threads
-                    out_stream = context.solver.log_output_as_stream
-                    if out_stream:
-                        out_stream.write("WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
-
-
-            mdl._apply_parameters_to_engine(parameters)
-            overwrite_params = self.make_overwrite_param_dict(parameters=parameters,
-                                                              optimize=is_model_optimized,
-                                                              limits=relaxation_limits)
+            # apply parameters after the context has been updated by kwargs
+            mdl._apply_parameters_to_engine(context.cplex_parameters)
 
             for prio in self._ordered_priorities:
                 if prio in priority_map:
                     cts = priority_map[prio]
                     if not cts:
                         # this should not happen...
-                        continue  # pragma: no cover
+                        continue  # pragma : no cover
 
                     pref = prio.get_geometric_preference_factor()
                     # build a new group
-                    relax_group = TRelaxableGroup(pref, cts)
+                    relax_group = [pref, cts]
 
                     # relaxing new batch of cts:
                     if not is_cumulative:
@@ -405,16 +345,10 @@ class Relaxer(object):
                     # - a sequence of constraints
                     for l in self._listeners:
                         l.notify_start_relaxation(prio, all_relaxable_cts)
-
-                    # ----
-                    # call the engine.
-                    # ---
                     try:
-                        (relax_ok, relax_obj) = engine.solve_relaxed(mdl, prio.name, all_groups, is_model_optimized, overwrite_params)
+                        (relax_ok, relax_obj) = engine.solve_relaxed(mdl, all_groups, is_model_optimized, relaxation_limits)
                     finally:
                         self._last_relaxation_details = engine.get_solve_details()
-                    # ---
-
                     if relax_ok:
                         self._last_successful_relaxed_priority = prio
                         self._last_relaxation_status = True
@@ -430,7 +364,6 @@ class Relaxer(object):
     
                         for l in self._listeners:
                             l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
-                        # now get out
                         break
                     else:
                         # relaxation has failed, notify the listeners
@@ -520,37 +453,3 @@ class Relaxer(object):
         """
         self._check_successful_relaxation()
         return self._relaxations[ct] if ct in self._relaxations else 0
-
-
-    def make_overwrite_param_dict(self, parameters, optimize, limits):
-        # INTERNAL
-        relax_gap, relax_max_nb_sol, relax_pass_time_limit = limits
-
-        feasopt_mode_min_sum = 0
-        feasopt_mode_opt_sum = 1
-        feasopt_mode_min_inf = 2
-        feasopt_mode_opt_inf = 3
-        # which forced mode for feasopt? switch this flag for testing
-        # with 12.67.2 and nurse, INF is very slow...
-        use_sum_or_nb = True
-        if use_sum_or_nb:
-            if optimize:
-                new_mode = feasopt_mode_opt_sum
-            else:
-                new_mode = feasopt_mode_min_sum
-        else:
-            if optimize:
-                new_mode = feasopt_mode_opt_inf
-            else:
-                new_mode = feasopt_mode_min_inf
-
-        overwritten_param_dict = {parameters.feasopt.mode: new_mode}
-        if relax_gap > 0:
-            overwritten_param_dict[parameters.mip.tolerances.mipgap] = relax_gap
-        if relax_max_nb_sol >= 1:
-            overwritten_param_dict[parameters.mip.limits.solutions] = relax_max_nb_sol
-        if relax_pass_time_limit >= 1:  # no less than 1s.
-            overwritten_param_dict[parameters.timelimit] = relax_pass_time_limit
-
-        # ---
-        return overwritten_param_dict

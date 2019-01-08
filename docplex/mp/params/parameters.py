@@ -8,8 +8,7 @@ from __future__ import print_function
 
 from six import iteritems
 
-from docplex.mp.utils import is_int, is_number
-from docplex.mp.compat23 import StringIO
+from docplex.mp.utils import is_int, StringIO, is_number
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.utils import RedirectedOutputContext
 
@@ -64,8 +63,7 @@ class ParameterGroup(object):
         """ Iterates over the group's own parameters.
 
         Returns:
-            A iterator over directparameters belonging to the group, not including
-            sub-groups.
+            An iterator over the group's parameters, non-recursively.
         """
         return iter(self._params)
 
@@ -80,7 +78,7 @@ class ParameterGroup(object):
         Includes all parameters of subgroups recursively.
 
         Returns:
-           integer: The total number of parameters inside the group.
+           The total number of parameters inside the group.
         """
         subparams = sum(g.total_number_of_params() for g in self._subgroups)
         return subparams + self.number_of_params
@@ -101,7 +99,7 @@ class ParameterGroup(object):
 
     @property
     def parent_group(self):
-        """ This property returns the parent group (an instance of :class:`ParameterGroup`), or None for the root group.
+        """ This property returns the parent group (An instance of :class:`ParameterGroup`), or None for the root group.
         """
         return self._parent
 
@@ -117,7 +115,7 @@ class ParameterGroup(object):
         """ Checks whether the group is the root group, in other words, has no parent group.
 
         Returns:
-            Boolean: True if the group is the root group.
+            True if the group is the root group.
         """
         return self._parent is None
 
@@ -134,10 +132,10 @@ class ParameterGroup(object):
             `parameter mip.mip_cuts.Cover` returns "mip.mip_cuts.Covers".
 
         Args:
-            sep (string): The separator string. Default is ".".
+            sep (str): The separator string. Default is ".".
 
         Returns:
-            string: A string representation of the parameter hierarchy.
+            A string representation of the parameter hierarchy.
         """
         self_parent = self._parent
         if not self_parent:
@@ -200,7 +198,7 @@ class ParameterGroup(object):
         """ Resets all parameters in the group.
 
         Args:
-            recursive (Boolean): If True, also resets the subgroups.
+            recursive (bool): If True, also resets the subgroups.
         """
         for p in self.iter_params():
             p.reset()
@@ -216,7 +214,7 @@ class ParameterGroup(object):
 
         The generator yields all parameters from the group
         and also from its subgroups, recursively.
-        When called from the root parameter group, it returns all parameters.
+        Called from the root parameter group, returns all parameters.
 
         Returns:
             A generator object.
@@ -251,7 +249,7 @@ class ParameterGroup(object):
 
         This generator function traverses the group and its subgroup tree,
         yielding those parameters with a non-default value, one at a time.
-        A parameter is non-default when its value differs from the default.
+        A parameter is non-default as soon as its value differs from the default.
 
         Returns:
             A generator object.
@@ -286,7 +284,7 @@ class ParameterGroup(object):
 class Parameter(object):
     """ Base class for all parameters.
 
-    This class is not meant to be instantiated but subclassed.
+    This class is not meant to be instantiated, but subclassed.
 
     """
 
@@ -310,66 +308,22 @@ class Parameter(object):
 
     @property
     def qualified_name(self, sep='.'):
-        """ Returns a hierarchical name string for the parameter.
-
-        The qualified name reflects the location of the parameter in the parameter hierarchy.
-        The qualified name of a parameter is guaranteed to be unique.
-
-        Examples:
-            `parameters.mip.tolerances.mipgap -> mip.tolerances.mipgap`
-
-        Returns:
-            A unique name that reflects the parameter location in the hierarchy.
-        :rtype:
-            string
-        """
         return "%s.%s" % (self._parent.qualified_name(sep=sep), self.short_name)
 
     @property
     def cpx_name(self):
-        """ Returns the CPLEX name of the parameter. This string is the CPLEX reference name which is used
-        in CPLEX Reference Manual.
-
-        Examples:
-            `parameters.mip.tolerances.mipgap` has the name `CPX_PARAM_EPGAP` in CPLEX
-
-        :rtype:
-            string
-        """
         return self._cpx_name
 
     @property
     def cpx_id(self):
-        """ Returns the CPLEX integer code of the parameter.  See the CPLEX Reference Manual for more
-        information.
-
-        Returns:
-            An integer code.
-        """
         return self._id
 
     @property
     def description(self):
-        """ Returns a string describing the parameter.
-
-        :rtype:
-           string
-        """
         return self._description
 
     @property
     def default_value(self):
-        """ Returns the default value of the parameter. This value can be numeric or a string,
-        depending on the parameter type.
-
-        Examples:
-            `parameters.workdir` has default value "."
-            `parameters.optimalitytarget` has default value 0
-            `parameters.mip.tolerances.mipgap` has default value of 0.0001
-
-        Returns:
-           The default value.
-        """
         return self._default_value
 
     def reset_default_value(self, new_default):
@@ -388,16 +342,15 @@ class Parameter(object):
             new_value: The candidate value.
 
         Returns:
-            Boolean: True if acceptable, else False.
+            True if acceptable, else False.
 
         """
         raise NotImplementedError()  # pragma: no cover
 
     def transform_value(self, raw_value):
-        # INTERNAL
         return raw_value
 
-    def _check_value(self, raw_value):
+    def check_value(self, raw_value):
         if raw_value == self.default_value:
             return raw_value
         elif not self.accept_value(raw_value):
@@ -409,26 +362,21 @@ class Parameter(object):
     def set(self, new_value):
         """ Changes the value of the parameter to `new_value`.
 
-        This method checks that the new value has the proper type and is valid.
-        Numeric parameters often specify a valid range with a minimum and a maximum value.
-
-        If the value is valid, the current value of the parameter is changed, otherwise
-        an exception is raised.
+        This method checks that the new value is valid.
+        If not valid, an exception is raised.
 
         Args:
             new_value: The new value for the parameter.
-
-        Raises:
-            An exception if the value is not valid.
         """
-        accepted_value = self._check_value(new_value)
-        # do not use if accepted value here as 0 evalutes to False in Python!
+        accepted_value = self.check_value(new_value)
         if accepted_value is not None:
             self._current_value = accepted_value
         return accepted_value
 
     def get(self):
-        """ Returns the current value of the parameter.
+        """
+        Returns:
+           The current value of the parameter.
         """
         return self._current_value
 
@@ -441,7 +389,7 @@ class Parameter(object):
         """ Checks if the current value of the parameter does not equal its default.
 
         Returns:
-           Boolean: True if the current value of the parameter differs from its default.
+           True if the current value of the parameter does not equal its default.
 
         """
         return self.get() != self._default_value
@@ -450,7 +398,7 @@ class Parameter(object):
         """  Checks if the current value of the parameter equals its default.
 
         Returns:
-            Boolean: True if the current value of the parameter equals its default.
+            True if the current value of the parameter equals its default.
         """
         return self.get() == self.default_value
 
@@ -463,24 +411,15 @@ class Parameter(object):
         return True
 
     def to_string(self):
-        """ Converts the parameter to a string.
-
-        This method is used in the `__str__` method to convert a parameter to a string.
-
-        :rtype:
-            string
-        """
         return "{0}:{1:s}(2!s)".format(self._short_name, self.type_name(), self._current_value)
 
     def __str__(self):
         return self.to_string()
 
     def is_numeric(self):
-        # INTERNAL
         return False  # pragma: no cover
 
     def type_name(self):
-        # INTERNAL
         raise NotImplementedError  # pragma: no cover
 
     def _root_group(self):
@@ -574,7 +513,7 @@ class PositiveIntParameter(IntParameter):
 
 
 class NumParameter(Parameter):
-    """ A numeric parameter can take any floating-point value in the range of `[min,max]` values.
+    """ A numeric parameter can take any floating-point value, inside a range of `[min,max]` values.
     """
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
@@ -723,8 +662,11 @@ class RootParameterGroup(ParameterGroup):
         Note:
             This method has no side effects on the parameters.
 
+        See Also:
+            :func:`export_prm`
+
         Returns:
-            string: A string in CPLEX PRM format.
+            A string, in CPLEX PRM format.
         """
         oss = StringIO()
         self.export_prm(oss, overload_params)
@@ -743,6 +685,9 @@ class RootParameterGroup(ParameterGroup):
 
         Note:
             This method has no side effects on the parameters.
+
+        See Also:
+            :func:`export_prm`
 
         Returns:
             A string.
@@ -789,7 +734,7 @@ class RootParameterGroup(ParameterGroup):
         if not isinstance(other_params, RootParameterGroup):
             docplex_fatal("Parameter.update expects  RootParameterGroup, got: {0!s}", other_params)
         elif self._cplex_version != other_params.cplex_version:
-            docplex_fatal("Parameter.update expects same CPLEX version, self: {0}, other: {1}",
+            docplex_fatal("Parameter.update expectes same cple version, self: {0}, other: {1}",
                           format(self.cplex_version, other_params.cplex_version))
         else:
             self_qdict = self.as_dict()

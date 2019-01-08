@@ -23,11 +23,15 @@ then cpo_config.py and finally cpo_config_<hostname>.py.
 These modules should be visible from the PYTHONPATH and are loaded in
 this order to overwrite default values.
 
+For compatibility with CPLEX DOcloud configuration, if the DOcloud
+key and url are not set in cpo_config_*.py files, the file.docplexrc is loaded
+from the user home directory.
+
 If called as main, this module prints the configuration on standard output.
 """
 
-from docplex.cp.utils import Context, CpoException
-from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
+from docplex.cp.utils import Context
+from docplex.cp.parameters import CpoParameters
 
 import sys, socket, os
 
@@ -39,7 +43,7 @@ import sys, socket, os
 #-----------------------------------------------------------------------------
 # Global context
 
-# Create default context infrastructure
+# Create context infrastructure
 context = Context(model=Context(),
                   params=CpoParameters(),
                   solver=Context())
@@ -58,10 +62,7 @@ context.visu_enabled = True
 context.model.add_source_location = True
 
 # Minimal variable name length that trigger use of shorter alias. None for no alias.
-context.model.length_for_alias = 15
-
-# Automatically add a name to every top-level constraint
-context.model.name_all_constraints = True
+context.model.length_for_alias = None
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
@@ -89,19 +90,8 @@ context.solver.trace_cpo = False
 # Indicate to trace solver log on log_output.
 context.solver.trace_log = False
 
-# Max number of threads allowed for model solving
-context.solver.max_threads = None
-try:
-    import docplex.util.environment as runenv
-    context.solver.max_threads = runenv.get_environment().get_available_core_count()
-except:
-    pass
-
 # Indicate to add solver log to the solution
 context.solver.add_log_to_solution = True
-
-# Indicate to auto-publish solve details and results in environment
-context.solver.auto_publish = True
 
 # Log prefix
 context.solver.log_prefix = "[Solver] "
@@ -116,7 +106,7 @@ context.solver.agent = 'docloud'
 context.solver.docloud = Context()
 
 # Agent class name
-context.solver.docloud.class_name = "docplex.cp.solver.solver_docloud.CpoSolverDocloud"
+context.solver.docloud.class_name = "docplex.cp.solver_docloud.CpoSolverDocloud"
 
 # Url of the DOCloud service
 context.solver.docloud.url = "https://api-oaas.docloud.ibmcloud.com/job_manager/rest/v1/"
@@ -150,82 +140,6 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 
 
 ##############################################################################
-## Public functions
-##############################################################################
-
-def get_default():
-    """ Get the default context
-
-    Returns:
-        Current default context
-    """
-    return context
-
-def set_default(ctx):
-    """ Set the default context
-
-    Args:
-        ctx: New default context
-    Returns:
-        Current default context
-    """
-    if ctx is None:
-        ctx = Context()
-    else:
-        assert isinstance(ctx, Context), "Context object must be of class Context"
-    sys.modules[__name__].context = ctx
-
-
-# Attribute values denoting a default value
-DEFAULT_VALUES = ("ENTER YOUR KEY HERE", "ENTER YOUR URL HERE", "default")
-
-
-def _get_effective_context(**kwargs):
-    """ Build a effective context from a variable list of arguments that may specify changes to default.
-
-    Args:
-        context (optional):   Source context, if not default.
-        params (optional):    Solving parameters (CpoParameters) that overwrite those in the solving context
-        (others) (optional):  All other context parameters that can be changed.
-    Returns:
-        Updated (cloned) context
-    """
-    # Determine source context
-    ctx = kwargs.get('context', None)
-    if (ctx is None) or (ctx in DEFAULT_VALUES):
-        ctx = context
-    # print("*** Source context");
-    # ctx.print_context()
-
-    # Process changes
-    ctx = ctx.clone()
-    rplist = []  # List of replacements to be done in solving parameters
-    for k, v in kwargs.items():
-        if (k != 'context') and (v not in DEFAULT_VALUES):
-            rp = ctx.search_and_replace_attribute(k, v)
-            # If not found, set in solving parameters
-            if (rp is None):
-                rplist.append((k, v))
-
-    # Replace or set remaining fields in parameters
-    if rplist:
-        params = ctx.params
-        #if params is None:
-        #    params = CpoParameters()
-        #    ctx.params = params;
-        if isinstance(params, CpoParameters):
-            for k, v in rplist:
-                if not k in ALL_PARAMETER_NAMES:
-                    raise CpoException("CPO solver does not accept a parameter named '{}'".format(k))
-                params.set_attribute(k, v)
-
-    # Return
-    # print("*** Result context");
-    # ctx.print_context()
-    return ctx
-
-
-##############################################################################
 ## Overloading with other configuraton python files
 ##############################################################################
 
@@ -238,14 +152,42 @@ def _eval_file(file):
          exec(open(f).read())
 
 
+def _load_properties(ppf):
+    """ Load property file (if exists)
+    Args:
+        ppf: Property file to load, if exists
+    """
+    if os.path.isfile(ppf):
+        with open(ppf, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#"):
+                    continue
+                snx = line.find('=')
+                if snx < 0:
+                    snx = line.find(':')
+                if snx > 0:
+                    key = line[:snx].strip()
+                    val = line[snx + 1:].strip()
+                    if key in ("api_key", "docloud.api_key", "docloud.key") :
+                        context.solver.docloud.key = val
+                    elif key in ("url", "docloud.url"):
+                        context.solver.docloud.url = val
+
+
 # Initialize default list of files to load
-FILE_LIST = ("cpo_config.py",
+FILE_LIST = (os.path.expanduser("~") + os.path.sep + ".docplexrc",
+             "cpo_config_local.py",  # For upward compatibility
+             "cpo_config.py",
              "cpo_config_" + socket.gethostname() + ".py",
              "docloud_config.py")
 
 # Load all config changes
 for f in FILE_LIST:
-    _eval_file(f)
+    if f.endswith(".py"):
+        _eval_file(f)
+    else:
+        _load_properties(f)
 
 
 ##############################################################################

@@ -12,7 +12,6 @@ available in a DOcplex.CP model.
 
 from docplex.cp.model import *
 from docplex.cp.expression import _create_operation as create_op
-from docplex.cp.expression import CpoExpr
 import collections
 
 try:

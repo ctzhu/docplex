@@ -8,9 +8,16 @@
 # ------------------------------
 from __future__ import print_function
 import sys
-from textwrap import TextWrapper
+
+from docplex.mp.linear import LinearConstraintType, LinearConstraint, IndicatorConstraint, RangeConstraint, Var, \
+    LinearExpr
 
 from six import iteritems
+
+from textwrap import TextWrapper
+
+from docplex.mp.utils import StringIO
+
 
 # gendoc: ignore
 
@@ -36,26 +43,25 @@ class _NumPrinter(object):
         return self.__precision
 
     def to_string(self, num):
-        if num >= self.true_infinity:
+        if 0 == num:
+            return '0'
+        elif 1 == num:
+            return '1'
+        elif num >= self.true_infinity:
             return self.__positive_infinity
         elif num <= - self.true_infinity:
             return self.__negative_infinity
+        elif num == int(num):
+            return '%d' % int(num)
         else:
-            try:
-                if num.is_integer():    # the is_integer() function is faster than testing: num == int(num)
-                    return '%d' % num
-                else:
-                    return self._double_format % num
-            except AttributeError:
-                return '%d' % num
+            return self._double_format % num
 
     def to_stringio(self, oss, num):
         int_num = int(num)
         if num == int_num:
             oss.write('%d' % int_num)
         else:
-            raw = self._double_format % num
-            oss.write(raw)
+            oss.write(self._double_format % num)
 
     def __call__(self, num):
         return self.to_string(num)
@@ -138,11 +144,13 @@ class TextModelPrinter(ModelPrinter):
     def __init__(self, comment_start, indent=1,
                  hide_user_names=False,
                  nb_digits_for_floats=3,
-                 encoding=DEFAULT_ENCODING):
+                 encoding=DEFAULT_ENCODING,
+                 wrap_lines=True):
         ModelPrinter.__init__(self)
         # should be elsewhere
         self.true_infinity = float('inf')
 
+        self.wrap_lines = wrap_lines
         self.line_width = 79
         # noinspection PyArgumentEqualDefault
         self.wrapper = self.create_wrapper(line_width=78, initial_indent=0)
@@ -152,9 +160,7 @@ class TextModelPrinter(ModelPrinter):
         self._encoding = encoding  # None is a valid value, in which case no encoding is printed
         #
         self._var_name_map = {}
-        self._ct_name_map = {}  # linear constraints
-        self._ic_name_map = {}  # indicators have a seperate index space.
-
+        self._ct_name_map = {}
         # created on demand if model is not fully indexed
         self._local_var_indices = None
         self._local_ct_indices = None
@@ -235,19 +241,19 @@ class TextModelPrinter(ModelPrinter):
         for _ in range(nb_lines):
             out.write("\n")
 
-    def _precompute_name_dict(self, mobj_seq, local_index_map, prefix):
+    def _precompute_name_dict(self, mobj_seq, prefixer, local_index_map):
         ''' Returns a name dictionary from a sequence of modeling objects.
         '''
         fixed_name_dir = {}
-        all_names = set()
+        all_names = set({})
         hide_names = self.encrypt_user_names()
         for mobj in mobj_seq:
+            prefix = prefixer(mobj)
             fixed_name = self.fix_name(mobj, prefix, local_index_map, hide_names)
             if fixed_name:
                 if fixed_name in all_names:
                     mobj.trace("duplicated name {0} obj is {0!s}".format(fixed_name, mobj))
-                # fixed_name_dir[mobj] = fixed_name
-                fixed_name_dir[mobj._index] = fixed_name    # Use _index attribute as key, which improves performance
+                fixed_name_dir[mobj] = fixed_name
                 all_names.add(fixed_name)
             else:
                 pass
@@ -259,8 +265,7 @@ class TextModelPrinter(ModelPrinter):
         if len(global_name_set) < len(fixed_name_dir):
             sys.__stdout__.write("\n--suffixing names")
             for (mobj, lp_name_pass1) in iteritems(fixed_name_dir):
-                # fixed_name_dir[mobj] = "%s#%d" % (lp_name_pass1, k)
-                fixed_name_dir[mobj._index] = "%s#%d" % (lp_name_pass1, k)
+                fixed_name_dir[mobj] = "%s#%d" % (lp_name_pass1, k)
                 k += 1
         return fixed_name_dir
 
@@ -280,9 +285,11 @@ class TextModelPrinter(ModelPrinter):
         self._local_var_indices = {dv: k for k, dv in enumerate(model.iter_variables())}
         self._local_ct_indices = {ct: k for k, ct in enumerate(model.iter_constraints())}
 
-        self._var_name_map = self._precompute_name_dict(model.iter_variables(), self._local_var_indices, prefix='x')
-        self._ct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_ct_indices,prefix='c')
-        self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_ct_indices, prefix='ic')
+        var_prefixer = lambda _: 'x'
+        self._var_name_map = self._precompute_name_dict(model.iter_variables(), var_prefixer, self._local_var_indices)
+        ct_type_to_prefix_map = {LinearConstraint: 'c', IndicatorConstraint: 'ic', RangeConstraint: 'c'}
+        ct_prefixer = lambda ct: ct_type_to_prefix_map.get(type(ct), 'c')
+        self._ct_name_map = self._precompute_name_dict(model.iter_constraints(), ct_prefixer, self._local_ct_indices)
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -306,20 +313,16 @@ class TextModelPrinter(ModelPrinter):
 
     def _var_print_name(self, dvar):
         # INTERNAL
-        return self._var_name_map[dvar._index]
+        return self._var_name_map[dvar]
 
-    def get_name_to_var_map(self, model):
-        # INTERNAL
-        name_to_var_map = {}
-        for v in model.iter_variables():
-            name_to_var_map[self._var_name_map[v._index]] = v
-        return name_to_var_map
+    def get_var_name_encoding(self):
+        return self._var_name_map
+
+    def get_ct_name_encoding(self):
+        return self._ct_name_map
 
     def ct_print_name(self, ct):
-        return self._ct_name_map.get(ct._index)
-
-    def ic_print_name(self, indicator):
-        return self._ic_name_map.get(indicator._index)
+        return self._ct_name_map.get(ct)
 
     def max_var_name_len(self):
         """
@@ -363,7 +366,7 @@ class TextModelPrinter(ModelPrinter):
         prefixed_name = "{0:s}{1:d}".format(prefix, index + offset)
         return prefixed_name
 
-    from docplex.mp.compat23 import mktrans
+    from docplex.mp.utils import mktrans
 
     __raw = " -+/\\<>"
     __cooked = "_mpd___"
@@ -408,8 +411,12 @@ class TextModelPrinter(ModelPrinter):
         # product symbol is '*'
         # no spaces
         expr.to_stringio(oss, self.nb_digits_for_floats, prod_symbol='*', use_space=True,
-                         var_namer=lambda v: self._var_name_map[v._index])
+                         var_namer=lambda v: self._var_name_map[v])
 
+    def _expr_to_string(self, expr):
+        oss = StringIO()
+        self._expr_to_stringio(oss, expr)
+        return oss.getvalue()
 
     def wrap_and_print(self, out, oss, subsequent_level=1):
         """
@@ -424,7 +431,7 @@ class TextModelPrinter(ModelPrinter):
         self_wrapper.subsequent_indent = indent
         printed_len = len(indent) + len(raw)
 
-        if printed_len > self.line_width:
+        if self.wrap_lines and printed_len > self.line_width:
             printed_line = self_wrapper.fill(raw)
             out.write(printed_line)
         else:
@@ -433,51 +440,217 @@ class TextModelPrinter(ModelPrinter):
         self._newline(out)
 
 
-class _ExportWrapper(object):
-    """
-    INTERNAL.
-    """
-    __new_line_sep = '\n'
+class ModelPrettyPrinter(TextModelPrinter):
+    def __init__(self, nb_digits=6):
+        # comment line is // as in OPL
+        # do NOT forget about user names
+        # no encoding is printed
+        TextModelPrinter.__init__(self, indent=2, comment_start='//',
+                                  nb_digits_for_floats=nb_digits,
+                                  hide_user_names=False,
+                                  encoding=None)
+        # symbols for constraints, not including whitespace
+        self.ct_symbol_map = {LinearConstraintType.EQ: "==",
+                              LinearConstraintType.LE: "<=",
+                              LinearConstraintType.GE: ">="}
 
-    #__slots__ = ("_oss", "_indent_str", "_line_width", "_curr_line", "_wrote")
 
-    def __init__(self, oss, indent_str, line_width=80):
-        self._oss = oss
-        self._indent_str = indent_str
-        self._line_width = line_width
-        self._curr_line = ''
-        self._wrote = False
 
-    def reset_indent(self, new_indent):
-        self._indent_str = new_indent
-        # reset dynamic line data
-        self._curr_line = ''
-        self._wrote = False
+    def get_format(self):
+        from docplex.mp.format import OPL_format
 
-    # The 'write' function is invoked intensively when exporting a model.
-    # Any piece of code that can be saved here will improve performance in a visible way.
-    def write(self, token, separator=True):
-        try:
-            if len(self._curr_line) + len(token) >= self._line_width:
-                # faster to write concatenated string, slightly faster to use '\n' instead of ref to static value
-                self._oss.write(self._curr_line + '\n')
-                self._curr_line = self._indent_str + token
+        return OPL_format
+
+    def fix_name(self, mobj, prefix, local_index_map, hide_names):
+        raw_name = mobj.name
+        # ignore hide_names here
+        if not raw_name or mobj.has_automatic_name():
+            return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
+        else:
+            if mobj.is_generated():
+                mobj_origin = mobj.origin()
+                if mobj is mobj_origin.functional_var:
+                    # only the functional var is named after the functional expr
+                    return str(mobj_origin)
+
+            return self._translate_chars(raw_name)
+
+    def _print_model_name(self, out, mdl):
+        printed_name = mdl.name or "AnonymousModel"
+        out.write("// model name is: {0:s}\n".format(printed_name))
+
+    def _print_var_containers(self, out, mdl):
+        gensym_count = 1
+        printed_header = False
+        for ctn in mdl.iter_var_containers():
+            if not printed_header:
+                self._print_line_comment(out, "var contrainer section")
+                printed_header = True
+            vartype_name = ctn.vartype.short_name
+            varctn_name = ctn.name
+            if not varctn_name:
+                varctn_name = 'x%d' % gensym_count
+                gensym_count += 1
+            out.write("dvar {0} {1}{2};\n".format(vartype_name, varctn_name, ctn.dimension_string))
+
+        if printed_header:
+            self._newline(out)
+
+    def _print_single_vars(self, out, mdl):
+        printed_header = False
+        for v in mdl.iter_variables():
+            if v.is_generated():
+                continue
+            var_ctn = v.get_container()
+            if var_ctn is not None:
+                continue
+
+            if not printed_header:
+                self._print_line_comment(out, "single vars section")
+                printed_header = True
+            vartype_name = v.vartype.short_name
+            var_printname = self._var_name_map.get(v, "???")
+            out.write("dvar {0} {1};\n".format(vartype_name, var_printname))
+
+        if printed_header:
+            self._newline(out)
+
+    def _print_objective(self, out, model):
+        out.write(model.objective_sense.verb())
+        self._newline(out)
+        # ---
+        oss = StringIO()
+        oss.write(self._indent_space)
+        self._expr_to_stringio(oss, model.objective_expr)
+        oss.write(';')
+        self.wrap_and_print(out, oss, subsequent_level=1)
+        # ---
+        self._newline(out)
+
+    def _print_binary_constraint(self, oss, ct):
+        left_expr = ct.left_expr
+        right_expr = ct.right_expr
+        self._expr_to_stringio(oss, left_expr)
+        oss.write(' ')
+        oss.write(self.ct_symbol_map[ct.type])
+        oss.write(' ')
+        self._expr_to_stringio(oss, right_expr)
+        oss.write(';')
+
+    def _print_range_constraint(self, oss, rng):
+        expr = rng.expr
+        lb = rng.lb
+        ub = rng.ub
+        self._num_to_stringio(oss, lb)
+        oss.write(" <= ")
+        self._expr_to_stringio(oss, expr)
+        oss.write(" <= ")
+        self._num_to_stringio(oss, ub)
+        oss.write(';')
+
+    def _print_indicator_constraint(self, oss, ind_ct):
+        active = ind_ct.active_value
+        linear_ct = ind_ct.linear_constraint
+        indicator_varname = self._var_print_name(ind_ct.indicator_var)
+        oss.write(indicator_varname)
+        if active is 0:
+            oss.write(" == 0")
+        oss.write(" <= ")
+        self._print_binary_constraint(oss, linear_ct)
+        oss.write(';')
+
+    def _print_constraints(self, out, model):
+        indent_one = self._indent_space
+        for ct in model.iter_binary_constraints():
+            if ct.is_generated():
+                continue
+
+            ctname = self.ct_print_name(ct)
+            indent_level = 1
+            if ctname:
+                out.write("%s%s:\n" % (indent_one, ctname))
+                indent_level += 1
+            oss = StringIO()
+            oss.write(indent_one * indent_level)
+            self._print_binary_constraint(oss, ct)
+            self.wrap_and_print(out, oss, subsequent_level=indent_level)
+
+    def _print_ranges(self, out, model):
+        indent_one = self._indent_space
+        for ct in model.iter_range_constraints():
+            ctname = self.ct_print_name(ct)
+            indent_level = 1
+            if ctname:
+                out.write("%s%s:\n" % (indent_one, ctname))
+                indent_level += 1
+            oss = StringIO()
+            oss.write(indent_one * indent_level)
+            self._print_range_constraint(oss, ct)
+            self.wrap_and_print(out, oss, subsequent_level=indent_level)
+
+    def _print_indicators(self, out, model):
+        indent_one = self._indent_space
+        for ct in model.iter_indicator_constraints():
+            if ct.is_generated():
+                continue
+
+            ctname = self.ct_print_name(ct)
+            indent_level = 1
+            if ctname:
+                out.write("%s%s:\n" % (indent_one, ctname))
+                indent_level += 1
+            oss = StringIO()
+            oss.write(indent_one * indent_level)
+            self._print_indicator_constraint(oss, ct)
+            self.wrap_and_print(out, oss, subsequent_level=indent_level)
+
+    def _print_kpis(self, out, model):
+        printed_section_header = False
+        for kpi in model.iter_kpis():
+            if not kpi.requires_solution():
+                continue
+
+            if not printed_section_header:
+                self._newline(out)
+                self._print_line_comment(out, " KPI section")
+                printed_section_header = True
+
+            kpi_expr = kpi.as_expression()
+            oss = StringIO()
+            oss.write("dexpr ")
+            if kpi_expr.is_discrete():
+                oss.write("integer ")
             else:
-                # 1 separator
-                self._curr_line += (' ' + token) if (separator and self._wrote) else token
-            self._wrote = True
-        except TypeError:
-            # An exception will occur if token is None. In that case, there is nothing to write and
-            # one can safely return.
-            pass
+                oss.write("float ")
+            oss.write(self._translate_chars(kpi.name))
+            oss.write(" = ")
+            if isinstance(kpi_expr, LinearExpr):
+                self._expr_to_stringio(oss, kpi_expr)
+            elif isinstance(kpi_expr, Var):
+                self._var_to_stringio(oss, kpi_expr)
+            self.wrap_and_print(out, oss, subsequent_level=1)
+        if printed_section_header:
+            self._newline(out)
 
-    def flush(self, print_newline):
-        self._oss.write(self._curr_line)
-        if print_newline:
-            self._oss.write('\n')
-        # Reset '_wrote' flag so that no separator will be added when writing first token of next line
-        self._wrote = False
-        self._curr_line = self._indent_str
+    def _var_to_stringio(self, oss, dvar):
+        oss.write(dvar.name)
 
-    def newline(self):
-        self._oss.write('\n')
+    def print_model_to_stream(self, out, model):
+        self.prepare(model)
+        self._print_signature(out)
+        self._print_encoding(out)
+        self._print_model_name(out, model)
+
+        # var containers
+        self._print_var_containers(out, model)
+        self._print_single_vars(out, model)
+        # KPI section
+        self._print_kpis(out, model)
+
+        self._print_objective(out, model)
+        out.write("subject to {\n")
+        self._print_constraints(out, model)
+        self._print_ranges(out, model)
+        self._print_indicators(out, model)
+        out.write("}\n")
+

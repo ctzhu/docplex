@@ -11,8 +11,9 @@ from __future__ import print_function
 import re
 
 from docplex.mp.linear import *
-from docplex.mp.environment import env_is_64_bit
-from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper
+from docplex.mp.mprinter import TextModelPrinter
+
+from docplex.mp.utils import StringIO
 
 from docplex.mp.format import LP_format
 
@@ -20,26 +21,20 @@ from docplex.mp.format import LP_format
 
 
 class LPModelPrinter(TextModelPrinter):
+
     _lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
 
     _lp_symbol_map = {LinearConstraintType.EQ: " = ",  # BEWARE NOT ==
                       LinearConstraintType.LE: " <= ",
                       LinearConstraintType.GE: " >= "}
 
-    __new_line_sep = '\n'
-    __expr_prefix = ' ' * 6
-
-    float_precision_32 = 9
-    float_precision_64 = 12  #
-
-    def __init__(self, hide_user_names=False, indent_level=1):
+    def __init__(self, hide_user_names=False, indent_level=1, wrap_lines=True):
         TextModelPrinter.__init__(self,
                                   indent=indent_level,
                                   comment_start='\\',
                                   hide_user_names=hide_user_names,
-                                  nb_digits_for_floats=\
-                                      self.float_precision_64 if env_is_64_bit() else
-                                  self.float_precision_32)
+                                  nb_digits_for_floats=9,
+                                  wrap_lines=wrap_lines)
 
         self.wrapper = self.create_wrapper(line_width=79, initial_indent=1)
 
@@ -55,193 +50,136 @@ class LPModelPrinter(TextModelPrinter):
         """
         return TextModelPrinter.encrypt_user_names(self) or self._noncompliant_varname
 
-    def _print_ct_name(self, ct, name_map):
-        lp_ctname = name_map.get(ct._index)
+    def _print_ct_name(self, oss, ct):
+        lp_ctname = self.ct_print_name(ct)
         indented = self._indent_level
-
         if lp_ctname is not None:
-            ct_label = self._indent_space + lp_ctname + ':'
-            indented += len(ct_label)
-        else:
-            ct_label = ''
-        ct_indent_space = self._get_indent_from_level(indented)
-        return ct_indent_space, ct_label
+            oss.write(lp_ctname)
+            oss.write(": ")
+            indented += (len(lp_ctname) + 1)
+        return indented
 
-    def _print_binary_ct(self, wrapper, num_printer, var_name_map, binary_ct, _symbol_map=_lp_symbol_map):
+    def _print_binary_ct(self, oss, num_printer, var_name_map, binary_ct, _symbol_map=_lp_symbol_map):
         # ensure consistent ordering: left termes then right terms
-        iter_diff_coeffs = binary_ct._iter_net_coeffs()
-        self._print_expr_iter(wrapper, num_printer, var_name_map, iter_diff_coeffs)
-        wrapper.write(_symbol_map.get(binary_ct.type, " ?? "), separator=False)
-        wrapper.write(num_printer.to_string(binary_ct.rhs()), separator=False)
-        wrapper.flush(print_newline=False)
+        iter_diff_coeffs = binary_ct._iter_net_coeffs(ordering=True)
+        self._print_expr_iter(oss, num_printer, var_name_map, iter_diff_coeffs, constant_to_print=None)
+        oss.write(_symbol_map.get(binary_ct.type, " ?? "))
+        num_printer.to_stringio(oss, binary_ct.rhs())
 
-    def _print_ranged_ct(self, wrapper, num_printer, var_name_map, ranged_ct):
+    def _print_ranged_ct(self, oss, num_printer, var_name_map, ranged_ct):
         exp = ranged_ct.expr
         (varname, rhs, _) = self._rangeData[ranged_ct]
-        self._print_expr(wrapper, num_printer, var_name_map, exp)
-        wrapper.write('-', separator=False)
-        wrapper.write(varname)
-        wrapper.write('=')
-        wrapper.write(self._num_to_string(rhs))
-        wrapper.flush(print_newline=False)
+        self._print_expr(oss, num_printer, var_name_map, exp, False)
+        oss.write(' - ')
+        oss.write(varname)
+        oss.write(' = ')
+        oss.write(self._num_to_string(rhs))
 
-    def _print_indicator_ct(self, wrapper, num_printer, var_name_map, indicator_ct):
+    def _print_indicator_ct(self, oss, num_printer, var_name_map, indicator_ct):
         """
         Prints an indicator ct in LP
-        :param wrapper:
+        :param oss:
         :param indicator_ct:
         :return:
         """
         INDICATOR_SYMBOL = " -> "
         binary_var = indicator_ct.indicator_var
 
-        wrapper.write(self._var_print_name(binary_var))
-        wrapper.write(" = ")
-        wrapper.write("%d" % indicator_ct.logical_rhs)
-        wrapper.write(INDICATOR_SYMBOL)
-        self._print_binary_ct(wrapper, num_printer, var_name_map, indicator_ct.linear_constraint)
+        oss.write(var_name_map[binary_var])
+        oss.write(" = ")
+        oss.write("%d" % indicator_ct.logical_rhs)
+        oss.write(INDICATOR_SYMBOL)
+        self._print_binary_ct(oss, num_printer, var_name_map, indicator_ct.linear_constraint)
 
-    def _print_constraint(self, wrapper, num_printer, var_name_map, ct):
-        ct_label = None
+    def _print_constraint(self, out, oss, num_printer, var_name_map, ct):
+        indented = 0
         if isinstance(ct, LinearConstraint):
             if not ct.is_trivial_feasible():
-                if self._hide_user_names:
-                    indent_str = ''
-                else:
-                    indent_str, ct_label = self._print_ct_name(ct, name_map=self._ct_name_map)
-                wrapper.reset_indent(indent_str)
-                if ct_label is not None:
-                    wrapper.write(ct_label)
-                self._print_binary_ct(wrapper, num_printer, var_name_map, ct)
+                indented = 0 if self._hide_user_names else self._print_ct_name(oss, ct)
+                self._print_binary_ct(oss, num_printer, var_name_map, ct)
         elif isinstance(ct, RangeConstraint):
-            if self._hide_user_names:
-                indent_str = ''
-            else:
-                indent_str, ct_label = self._print_ct_name(ct, name_map=self._ct_name_map)
-            wrapper.reset_indent(indent_str)
-            if ct_label is not None:
-                wrapper.write(ct_label)
-            self._print_ranged_ct(wrapper, num_printer, var_name_map, ct)
+            indented = 0 if self._hide_user_names else self._print_ct_name(oss, ct)
+            self._print_ranged_ct(oss, num_printer, var_name_map, ct)
         elif isinstance(ct, IndicatorConstraint):
-            if self._hide_user_names:
-                indent_str = ''
-            else:
-                indent_str, ct_label = self._print_ct_name(ct, name_map=self._ic_name_map)
-            wrapper.reset_indent(indent_str)
-            if ct_label is not None:
-                wrapper.write(ct_label)
-            self._print_indicator_ct(wrapper, num_printer, var_name_map, ct)
+            indented = 0 if self._hide_user_names else self._print_ct_name(oss, ct)
+            self._print_indicator_ct(oss, num_printer, var_name_map, ct)
         else:
             ct.error("ERROR: unexpected constraint not printed: {0!s}".format(ct))  # pragma: no cover
 
-        # EOL
-        wrapper.newline()
+        self.wrap_and_print(out, oss, subsequent_level=indented)
 
-    def _print_qexpr(self, wrapper, num_printer, var_name_map, quad_expr, force_initial_plus):
-        # writes a quadratic expression
-        # in the form [ 2a_ij a_i.a_j ] / 2
-        # Note that all coefficients must be doubled due to the tQXQ formulation
-        q = 0
-        varname_getter = self._var_print_name
-        if force_initial_plus:
-            wrapper.write('+')
-        if quad_expr.is_quadratic():
-            wrapper.write('[')
-
-            for qvp, qk in quad_expr.iter_quads():
-                curr_token = ''
-                if 0 == qk:
-                    continue
-                if qk < 0:
-                    print_sign = '-'
-                    abs_qk = - qk
-                else:
-                    print_sign = '+' if q > 0 else ''
-                    abs_qk = qk
-                curr_token += print_sign
-                # all coefficients must be doubled because of the []/2 pattern.
-                abs_qk2 = 2 * abs_qk
-                if abs_qk2 != 1:
-                    curr_token += num_printer.to_string(abs_qk2)
-                    curr_token += ' '
-
-                if qvp.is_square():
-                    qv_name = varname_getter(qvp[0])
-                    curr_token += "%s^2" % qv_name
-                else:
-                    qv1 = qvp[0]
-                    qv2 = qvp[1]
-                    curr_token += "%s*%s" % (varname_getter(qv1), varname_getter(qv2))
-
-                wrapper.write(curr_token)
-
-                q += 1
-
-            # closing ]
-            wrapper.write(']/2')
-
-
-    def _print_expr(self, wrapper, num_printer, var_name_map, expr):
+    def _print_expr(self, oss, num_printer, var_name_map, expr, print_constant=True):
         # prints an expr to a stream
+        printed_constant = expr._get_constant() if print_constant else None
         term_iter = expr.iter_terms()
-        self._print_expr_iter(wrapper, num_printer, var_name_map, term_iter)
+        self._print_expr_iter(oss, num_printer, var_name_map, term_iter, printed_constant)
 
-    # @profile
-    def _print_expr_iter(self, wrapper, num_printer, var_name_map, expr_iter):
-        num2string_fn = num_printer.to_string
+    #  @profile
+    def _print_expr_iter(self, oss, num_printer, var_name_map, expr_iter, constant_to_print):
         c = 0
         for (v, coeff) in expr_iter:
-            curr_token = ''
             if 0 == coeff:
-                continue  # pragma: no cover
+                continue
 
+            # 1 separator
+            if c > 0:
+                oss.write(' ')
+
+            wrote_sign = False
+            if coeff < 0 or c > 0:
+                oss.write('-' if coeff < 0 else '+')
+                wrote_sign = True
+            # sign has been taken care of, drop it
             if coeff < 0:
-                curr_token += '-'
-                wrote_sign = True
-                coeff = - coeff
-            elif c > 0:
-                # here coeff is positive, we write the '+' only if term is non-first
-                curr_token += '+'
-                wrote_sign = True
-            else:
-                wrote_sign = False
+                coeff = -coeff
 
             if 1 != coeff:
                 if wrote_sign:
-                    curr_token += ' '
-                curr_token += num2string_fn(coeff)
+                    oss.write(' ')
+                num_printer.to_stringio(oss, coeff)
             if wrote_sign or 1 != coeff:
-                curr_token += ' '
-            curr_token += var_name_map[v._index]
-
-            wrapper.write(curr_token)
+                oss.write(' ')
+            oss.write(var_name_map[v])
             c += 1
 
-        if not c:
-            # expr is empty, we must print something, so 0
-            wrapper.write('0')
+        if constant_to_print is not None:
+            if constant_to_print != 0:
+                if c == 0:
+                    num_printer.to_stringio(oss, constant_to_print)
+                else:
+                    if constant_to_print < 0:
+                        sign = ' - '
+                        constant_to_print = -constant_to_print
+                    else:
+                        sign = ' + '
+                    oss.write(sign)
+                    num_printer.to_stringio(oss, constant_to_print)
+            else:
+                pass
 
-    def _print_var_block(self, wrapper, iter_vars, header):
-        # Set wrapper with no indent
-        wrapper.reset_indent('')
-        wrapper.flush(print_newline=False)
+        elif not c:
+            # expr is empty, we must print something, so 0
+            oss.write("0")
+
+    def _print_var_block(self, out, iter_vars, header):
         printed_header = False
-        self_indent = self._indent_space
+        oss = None
+        c = 0
         for v in iter_vars:
             lp_name = self._var_print_name(v)
+            if oss is None:
+                oss = StringIO()
             if not printed_header:
-                wrapper.newline()
-                wrapper.write("%s" % header)
+                out.write("\n%s\n" % header)
                 printed_header = True
-                # Configure indent for next lines
-                wrapper.flush(print_newline=True)
-                wrapper.reset_indent(self_indent)
-                wrapper.flush(print_newline=False)
-            wrapper.write(lp_name)
+            if c > 0:
+                oss.write(' ')
+            oss.write(lp_name)
+            c += 1
         if printed_header:
-            wrapper.flush(print_newline=True)
+            self.wrap_and_print(out, oss, subsequent_level=self._indent_level)
 
-    def _print_var_bounds(self, out, num_printer, varname, lb, ub, varname_indent=5 * ' '):
+    def _print_var_bounds(self, out, varname, lb, ub, varname_indent=5*' '):
         LE = "<="
         FREE = "Free"
 
@@ -249,19 +187,15 @@ class LPModelPrinter(TextModelPrinter):
             # try to indent with space of '0 <= ', that is 5 space
             out.write("%s %s %s\n" % (varname_indent, varname, FREE))
         elif lb is None:
-            out.write("%s %s %s %s\n" % (varname_indent, varname, LE, num_printer.to_string(ub)))
+            out.write("%s %s %s %s\n" % (varname_indent, varname, LE, self._num_to_string(ub)))
         elif ub is None:
-            out.write("%s %s %s\n" % (num_printer.to_string(lb), LE, varname))
+            out.write("%s %s %s\n" % (self._num_to_string(lb), LE, varname))
         elif lb == ub:
-            out.write("%s %s %s %s\n" % (varname_indent, varname, "=", num_printer.to_string(lb)))
+            out.write("%s %s %s %s\n" % (varname_indent, varname, "=", self._num_to_string(lb)))
         else:
-            out.write("%s %s %s %s %s\n" % (num_printer.to_string(lb), LE, varname, LE, num_printer.to_string(ub)))
+            out.write("%s %s %s %s %s\n" % (self._num_to_string(lb), LE, varname, LE, self._num_to_string(ub)))
 
     TRUNCATE = 200
-
-    @staticmethod
-    def _non_compliant_lp_name_stop_here(name):
-        pass
 
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
         raw_name = mobj.name
@@ -270,8 +204,7 @@ class LPModelPrinter(TextModelPrinter):
         if hide_names or mobj.has_automatic_name() or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         elif not self._is_lp_compliant(raw_name):
-            self._non_compliant_lp_name_stop_here(raw_name)
-            return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
+             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             # swap blanks with underscores
             fixed_name = self._translate_chars(raw_name)
@@ -299,13 +232,23 @@ class LPModelPrinter(TextModelPrinter):
 
     #  @profile
     def print_model_to_stream(self, out, model):
+        # first , check that all fixed names are lp compliant
+        # for dv in model.iter_variables():
+        #     if not dv.is_generated() and dv.has_user_name() and not self._is_lp_compliant(dv.name):
+        #         self._noncompliant_varname = dv.name
+        #         break
+        # else:
+        #     self._noncompliant_varname = None
+        #
+        # if self._noncompliant_varname:
+        #     model.error_handler.info("#non-compliant LP name: |{0}|\n".format(self._noncompliant_varname))
 
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
             sys.__stdout__.write("\DOcplex: refine variable names\n")
             k = 0
-            for dv, lp_varname in iteritems(self._var_name_map):
-                refined_name = "%s#%d" % (lp_varname, k)
+            for dv, lp_name in iteritems(self._var_name_map):
+                refined_name = "%s#%d" % (lp_name, k)
                 self._var_name_map[dv] = refined_name
                 k += 1
 
@@ -321,74 +264,50 @@ class LPModelPrinter(TextModelPrinter):
         # print objective
         out.write(model.objective_sense.name)
         self._newline(out)
-        wrapper = _ExportWrapper(out, self.__expr_prefix)
-        wrapper.write(' obj:')
         objexpr = model.objective_expr
-        obj_offset = objexpr.constant
-        obj_constant_term_varname = None
-        if objexpr.is_constant():
-            if obj_offset:
-                wrapper.write(self._num_to_string(obj_offset))
-        else:
-            # if objexpr is constant just print nothing.
+        obj_constant = objexpr.constant
+        # the new dummy var has name 'x' + (max_index+2
+        # why +2 because name indices start from 1 and CPLEX start from 0
 
-            # the new dummy var has name 'x' + (max_index+2
-            # why +2 because name indices start from 1 and CPLEX start from 0
-            if 0 != obj_offset:
-                obj_constant_term_varname = self.get_extra_var_name(model, pattern='x%d')
-
-            if objexpr.is_quad_expr():
-                objlin = objexpr.linear_part
-            else:
-                objlin = objexpr
-
-            if not objlin.is_constant():
-                # write the linear part first
-                self._print_expr(wrapper, self_num_printer, var_name_map, objlin)
-                # for the constant part, one day remove this...
-                if obj_constant_term_varname:
-                    wrapper.write(' + %s' % obj_constant_term_varname, separator=False)
-            elif obj_constant_term_varname:
-                wrapper.write(obj_constant_term_varname)
-
-            if objexpr.is_quad_expr() and objexpr.is_quadratic():
-                # is there a linear part?
-                self._print_qexpr(wrapper, self_num_printer, var_name_map, quad_expr=objexpr, force_initial_plus=not objlin.is_zero())
-
-        wrapper.flush(print_newline=True)
-
+        obj_constant_term_varname = self.get_extra_var_name(model, pattern='x%d')
+        oss = StringIO()
+        oss.write('obj: ')
+        if not objexpr.is_constant():
+            self._print_expr(oss, self_num_printer, var_name_map, objexpr, print_constant=False)
+            oss.write(' + ')
+        oss.write(obj_constant_term_varname)
+        # 6 is len("obj: ") + 1
+        self.wrap_and_print(out, oss, subsequent_level=6)
         out.write("Subject To\n")
 
         for ct in model.iter_constraints():
-            self._print_constraint(wrapper, self_num_printer, var_name_map, ct)
+            oss = StringIO()
+            self._print_constraint(out, oss, self_num_printer, var_name_map, ct)
 
         out.write("\nBounds\n")
         for dvar in model.iter_variables():
-            lp_varname = self._var_print_name(dvar)
+            lp_name = self._var_print_name(dvar)
             if dvar.is_binary():
-                self._print_var_bounds(out, self_num_printer, lp_varname, 0, 1)
+                self._print_var_bounds(out, lp_name, 0, 1)
             else:
-                var_lb = dvar.get_lb()
-                var_ub = dvar.get_ub()
-                free_lb = model.is_free_lb(var_lb)
-                free_ub = model.is_free_ub(var_ub)
+                free_lb = dvar.has_free_lb()
+                free_ub = dvar.has_free_ub()
                 if free_lb and free_ub:
-                    self._print_var_bounds(out, self_num_printer, lp_varname, None, None)
+                    self._print_var_bounds(out, lp_name, None, None)
                 elif free_ub:
-                    self._print_var_bounds(out, self_num_printer, lp_varname, var_lb, None)
+                    self._print_var_bounds(out, lp_name, dvar.lb, None)
                 elif free_lb:
-                    self._print_var_bounds(out, self_num_printer, lp_varname, None, var_ub)
+                    self._print_var_bounds(out, lp_name, None, dvar.ub)
                 else:
-                    self._print_var_bounds(out, self_num_printer, lp_varname, var_lb, var_ub)
+                    self._print_var_bounds(out, lp_name, dvar.lb, dvar.ub)
         # add constant term
-        if obj_constant_term_varname:
-            self._print_var_bounds(out, self_num_printer, obj_constant_term_varname, obj_offset, obj_offset)
+        self._print_var_bounds(out, obj_constant_term_varname, obj_constant, obj_constant)
         # add ranged cts vars
         for rng in model.iter_range_constraints():
             (varname, _, ub) = self._rangeData[rng]
-            self._print_var_bounds(out, self_num_printer, varname, 0, ub)
+            self._print_var_bounds(out, varname, 0, ub)
 
-        self._print_var_block(wrapper, model.iter_binary_vars(), 'Binaries')
-        self._print_var_block(wrapper, model.iter_integer_vars(), 'Generals')
+        self._print_var_block(out, model.iter_binary_vars(), 'Binaries')
+        self._print_var_block(out, model.iter_integer_vars(), 'Generals')
 
         out.write("End\n")

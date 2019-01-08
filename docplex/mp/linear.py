@@ -9,14 +9,175 @@ from __future__ import print_function
 
 import operator
 from collections import OrderedDict
-from six import iteritems
 
 from enum import Enum
 
-from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase
-from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
+from docplex.mp.basic import ModelingObjectBase
+from docplex.mp.basic import ModelingObject, Expr
 from docplex.mp.utils import *
-from docplex.mp.xcounter import ExprCounter, FastOrderedDict
+
+
+class VarType(object):
+    """VarType()
+
+    This class defines the various types of decision variables.
+
+        This class should never be instantiated. Three instances of
+        variable types are available for Binary, Integer and Continuous types.
+
+    """
+
+    def __init__(self, short_name, lb, ub):
+        self._short_name = short_name
+        self._lb = lb
+        self._ub = ub
+
+    @property
+    def short_name(self):
+        """
+        This property returns a short name string for the type.
+        """
+        return self._short_name
+
+    @property
+    def default_lb(self):
+        """  This property returns the default lower bound for the type.
+        """
+        return self._lb
+
+    @property
+    def default_ub(self):
+        """  This property returns the default upper bound for the type.
+        """
+        return self._ub
+
+    def compute_lb(self, candidate_lb):
+        # INTERNAL
+        raise NotImplementedError  # pragma: no cover
+
+    def compute_ub(self, candidate_ub):
+        # INTERNAL
+        raise NotImplementedError  # pragma: no cover
+
+    def is_discrete(self):
+        """
+        Returns:
+            True if the type is a discrete type.
+        """
+        raise NotImplementedError  # pragma: no cover
+
+    def accept_value(self, numeric_value):
+        """ Returns True if the `numeric_value` is valid for the type.
+
+        Accepted values depend on the type:
+
+        - Binary type accepts only 0 or 1.
+
+        - Integer type accepts only integers.
+
+        - Continuous type accepts any floating-point number within -inf and +inf, where inf
+          is the model's infinity value.
+
+        This method never raises any exception.
+
+        :param numeric_value: The candidate value.
+
+        :return: True if the candidate value is valid, else False.
+
+        """
+        raise NotImplementedError  # pragma: no cover
+
+    # compat
+    def is_continuous(self):
+        # INTERNAL
+        return not self.is_discrete()
+
+    def to_string(self):
+        """
+        Returns:
+            A string representation of the type.
+        """
+        return "VarType_%s" % self.short_name
+
+    def __str__(self):
+        return self.to_string()
+
+
+class BinaryVarType(VarType):
+    """ Binary variable type.
+    """
+
+    def __init__(self):
+        """ Constructor
+        """
+        VarType.__init__(self, short_name="binary", lb=0, ub=1)
+
+    def compute_lb(self, candidate_lb):
+        return 0.0
+
+    def compute_ub(self, candidate_ub):
+        return 1.0
+
+    def is_discrete(self):
+        return True
+
+    def accept_value(self, numeric_value):
+        return numeric_value == 0 or numeric_value == 1
+
+
+class ContinuousVarType(VarType):
+    """ Continuous variable type.
+    """
+
+    def __init__(self, plus_infinity=1e+20):
+        """ Constructor
+        """
+        VarType.__init__(self, short_name="float", lb=0, ub=plus_infinity)
+        self._plus_infinity = plus_infinity
+        self._minus_infinity = - plus_infinity
+
+    def compute_ub(self, candidate_ub):
+        return self._plus_infinity if candidate_ub > self._plus_infinity else float(candidate_ub)
+
+    def compute_lb(self, candidate_lb):
+        return self._minus_infinity if candidate_lb < self._minus_infinity else float(candidate_lb)
+
+    def is_discrete(self):
+        return False
+
+    def accept_value(self, numeric_value):
+        return self._minus_infinity <= numeric_value <= self._plus_infinity
+
+
+class IntegerVarType(VarType):
+    """ Integer variable type.
+    """
+
+    def __init__(self, plus_infinity=1e+20):
+        """ Constructor
+        """
+        VarType.__init__(self, short_name="int", lb=0, ub=plus_infinity)
+        self._plus_infinity = plus_infinity
+
+    def compute_ub(self, candidate_ub):
+        iub = min(candidate_ub, self._plus_infinity)
+        if int(iub) != iub:
+            return float(math.floor(iub))
+        else:
+            return float(iub)
+
+    def compute_lb(self, candidate_lb):
+        ilb = max(candidate_lb, -self._plus_infinity)
+        if int(ilb) != ilb:
+            return float(math.ceil(ilb))
+        else:
+            return float(ilb)
+
+    def is_discrete(self):
+        return True
+
+    def accept_value(self, numeric_value):
+        return is_int(numeric_value) or numeric_value == int(numeric_value)
 
 
 class Var(ModelingObject):
@@ -26,9 +187,6 @@ class Var(ModelingObject):
     Decision variables are instantiated by :class:`docplex.mp.model.Model` methods such as :func:`docplex.mp.model.Model.var`.
 
     """
-
-    __slots__ = ("_vartype", "_lb", "_ub", "__id")
-
     def __init__(self, model, vartype, name,
                  lb=None, ub=None,
                  _safe_domain=False,
@@ -40,7 +198,6 @@ class Var(ModelingObject):
         self.__id = None  # cache the id() for perf
 
         if _safe_domain:
-
             # this is called by the var_list
             self._lb = lb
             self._ub = ub
@@ -48,8 +205,8 @@ class Var(ModelingObject):
             self._lb = vartype.default_lb
             self._ub = vartype.default_ub
         else:
-            used_lb = vartype.get_default_lb() if lb is None else vartype.compute_lb(lb)
-            used_ub = vartype.get_default_ub() if ub is None else vartype.compute_ub(ub)
+            used_lb = vartype.default_lb if lb is None else vartype.compute_lb(lb)
+            used_ub = vartype.default_ub if ub is None else vartype.compute_ub(ub)
             if used_lb <= used_ub:
                 self._lb = used_lb
                 self._ub = used_ub
@@ -98,10 +255,7 @@ class Var(ModelingObject):
 
     def to_linear_expr(self):
         # INTERNAL
-        expr = self._get_model().linear_expr(self)
-        expr._transient = True
-        return expr
-        # return MonomialExpr(self._get_model(), self, coeff=1)
+        return self._get_model().linear_expr(self)
 
     def set_name(self, new_name):
         # INTERNAL
@@ -138,9 +292,9 @@ class Var(ModelingObject):
 
         Possible values for the upper bound depend on the variable type. Binary variables
         accept only 0 or 1 as bounds. An integer variable will convert the upper bound value to the
-        floor integer value of the argument.
+        floor integer value.
 
-        To reset the upper bound to its default infinity value, use :func:`docplex.mp.model.Model.infinity`.
+        To reset the upper bound to its default infinity value, use model.infinity.
         """
         return self._ub
 
@@ -169,46 +323,35 @@ class Var(ModelingObject):
         """
         return self._vartype
 
-    def get_vartype(self):
-        return self._vartype
-
-    def set_vartype(self, new_vartype):
-        return self._model.set_var_type(self, new_vartype)
-
-
     def has_type(self, vartype):
         # internal
         return type(self._vartype) == vartype
 
     def is_binary(self):
-        """ Checks if the variable is binary.
-
-        Returns:
-            Boolean: True if the variable is of type Binary.
+        """
+        returns:
+            True if the variable has Binary type.
         """
         return self.has_type(BinaryVarType)
 
     def is_integer(self):
-        """ Checks if the variable is integer.
-
+        """
         Returns:
-            Boolean: True if the variable is of type Integer.
+            True if the variable has Integer type.
         """
         return self.has_type(IntegerVarType)
 
     def is_continuous(self):
-        """ Checks if the variable is continuous.
-
+        """
         Returns:
-            Boolean: True if the variable is of type Continuous.
+            True if the variable has Continuous type.
         """
         return self.has_type(ContinuousVarType)
 
     def is_discrete(self):
-        """  Checks if the variable is discrete.
-
+        """
         Returns:
-            Boolean: True if the variable is of  type Binary or Integer.
+            True if the variable has type Binary or Integer.
         """
         return self.is_binary() or self.is_integer()
 
@@ -241,23 +384,16 @@ class Var(ModelingObject):
     def _get_solution_value(self):
         return self._get_model()._get_solution().get_value(self)
 
-    def le_constraint(self, other):
-        return self._get_model().le_constraint(self, other)
-
-    def eq_constraint(self, other):
-        return self._get_model().eq_constraint(self, other)
-
-    def ge_constraint(self, other):
-        return self._get_model().ge_constraint(self, other)
-
     def __le__(self, e):
-        return self.le_constraint(e)
+        expr = self.to_linear_expr()
+        return expr.le_constraint(e)
 
     def __eq__(self, e):
-        return self.eq_constraint(e)
+        expr = self.to_linear_expr()
+        return expr.eq_constraint(e)
 
     def __ge__(self, e):
-        return self.ge_constraint(e)
+        return self.to_linear_expr().ge_constraint(e)
 
     def __ne__(self, other):
         # INTERNAL: For now, not supported
@@ -265,27 +401,26 @@ class Var(ModelingObject):
 
 
     def __gt__(self, e):
-        self.model.unsupported_relational_operator_error(self, ">", e)
+        self.model.unsupported_operator_error(self, ">", e)
 
     def __lt__(self, e):
-        self.model.unsupported_relational_operator_error(self, "<", e)
+        self.model.unsupported_operator_error(self, "<", e)
 
     def __mul__(self, e):
         return self.times(e)
 
-
     def times(self, e):
         if is_number(e):
             if 0 == e:
-                return self.zero_expr()
+                return self._model._get_zero_expr()
             else:
                 return MonomialExpr(self._model, self, e)
-        elif isinstance(e, ZeroExpr):
-            return e
-        elif isinstance(e, (Var, Expr)):
-            return self._model._qfactory.new_var_product(self, e)
+        elif isinstance(e, _ZeroExpr):
+            return self._model._get_zero_expr()
+        elif AbstractLinearExpr.is_var_operand(e):
+            raise DOCplexQuadraticNotImplementedError(self, e)
         else:
-            return self.to_linear_expr().multiply(e)
+            return self.to_linear_expr()._multiply(e)
 
     def __rmul__(self, e):
         return self.times(e)
@@ -294,10 +429,7 @@ class Var(ModelingObject):
         return self.plus(e)
 
     def plus(self, e):
-        try:
-            return self.to_linear_expr().add(e)
-        except DOCPlexQuadraticArithException:
-            return e.plus(self)
+        return self.to_linear_expr()._add(e)
 
     def __radd__(self, e):
         return self.plus(e)
@@ -306,19 +438,16 @@ class Var(ModelingObject):
         return self.minus(e)
 
     def minus(self, e):
-        try:
-            return self.to_linear_expr().subtract(e)
-        except DOCPlexQuadraticArithException:
-            return e.rminus(self)
+        return self.to_linear_expr()._subtract(e)
 
     def __rsub__(self, e):
         # e - self
-        expr = self._get_model()._to_linear_expr(e, force_clone=True)  # makes a clone.
-        return expr.subtract(self)
+        expr = self.model._to_linear_expr(e)  # makes a clone.
+        return expr._subtract(self)
 
     def divide(self, e):
         expr = self.to_linear_expr()
-        return expr.divide(e)
+        return expr._divide(e)
 
     def __div__(self, e):
         return self.divide(e)
@@ -341,21 +470,7 @@ class Var(ModelingObject):
 
     def __neg__(self):
         # the "-e" unary minus returns a linear expression
-        return self.model._lfactory.new_monomial_expr(self, -1)
-
-    def __pow__(self, power):
-        # INTERNAL
-        # power must be checke in {0, 1, 2}
-        self.model.typecheck_as_power(self, power)
-        if 0 == power:
-            return 1
-        elif 1 == power:
-            return self
-        else:
-            return self.square()
-
-    def square(self):
-        return self._model._qfactory.new_var_square(self)
+        return self.model._monomial_expr(self, -1)
 
     def __int__(self):
         """ Converts a decision variable to a integer number.
@@ -363,9 +478,6 @@ class Var(ModelingObject):
         This is only possible for discrete variables,
         and when the model has been solved successfully.
         If the model has been solved, returns the variable's solution value.
-
-        Returns:
-            int: The variable's solution value.
 
         Raises:
             DOCplexException
@@ -381,12 +493,10 @@ class Var(ModelingObject):
     def __float__(self):
         """ Converts a decision variable to a floating-point number.
 
-        This is only possible when the model has been solved successfully,
-        otherwise an exception is raised.
-        If the model has been solved, it returns the variable's solution value.
+        This is only possible when the model has been solved successfully.
+        Otherwise an exception is raised.
+        If the model has been solved, returns the variable's solution value.
 
-        Returns:
-            float: The variable's solution value.
         Raises:
             DOCplexException
                 if the model has not been solved successfully.
@@ -394,7 +504,9 @@ class Var(ModelingObject):
         return float(self.solution_value)
 
     def to_bool(self):
-        """ Converts a variable value to True or False.
+        """to_bool()
+
+        Converts a variable value to True or False.
 
         This is only possible for discrete variables and assumes there is a solution.
 
@@ -405,7 +517,7 @@ class Var(ModelingObject):
                 if the variable is not discrete.
 
         Returns:
-            Boolean: True if the variable value is nonzero, else False.
+            True if the variable value is nonzero, else False.
         """
         if not self.is_discrete():
             self.fatal("boolean conversion only for discrete variables, type is {0!s}", self.vartype)
@@ -417,51 +529,24 @@ class Var(ModelingObject):
 
     def __str__(self):
         """
-        Returns:
-            string: A string representation of the variable.
+        returns:
+            A string representation of the variable.
 
         """
         return self.to_string()
 
-    def _set_vartype_internal(self, new_vartype):
-        # INTERNAL
-        self._vartype = new_vartype
-
-    def _name_marker(self):
-        if self.is_generated():
-            return "?"  # ? for generated variables e.g. _x1?
-        elif self.has_automatic_name():
-            return "*"  # anonymous but not generated _x1*
-        else:
-            return ""   # no suffix for usernames
-
     def to_string(self):
-        str_name = self.name or '%s_var_%d' % (self.vartype.short_name, self.unchecked_index)
-        return str_name
-
-    def to_full_string(self):
-        str_name = self.name or '%s_var_%d' % (self.vartype.short_name, self.unchecked_index)
-        name_mark = self._name_marker()
-        self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
-        if self_vartype.is_default_domain(self_lb, self_ub):
-            str_bounds = ""
-        else:
-            str_bounds = "[%g..%g]" % (self_lb, self_ub)
-        return "{1}{2}{3}".format(self_vartype.one_letter_symbol(), str_name, name_mark, str_bounds)
+        print_name = self.name or 'x_%s[%d]' % (self.vartype.short_name, id(self))
+        return print_name
 
     def to_stringio(self, oss):
         oss.write(self.to_string())
 
     def __repr__(self):
-        repr_name = self.name or "NO_NAME"
-        name_mark = self._name_marker()
-        self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
-        if self_vartype.is_default_domain(self_lb, self_ub):
-            repr_bounds = ""
+        if self.has_user_name():
+            return 'docplex.mp.linear.Var<%s>(%s)' % (self.vartype.short_name, self.name)
         else:
-            repr_bounds = ",lb=%g,ub=%g" % (self_lb, self_ub)
-        return 'docplex.mp.linear.Var(type={0},name={1}{2}{3})'.\
-            format(self_vartype.one_letter_symbol(), repr_name, name_mark, repr_bounds)
+            return 'docplex.mp.linear.Var<%s>' % self.vartype.short_name
 
 
 # noinspection PyAbstractClass
@@ -474,19 +559,11 @@ class AbstractLinearExpr(Expr):
     def __getitem__(self, dvar):
         return self.unchecked_get_coef(dvar)
 
+    @staticmethod
+    def is_var_operand(e):
+        return isinstance(e, Var) or isinstance(e, MonomialExpr) or isinstance(e, LinearExpr)
+
     def unchecked_get_coef(self, dvar):
-        raise NotImplementedError  # pragma: no cover
-
-    def iter_variables(self):
-        """
-        Iterates over all variables in the expression.
-
-        Returns:
-            iterator: An iterator over all variables present in the expression.
-        """
-        raise NotImplementedError  # pragma: no cover
-
-    def iter_terms(self):
         raise NotImplementedError  # pragma: no cover
 
     def get_coef(self, dvar):
@@ -512,6 +589,11 @@ class AbstractLinearExpr(Expr):
         # redefine this for subclasses.
         return False  # pragma: no cover
 
+    def is_discrete(self):
+        raise NotImplementedError  # pragma: no cover
+
+    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
+        raise NotImplementedError  # pragma: no cover
 
     def is_variable(self):
         # return True if the expression is infact one variable.
@@ -519,30 +601,128 @@ class AbstractLinearExpr(Expr):
         # returned by iter_variables()
         return False
 
-    def __lt__(self, e):
-        self.model.unsupported_relational_operator_error(self, "<", e)
 
-    def __gt__(self, e):
-        self.model.unsupported_relational_operator_error(self, ">", e)
+class _ZeroExpr(AbstractLinearExpr):
 
-    def __le__(self, other):
-        return self.le_constraint(other)
+    def _get_solution_value(self):
+        return 0
 
-    def __eq__(self, other):
-        return self.eq_constraint(other)
+    # INTERNAL
+    __slots__ = ()
+
+    def __init__(self, model):
+        ModelingObjectBase.__init__(self, model)
+
+    def clone(self):
+        return self  # this is not cloned.
+
+    def copy(self, target_model, var_map):
+        return _ZeroExpr(target_model)
+
+    def to_linear_expr(self):
+        return self  # this is a linear expr.
+
+    def number_of_variables(self):
+        return 0
+
+    def iter_variables(self):
+        return iter([])
+
+    def is_constant(self):
+        return True
+
+    def is_discrete(self):
+        return True
+
+    def unchecked_get_coef(self, dvar):
+        return 0
+
+    def contains_var(self, dvar):
+        return False
+
+    @property
+    def constant(self):
+        # for compatibility
+        return 0
+
+    # noinspection PyMethodMayBeStatic
+    def _get_coefs(self):
+        return []
+
+    def negate(self):
+        pass
+
+    # noinspection PyMethodMayBeStatic
+    def plus(self, e):
+        return e
+
+    def times(self, _):
+        return self
+
+    # noinspection PyMethodMayBeStatic
+    def minus(self, e):
+        expr = e.to_linear_expr().clone()
+        expr.negate()
+        return expr
+
+    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
+        return "0"
+
+    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
+        oss.write(self.to_string())
+
+    # arithmetic
+    def __sub__(self, other):
+        return self._subtract(other)
+
+    def _subtract(self, other):
+        # return -other
+        other_expr = self.model.linear_expr(other)
+        other_expr.negate()
+        return other_expr
+
+    def __rsub__(self, e):
+        # e - 0 = e !
+        return e
+
+    def __add__(self, other):
+        return other
+
+    def __radd__(self, other):
+        return other
+
+    def __mul__(self, other):
+        return self
+
+    def __rmul__(self, other):
+        return self
+
+    def __div__(self, other):
+        return self._divide(other)
+
+    def __truediv__(self, e):
+        # for py3
+        # INTERNAL
+        return self.__div__(e)  # pragma: no cover
+
+    def _divide(self, other):
+        self.model.typecheck_as_denominator(numerator=self, denominator=other)
+        return self
+
+    def __repr__(self):
+        return "docplex.mp.linear.ZeroExpr()"
+
+    def equals_expr(self, other):
+        return isinstance(other, _ZeroExpr)
 
     def __ge__(self, other):
-        return self.ge_constraint(other)
-
-    def le_constraint(self, other):
-        return self._get_model().le_constraint(self, other)
-
-    def eq_constraint(self, other):
-        return self._get_model().eq_constraint(self, other)
-
-    def ge_constraint(self, other):
         return self._get_model().ge_constraint(self, other)
 
+    def __le__(self, other):
+        return self._get_model().le_constraint(self, other)
+
+    def __eq__(self, other):
+        return self._get_model().eq_constraint(self, other)
 
 
 class MonomialExpr(AbstractLinearExpr):
@@ -558,7 +738,7 @@ class MonomialExpr(AbstractLinearExpr):
         self._model = model  # faster than to call recursively init methods...
         self._name = None
         self._dvar = dvar
-        self._coef = model._lfactory.to_valid_number(coeff, context=lambda: dvar.name + ".times()")
+        self._coef = coeff
 
     def number_of_variables(self):
         return 1
@@ -577,7 +757,6 @@ class MonomialExpr(AbstractLinearExpr):
         return 0
 
     def is_variable(self):
-        # INTERNAL
         return 1 == self._coef
 
     def clone(self):
@@ -588,10 +767,13 @@ class MonomialExpr(AbstractLinearExpr):
         return MonomialExpr(target_model, dvar=copy_var, coeff=self._coef)
 
     def iter_variables(self):
-        yield self._dvar
+        return iter([self._dvar])
 
-    def iter_terms(self):
-        yield self._dvar, self._coef
+    def _get_coefs(self):
+        return [float(self._coef)]
+
+    def var_set(self):
+        return {self._dvar}
 
     def unchecked_get_coef(self, dvar):
         return self._coef if dvar is self._dvar else 0
@@ -615,48 +797,35 @@ class MonomialExpr(AbstractLinearExpr):
         if e is 0:
             return self
         else:
-            try:
-                return self.to_linear_expr().add(e)
-            except DOCPlexQuadraticArithException:
-                return e.plus(self)
+            return self.to_linear_expr()._add(e)
 
     def minus(self, e):
-        try:
-            expr = self.to_linear_expr()
-            expr.subtract(e)
-            return expr
-        except DOCPlexQuadraticArithException:
-            return e.rminus(self)
+        expr = self.to_linear_expr()
+        expr._subtract(e)
+        return expr
 
     def times(self, e):
-        if is_number(e):
+        if e is 1:
+            return self
+        elif is_number(e):
             # e might be a fancy numpy type
-            if 1 == e:
+            if 1 == float(e):
                 return self
-            elif 0 == e:
-                return self.zero_expr()
             else:
                 # return a fresh instance
-                return self.model._lfactory.new_monomial_expr(self._dvar, self._coef * e)
+                return self.model._monomial_expr(self._dvar, self._coef * e)
         elif isinstance(e, LinearExpr):
             return e.times(self)
         elif isinstance(e, Var):
-            return self.model._qfactory.new_var_product(e, self)
-        elif isinstance(e, MonomialExpr):
-            return self.model._qfactory.new_monomial_product(self, e)
+            raise DOCplexQuadraticNotImplementedError(self, e)
         else:
             expr = self.to_linear_expr()
-            return expr.multiply(e)
-
-
-
-    def square(self):
-        return self.model._qfactory.new_monomial_product(self, self)
+            return expr._multiply(e)
 
     def quotient(self, e):
         self.model.typecheck_as_denominator(e, self)
         inverse = 1.0 / float(e)
-        return self.model._lfactory.new_monomial_expr(self._dvar, self._coef * inverse)
+        return self.model._monomial_expr(self._dvar, self._coef * inverse)
 
     def __add__(self, e):
         return self.plus(e)
@@ -695,11 +864,22 @@ class MonomialExpr(AbstractLinearExpr):
     def __rdiv__(self, e):
         self.model.cannot_be_used_as_denominator_error(self, e)
 
+    def __le__(self, other):
+        return self.to_linear_expr().le_constraint(other)
 
-    add = plus
-    subtract = minus
-    divide = quotient
-    multiply = times
+    def __eq__(self, other):
+        return self.to_linear_expr().eq_constraint(other)
+
+    def __ge__(self, other):
+        return self.to_linear_expr().ge_constraint(other)
+
+    def __lt__(self, other):
+        # unsupported operator
+        self.model.unsupported_operator_error(self, "<", other)
+
+    def __gt__(self, other):
+        # unsupported operator
+        self.model.unsupported_operator_error(self, ">", other)
 
     def equals_expr(self, other):
         if isinstance(other, MonomialExpr):
@@ -714,11 +894,8 @@ class MonomialExpr(AbstractLinearExpr):
 
     # conversion
     def to_linear_expr(self):
-        terms = LinearExpr.term_dict_type()
-        terms[self._dvar] = self._coef
-        e = LinearExpr(self._model, e=terms, safe=True)
-        e._transient = True
-        return e
+        self_as_dict = {self._dvar: self._coef}
+        return self.model.linear_expr(e=self_as_dict)
 
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         self_coef = self._coef
@@ -739,15 +916,22 @@ class MonomialExpr(AbstractLinearExpr):
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
 
+    # @property
+    # def solution_value(self):
+    #     raw = self.coef * self._dvar.solution_value
+    #     return self._round_if_discrete(raw)
+
 
 class LinearExpr(AbstractLinearExpr):
     """LinearExpr()
 
     This class models linear expressions.
     This class is not intended to be instantiated. Expressions are built
-    either using operators or using `Model.linear_expr()`.
+    either using operators or using Model.linear_expr().
 
     """
+    _private_instance_counter = 0
+    _private_clone_counter = 0
 
     # what type to use for merging dicts
     counter_type = ExprCounter
@@ -755,18 +939,9 @@ class LinearExpr(AbstractLinearExpr):
     # what type to use for storing terms
     term_dict_type = OrderedDict
 
-
     @staticmethod
-    def _sort_terms_if_needed(mdl, counter, term_dict_type=term_dict_type):
-        # INTERNAL
-        if not mdl._keep_ordering:
-            return counter
-        elif isinstance(counter, term_dict_type):
-            return counter
-        else:
-            # normalize by sorting variables by increasing indices
-            sorted_items = sorted(counter.items(), key=lambda vk: vk[0].get_index())
-            return term_dict_type(sorted_items)
+    def number_of_instances():
+        return LinearExpr._private_instance_counter  # pragma: no cover
 
     def to_linear_expr(self):
         return self
@@ -774,6 +949,13 @@ class LinearExpr(AbstractLinearExpr):
     def _get_terms_dict(self):
         # INTERNAL
         return self.__terms
+
+    def _get_coefs(self):
+        # INTERNAL: returns list of coefs in key order
+        # return self.__terms.values()
+        # PY3 dict views do not support indexing but Wrapper REQUIRES indexing
+        # note that we must return floats for cplex.
+        return [float(v) for v in itervalues(self.__terms)]
 
     def __typecheck_terms_dict(self, terms):
         """
@@ -803,18 +985,16 @@ class LinearExpr(AbstractLinearExpr):
         # INTERNAL: builds a new terms dict.
         return dict_type(*args)
 
-    __slots__ = ('_constant', '__terms', '_transient', '_refcnt')
+    __slots__ = ("_constant", "__terms", "private_instance_counter")
 
     def __init__(self, model, e=None, constant=0, name=None, safe=False):
         Expr.__init__(self, model, name)
         # a global counter for performance measurement
-        model._linexpr_instance_counter += 1
+        LinearExpr._private_instance_counter += 1
         # "calling LinearExpr ctor, k=%d" % LinearExpr.InstanceCounter)
         if not safe and 0 != constant:
             model.typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
-        self._transient = False
-        self._refcnt = 0
 
         if isinstance(e, dict):
             if safe:
@@ -831,9 +1011,7 @@ class LinearExpr(AbstractLinearExpr):
         else:
             self.__terms = self._new_terms_dict()
 
-        if e is None:
-            pass
-        elif isinstance(e, Var):
+        if isinstance(e, Var):
             self.__terms[e] = 1
         elif is_number(e):
             self._constant += e
@@ -851,60 +1029,29 @@ class LinearExpr(AbstractLinearExpr):
             else:
                 self.fatal("Not a (variable, value) tuple: {0!s}", e)
         elif isinstance(e, LinearExpr):
-            # note that transient is not kept.
             self._constant = e.constant
-            self.__terms = self.term_dict_type(e._get_terms_dict())  # copy
+            self.__terms = e._get_terms_dict()
 
         elif is_iterable(e) and not is_string(e):
+            # assume only variables in iteration?:
             for o in e:
-                model.typecheck_var(o)
-                self.__terms[o] = 1
-
+                if isinstance(o, Var):
+                    self.__terms[o] = 1
+                else:
+                    self.fatal('only variable sequences are accepted to build an expression, got: {0!s}', e)
         else:
             self.fatal("Cannot convert {1!s} to docplex.mp.LinearExpr, instance: {0!s}", repr(e), type(e).__name__)
-
-    def _check_mutable(self):
-        # INTERNAL
-        if self._refcnt > 0:
-            self.fatal("An expression used in constraints is not mutable: {0!s}", self)
-
-    def notify_used(self, user):
-        # INTERNAL
-        self._refcnt += 1
-
-    def _is_mutable(self):
-        return 0 == self._refcnt
-
-    def clone_if_necessary(self):
-        #  INTERNAL
-        if self._transient and not self._model._clone_transient_exprs and self._is_mutable():
-            return self
-        else:
-            return self.clone()
-
-    def set_name(self, name):
-        Expr.set_name(self, name)
-        # an expression with a name is not transient any more
-        if name:
-            self._transient = False
-
-    def _get_name(self):
-        return self._name
-
-    name = property(_get_name, set_name)
-
-    def is_transient(self):
-        # INTERNAL
-        return self._transient
 
     def clone(self):
         """
         Returns:
             A copy of the expression on the same model.
         """
-        self._model._linexpr_clone_counter += 1
+        LinearExpr._private_clone_counter += 1
         cloned_terms = self.term_dict_type(self.__terms)  # faster than copy() on OrderedDict()
-        cloned = LinearExpr(model=self._model, e=cloned_terms, constant=self._constant, safe=True)
+        cloned = LinearExpr(model=self.model, e=cloned_terms, constant=self._constant, safe=True)
+        # cloned = self.model.linear_expr(self._constant)
+        # cloned.__terms = cloned_terms
         return cloned
 
     def copy(self, target_model, var_mapping):
@@ -921,37 +1068,26 @@ class LinearExpr(AbstractLinearExpr):
 
         Changes the expression by replacing each variable coefficient and the constant term
         by its opposite.
-
-        Note:
-            This method does not create any new expression but modifies the `self` instance.
-
-        Returns:
-            The modified self.
-
         """
-        self._check_mutable()
         self._constant = - self._constant
         self_terms = self.__terms
-        for v, k in iteritems(self_terms):
+        for (v, k) in iteritems(self.__terms):
             self_terms[v] = -k
-        return self
 
     def _clear(self):
         """ Clears the expression.
 
         All variables and coefficients are removed and the constant term is set to zero.
         """
-        self._check_mutable()
         self._constant = 0
         self.__terms = self._new_terms_dict()
 
     def equals_constant(self, scalar):
-        """ Checks if the expression equals a constant term.
-
+        """
         Args:
             scalar (float): A floating-point number.
         Returns:
-            Boolean: True if the expression equals this constant term.
+            True if the expression equals this constant term.
         """
         return self.is_constant() and (scalar == self._constant)
 
@@ -966,14 +1102,15 @@ class LinearExpr(AbstractLinearExpr):
         Checks if the expression is a constant.
 
         Returns:
-            Boolean: True if the expression consists of only a constant term.
+            True if the expression consists of only a constant term.
         """
         return not self.__terms
 
     def is_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
-        terms = self.__terms
-        return 0 == self.constant and 1 == len(terms) and 1 == next(itervalues(terms))
+        return 0 == self.constant \
+               and 1 == self.number_of_variables() \
+               and 1 == next(itervalues(self.__terms))
 
     def is_normal_form(self):
         # INTERNAL
@@ -988,6 +1125,13 @@ class LinearExpr(AbstractLinearExpr):
     def unchecked_get_coef(self, dvar):
         # INTERNAL
         return self.__terms.get(dvar, 0)
+
+    def _set_coef(self, dvar, acoef):
+        # INTERNAL
+        if 0 != acoef:
+            self.__terms[dvar] = acoef
+        else:
+            self._remove_term(dvar)
 
     def add_term(self, dvar, coeff):
         """
@@ -1005,7 +1149,6 @@ class LinearExpr(AbstractLinearExpr):
         return self
 
     def _add_term(self, dvar, coef=1):
-        self._check_mutable()
         # INTERNAL
         if coef != 0:
             self_terms = self.__terms
@@ -1019,7 +1162,6 @@ class LinearExpr(AbstractLinearExpr):
                     del self_terms[dvar]
 
     def _add_var(self, dvar):
-        self._check_mutable()
         old_coeff = self.__terms.get(dvar, 0)
         new_coef = 1 + old_coeff
         if new_coef:  # nonzero is True
@@ -1042,21 +1184,19 @@ class LinearExpr(AbstractLinearExpr):
         return self
 
     def _remove_term(self, dvar):
-        self._check_mutable()
         # INTERNAL
         del self.__terms[dvar]
 
-    def get_constant(self):
+    def _get_constant(self):
         """
         This property is used to get or set the constant term of the expression.
         """
         return self._constant
 
-    def set_constant(self, numval):
-        self._check_mutable()
+    def _set_constant(self, numval):
         self._constant = numval
 
-    constant = property(get_constant, set_constant)
+    constant = property(_get_constant, _set_constant)
 
     def iter_variables(self):
         """  Iterates over all variables mentioned in the linear expression.
@@ -1066,6 +1206,10 @@ class LinearExpr(AbstractLinearExpr):
         """
         return iter(self.__terms.keys())
 
+    def var_set(self):
+        # INTERNAL
+        return set(self.__terms.keys())
+
     def contains_var(self, dvar):
         """ Checks whether a decision variable is part of an expression.
 
@@ -1073,13 +1217,13 @@ class LinearExpr(AbstractLinearExpr):
             dvar (:class:`Var`): A decision variable.
 
         Returns:
-            Boolean: True if `dvar` is mentioned in the expression with a nonzero coefficient.
+            True if `dvar` is mentioned in the expression with a nonzero coefficient.
         """
-        return dvar in self.__terms
+        return (dvar in self.__terms) and (self.__terms[dvar] != 0)
 
     def equals_expr(self, other):
         if is_number(other):
-            return self.is_constant() and other == self.constant
+            return self.equals_number(other)
         elif isinstance(other, LinearExpr):
             if self.constant != other.constant:
                 return False
@@ -1092,6 +1236,12 @@ class LinearExpr(AbstractLinearExpr):
                 return True
         else:
             return False
+
+    def equals_number(self, nb):
+        return self.is_constant() and (nb == self._constant)
+
+    def equals_var(self, dvar):
+        return 0 == self.constant and 1 == len(self.__terms) and 1 == self.unchecked_get_coef(dvar)
 
     # noinspection PyPep8
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
@@ -1152,60 +1302,33 @@ class LinearExpr(AbstractLinearExpr):
         :param other_expr:
         :return:
         """
-        self._check_mutable()
         self.constant += other_expr.constant
         # merge term dictionaries
         for v, k in other_expr.iter_terms():
             # use unchecked version
             self._add_term(v, k)
 
-    def _add_expr_scaled(self, expr, factor):
-        self._check_mutable()
-        # INTERNAL
-        if 0 != factor:
-            self.constant += expr.constant * factor
-            for v, k in expr.iter_terms():
-                # use unchecked version
-                self._add_term(v, k * factor)
-
     # --- algebra methods always modify self.
-    def add(self, e):
-        """ Adds an expression to self.
-
-        Note:
-            This method does not create any new expression but modifies the `self` instance.
-
-
-        Args:
-            e: the expression to be added. Can be either a variable, an expression, or a number.
-
-        Returns:
-            the modified self.
-
-        See Also:
-            :func:`plus` to compute a sum without modifying the self instance.
-
-        PROOFREAD
-        """
-        self._check_mutable()
+    def _add(self, e):
+        # INTERNAL: modifies self.
         if isinstance(e, Var):
             self._add_var(e)
+        elif is_number(e):
+            self._constant += e
         elif isinstance(e, LinearExpr):
             self._add_expr(e)
         elif isinstance(e, MonomialExpr):
             self._add_term(e._dvar, e._coef)
-        elif isinstance(e, ZeroExpr):
+        elif isinstance(e, _ZeroExpr):
             pass
-        elif is_number(e):
-            self._constant += e
-        elif isinstance(e, Expr) and e.is_quad_expr():
-            raise DOCPlexQuadraticArithException
+        elif isinstance(e, list):
+            for elt in e:
+                self._add(elt)
         else:
             try:
-                self.add(e.to_linear_expr())
+                self._add(e.to_linear_expr())
             except AttributeError:
-                self._unsupported_binary_operation(self, "+", e)
-
+                self.fatal("Unexpected argument for add: {0!s}", e)
         return self
 
     def iter_terms(self):
@@ -1216,31 +1339,19 @@ class LinearExpr(AbstractLinearExpr):
         """
         return iteritems(self.__terms)
 
-    def subtract(self, e):
-        """ Subtracts an expression to self.
-        Note:
-            This method does not create any new expression but modifies the `self` instance.
-
-
-        Args:
-            e: the expression to be subtracted. Can be either a variable, an expression, or a number.
-
-        Returns:
-            the modified self.
-
-        See Also:
-            :func:`minus` to compute a difference without modifying the self instance.
-
-        PROOFREAD
+    def _subtract(self, e):
         """
-        self._check_mutable()
+        INTERNAL: Subtracts to self, self will be modified.
+        :param e:
+        :return:
+        """
         if isinstance(e, Var):
             self._add_term(e, -1)
         elif is_number(e):
             if e != 0:
                 self._constant -= e
         elif isinstance(e, LinearExpr):
-            if e.is_constant() and 0 == e.get_constant():
+            if e.is_zero():
                 return self
             else:
                 # 1. decr constant
@@ -1250,21 +1361,22 @@ class LinearExpr(AbstractLinearExpr):
                     self._add_term(v, -k)
         elif isinstance(e, MonomialExpr):
             self._add_term(e.var, -e.coef)
-        elif isinstance(e, ZeroExpr):
+        elif isinstance(e, list):
+            # do not use is_iterable as string will loop
+            for elt in e:
+                self._subtract(elt)
+        elif isinstance(e, _ZeroExpr):
             pass
-        elif isinstance(e, Expr) and e.is_quad_expr():
-            raise DOCPlexQuadraticArithException
         else:
             try:
-                self.subtract(e.to_linear_expr())
+                self._subtract(e.to_linear_expr())
             except AttributeError:
-                self._unsupported_binary_operation(self, "-", e)
+                self.fatal("Unexpected argument for subtract: {0!s}", e)
         return self
 
-    def _scale(self, factor):
+    def _scale(self, factor, dictype=term_dict_type):
         # INTERNAL: used my multiply
         # this method modifies self.
-        self._check_mutable()
         if 0 == factor:
             self._clear()
         elif factor != 1:
@@ -1273,133 +1385,58 @@ class LinearExpr(AbstractLinearExpr):
             for v, k in iteritems(self_terms):
                 self_terms[v] = k * factor
 
-    def multiply(self, e):
-        """ Mutiplies self by an expression.
-
-        Note:
-            This method does not create any new expression but modifies the `self` instance.
-
-        Args:
-            e: the expression that is used to multiply self.
-
-        Returns:
-            the modified self.
-
-        See Also:
-            :func:`times` to compute a multiplication without modifying the self instance.
-
-        PROOFREAD
-        """
-        self._check_mutable()
+    def _multiply(self, e):
         if is_number(e):
             self._scale(e)
         elif isinstance(e, LinearExpr):
             if e.is_constant():
                 self._scale(e.constant)
             else:
-                return self.model._qfactory.new_linexpr_product(self, e)
-
+                raise DOCplexQuadraticNotImplementedError(self, e)
         elif isinstance(e, Var):
             if self.is_constant():
                 return e.times(self._constant)
             else:
-                return self.model._qfactory.new_var_product(e, self)
+                raise DOCplexQuadraticNotImplementedError(self, e)
         elif isinstance(e, MonomialExpr):
             if self.is_constant():
-                return self.model._lfactory.new_monomial_expr(e._dvar, e._coef * self._constant)
+                return self.model._monomial_expr(e._dvar, e._coef * self._constant)
             else:
-                return self.model._qfactory.new_linexpr_product(self, e)
-        elif isinstance(e, ZeroExpr):
-            return self.zero_expr()
+                raise DOCplexQuadraticNotImplementedError(self, e)
+        elif isinstance(e, _ZeroExpr):
+            return self.model._get_zero_expr()
         else:
             self.fatal("Multiply expects variable, expr or number, got: {0!s}", e)
         return self
 
-    def square(self):
-        return self.model._qfactory.new_linexpr_product(self, self)
-
-    def divide(self, e):
-        """ Divides this expression by an operand
-
-        Args:
-            e: the operand by which the self expression is divided. Only nonzero number is allowed here.
-
-        Note:
-            This method does not create any new expression but modifies the `self` instance.
-
-        Returns:
-            The modified self.
-
-        PROOFREAD
-        """
+    def _divide(self, e):
         self.model.typecheck_as_denominator(e, numerator=self)
         inverse = 1.0 / float(e)
-        return self.multiply(inverse)
+        return self._multiply(inverse)
 
     # operator-based API
     def opposite(self):
-        cloned = self.clone_if_necessary()
+        cloned = self.clone()
         cloned.negate()
         return cloned
 
     def plus(self, e):
-        """ Computes the sum of the expression and some operand.
-
-        Args:
-            e: the expression to add to self. Can be either a variable, an expression or a number.
-
-        Returns:
-            a new expression equal to the sum of the self expression and `e`
-
-        Note:
-            This method doe snot modify self.
-        """
-        cloned = self.clone_if_necessary()
-        try:
-            return cloned.add(e)
-        except DOCPlexQuadraticArithException:
-            return e.plus(self)
+        cloned = self.clone()
+        cloned._add(e)
+        return cloned
 
     def minus(self, e):
-        cloned = self.clone_if_necessary()
-        try:
-            return cloned.subtract(e)
-        except DOCPlexQuadraticArithException:
-            return e.rminus(self)
+        cloned = self.clone()
+        cloned._subtract(e)
+        return cloned
 
     def times(self, e):
-        """ Computes the multiplication of self with an operand.
-
-        Note:
-            This method does not modify self but returns a new expression instance.
-
-        Args:
-            e: the expression that is used to multiply self.
-
-        Returns:
-            a new instance of expression.
-
-        PROOFREAD
-        """
-        cloned = self.clone_if_necessary()
-        return cloned.multiply(e)
+        cloned = self.clone()
+        return cloned._multiply(e)
 
     def quotient(self, e):
-        """ Computes the division of self with an operand.
-
-        Note:
-            This method does not modify self but returns a new expression instance.
-
-        Args:
-            e: the expression that is used to modif self. Only nonzero numbers are allowed here.
-
-        Returns:
-            a new instance of expression.
-
-            PROOFREAD
-        """
-        cloned = self.clone_if_necessary()
-        cloned.divide(e)
+        cloned = self.clone()
+        cloned._divide(e)
         return cloned
 
     def __add__(self, e):
@@ -1409,19 +1446,18 @@ class LinearExpr(AbstractLinearExpr):
         return self.plus(e)
 
     def __iadd__(self, e):
-        return self.add(e)
+        return self._add(e)
 
     def __sub__(self, e):
         return self.minus(e)
 
     def __rsub__(self, e):
-        cloned = self.clone_if_necessary()
-        cloned.subtract(e)
-        cloned.negate()
-        return cloned
+        cloned = self.clone()
+        cloned._subtract(e)
+        return cloned.opposite()
 
     def __isub__(self, e):
-        return self.subtract(e)
+        return self._subtract(e)
 
     def __neg__(self):
         return self.opposite()
@@ -1430,7 +1466,7 @@ class LinearExpr(AbstractLinearExpr):
         return self.times(e)
 
     def __imul__(self, e):
-        return self.multiply(e)
+        return self._multiply(e)
 
     def __div__(self, e):
         return self.quotient(e)
@@ -1446,6 +1482,30 @@ class LinearExpr(AbstractLinearExpr):
 
     def __str__(self):
         return self.to_string()
+
+    def __le__(self, other):
+        return self.le_constraint(other)
+
+    def __eq__(self, other):
+        return self.eq_constraint(other)
+
+    def __lt__(self, other):
+        self.model.unsupported_operator_error(self, "<", other)
+
+    def __gt__(self, other):
+        self.model.unsupported_operator_error(self, ">", other)
+
+    def __ge__(self, other):
+        return self.ge_constraint(other)
+
+    def le_constraint(self, other):
+        return self._get_model().le_constraint(self, other)
+
+    def eq_constraint(self, other):
+        return self._get_model().eq_constraint(self, other)
+
+    def ge_constraint(self, other):
+        return self._get_model().ge_constraint(self, other)
 
     @property
     def solution_value(self):
@@ -1477,7 +1537,7 @@ class LinearExpr(AbstractLinearExpr):
             but X+0.3, 1.5X, 2X + 0.7 are not.
 
         Returns:
-            Boolean: True if the expression contains only discrete variables and coefficients.
+            True if the expression contains only discrete variables and coefficients.
         """
         self_cst = self._constant
         if self_cst != int(self_cst):
@@ -1519,7 +1579,7 @@ class LinearConstraintType(Enum):
             Returns string "<=" for a e1 <= e2 constraint.
 
         Returns:
-            string: A string describing the logical operator used in the constraint.
+            A string describing the logical operator used in the constraint.
         """
         return _LinearConstraintTypeUtils.get_operator(self)
 
@@ -1621,13 +1681,18 @@ class AbstractConstraint(ModelingObject):
 class AbstractLinearConstraint(AbstractConstraint):
     # INTERNAL:  base class for linear constraints
 
-    __slots__ = ()
-
     def __init__(self, model, name=None):
         AbstractConstraint.__init__(self, model, name)
 
     def copy(self, tagret_model, var_map):
         raise NotImplementedError  # pragma: no cover
+
+    def get_var_coef(self, dvar):
+        """ Returns the coefficient of the variable in the constraint.
+             Calls the unsafe fastGetCoef method once type has been checked.
+        """
+        self.model.typecheck_var(dvar)
+        return self.fast_get_coef(dvar)
 
     def fast_get_coef(self, var):
         """ Redefine this method for concrete sub-classes."""
@@ -1654,10 +1719,22 @@ class LinearConstraint(AbstractLinearConstraint):
     def __init__(self, model, left_expr, ctype, right_expr, name=None):
         AbstractLinearConstraint.__init__(self, model, name)
         self._ctype = ctype
-        # noinspection PyPep8
-        self._left_expr  = left_expr
-        self._right_expr = right_expr
+        self._left_expr = model._to_linear_expr(left_expr)
+        self._right_expr = model._to_linear_expr(right_expr)
 
+        model._check_both_in_selfmodel(self._left_expr, self._right_expr, "linear constraint")
+
+    def equals(self, other):
+        if type(other) != LinearConstraint:
+            return False
+        if self._ctype != other.type:
+            return False
+        if not self._left_expr.equals_expr(other.left_expr):
+            return False
+        if not self._right_expr.equals_expr(other.right_expr):
+            return False
+
+        return True
 
     def is_trivial(self):
         # Checks whether the constraint is equivalent to a comparison between numbers.
@@ -1670,10 +1747,10 @@ class LinearConstraint(AbstractLinearConstraint):
             return self_right_expr.is_constant()
         else:
             for lv in self_left_expr.iter_variables():
-                if self_left_expr.unchecked_get_coef(lv) != self_right_expr.unchecked_get_coef(lv):
+                if self_left_expr[lv] != self_right_expr[lv]:
                     return False
             for rv in self_right_expr.iter_variables():
-                if self_left_expr.unchecked_get_coef(rv) != self_right_expr.unchecked_get_coef(rv):
+                if self_left_expr[rv] != self_right_expr[rv]:
                     return False
             return True
 
@@ -1800,7 +1877,7 @@ class LinearConstraint(AbstractLinearConstraint):
     def iter_variables(self):
         """  Iterates over all variables mentioned in the constraint.
 
-        *Note:* This inncludes variables that are mentioned with a zero coefficient. For example,
+        *Note:* Includes variables that are mentioned with a zero coefficient. For example,
         the iterator on the following constraint:
 
          X <= X+Y + 1
@@ -1815,15 +1892,25 @@ class LinearConstraint(AbstractLinearConstraint):
         elif self._left_expr.is_constant():
             return self._right_expr.iter_variables()
         else:
-            return self.generate_ordered_vars()
+            # noinspection PyPep8
+            if self._model._keep_ordering:
+                return self._ordered_var_iter()
+            else:
+                left_vars = self.left_expr.var_set()
+                right_vars = self.right_expr.var_set()
+                union_vars = left_vars.union(right_vars)
+                return iter(union_vars)
 
-    def generate_ordered_vars(self):
-        left_expr = self.left_expr
-        for lv in left_expr.iter_variables():
-            yield lv
-        for rv in self.right_expr.iter_variables():
-            if rv not in left_expr:
-                yield rv
+    def _ordered_var_iter(self):
+        # INTERNAL
+        e1 = self._left_expr._get_terms_dict()
+        e2 = self._right_expr._get_terms_dict()
+        od1 = OrderedDict(e1)
+        od1.update(e2)
+        return iter(od1)
+
+    def contains_var(self, dvar):
+        return self._left_expr.contains_var(dvar) or self._right_expr.contains_var(dvar)
 
     def fast_get_coef(self, dvar):
         return self._left_expr[dvar] - self._right_expr[dvar]
@@ -1833,7 +1920,7 @@ class LinearConstraint(AbstractLinearConstraint):
         left_cst = self._left_expr.constant
         return right_cst - left_cst
 
-    def _iter_net_coeffs(self):
+    def _iter_net_coeffs(self, ordering=False):
         # INTERNAL
         if self._right_expr.is_constant():
             return self._left_expr.iter_terms()
@@ -1841,8 +1928,23 @@ class LinearConstraint(AbstractLinearConstraint):
             self_right_expr = self._right_expr
             opposite_right_coeffs = {v: -k for v, k in self_right_expr.iter_terms()}
             return iteritems(opposite_right_coeffs)
+        elif ordering:
+            # build an ordered dict of left terms updated by right terms
+            e1 = self._left_expr._get_terms_dict()
+            # we must create an extra od here
+            od = OrderedDict(e1)
+            #  update od no need to create yet another od
+            for v, rk in self._right_expr.iter_terms():
+                if v in od:
+                    od[v] -= rk
+                else:
+                    od[v] = -rk
+            # od2 = OrderedDict({v: -k for v, k in self._right_expr.iter_terms()})
+            # od.update(od2)
+            return iteritems(od)
         else:
-            return self._generate_net_coefs()
+            diff_coeffs = {v: self._left_expr[v] - self._right_expr[v] for v in self.iter_variables()}
+            return iteritems(diff_coeffs)
 
     def _generate_net_coefs(self):
         for v in self.iter_variables():
@@ -1852,13 +1954,8 @@ class LinearConstraint(AbstractLinearConstraint):
 
 class _DummyFeasibleConstraint(LinearConstraint):
     # INTERNAL
-    def __init__(self, model, zero_expr, name=None):
-        ctname = name or "dummy_feasible_ct"
-        LinearConstraint.__init__(self, model,
-                                  left_expr=zero_expr,
-                                  ctype=LinearConstraintType.EQ,
-                                  right_expr=zero_expr,
-                                  name=ctname)
+    def __init__(self, model, zero_expr):
+        LinearConstraint.__init__(self, model, zero_expr, LinearConstraintType.EQ, 0, "_dummy_feasible_ct_")
 
     def __repr__(self):
         return "docplex.mp.linear.LinearConstraint._TrivialFeasible"
@@ -1866,12 +1963,8 @@ class _DummyFeasibleConstraint(LinearConstraint):
 
 class _DummyInfeasibleConstraint(LinearConstraint):
     # INTERNAL
-    def __init__(self, model, zero, one):
-        LinearConstraint.__init__(self, model,
-                                  left_expr=zero,
-                                  ctype=LinearConstraintType.EQ,
-                                  right_expr=one,
-                                  name="_dummy_infeasible_ct_")
+    def __init__(self, model, zero):
+        LinearConstraint.__init__(self, model, zero, LinearConstraintType.EQ, 1, "_dummy_infeasible_ct_")
 
     def __repr__(self):
         return "docplex.mp.linear.LinearConstraint.TrivialInfeasible"
@@ -1895,7 +1988,7 @@ class RangeConstraint(AbstractLinearConstraint):
         model.typecheck_num(ub, 'RangeConstraint.ub')
         self.__ub = ub
         self.__lb = lb
-        self.__expr = expr
+        self.__expr = model._to_linear_expr(expr)
 
     def equals(self, other):
         if type(other) != RangeConstraint:
@@ -1955,6 +2048,9 @@ class RangeConstraint(AbstractLinearConstraint):
            An iterator object.
         """
         return self.__expr.iter_variables()
+
+    def contains_var(self, dvar):
+        return self.__expr.contains_var(dvar)
 
     def rhs(self):
         # INTERNAL
@@ -2063,33 +2159,74 @@ class IndicatorConstraint(AbstractLogicalConstraint):
         z=0 -> 4 <= 3 sets z to 1.
         This is equivalent to if z=a => False, then z *cannot* be equal to a.
         """
-        if 0 == self.active_value:
+        if self.active_value is 0:
             # set to 1 : lb = 1
             self.indicator_var.lb = 1
-        elif 1 == self.active_value:
+        elif self.active_value is 1:
             # set to 0 ub = 0
             self.indicator_var.ub = 0
         else:
-            self.fatal("Unexpected active value for indicator constraint: {0!s}, value is: {1!s}, expecting 0 or 1",  # pragma: no cover
-                       self, self.active_value)  # pragma: no cover
+            self.fatal("Unexpected active value for indicator constraint {0!s}, expecting 0 or 1", self)
 
     def iter_variables(self):
         yield self._binary_var
         for v in self._linear_ct.iter_variables():
             yield v
 
+    def contains_var(self, dvar):
+        return dvar is self._binary_var or self._linear_ct.contains_var(dvar)
+
     def to_string(self):
         """
         Displays the indicator constraint in the LP style:
         z = 1 -> x+y+z == 2
-
-        Returns:
-            A string.
         """
         return "{0!s} = {1} -> {2!s}".format(self._binary_var, self.logical_rhs, self.linear_constraint)
 
     def __str__(self):
         return self.to_string()
+
+
+class ObjectiveSense(Enum):
+    """
+    This enumerated class defines the two types of objectives, Minimize and Maximize.
+    """
+    Minimize, Maximize = 1, 2
+
+    # static method: which type is the default.
+    @staticmethod
+    def default_sense():
+        return ObjectiveSense.Minimize
+
+    def is_minimize(self):
+        return self is ObjectiveSense.Minimize
+
+    def is_maximize(self):
+        return self is ObjectiveSense.Maximize
+
+    def verb(self):
+        # INTERNAL
+        return "minimize" if self.is_minimize() else "maximize" if self.is_maximize() else "WHAT???"
+
+    def action(self):
+        return "%sing" % self.verb()[:-1]
+
+    @staticmethod
+    def parse(text, errorhandler, do_raise=False):
+        if not text or not is_string(text):
+            if do_raise:
+                errorhandler.fatal("cannot read objective sense from: <{}>", text)
+            else:
+                errorhandler.error("cannot read objective sense from: <{}>", text)
+                return None
+        else:
+            lower_text = text.lower()
+            if lower_text in {"minimize", "min"}:
+                return ObjectiveSense.Minimize
+            elif lower_text in {"maximize", "max"}:
+                return ObjectiveSense.Maximize
+            else:
+                errorhandler.fatal("Text is not recognized as objective sense: {0}, expecting min"" or max", (text,))
 
 
 # --- version with global functions
@@ -2140,139 +2277,3 @@ def _docplex_sum_with_seq(x_list):
     else:
         # try a python sum ?
         return sum(x_list)
-
-
-class ZeroExpr(AbstractLinearExpr):
-
-    def _get_solution_value(self):
-        return 0
-
-    def is_zero(self):
-        return True
-
-    # INTERNAL
-    __slots__ = ()
-
-    def __init__(self, model):
-        ModelingObjectBase.__init__(self, model)
-
-    def clone(self):
-        return self  # this is not cloned.
-
-    def copy(self, target_model, var_map):
-        return ZeroExpr(target_model)
-
-    def to_linear_expr(self):
-        return self  # this is a linear expr.
-
-    def number_of_variables(self):
-        return 0
-
-    def iter_variables(self):
-        return iter_emptyset()
-
-    def iter_terms(self):
-        return iter_emptyset()
-
-    def is_constant(self):
-        return True
-
-    def is_discrete(self):
-        return True
-
-    def unchecked_get_coef(self, dvar):
-        return 0
-
-    def contains_var(self, dvar):
-        return False
-
-    @property
-    def constant(self):
-        # for compatibility
-        return 0
-
-
-    def negate(self):
-        pass
-
-    # noinspection PyMethodMayBeStatic
-    def plus(self, e):
-        return e
-
-
-    def times(self, _):
-        return self
-
-    # noinspection PyMethodMayBeStatic
-    def minus(self, e):
-        return -e
-        # expr = e.to_linear_expr().clone()
-        # expr.negate()
-        # return expr
-
-    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
-        return "0"
-
-    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
-        oss.write(self.to_string())
-
-    # arithmetic
-    def __sub__(self, e):
-        return self.minus(e)
-
-    def __rsub__(self, e):
-        # e - 0 = e !
-        return e
-
-    def __neg__(self):
-        return self
-
-    def __add__(self, other):
-        return other
-
-    def __radd__(self, other):
-        return other
-
-    def __mul__(self, other):
-        return self
-
-    def __rmul__(self, other):
-        return self
-
-    def __div__(self, other):
-        return self._divide(other)
-
-    def __truediv__(self, e):
-        # for py3
-        # INTERNAL
-        return self.__div__(e)  # pragma: no cover
-
-    def _divide(self, other):
-        self.model.typecheck_as_denominator(numerator=self, denominator=other)
-        return self
-
-    def __repr__(self):
-        return "docplex.mp.linear.ZeroExpr()"
-
-    def equals_expr(self, other):
-        return isinstance(other, ZeroExpr)
-
-    def __ge__(self, other):
-        return self._get_model().ge_constraint(self, other)
-
-    def __le__(self, other):
-        return self._get_model().le_constraint(self, other)
-
-    def __eq__(self, other):
-        return self._get_model().eq_constraint(self, other)
-
-    def square(self):
-        return self
-
-    # arithmetci to self
-    add = plus
-    subtract = minus
-    tmultiply = times
-
-    def _scale(self, factor):
-        return self

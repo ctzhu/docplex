@@ -5,8 +5,7 @@
 # --------------------------------------------------------------------------
 from enum import Enum
 
-from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import is_number, is_string, str_holo
+from docplex.mp.utils import is_number, str_holo, StringIO
 
 
 class ModelingObjectBase(object):
@@ -27,7 +26,7 @@ class ModelingObjectBase(object):
         self._model = model
         self._has_automatic_name = has_automatic_name
 
-    def get_name(self):
+    def _get_name(self):
         """ This property is used to get or set the name of the modeling object.
 
         """
@@ -43,7 +42,7 @@ class ModelingObjectBase(object):
         # INTERNAL: basic method for checking names.
         pass  # pragma: no cover
 
-    name = property(get_name, set_name)
+    name = property(_get_name, set_name)
 
     def has_name(self):
         """ Checks whether the object has a name.
@@ -106,22 +105,13 @@ class ModelingObjectBase(object):
     def truncated_str(self):
         return str_holo(self, maxlen=self._model._max_repr_len)
 
-    def zero_expr(self):
-        # INTERNAL
-        return self._model._get_zero_expr()
-
-    def _unsupported_binary_operation(self, lhs, op, rhs):
-        self.fatal("Unsupported operation: {0!s} {1:s} {2!s}", lhs, op, rhs)
-
-    def is_quad_expr(self):
-        return False
-
 
 class ModelingObject(ModelingObjectBase):
 
     __slots__ = ("_index", "_origin", "_container")
 
-    def is_valid_index(self, idx):
+    @staticmethod
+    def is_valid_index(idx):
         # INTERNAL: This is where the valid index check is performed
         return idx >= 0
 
@@ -201,10 +191,18 @@ class Expr(ModelingObjectBase):
     def number_of_variables(self):
         """
         Returns:
-            integer: The number of variables in the expression.
+            The number of variables in the expression.
         """
         return sum(1 for _ in self.iter_variables())  # pragma: no cover
 
+    def iter_variables(self):
+        """
+        Iterates over all variables present in the solution.
+
+        Returns:
+            An iterator over all variables present in the expression.
+        """
+        raise NotImplementedError  # pragma: no cover
 
     def contains_var(self, dvar):
         """ Checks whether a variable is present in the expression.
@@ -212,7 +210,7 @@ class Expr(ModelingObjectBase):
         :param: dvar (:class:`docplex.mp.linear.Var`): A decision variable.
 
         Returns:
-            Boolean: True if the variable is present in the expression, else False.
+            True if the variable is present in the expression, else False.
         """
         for v in self.iter_variables():
             if dvar is v:
@@ -220,13 +218,16 @@ class Expr(ModelingObjectBase):
         else:
             return False
 
+    def var_set(self):
+        return {v for v in self.iter_variables()}
+
     def __contains__(self, dvar):
         """Overloads operator `in` for an expression and a variable.
 
         :param: dvar (:class:`docplex.mp.linear.Var`): A decision variable.
 
         Returns:
-            Boolean: True if the variable is present in the expression, else False.
+            True if the variable is present in the expression, else False.
         """
         return self.contains_var(dvar)
 
@@ -236,9 +237,6 @@ class Expr(ModelingObjectBase):
             nb_digits = self.model.float_precision
         self.to_stringio(oss, nb_digits=nb_digits, prod_symbol=prod_symbol, use_space=use_space)
         return oss.getvalue()
-
-    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
-        raise NotImplementedError  # pragma: no cover
 
     def __str__(self):
         return self.to_string()
@@ -260,17 +258,6 @@ class Expr(ModelingObjectBase):
     def is_discrete(self):
         raise NotImplementedError  # pragma : no cover
 
-    def is_zero(self):
-        return False
-
-    def is_constant(self):
-        return False
-
-    def get_constant(self):
-        return 0
-
-    constant = property(get_constant)
-
     @property
     def float_precision(self):
         return 0 if self.is_discrete() else self.model.float_precision
@@ -285,10 +272,6 @@ class Expr(ModelingObjectBase):
         # INTERNAL: compute solutoion value.
         raise NotImplementedError  # pragma: no cover
 
-    def notify_used(self, ct):
-        # INTERNAL
-        pass
-
     @property
     def solution_value(self):
         self._check_model_has_solution()
@@ -296,32 +279,6 @@ class Expr(ModelingObjectBase):
 
     def __ne__(self, other):
         self.model.unsupported_neq_error(self, other)
-
-    def __pow__(self, power):
-        # INTERNAL
-        # power must be checke in {0, 1, 2}
-        self.model.typecheck_as_power(self, power)
-        if 0 == power:
-            return 1
-        elif 1 == power:
-            return self
-        else:
-            return self.square()
-
-    def square(self):
-        # redefine for each class of expression
-        return None  # pragma : no cover
-
-    def __gt__(self, e):
-        """ The strict > operator is not supported
-        """
-        self.model.unsupported_relational_operator_error(self, ">", e)
-
-    def __lt__(self, e):
-        """ The strict < operator is not supported
-        """
-        self.model.unsupported_relational_operator_error(self, "<", e)
-
 
 # --- Priority class used for relaxation
 class Priority(Enum):
@@ -382,59 +339,3 @@ class Priority(Enum):
 
     def is_mandatory(self):
         return self == Priority.MANDATORY
-
-
-# ---
-
-
-class ObjectiveSense(Enum):
-    """
-    This enumerated class defines the two types of objectives, `Minimize` and `Maximize`.
-    """
-    Minimize, Maximize = 1, 2
-
-    # static method: which type is the default.
-    @staticmethod
-    def default_sense():
-        return ObjectiveSense.Minimize
-
-    def is_minimize(self):
-        return self is ObjectiveSense.Minimize
-
-    def is_maximize(self):
-        return self is ObjectiveSense.Maximize
-
-    def verb(self):
-        # INTERNAL
-        return "minimize" if self.is_minimize() else "maximize" if self.is_maximize() else "WHAT???"
-
-    def action(self):
-        # INTERNAL
-        # minimize -> minimizing, maximize -> maximizing...
-        return "%sing" % self.verb()[:-1]
-
-    @staticmethod
-    def parse(arg, logger, default_sense=None):
-        if isinstance(arg, ObjectiveSense):
-            return arg
-        elif not arg or not is_string(arg):
-            if not default_sense:
-                logger.fatal("cannot convert: <{}> to oebjective sense", (arg,))
-            else:
-                logger.error("cannot convert: <{0!r}> to objective sense - using default: {1!s}", (arg, default_sense))
-                return default_sense
-        else:
-            lower_text = arg.lower()
-            if lower_text in {"minimize", "min"}:
-                return ObjectiveSense.Minimize
-            elif lower_text in {"maximize", "max"}:
-                return ObjectiveSense.Maximize
-            elif default_sense:
-                logger.error("Text is not recognized as objective sense: {0}, expecting \"min\" or \"max\" - using default {1:s}",
-                             (arg, default_sense))
-                return default_sense
-            else:
-                logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
-
-
-# noinspection PyUnusedLocal

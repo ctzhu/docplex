@@ -18,13 +18,18 @@ class CpoType(object):
     """ CPO type (flavor) descriptor """
     __slots__ = ('name',          # Name of the type
                  'is_var',        # Indicate a type corresponding to a variable
-                 'is_cst',        # Indicates that type denotes a constant
+                 'is_cst',        # Indicates that type denotes a constant (possibly array)
+                 'is_cst_atom',   # Indicates that type denotes an atomic constant
                  'is_arr',        # Indicates that type describes an array
                  'is_arr_expr',   # Indicates that type describes an array of expressions (not constants)
                  'higher_types',  # List of higher types in the hierarchy
                  'element_type',  # Type of array element (for arrays)
                  'parent_array',  # Type corresponding to an array of this type
                  'base_type',     # Base type to be used for signature matching
+                 'id',            # Unique type id (index) used to fasten type links
+                 'kind_of_types', # Set of types that are kind of this one
+                 'common_types'   # Dictionary of types that are common with this and others.yield
+                                  # Key is type name, value is common type with this one.
                 )
 
     def __init__(self, name, isvar=False, iscst=False, htyps=(), eltyp=None, bastyp=None):
@@ -41,6 +46,7 @@ class CpoType(object):
         self.name         = name
         self.is_var       = isvar
         self.is_cst       = iscst
+        self.is_cst_atom  = iscst
         self.higher_types = (self,) + htyps
         self.element_type = eltyp
         self.base_type    = bastyp if bastyp else self
@@ -75,6 +81,14 @@ class CpoType(object):
             True if this type describes a constant
         """
         return self.is_cst
+
+    def is_constant_atom(self):
+        """ Check if this type describes an atomic constant
+
+        Returns:
+            True if this type describes an atomic constant
+        """
+        return self.is_cst_atom
 
     def is_array(self):
         """ Check if this type describes an array
@@ -117,7 +131,8 @@ class CpoType(object):
            True if this type is a kind of tp
         """
         # Check if required type is the same
-        return (tp.base_type in self.higher_types)
+        # return tp.base_type in self.higher_types
+        return self.kind_of_types[tp.id]
 
     def get_common_type(self, tp):
         """ Get first common type between this and the parameter.
@@ -125,16 +140,35 @@ class CpoType(object):
         Args:
             tp: Other type 
         Returns:
-           The first common type between this and the parameter
-                None if none
+            The first common type between this and the parameter, None if none
         """
+        return self.common_types[tp.id]
+
+    def _compute_common_type(self, tp):
+        """ Compute the first common type between this and the parameter.
+
+        Args:
+            tp: Other type
+        Returns:
+            The first common type between this and the parameter, None if none
+        """
+        # Check if given type is derived
+        if tp.base_type is not tp:
+            tp = tp.base_type
+        # Check if this type is derived
+        if self.base_type is not self:
+            return self.base_type._compute_common_type(tp)
+        # Check direct comparison
         if (self is tp) or tp.is_kind_of(self):
             return(self)
         elif (self.is_kind_of(tp)):
             return(tp)
-        # TODO: Search common up in the tree
-        return(None)
-        
+        # Search common types in ancestors
+        for ct in self.higher_types:
+            if ct in tp.higher_types:
+                return ct
+        return None
+
     def get_array_type(self):
         """ Get the array type with this type as element
         
@@ -157,6 +191,10 @@ class CpoType(object):
     def __ne__(self, other):
         """ Check inequality of this object with another """
         return not self.__eq__(other)
+
+    def __hash__(self):
+        """ Return object hash-code """
+        return id(self)
 
 
 class CpoParam(object):
@@ -185,7 +223,7 @@ class CpoParam(object):
         return self.type
         
     def is_default_value(self):
-        """ Check wether this parameter has a default value
+        """ Check whether this parameter has a default value
         
         Returns:
             True if parameter has a default value, false otherwise
@@ -393,3 +431,29 @@ class CpoOperation(object):
     def __ne__(self, other):
         """ Check inequality of this object with another """
         return not self.__eq__(other)
+
+
+def compute_all_type_links(ltypes):
+    """ Compute all links between the different data types.
+
+    Args:
+        ltypes: List of all types
+    """
+    # Allocate id to each each type
+    nbtypes = len(ltypes)
+    for i, tp in enumerate(ltypes):
+        tp.id = i
+
+    # Compute kind of for each type
+    for tp1 in ltypes:
+        tp1.kind_of_types = tuple(map(lambda tp2: (tp2.base_type in tp1.higher_types), ltypes))
+
+    # Compute common type
+    for tp1 in ltypes:
+        ctypes = [None] * nbtypes
+        for tp2 in ltypes:
+            ct = tp1._compute_common_type(tp2)
+            if ct is not None:
+                ctypes[tp2.id] = ct
+        tp1.common_types = tuple(ctypes)
+

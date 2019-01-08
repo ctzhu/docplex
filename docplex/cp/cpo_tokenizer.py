@@ -6,7 +6,7 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-Tokenizer for CPO file format
+Tokenizer for reading CPO file format
 """
 
 from docplex.cp.utils import CpoException, to_internal_string
@@ -95,7 +95,7 @@ class CpoToken(object):
 
 
 # Null token
-TOKEN_NONE = CpoToken(TOKEN_EMPTY, None)
+TOKEN_NONE = CpoToken(TOKEN_EMPTY, "")
 
 # Token for '/'
 _TOKEN_SLASK = CpoToken(TOKEN_OPERATOR, '/')
@@ -204,7 +204,8 @@ class CpoTokenizer(object):
             while c and (((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')):
                 c = self._next_char()
             self._back_char()
-            return CpoToken(TOKEN_SYMBOL, self._get_token())
+            s = self._get_token()
+            return CpoToken(TOKEN_OPERATOR if s == 'div' else TOKEN_SYMBOL, s)
         
         elif c in _PUNCTUATION_CHARS:
             return CpoToken(TOKEN_PUNCTUATION, c)
@@ -226,8 +227,8 @@ class CpoTokenizer(object):
             
     def get_line_reminder(self):
         """ Get reminder of the line
-            Returns:
-                Line content, without ending \n
+        Returns:
+            Line remainder content, without ending \n
         """
         start = self.rindex
         c = self._next_char()
@@ -235,6 +236,21 @@ class CpoTokenizer(object):
             c = self._next_char()
         return(self.line[start:self.rindex])
         
+    def get_up_to(self, echar):
+        """ Get string from current character to a given one (excluded)
+        Args:
+            echar:  Ending character
+        Returns:
+            Line content, without ending \n
+        """
+        res = []
+        c = self._next_char()
+        while (c is not None) and (c != echar):
+            res.append(c)
+            c = self._next_char()
+        self._back_char()
+        return(''.join(res))
+
     def _reset_token(self):
         """ Reset the current token
         """
@@ -247,8 +263,8 @@ class CpoTokenizer(object):
                         
     def _next_char(self):
         """ Get next input character
-            Returns:
-                Next available character, None if end of input
+        Returns:
+            Next available character, None if end of input
         """
         # Check end of stream
         line = self.line

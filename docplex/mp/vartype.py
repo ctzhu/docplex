@@ -19,10 +19,19 @@ class VarType(object):
 
     """
 
-    def __init__(self, short_name, lb, ub):
+    def __init__(self, short_name, lb, ub, cplex_typecode):
         self._short_name = short_name
         self._lb = lb
         self._ub = ub
+        self._cpx_typecode = cplex_typecode
+
+    def _check_number(self, arg):
+        if not is_number(arg):
+            raise ValueError('Variable bound expects number, got: {0!s}'.format(arg))
+
+    def get_cplex_typecode(self):
+        # INTERNAL
+        return self._cpx_typecode
 
     @property
     def short_name(self):
@@ -116,7 +125,7 @@ class VarType(object):
 
     def one_letter_symbol(self):
         # INTERNAL: returns B,I,C
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     def __eq__(self, other):
         return type(other) == type(self)
@@ -126,18 +135,6 @@ class VarType(object):
 
     def hash_vartype(self):
         return hash(self.one_letter_symbol())
-
-    def process_var_bound(self, m, candidate_bound, is_lb):
-        # INTERNAL
-        if candidate_bound is None:
-            return self.default_lb if is_lb else self.default_ub
-        elif is_number(candidate_bound):
-            if is_lb:
-                return self.compute_lb(candidate_bound)
-            else:
-                return self.compute_ub(candidate_bound)
-        else:
-            m.fatal("Variable bound is not a number: {0!s}", candidate_bound)
 
 
 class BinaryVarType(VarType):
@@ -149,7 +146,7 @@ class BinaryVarType(VarType):
     """
 
     def __init__(self):
-        VarType.__init__(self, short_name="binary", lb=0, ub=1)
+        VarType.__init__(self, short_name="binary", lb=0, ub=1, cplex_typecode='B')
 
     def compute_lb(self, candidate_lb):
         # INTERNAL
@@ -193,21 +190,23 @@ class ContinuousVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="float", lb=0, ub=plus_infinity)
+        VarType.__init__(self, short_name="float", lb=0, ub=plus_infinity, cplex_typecode='C')
         self._plus_infinity = plus_infinity
         self._minus_infinity = - plus_infinity
 
     def compute_ub(self, candidate_ub):
+        self._check_number(candidate_ub)
         return self._plus_infinity if candidate_ub > self._plus_infinity else float(candidate_ub)
 
     def compute_lb(self, candidate_lb):
+        self._check_number(candidate_lb)
         return self._minus_infinity if candidate_lb < self._minus_infinity else float(candidate_lb)
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
 
         Returns:
-            Boolean: False as this type is not a discrete type.
+            Boolean: False because this type is not a discrete type.
         """
         return False
 
@@ -239,7 +238,7 @@ class IntegerVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="int", lb=0, ub=plus_infinity)
+        VarType.__init__(self, short_name="int", lb=0, ub=plus_infinity, cplex_typecode='I')
         self._plus_infinity = plus_infinity
 
     def compute_ub(self, candidate_ub):
@@ -273,6 +272,53 @@ class IntegerVarType(VarType):
 
     def one_letter_symbol(self):
         return "I"
+
+    def __hash__(self):
+        return VarType.hash_vartype(self)
+
+
+class SemiContinuousVarType(VarType):
+    """SemiContinuousVarType()
+
+            This class models the :index:`semi-continuous` variable type and
+            is not meant to be instantiated. 
+    """
+    def __init__(self, plus_infinity=1e+20):
+        VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
+        self._plus_infinity = plus_infinity
+
+    def compute_ub(self, candidate_ub):
+        self._check_number(candidate_ub)
+        return self._plus_infinity if candidate_ub > self._plus_infinity else float(candidate_ub)
+
+    def compute_lb(self, candidate_lb):
+        self._check_number(candidate_lb)
+        if candidate_lb <= 0:
+            raise ValueError('semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
+        return candidate_lb
+
+    def is_discrete(self):
+        """ Checks if this is a discrete type.
+
+        Returns:
+            Boolean: False because this type is not a discrete type.
+        """
+        return False
+
+    def accept_value(self, numeric_value):
+        """ Checks if the value is within the minus infinity to positive infinity range.
+
+        Args:
+            numeric_value: The candidate value.
+
+        Returns:
+            Boolean: True if the candidate value is a valid floating-point number
+            with respect to the model's infinity.
+        """
+        return 0 <= numeric_value <= self._plus_infinity
+
+    def one_letter_symbol(self):
+        return 'S'
 
     def __hash__(self):
         return VarType.hash_vartype(self)

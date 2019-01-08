@@ -6,27 +6,42 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module allows to solve a model represented by a CpoModel object.
+This module implements appropriate software to solve a CPO model represented by a
+:class:`docplex.cp.model.CpoModel` object.
 
-The solving is handled by the class CpoSolver that takes a CpoModel as parameter.
-This class uses information stored in the configuration (subtree 'context.solver'
-to determine which appropriate CpoSolverAgent must be used to actually solve
-the model.
+It implements the following object classes:
 
-Each solving implementation (for example CpoSolverDocloud for a solving on DOcplexcloud)
-uses specific parameters that are stored in the appropriate sub-tree of the configuration.
-For example, 'context.solver.docloud' configuration subtree should contain
-the attributes 'url' and 'key' to allow a solving with DOcplexcloud.
+ * :class:`CpoSolver` contains the public interface allowing to make solving requests with a model.
+ * :class:`CpoSolverAgent` is an abstract class that is extended by the actual implementation(s) of
+   the solving functions.
 
-The basic method to call to solve a model is solve(), that returns an object CpoModelSolution
-that contain the solution.
+The :class:`CpoSolver` identifies and creates the required :class:`CpoSolverAgent` depending on the configuration
+parameter *context.solver.agent' that contains the name of the agent to be used. This name is used to
+access the configuration context *context.solver.<agent>* that contains the details about this agent.
 
-Some solver implementations, in particular local solvers, provide more functions such
-as the possibility to iterate on multiple solutions of a problem. This is available by calling
-search_next() as long as the returned solution is valid.
+For example, the default configuration refers to *docloud* as default solver agent, to solve model using *DOcplexcloud*
+services. This means that at least following configuration elements must be set:
+::
+   context.solver.agent = 'docloud'
+   context.solver.docloud.url = <URL of the service>
+   context.solver.docloud.key = <Access key of the service>
 
-The solver also acts as an iterator. All solutions can be retrieved using a loop like:
+The different methods that can be called on a CpoSolver object are:
 
+ * :meth:`solve` simply solve the model and returns a solve result, if any.
+   For convenience reason, this method is also directly available on the CpoModel object (:meth:`docplex.cp.model.CpoModel.solve`).
+ * :meth:`search_next` and :meth:`end_search` allows to iterate on different solutions of the model.
+ * :meth:`refine_conflict` calls the conflict refiner that identifies a minimal conflict for the infeasibility of
+   the model.
+ * :meth:`propagate` calls the propagation that communicates the domain reduction of a decision variable to
+   all of the constraints that are stated over this variable.
+
+Except :meth:`solve`, these functions are only available with a local solver with release strictly greater than 12.6.3.
+When a method is not available, an exception *CpoNotSupportedException* is raised.
+
+If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
+the :class:`CpoSolver` object can acts as an iterator. All solutions can be retrieved using a loop like:
+::
    solver = CpoSolver(mdl)
    for sol in solver:
        sol.print_solution()
@@ -39,8 +54,9 @@ import docplex.cp.config as config
 from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context
 import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
+import docplex.cp.solver.environment_client as runenv
 
-import time, importlib, inspect
+import time, importlib, inspect, io
 
 
 ###############################################################################
@@ -54,19 +70,19 @@ STATUS_SOLVING           = "SolveRunning"     # Simple solve in progress
 STATUS_SEARCH_WAITING    = "SearchWaiting"    # Search started or waiting to call next
 STATUS_SEARCH_RUNNING    = "NextRunning"      # Search of next solution in progress
 STATUS_REFINING_CONFLICT = "RefiningConflict" # Solver refine conflict in progress
+STATUS_PROPAGATING       = "Propagating"      # Propagation in progress
 
 ###############################################################################
 ##  Public classes
 ###############################################################################
 
 class CpoSolverAgent(object):
-    """ CPO model abstract solver agent
-
-    This class is extended by actual solver agents of CPO models that can be addressed from CpoSolver generic class.
+    """ This class is an abstract class that must be extended by every solver agent that intend
+    to be called by :class:`CpoSolver` to solve a CPO model.
     """
 
     def __init__(self, model, params, context):
-        """ Create a new solver
+        """ Constructor
 
         Args:
             model:    Model to solve
@@ -143,8 +159,30 @@ class CpoSolverAgent(object):
         self._raise_not_supported()
 
 
+    def propagate(self):
+        """ This method invokes the propagation on the current model.
+
+        Constraint propagation is the process of communicating the domain reduction of a decision variable to
+        all of the constraints that are stated over this variable.
+        This process can result in more domain reductions.
+        These domain reductions, in turn, are communicated to the appropriate constraints.
+        This process continues until no more variable domains can be reduced or when a domain becomes empty
+        and a failure occurs.
+        An empty domain during the initial constraint propagation means that the model has no solution.
+
+        The result is a object of class CpoSolveResult, the same than the one returned by solve() method.
+        However, in this case, variable domains may not be completely defined.
+
+        Returns:
+            Propagation result (object of class CpoSolveResult)
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        self._raise_not_supported()
+
+
     def end(self):
-        """ End solver and release all resources.
+        """ End solver agent and release all resources.
         """
         self.model = None
         self.params = None
@@ -164,7 +202,7 @@ class CpoSolverAgent(object):
         cpostr = CpoCompiler(self.model, params=self.params).get_as_string()
 
         # Trace CPO model if required
-        lout = ctx.log_output
+        lout = ctx.get_log_output()
         if lout and ctx.trace_cpo:
             lout.write("Model '" + str(self.model.get_name()) + "' in CPO format:\n")
             lout.write(cpostr)
@@ -177,7 +215,7 @@ class CpoSolverAgent(object):
         if ctx.model.dump_directory:
             make_directories(ctx.model.dump_directory)
             file = ctx.model.dump_directory + "/" + utils.get_file_name_only(self.model.get_source_file()) + ".cpo"
-            with open(file, "w") as f:
+            with utils.open_utf8(file, 'w') as f:
                 f.write(cpostr)
 
         # Return
@@ -220,10 +258,10 @@ class CpoSolverAgent(object):
 
 
 class CpoSolver(object):
-    """ Generic CPO model solver
+    """ This class represents the public API of the object allowing to solve a CPO model.
 
-    This class is the visible solver that creates appropriate instance of solver agent according to
-    configuration parameter context.solver.agent.
+    It create the appropriate :class:`CpoSolverAgent` that actually implements solving functions, depending
+    on the value of the configuration parameter *context.solver.agent*.
     """
     __slots__ = ('model',     # Model to solve
                  'context',   # Solving context
@@ -233,14 +271,16 @@ class CpoSolver(object):
                 )
 
     def __init__(self, model, **kwargs):
-        """ Create a new CPO model solver
+        """ Constructor:
 
         Args:
-            model:          Model to solve
+            model:     Model to solve
         Optional args:
-            context:        Global solving context. If not given, context is the default context that is set in config.py.
-            params:         Solving parameters (CpoParameters) that overwrites those in solving context
-            etc             All other context parameters that can be changed
+            context:   Complete solving context. If not given, context is the default context that is set in config.py.
+            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
+            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (others):  All other context parameters that can be changed.
         """
         super(CpoSolver, self).__init__()
         self.solver = None
@@ -271,7 +311,7 @@ class CpoSolver(object):
         sctx.log(1, "Solve model '", self.model.get_name(), "' with agent '", aname, "'")
 
         # Retrieve solver agent class and create instance
-        actx = sctx[aname]
+        actx = sctx.get(aname)
         sclass = _get_solver_agent_class(aname, actx)
         self.solver = sclass(self.model, sctx.params, actx)
 
@@ -293,9 +333,20 @@ class CpoSolver(object):
     def solve(self):
         """ Solve the model
 
+        This function solves the model using CP Optimizer's built-in strategy.
+        The built-in strategy is determined by setting the parameter SearchType (see docplex.cp.parameters).
+        If the model contains an objective, then the optimal solution with respect to the objective will be calculated.
+        Otherwise, a solution satisfying all problem constraints will be calculated.
+
+        The function returns an object of the class CpoSolveResult (see docplex.cp.solution) that contains the solution
+        if exists, plus different information on the solving process.
+
         Returns:
-            Model solution (object of class CpoModelSolution)
+            Model solution (object of class CpoSolveResult)
         """
+        # Notify start solve to environment
+        runenv.start_solve(self)
+
         # Solve model
         stime = time.time()
         self.status = STATUS_SOLVING
@@ -311,8 +362,8 @@ class CpoSolver(object):
         # Store last solution
         self.last_sol = msol
 
-        # Update environment
-        _update_environment(self)
+        # Notify end solve to environment
+        runenv.end_solve(self)
 
         # Return solution
         return msol
@@ -320,6 +371,8 @@ class CpoSolver(object):
      
     def search_next(self):
         """ Get the next available solution.
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
 
         Returns:
             Next model solution (object of class CpoModelSolution)
@@ -332,6 +385,9 @@ class CpoSolver(object):
             self.status = STATUS_SEARCH_WAITING
         else:
             self._check_status(STATUS_SEARCH_WAITING)
+
+        # Notify start solve to environment
+        runenv.start_solve(self)
 
         # Solve model
         stime = time.time()
@@ -353,8 +409,8 @@ class CpoSolver(object):
         # Store last solution
         self.last_sol = msol
 
-        # Update environment
-        _update_environment(self)
+        # Notify end solve to environment
+        runenv.end_solve(self)
 
         # Return solution
         return msol
@@ -362,6 +418,8 @@ class CpoSolver(object):
 
     def end_search(self):
         """ End current search.
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
 
         Returns:
             Last (fail) model solution with last solve information (type CpoModelSolution)
@@ -382,8 +440,10 @@ class CpoSolver(object):
         There may be other conflicts in the model; consequently, repair of a given conflict
         does not guarantee feasibility of the remaining model.
 
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+
         Returns:
-            List of constraints tah cause the conflict.
+            List of constraints that cause the conflict (object of class CpoRefineConflictResult)
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
@@ -392,6 +452,34 @@ class CpoSolver(object):
         msol = self.solver.refine_conflict()
         self.status = STATUS_IDLE
         return msol
+
+
+    def propagate(self):
+        """ This method invokes the propagation on the current model.
+
+        Constraint propagation is the process of communicating the domain reduction of a decision variable to
+        all of the constraints that are stated over this variable.
+        This process can result in more domain reductions.
+        These domain reductions, in turn, are communicated to the appropriate constraints.
+        This process continues until no more variable domains can be reduced or when a domain becomes empty
+        and a failure occurs.
+        An empty domain during the initial constraint propagation means that the model has no solution.
+
+        The result is a object of class CpoSolveResult, the same than the one returned by solve() method.
+        However, variable domains may not be completely defined.
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+
+        Returns:
+            Propagation result (object of class CpoSolveResult)
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        self._check_status(STATUS_IDLE)
+        self.status = STATUS_PROPAGATING
+        psol = self.solver.propagate()
+        self.status = STATUS_IDLE
+        return psol
 
 
     def get_last_solution(self):
@@ -414,6 +502,8 @@ class CpoSolver(object):
     def next(self):
         """ For solution iteration, get the next available solution.
 
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+
         Returns:
             Next model solution (object of class CpoModelSolution)
         """
@@ -427,6 +517,8 @@ class CpoSolver(object):
 
     def __next__(self):
         """ Get the next available solution (same as next() for compatibility with Python 3)
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
 
         Returns:
             Next model solution (object of class  CpoModelSolution)
@@ -494,64 +586,3 @@ def _get_solver_agent_class(aname, sctx):
     # Return
     return sclass
 
-# Update environment when running on Python worker
-try:
-
-    import docplex.util.environment as runenv
-    def _update_environment(solver):
-        """ Update execution environment with job details
-
-        Args:
-           solver: Source CPpoolver
-        """
-        # Check if auto_publis config exists
-        pblsh = solver.context.solver.auto_publish
-        if pblsh is None:
-            return
-
-        # Skip if environment is local
-        env = runenv.get_environment()
-        if isinstance(env, runenv.LocalEnvironment):
-            return
-
-        # Publish solve details
-        if (pblsh is True) or pblsh.solve_details:
-            # Build solve details
-            msol = solver.last_sol
-            infos = msol.get_infos()
-            sdetails = {}
-            nbintvars = infos.get("NumberOfIntegerVariables")
-            if nbintvars is not None:
-                sdetails["MODEL_DETAIL_INTEGER_VARS"] = nbintvars
-            nbintervars = infos.get("NumberOfIntervalVariables")
-            if nbintervars is not None:
-                sdetails["MODEL_DETAIL_INTERVAL_VARS"] = nbintervars
-            nbseqvars = infos.get("NumberOfSequenceVariables")
-            if nbseqvars is not None:
-                sdetails["MODEL_DETAIL_SEQUENCE_VARS"] = nbseqvars
-            nbconstr = infos.get("NumberOfConstraints")
-            if nbconstr is not None:
-                sdetails["MODEL_DETAIL_CONSTRAINTS"] = nbconstr
-            # Set detail type
-            if (nbintervars in (0, None)) and (nbseqvars in (0, None)):
-                sdetails["MODEL_DETAIL_TYPE"] = "CPO CP"
-            else:
-                sdetails["MODEL_DETAIL_TYPE"] = "CPO Scheduling"
-            # Set objective if any
-            objctv = msol.get_objective_values()
-            if objctv is not None:
-                sdetails["PROGRESS_CURRENT_OBJECTIVE"] = ';'.join([str(x) for x in objctv])
-            # Submit details to environment
-            env.update_solve_details(sdetails)
-
-        # Write JSON solution as output
-        if (pblsh is True) or pblsh.json_solution:
-            json = solver.solver._get_last_json_result_string()
-            if json is not None:
-                with env.get_output_stream("solution.json") as fp:
-                    fp.write(json)
-
-except:
-
-    def _update_environment(solver):
-        pass

@@ -6,8 +6,14 @@
 # Author: Philippe LABORIE, IBM Analytics, France Lab, Gentilly
 
 """
-This module contains the objects representing CPO function expressions
-(Stepwise and Piecewise Linear functions).
+This module contains the objects representing CP Optimizer function expressions,
+Stepwise and Piecewise Linear functions:
+
+In particular, it defines the following classes:
+
+ * :class:`CpoFunction`: the root class of all function expressions,
+ * :class:`CpoSegmentedFunction`: for functions represented as a list of segments,
+ * :class:`CpoStepFunction`: for functions represented as a list of steps.,
 """
 
 from docplex.cp.catalog import Type_SegmentedFunction, Type_StepFunction
@@ -97,11 +103,11 @@ class CpoFunction(CpoExpr):
 
     @property
     def is_step_function(self):
-        return self.get_type() == Type_StepFunction
+        return self.is_type(Type_StepFunction)
 
     @property
     def is_segmented_function(self):
-        return self.get_type() == Type_SegmentedFunction
+        return self.is_type(Type_SegmentedFunction)
 
     def get_value(self, t):
         """ Gets the value of the function.
@@ -378,7 +384,7 @@ class CpoFunction(CpoExpr):
         if isinstance(other, CpoFunction):
             assert (self.is_segmented_function or not other.is_segmented_function)
             return self._add(other)
-        elif isinstance(other, (bool, int, float)):
+        elif is_number(other) or is_bool(other):
             return self._add_number(other)
 
     def __isub__(self, other):
@@ -386,7 +392,7 @@ class CpoFunction(CpoExpr):
             assert (self.is_segmented_function or not other.is_segmented_function)
             tmp = other.copy()._mul(-1)
             return self._add(tmp)
-        elif isinstance(other, (bool, int, float)):
+        elif is_number(other) or is_bool(other):
             return self._add_number(-other)
 
     def __add__(self, other):
@@ -395,7 +401,7 @@ class CpoFunction(CpoExpr):
                 return other.copy(Type_SegmentedFunction)._add(self)
             else:
                 return other.copy()._add(self)
-        elif isinstance(other, (bool, int, float)):
+        elif is_number(other) or is_bool(other):
             return self.copy()._add_number(other)
 
     def __radd__(self, value):
@@ -407,7 +413,7 @@ class CpoFunction(CpoExpr):
                 return other.copy(Type_SegmentedFunction)._mul(-1)._add(self)
             else:
                 return other.copy()._mul(-1)._add(self)
-        elif isinstance(other, (bool, int, float)):
+        elif is_number(other) or is_bool(other):
             return self.copy()._add_number(-other)
 
     def __neg__(self):
@@ -453,9 +459,20 @@ class CpoFunction(CpoExpr):
 
 
 class CpoSegmentedFunction(CpoFunction):
-    def __init__(self, segment0=None, segments=None, name=None):
-        """ Segmented function.
+    """ Class representing a segmented function.
 
+    In CP Optimizer, piecewise linear functions are typically used in modeling a known function of time,
+    for instance the cost that is incurred for completing an activity after a known date.
+
+    A segmented function is a piecewise linear function defined on an interval [xmin, xmax)
+    which is partitioned into segments such that over each segment, the function is linear.
+
+    When two consecutive segments of the function are colinear, these segments are merged so that the function
+    is always represented with the minimal number of segments.
+    """
+
+    def __init__(self, segment0=None, segments=None, name=None):
+        """
         Args:
             segment0 (tuple): Initial segment of the function (slope, vright).
             segments (list): Segments of the function represented as a list of
@@ -487,6 +504,16 @@ class CpoSegmentedFunction(CpoFunction):
 
 
 class CpoStepFunction(CpoFunction):
+    """ Class representing a step function.
+
+    In CP Optimizer, stepwise functions are typically used to model the efficiency of a resource over time.
+
+    A stepwise function is a special case of piecewise linear function where all slopes are equal to 0 and the
+    domain and image of the function are integer.
+
+    When two consecutive steps of the function have the same value, these steps are merged so that the function
+    is always represented with the minimal number of steps.
+    """
     def __init__(self, steps=None, name=None):
         """ Step function.
 

@@ -57,7 +57,7 @@ class ModelAggregator(object):
             if 0 == coef:
                 continue
 
-            safe_coef = linear_factory.to_valid_number(coef, context=lambda : "Model.dot({0!s}..)".format(item))
+            safe_coef = linear_factory.to_valid_number(coef, context_msg=lambda : "Model.dot({0!s}..)".format(item))
             if isinstance(item, Var):
                 lcc.update_from_item_value(item, safe_coef)
 
@@ -133,17 +133,20 @@ class ModelAggregator(object):
             elif isinstance(item, ZeroExpr):
                 pass
             elif is_number(item):
-                accumulated_ct += linear_factory.to_valid_number(item, context="Model.sum()")
+                accumulated_ct += linear_factory.to_valid_number(item, context_msg="Model.sum()")
             elif isinstance(item, QuadExpr):
                 for v, k in item.linear_part.iter_terms():
                     lcc.update_from_item_value(v, k)
                 if qcc is None:
                     qcc = cctype()
                 qcc.update(item._quadterms)
+                accumulated_ct += item.constant
+
             else:
                 try:
                     le = item.to_linear_expr()
                     lcc.update(le._get_terms_dict())
+                    accumulated_ct += le.constant
                 except AttributeError:
                     self._model.fatal("Model.sum() expects numbers/variables/expressions, got: {0!s}", item)
 

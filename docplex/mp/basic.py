@@ -5,7 +5,11 @@
 # --------------------------------------------------------------------------
 from enum import Enum
 
-from docplex.mp.compat23 import StringIO
+# Do not use StringIO from docplex.mp.compat23 here, since we want io.StringIO
+# so that the StringIO can accept unicode and strings (cStringIO does not accept unicode)
+from io import StringIO
+import sys
+
 from docplex.mp.utils import is_number, is_string, str_holo
 
 
@@ -38,6 +42,10 @@ class ModelingObjectBase(object):
         self._name = name
         if name:
             self._has_automatic_name = False
+
+    def _get_safe_name(self):
+        # INTERNAL: always return a string
+        return self._name or ''
 
     def check_name(self, new_name):
         # INTERNAL: basic method for checking names.
@@ -115,6 +123,15 @@ class ModelingObjectBase(object):
 
     def is_quad_expr(self):
         return False
+
+    def __unicode__(self):
+        return self.to_string()
+
+    def __str__(self):
+        if sys.version_info[0] == 2:
+            return self.__unicode__().encode('utf-8')
+        else:
+            return self.__unicode__()
 
 
 class ModelingObject(ModelingObjectBase):
@@ -240,18 +257,15 @@ class Expr(ModelingObjectBase):
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         raise NotImplementedError  # pragma: no cover
 
-    def __str__(self):
-        return self.to_string()
-
     def _num_to_stringio(self, oss, num, ndigits=None):
         # INTERNAL
         if ndigits is None:
             ndigits = self.model.float_precision
         if num == int(num):
-            oss.write('%d' % num)
+            oss.write(u'%d' % num)
         else:
             # use second arg as nb digits:
-            oss.write("{0:.{1}f}".format(num, ndigits))
+            oss.write(u"{0:.{1}f}".format(num, ndigits))
 
     def __pos__(self):
         # + e is identical to e
@@ -322,9 +336,22 @@ class Expr(ModelingObjectBase):
         """
         self.model.unsupported_relational_operator_error(self, "<", e)
 
+    def get_constraint_factory(self, arg):
+        # INTERNAL
+        try:
+            if arg.is_quad_expr():
+                return self._model._qfactory
+        except AttributeError:
+            pass
+        return self._model._lfactory
+
 
 # --- Priority class used for relaxation
 class Priority(Enum):
+    """
+    This enumerated class defines the priorities: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH, MANDATORY.
+    """
+
     # priority values are not sequential integers
     VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH = range(100, 6 * 100, 100)
     MANDATORY = 999999999
@@ -333,18 +360,14 @@ class Priority(Enum):
     def default_priority():
         return Priority.MEDIUM
 
+    def __repr__(self):
+        return 'Priority<{}>'.format(self.name)
+
     @staticmethod
     def all_sorted():
         # INTERNAL
         sorted_properties = [Priority.VERY_LOW, Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.VERY_HIGH]
         return sorted_properties
-
-    def get_index(self):
-        return self.value / 100
-
-    def _level(self):
-        # INTERNAL: retuens an integer value for priority
-        return self.value
 
     def print_name(self):
         priority_names = {Priority.MANDATORY: 'Mandatory',
@@ -359,11 +382,12 @@ class Priority(Enum):
         # INTERNAL: returns a CPLEX preference factor as a poer of "base"
         # MEDIUM priority has always a preference factor of 1
         assert is_number(base)
+        medium_index = Priority.MEDIUM.value / 100
         if self.is_mandatory():
             return 1e+20
         else:
             # pylint complains about no value member but is wrong!
-            diff = self.get_index() - Priority.MEDIUM.get_index()
+            diff = self.value / 100 - medium_index
             factor = 1.0
             pdiff = diff if diff >= 0 else -diff
             for _ in range(0, int(pdiff)):
@@ -372,7 +396,7 @@ class Priority(Enum):
 
     def less_than(self, other):
         assert isinstance(other, Priority)
-        return self._level() < other._level()
+        return self.value < other.value
 
     def __lt__(self, other):
         return self.less_than(other)
@@ -383,7 +407,52 @@ class Priority(Enum):
     def is_mandatory(self):
         return self == Priority.MANDATORY
 
+    @staticmethod
+    def _name_to_prio_mapping():
+        return {'mandatory': Priority.MANDATORY,
+                'high': Priority.HIGH,
+                'very_high': Priority.VERY_HIGH,
+                'medium': Priority.MEDIUM,
+                'low': Priority.LOW,
+                'very_low': Priority.VERY_LOW}
 
+    @staticmethod
+    def _parse(arg, logger, accept_none=True, do_raise=True):
+        ''' Converts its argument to a ``Priority`` object.
+
+        Returns `default_priority` if the text is not a string, empty, or does not match.
+
+        Args;
+            arg: The argument to convert.
+
+            logger: An error logger
+
+            accept_none: True if None is a possible value. Typically,
+                Constraint.set_priority accepts None as a way to
+                remove the constraint's own priority.
+
+            do_raise: A Boolean flag indicating if an exception is to be raised if the value
+                is not recognized.
+
+        Returns:
+            A Priority enumerated object.
+        '''
+        if isinstance(arg, Priority):
+            return arg
+        elif is_string(arg):
+            key = arg.lower()
+            mapped = Priority._name_to_prio_mapping().get(key)
+            if mapped is None:
+                if do_raise:
+                    logger.fatal('String does not match priority type: {}', arg)
+                else:
+                    logger.error('String does not match priority type: {}', arg)
+                    return None
+            return mapped
+        elif accept_none and arg is None:
+            return None
+        else:
+            logger.fatal('Cannot convert to a priority: {0!s}'.format(arg))
 # ---
 
 
@@ -438,3 +507,4 @@ class ObjectiveSense(Enum):
 
 
 # noinspection PyUnusedLocal
+

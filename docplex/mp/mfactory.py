@@ -8,9 +8,11 @@
 
 import math
 
+from docplex.mp.sosvarset import SOSVariableSet
 from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr
-from docplex.mp.linear import _DummyFeasibleConstraint, _DummyInfeasibleConstraint
-from docplex.mp.linear import LinearConstraintType, LinearConstraint, RangeConstraint, IndicatorConstraint
+from docplex.mp.constants import ComparisonType, SOSType
+from docplex.mp.constr import LinearConstraint, _DummyFeasibleConstraint, _DummyInfeasibleConstraint, RangeConstraint, \
+    IndicatorConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr
 from docplex.mp.compat23 import fast_range
 from docplex.mp.utils import *
@@ -96,7 +98,7 @@ class ModelFactory(object):
         self.zero_expr = ZeroExpr(model)
         self.one_expr = None
 
-    def get_one_expr(self):
+    def _get_cached_one_expr(self):
         if self.one_expr is None:
             self.one_expr = LinearExpr(self._model, e=None, constant=1, safe=True)
         return self.one_expr
@@ -105,7 +107,7 @@ class ModelFactory(object):
         return _DummyFeasibleConstraint(self._model, self.zero_expr, name=name)
 
     def new_trivial_infeasible_ct(self):
-        return _DummyInfeasibleConstraint(self._model, self.zero_expr, self.get_one_expr())
+        return _DummyInfeasibleConstraint(self._model, self.zero_expr, self._get_cached_one_expr())
 
     def fatal(self, msg, *args):
         self._model.fatal(msg, args)
@@ -267,26 +269,34 @@ class ModelFactory(object):
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
-    def constant_expr(self, cst, context=None):
+    def constant_expr(self, cst, safe=False, context=None, force_clone=False):
         if 0 == cst:
             return self.zero_expr
+        elif 1 ==  cst:
+            if force_clone:
+                return LinearExpr(self._model, e=None, constant=1, safe=True)
+            else:
+                return self._get_cached_one_expr()
         else:
-            k = self.to_valid_number(cst, context=context)
+            if safe:
+                k = cst
+            else:
+                k = self._model._checker.to_valid_number(cst, context_msg=context)
             return LinearExpr(self._model, e=None, constant=k, safe=True)
 
     def linear_expr(self, e=0, constant=0, name=None):
         expr = LinearExpr(self._model, e, constant, name)
         return expr
 
-    def to_valid_number(self, e, context=None, infinity=1e+20):
-        if not is_number(e):
+    def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
+        if not checked_num and not is_number(e):
             self.fatal("Not a number: {}".format(e))
         elif math.isnan(e):
             msg = "NaN value found in expression"
             try:
-                msg = "{0}: {1}".format(context(), msg)
+                msg = "{0}: {1}".format(context_msg(), msg)
             except TypeError:
-                msg = "{0}: {1}".format(context, msg)
+                msg = "{0}: {1}".format(context_msg, msg)
             self.fatal(msg)
         elif -infinity <= e <= infinity:
             return e
@@ -308,7 +318,7 @@ class ModelFactory(object):
         elif isinstance(e, (AbstractLinearExpr, Var, ZeroExpr)):
             return e.to_linear_expr()
         elif is_number(e):
-            return self.constant_expr(cst=e, context=context)
+            return self.constant_expr(cst=e, context=context, force_clone=force_clone)
         else:
             try:
                 return e.to_linear_expr()
@@ -332,11 +342,10 @@ class ModelFactory(object):
             self.fatal("cannot convert to expression: {0!r}", e)
 
     def new_monomial_expr(self, dvar, coef):
-        # assume coef is a number here
         if 0 == coef:
             return self.zero_expr
         else:
-            return MonomialExpr(self._model, dvar, coef)
+            return MonomialExpr(self._model, dvar, coef, checked_num=False)
 
     def _new_binary_constraint(self, lhs, ctype, rhs, name=None):
         # noinspection PyPep8
@@ -349,13 +358,13 @@ class ModelFactory(object):
         return ct
 
     def new_le_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.LE, rhs, name=ctname)
+        return self._new_binary_constraint(e, ComparisonType.LE, rhs, name=ctname)
 
     def new_eq_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.EQ, rhs, name=ctname)
+        return self._new_binary_constraint(e, ComparisonType.EQ, rhs, name=ctname)
 
     def new_ge_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.GE, rhs, name=ctname)
+        return self._new_binary_constraint(e, ComparisonType.GE, rhs, name=ctname)
 
     def new_range_constraint(self, lb, expr, rhs, ctname=None):
         # INTERNAL
@@ -418,3 +427,9 @@ class ModelFactory(object):
 
         # send objective
         self_engine.set_objective(self_model.objective_sense, self_model.objective_expr)
+
+
+    def new_sos(self, dvars, sos_type, name):
+        # INTERNAL
+        new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, name=name)
+        return new_sos

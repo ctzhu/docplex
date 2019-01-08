@@ -72,12 +72,13 @@ class JobClient(object):
         # Create attachment name
         name = _normalize_job_name(name)
         # Create job
-        args = {'attachments': [{'name': name, 'data': cpodata}]}
+        args = {'attachments': [{'name': name}]}
         rsp = self._request('post', self.ctx.url + "/jobs", [201], data=json.dumps(args))
         self.jobid = rsp.headers['location'].rsplit("/", 1)[1]
         self.ctx.log(2, "Job created: ", self.jobid)
         # Upload attachments
         hdrs = self.headers.copy()
+        cpodata = cpodata.encode('utf-8')
         hdrs['Content-Type'] = 'application/octet-stream'
         self._request('put', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + name + "/blob", [204], data=cpodata, headers=hdrs)
         self.ctx.log(2, "Model data '", name, "' uploaded (", len(cpodata), " bytes)")
@@ -244,6 +245,8 @@ class JobClient(object):
             astc:    List of expected status codes
             headers: Extra headers
             kwargs:  Arguments to pass to request
+        Returns:
+            Request response
         """
         # Send request
         kwargs.setdefault('headers',         self.headers)

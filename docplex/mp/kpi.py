@@ -7,7 +7,7 @@
 from docplex.mp.linear import Var
 from docplex.mp.basic import Expr
 
-from docplex.mp.utils import is_function
+from docplex.mp.utils import is_number, is_function, str_holo
 
 
 class KPI(object):
@@ -84,6 +84,9 @@ class KPI(object):
                 return cloned
         elif is_function(kpi_arg):
             return FunctionalKPI(kpi_arg, model, kpi_name)
+        elif is_number(kpi_arg):
+            kpi_fn = lambda _: kpi_arg
+            return FunctionalKPI(kpi_fn, model, kpi_name)
         else:
             model.fatal("Cannot interpret this as a KPI: {0!r}. expecting expression, variable or function", kpi_arg)
 
@@ -143,7 +146,7 @@ class DecisionKPI(KPI):
         return DecisionKPI(self._dobj, self._name)
 
     def __repr__(self):
-        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str(self._dobj))
+        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_holo(self._dobj, maxlen=64))
 
 
 class FunctionalKPI(KPI):

@@ -6,8 +6,8 @@
 # Generated automatically
 
 """
-This module handles the parameters that can be assigned to the solver to configure
-the processing of a model.
+This module handles the parameters that can be assigned to CP Optimizer to configure
+the solving of a model.
 
 The class `CpoParameters` contains the list of modifiable parameters
 expressed as properties with getters and setters.
@@ -30,7 +30,7 @@ If a parameter is not set, the value returned by the first two access forms is N
 Getting the list of all parameters that have been changed can be done by calling the method
 `keys()`.
 
-Note that PEP8 naming conventions are not applied here, to keep parameter names as they
+Note that PEP8 naming convention is not applied here, to keep parameter names as they
 are in the solver, so that they can be referenced in solver logs.
 """
 
@@ -1319,6 +1319,36 @@ class CpoParameters(Context):
     TimeMode = property(get_TimeMode, set_TimeMode)
 
 
+    def set_UseFileLocations(self, val):
+        """
+        This parameter controls whether CP Optimizer processes file locations. With each constraint,
+        variable or expression it is possible to associate a source file location (file name and line
+        number). CP Optimizer can use locations later for reporting errors and conflicts. Locations are also
+        included in exported/dumped models (#line directives). Legal values for this parameter are On (the
+        default) and Off. When the value is Off then CP Optimizer ignores locations in the input model and
+        also does not export them in CPO file format (functions dumpModel and exportModel).
+        The value must be a symbol in [Off, On].
+        Default value is On.
+        """
+        self.set_attribute('UseFileLocations', val)
+
+    def get_UseFileLocations(self):
+        """ Value of parameter UseFileLocations, None if not defined.
+
+        This parameter controls whether CP Optimizer processes file locations. With each constraint,
+        variable or expression it is possible to associate a source file location (file name and line
+        number). CP Optimizer can use locations later for reporting errors and conflicts. Locations are also
+        included in exported/dumped models (#line directives). Legal values for this parameter are On (the
+        default) and Off. When the value is Off then CP Optimizer ignores locations in the input model and
+        also does not export them in CPO file format (functions dumpModel and exportModel).
+        The value must be a symbol in [Off, On].
+        Default value is On.
+        """
+        return self.get_attribute('UseFileLocations')
+
+    UseFileLocations = property(get_UseFileLocations, set_UseFileLocations)
+
+
     def set_WarningLevel(self, val):
         """
         This parameter controls the level of warnings issued by CP Optimizer when a solve is launched.
@@ -1384,4 +1414,4 @@ class CpoParameters(Context):
 
 
 # List of all available parameter names
-ALL_PARAMETER_NAMES = ("AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit", "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit", "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit", "CountDifferentInferenceLevel", "CountInferenceLevel", "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing", "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch", "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod", "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel", "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed", "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel", "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "WarningLevel", "Workers",)
+ALL_PARAMETER_NAMES = ("AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit", "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit", "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit", "CountDifferentInferenceLevel", "CountInferenceLevel", "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing", "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch", "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod", "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel", "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed", "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel", "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations", "WarningLevel", "Workers",)

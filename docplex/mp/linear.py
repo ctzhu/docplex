@@ -7,16 +7,16 @@
 # pylint: disable=too-many-lines
 from __future__ import print_function
 
-import operator
 from collections import OrderedDict
+
 from six import iteritems
 
-from enum import Enum
-
+from docplex.mp.constants import ComparisonType
+from docplex.mp.compat23 import unitext
 from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
-from docplex.mp.xcounter import ExprCounter, FastOrderedDict
+from docplex.mp.xcounter import ExprCounter
 
 
 class Var(ModelingObject):
@@ -40,7 +40,6 @@ class Var(ModelingObject):
         self.__id = None  # cache the id() for perf
 
         if _safe_domain:
-
             # this is called by the var_list
             self._lb = lb
             self._ub = ub
@@ -74,7 +73,7 @@ class Var(ModelingObject):
             return False
         return True
 
-    def typecheck_initial_value(self, numeric_value):
+    def accept_initial_value(self, numeric_value):
         if not self.vartype.accept_value(numeric_value):
             return False
         return self.lb <= numeric_value <= self.ub
@@ -84,7 +83,7 @@ class Var(ModelingObject):
         if not is_string(new_name) or not new_name:
             self.fatal("Variable name accepts only non-empty strings, got: {0!s}", new_name)
         elif new_name.find(' ') >= 0:
-            self.warning("Variable name contains blank space, var: {0!s}, name: {1!s}", self, new_name)
+            self.warning("Variable name contains blank space, var: {0!s}, name: \'{1!s}\'", self, new_name)
 
     def __hash__(self):
         # INTERNAL Necessary for python 3
@@ -98,7 +97,7 @@ class Var(ModelingObject):
 
     def to_linear_expr(self):
         # INTERNAL
-        expr = self._get_model().linear_expr(self)
+        expr = self._get_model()._linear_expr(self)
         expr._transient = True
         return expr
         # return MonomialExpr(self._get_model(), self, coeff=1)
@@ -241,14 +240,24 @@ class Var(ModelingObject):
     def _get_solution_value(self):
         return self._get_model()._get_solution().get_value(self)
 
-    def le_constraint(self, other):
-        return self._get_model().le_constraint(self, other)
+    def get_constraint_factory(self, arg):
+        # INTERNAL
+        try:
+            if arg.is_quad_expr():
+                return self._model._qfactory
+        except AttributeError:
+            pass
+        return self._model._lfactory
 
-    def eq_constraint(self, other):
-        return self._get_model().eq_constraint(self, other)
+    def le_constraint(self, rhs):
+        return self.get_constraint_factory(rhs).new_le_constraint(self, rhs)
 
-    def ge_constraint(self, other):
-        return self._get_model().ge_constraint(self, other)
+
+    def eq_constraint(self, rhs):
+        return self.get_constraint_factory(rhs).new_eq_constraint(self, rhs)
+
+    def ge_constraint(self, rhs):
+        return self.get_constraint_factory(rhs).new_ge_constraint(self, rhs)
 
     def __le__(self, e):
         return self.le_constraint(e)
@@ -278,8 +287,10 @@ class Var(ModelingObject):
         if is_number(e):
             if 0 == e:
                 return self.zero_expr()
+            elif 1 == e:
+                return self
             else:
-                return MonomialExpr(self._model, self, e)
+                return MonomialExpr(self._model, self, e, checked_num=True)
         elif isinstance(e, ZeroExpr):
             return e
         elif isinstance(e, (Var, Expr)):
@@ -294,6 +305,9 @@ class Var(ModelingObject):
         return self.plus(e)
 
     def plus(self, e):
+        if is_number(e):
+            if e == 0:
+                return self
         try:
             return self.to_linear_expr().add(e)
         except DOCPlexQuadraticArithException:
@@ -306,6 +320,9 @@ class Var(ModelingObject):
         return self.minus(e)
 
     def minus(self, e):
+        if is_number(e):
+            if e == 0:
+                return self
         try:
             return self.to_linear_expr().subtract(e)
         except DOCPlexQuadraticArithException:
@@ -317,6 +334,9 @@ class Var(ModelingObject):
         return expr.subtract(self)
 
     def divide(self, e):
+        if is_number(e):
+            if e == 1:
+                return self
         expr = self.to_linear_expr()
         return expr.divide(e)
 
@@ -535,14 +555,16 @@ class AbstractLinearExpr(Expr):
         return self.ge_constraint(other)
 
     def le_constraint(self, other):
-        return self._get_model().le_constraint(self, other)
+        return self.get_constraint_factory(other).new_le_constraint(self, other)
 
     def eq_constraint(self, other):
-        return self._get_model().eq_constraint(self, other)
+        return self.get_constraint_factory(other).new_eq_constraint(self, other)
 
     def ge_constraint(self, other):
-        return self._get_model().ge_constraint(self, other)
+        return self.get_constraint_factory(other).new_ge_constraint(self, other)
 
+    def iter_quads(self):
+        return iter_emptyset()
 
 
 class MonomialExpr(AbstractLinearExpr):
@@ -554,11 +576,17 @@ class MonomialExpr(AbstractLinearExpr):
     __slots__ = ("_dvar", "_coef")
 
     # noinspection PyMissingConstructor
-    def __init__(self, model, dvar, coeff):
+    def __init__(self, model, dvar, coeff, checked_num=False, safe=False):
         self._model = model  # faster than to call recursively init methods...
         self._name = None
         self._dvar = dvar
-        self._coef = model._lfactory.to_valid_number(coeff, context=lambda: dvar.name + ".times()")
+        # check perf on that
+        if safe:
+            self._coef = coeff
+        else:
+            self._coef = model._lfactory.to_valid_number(coeff,
+                                                         checked_num=checked_num,
+                                                         context_msg=lambda: dvar.name + ".times()")
 
     def number_of_variables(self):
         return 1
@@ -581,11 +609,11 @@ class MonomialExpr(AbstractLinearExpr):
         return 1 == self._coef
 
     def clone(self):
-        return MonomialExpr(self.model, self._dvar, self._coef)
+        return MonomialExpr(self.model, self._dvar, self._coef, safe=True)
 
     def copy(self, target_model, var_mapping):
         copy_var = var_mapping[self._dvar]
-        return MonomialExpr(target_model, dvar=copy_var, coeff=self._coef)
+        return MonomialExpr(target_model, dvar=copy_var, coeff=self._coef, safe=True)
 
     def iter_variables(self):
         yield self._dvar
@@ -724,17 +752,17 @@ class MonomialExpr(AbstractLinearExpr):
         self_coef = self._coef
         if self_coef != 1:
             if self_coef < 0:
-                oss.write('-')
+                oss.write(u'-')
                 self_coef = - self_coef
             if self_coef != 1:
                 self._num_to_stringio(oss, num=self_coef, ndigits=nb_digits)
             if use_space:
-                oss.write(' ')
+                oss.write(u' ')
             if prod_symbol:
-                oss.write(prod_symbol)
+                oss.write(unitext(prod_symbol))
                 if use_space:
-                    oss.write(' ')
-        oss.write(var_namer(self._dvar))
+                    oss.write(u' ')
+        oss.write(unitext(var_namer(self._dvar)))
 
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
@@ -1096,9 +1124,10 @@ class LinearExpr(AbstractLinearExpr):
     # noinspection PyPep8
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         # INTERNAL
+        # Writes unicode repsentation of self
         c = 0
         # noinspection PyPep8Naming
-        SP = ' '
+        SP = u' '
 
         for v, coeff in iteritems(self.__terms):
             if 0 == coeff:
@@ -1113,7 +1142,7 @@ class LinearExpr(AbstractLinearExpr):
             # at the end of this block coeff is positive
             wrote_sign = False
             if coeff < 0 or c > 0:
-                oss.write('-' if coeff < 0 else '+')
+                oss.write(u'-' if coeff < 0 else u'+')
                 wrote_sign = True
                 if coeff < 0:
                     coeff = -coeff
@@ -1124,12 +1153,12 @@ class LinearExpr(AbstractLinearExpr):
                     oss.write(SP)
                 self._num_to_stringio(oss, coeff, nb_digits)
                 if prod_symbol:
-                    oss.write(prod_symbol)
+                    oss.write(unitext(prod_symbol))
             elif wrote_sign and c > 0 and use_space:
                 oss.write(SP)
             elif not use_space and varname[0].isdigit():
                 oss.write(SP)
-            oss.write(varname)
+            oss.write(unitext(varname))
             c += 1
 
         k = self.constant
@@ -1137,10 +1166,10 @@ class LinearExpr(AbstractLinearExpr):
             self._num_to_stringio(oss, k, nb_digits)
         elif k != 0:
             if k < 0:
-                sign = '-'
+                sign = u'-'
                 k = -k
             else:
-                sign = '+'
+                sign = u'+'
             if use_space: oss.write(SP)
             oss.write(sign)
             if use_space: oss.write(SP)
@@ -1173,19 +1202,16 @@ class LinearExpr(AbstractLinearExpr):
         """ Adds an expression to self.
 
         Note:
-            This method does not create any new expression but modifies the `self` instance.
-
+            This method does not create an new expression but modifies the `self` instance.
 
         Args:
-            e: the expression to be added. Can be either a variable, an expression, or a number.
+            e: The expression to be added. Can be a variable, an expression, or a number.
 
         Returns:
-            the modified self.
+            The modified self.
 
         See Also:
-            :func:`plus` to compute a sum without modifying the self instance.
-
-        PROOFREAD
+            The method :func:`plus` to compute a sum without modifying the self instance.
         """
         self._check_mutable()
         if isinstance(e, Var):
@@ -1217,21 +1243,18 @@ class LinearExpr(AbstractLinearExpr):
         return iteritems(self.__terms)
 
     def subtract(self, e):
-        """ Subtracts an expression to self.
+        """ Subtracts an expression from this expression.
         Note:
-            This method does not create any new expression but modifies the `self` instance.
-
+            This method does not create a new expression but modifies the `self` instance.
 
         Args:
-            e: the expression to be subtracted. Can be either a variable, an expression, or a number.
+            e: The expression to be subtracted. Can be either a variable, an expression, or a number.
 
         Returns:
-            the modified self.
+            The modified self.
 
         See Also:
-            :func:`minus` to compute a difference without modifying the self instance.
-
-        PROOFREAD
+            The method :func:`minus` to compute a difference without modifying the `self` instance.
         """
         self._check_mutable()
         if isinstance(e, Var):
@@ -1274,21 +1297,19 @@ class LinearExpr(AbstractLinearExpr):
                 self_terms[v] = k * factor
 
     def multiply(self, e):
-        """ Mutiplies self by an expression.
+        """ Multiplies this expression by an expression.
 
         Note:
-            This method does not create any new expression but modifies the `self` instance.
+            This method does not create a new expression but modifies the `self` instance.
 
         Args:
-            e: the expression that is used to multiply self.
+            e: The expression that is used to multiply `self`.
 
         Returns:
-            the modified self.
+            The modified `self`.
 
         See Also:
-            :func:`times` to compute a multiplication without modifying the self instance.
-
-        PROOFREAD
+            The method :func:`times` to compute a multiplication without modifying the `self` instance.
         """
         self._check_mutable()
         if is_number(e):
@@ -1319,18 +1340,16 @@ class LinearExpr(AbstractLinearExpr):
         return self.model._qfactory.new_linexpr_product(self, self)
 
     def divide(self, e):
-        """ Divides this expression by an operand
+        """ Divides this expression by an operand.
 
         Args:
-            e: the operand by which the self expression is divided. Only nonzero number is allowed here.
+            e: The operand by which the self expression is divided. Only nonzero numbers are permitted.
 
         Note:
-            This method does not create any new expression but modifies the `self` instance.
+            This method does not create a new expression but modifies the `self` instance.
 
         Returns:
-            The modified self.
-
-        PROOFREAD
+            The modified `self`.
         """
         self.model.typecheck_as_denominator(e, numerator=self)
         inverse = 1.0 / float(e)
@@ -1368,35 +1387,31 @@ class LinearExpr(AbstractLinearExpr):
             return e.rminus(self)
 
     def times(self, e):
-        """ Computes the multiplication of self with an operand.
+        """ Computes the multiplication of this expression with an operand.
 
         Note:
-            This method does not modify self but returns a new expression instance.
+            This method does not modify the `self` instance but returns a new expression instance.
 
         Args:
-            e: the expression that is used to multiply self.
+            e: The expression that is used to multiply `self`.
 
         Returns:
-            a new instance of expression.
-
-        PROOFREAD
+            A new instance of expression.
         """
         cloned = self.clone_if_necessary()
         return cloned.multiply(e)
 
     def quotient(self, e):
-        """ Computes the division of self with an operand.
+        """ Computes the division of this expression with an operand.
 
         Note:
-            This method does not modify self but returns a new expression instance.
+            This method does not modify the `self` instance but returns a new expression instance.
 
         Args:
-            e: the expression that is used to modif self. Only nonzero numbers are allowed here.
+            e: The expression that is used to modify `self`. Only nonzero numbers are permitted.
 
         Returns:
-            a new instance of expression.
-
-            PROOFREAD
+            A new instance of expression.
         """
         cloned = self.clone_if_necessary()
         cloned.divide(e)
@@ -1444,9 +1459,6 @@ class LinearExpr(AbstractLinearExpr):
     def __rmul__(self, e):
         return self.times(e)
 
-    def __str__(self):
-        return self.to_string()
-
     @property
     def solution_value(self):
         """ This property returns the solution value of the variable.
@@ -1492,605 +1504,7 @@ class LinearExpr(AbstractLinearExpr):
     def __repr__(self):
         return "docplex.mp.LinearExpr({0})".format(self.truncated_str())
 
-
-class LinearConstraintType(Enum):
-    """This enumerated class defines the various types of linear constraints:
-
-        - LE for e1 <= e2 constraints
-
-        - EQ for e1 == e2 constraints
-
-        - GE for e1 >= e2 constraints
-
-        where e1 and e2 denote linear expressions.
-    """
-    LE, EQ, GE = range(1, 4)
-
-    # NOTE: Never add a static field in an enum class: it would be interpreted as an other enum
-
-    @property
-    def short_name(self):
-        return _LinearConstraintTypeUtils.get_name(self)
-
-    def get_operator_symbol(self):
-        """ Returns a string operator for the constraint.
-
-        Example:
-            Returns string "<=" for a e1 <= e2 constraint.
-
-        Returns:
-            string: A string describing the logical operator used in the constraint.
-        """
-        return _LinearConstraintTypeUtils.get_operator(self)
-
-
-class _LinearConstraintTypeUtils(object):
-    # INTERNAL.
-    # raison d'etre: cannot add static fields in an enumerated type, so we deport them elsewhere
-
-    @staticmethod
-    def _get_map_value(cttype, attribute_map, default_value=None):
-        if cttype not in attribute_map:
-            raise DOcplexException("unexpected constraint type: {0!s}".format(cttype))  # pragma: no cover
-
-        return attribute_map.get(cttype, default_value)
-
-    _operator_symbol_map = {LinearConstraintType.LE: "<=",
-                            LinearConstraintType.EQ: "==",
-                            LinearConstraintType.GE: ">="}
-    _name_map = {LinearConstraintType.LE: "LE",
-                 LinearConstraintType.EQ: "EQ",
-                 LinearConstraintType.GE: "GE"}
-
-    _python_op_map = {LinearConstraintType.LE: operator.le,
-                      LinearConstraintType.EQ: operator.eq,
-                      LinearConstraintType.GE: operator.ge}
-
-    @staticmethod
-    def get_operator(cttype):
-        return _LinearConstraintTypeUtils._get_map_value(cttype, _LinearConstraintTypeUtils._operator_symbol_map)
-
-    @staticmethod
-    def get_name(cttype):
-        return _LinearConstraintTypeUtils._get_map_value(cttype, _LinearConstraintTypeUtils._name_map)
-
-    @staticmethod
-    def get_python_operator_fn(cttype):
-        """
-        Returns the Python operator function associated with the ct.
-        For example, returns operator.ge(a, b) for a GE constraint.
-        :param cttype: A binary constraint type (LE, EQ, GE.
-        :return: A Python operator function.
-        """
-        return _LinearConstraintTypeUtils._get_map_value(cttype, _LinearConstraintTypeUtils._python_op_map)
-
-
-class AbstractConstraint(ModelingObject):
-    __slots__ = ()
-
-    def __init__(self, model, name=None):
-        ModelingObject.__init__(self, model, name)
-
-    def _unsupported_relational_op(self, op_string, other):
-        self.fatal("Cannot use relational operator {1} on linear constraint: {0!s}", self, op_string)
-
-    def __le__(self, e):
-        self._unsupported_relational_op("<=", e)
-
-    def __ge__(self, e):
-        self._unsupported_relational_op(">=", e)
-
-    def __lt__(self, e):
-        self._unsupported_relational_op("<", e)
-
-    def __gt__(self, e):
-        self._unsupported_relational_op(">", e)
-
-    # def __eq__(self, e):
-    # self._unsupported_relational_op("==", e)
-
-    def _no_linear_ct_in_logical_test_error(self):
-        raise TypeError("cannot convert a constraint to boolean: {0!s}".format(self))
-
-    def __nonzero__(self):
-        self._no_linear_ct_in_logical_test_error()
-
-    def __bool__(self):
-        # python 3 version of nonzero
-        self._no_linear_ct_in_logical_test_error()  # pragma: no cover
-
-    def iter_variables(self):
-        raise NotImplementedError  # pragma: no cover
-
-    def copy(self, target_model, var_map):
-        raise NotImplementedError  # pragma: no cover
-
-    # noinspection PyMethodMayBeStatic
-    def notify_deleted(self):
-        # INTERNAL
-        pass  # pragma: no cover
-
-    def short_typename(self):
-        return "constraint"
-
-    def is_trivial(self):
-        return False
-
-
-# noinspection PyAbstractClass
-class AbstractLinearConstraint(AbstractConstraint):
-    # INTERNAL:  base class for linear constraints
-
-    __slots__ = ()
-
-    def __init__(self, model, name=None):
-        AbstractConstraint.__init__(self, model, name)
-
-    def copy(self, tagret_model, var_map):
-        raise NotImplementedError  # pragma: no cover
-
-    def fast_get_coef(self, var):
-        """ Redefine this method for concrete sub-classes."""
-        raise NotImplementedError  # pragma: no cover
-
-    def rhs(self):
-        """ Redefine this for any concrete constraint class."""
-        raise NotImplementedError  # pragma: no cover
-
-
-# noinspection PyAbstractClass
-class AbstractLogicalConstraint(AbstractConstraint):
-    # INTERNAL Root class for all logical stuff constraints
-
-    def __init__(self, model, name=None):
-        AbstractConstraint.__init__(self, model, name)
-
-
-class LinearConstraint(AbstractLinearConstraint):
-    """ The class that models all constraints of the form `<expr1> <OP> <expr2>`.
-    """
-    __slots__ = ("_ctype", "_left_expr", "_right_expr")
-
-    def __init__(self, model, left_expr, ctype, right_expr, name=None):
-        AbstractLinearConstraint.__init__(self, model, name)
-        self._ctype = ctype
-        # noinspection PyPep8
-        self._left_expr  = left_expr
-        self._right_expr = right_expr
-
-
-    def is_trivial(self):
-        # Checks whether the constraint is equivalent to a comparison between numbers.
-        # For example, x <= x+1 is trivial, but 1.5 X <= X + 1 is not.
-        self_left_expr = self._left_expr
-        self_right_expr = self._right_expr
-        if self_right_expr.is_constant():
-            return self_left_expr.is_constant()
-        elif self_left_expr.is_constant():
-            return self_right_expr.is_constant()
-        else:
-            for lv in self_left_expr.iter_variables():
-                if self_left_expr.unchecked_get_coef(lv) != self_right_expr.unchecked_get_coef(lv):
-                    return False
-            for rv in self_right_expr.iter_variables():
-                if self_left_expr.unchecked_get_coef(rv) != self_right_expr.unchecked_get_coef(rv):
-                    return False
-            return True
-
-    def is_trivial_feasible(self):
-        return self.is_trivial() and self._is_trivially_feasible()
-
-    def is_trivial_infeasible(self):
-        return self.is_trivial() and self._is_trivially_infeasible()
-
-    def _is_trivially_feasible(self):
-        # INTERNAL : assume self is trivial()
-        op_func = _LinearConstraintTypeUtils.get_python_operator_fn(self.type)
-        return op_func(self.left_expr.constant, self.right_expr.constant) if op_func else False
-
-    def _is_trivially_infeasible(self):
-        # INTERNAL: assume self is trivial .
-        op_func = _LinearConstraintTypeUtils.get_python_operator_fn(self.type)
-        return not op_func(self.left_expr.constant, self.right_expr.constant) if op_func else False
-
-    def copy(self, target_model, var_map):
-        copied_left = self.left_expr.copy(target_model, var_map)
-        copied_right = self.right_expr.copy(target_model, var_map)
-        return LinearConstraint(target_model, copied_left, self.type, copied_right, self.name)
-
-    @property
-    def type(self):
-        """ This property returns the type of the constraint; type is an enumerated value
-        of type :class:`LinearConstraintType`, with three possible values:
-
-        - LE for e1 <= e2 constraints
-
-        - EQ for e1 == e2 constraints
-
-        - GE for e1 >= e2 constraints
-
-        where e1 and e2 denote linear expressions.
-
-        """
-        return self._ctype
-
-    @property
-    def left_expr(self):
-        """ This property returns the left expression in the constraint.
-
-        Example:
-            (X+Y <= Z+1) has left expression (X+Y).
-        """
-        return self._left_expr
-
-    @property
-    def right_expr(self):
-        """ This property returns the right expression in the constraint.
-
-        Example:
-            (X+Y <= Z+1) has right expression (Z+1).
-        """
-        return self._right_expr
-
-    def to_string(self):
-        """ Returns a string representation of the constraint.
-
-        The operators in this representation are the usual operators <=, ==, and >=.
-
-        Example:
-            The constraint (X+Y <= Z+1) is represented as "X+Y <= Z+1".
-
-        Returns:
-            A string.
-
-        """
-        return "%s %s %s" % (self.left_expr.to_string(),
-                             self._ctype.get_operator_symbol(),
-                             str(self.right_expr))
-
-    def __str__(self):
-        return self.to_string()
-
-    def __repr__(self):
-        user_name = self.name if self.has_user_name() else ""
-        typename = self.type.short_name
-        sleft = self._left_expr.truncated_str()
-        sright = self._right_expr.truncated_str()
-        return "docplex.mp.linear.LinearConstraint[{0}]({1!s},{2},{3!s})". \
-            format(user_name, sleft, typename, sright)
-
-    def __le__(self, e):
-        # INTERNAL: define ranges with operators.
-        # Beware one must use parentheses as in r = (1 <= x) <= 2
-        # Chained comparisons like: 1 <= x <= 2 will fail as Python
-        # generates an "and" of two constraints (1<=x) and (x<=2) but
-        # constraints _cannot_ be converted to booleans.
-        if not is_number(e):
-            self.fatal("operator <= on constraint requires numeric argument, got: {0!s}", e)
-        if self.type is LinearConstraintType.GE:
-            rhs = self.right_expr
-            if rhs.is_constant():
-                range_min = rhs.constant
-                range_max = float(e)
-                return self.model.range_constraint(range_min, self.left_expr, range_max)
-            else:
-                self.fatal("operator <= requires a constraint with numeric RHS, rhs is: {0!s}", rhs)
-        else:
-            self.fatal("operator <= is only allowed for LE constraints, type is: {0!s}", self.type)
-
-    def __ge__(self, e):
-        # INTERNAL: define ranges with operators.
-        # Beware one must use parentheses as in r = (1 <= x) <= 2
-        # Chained comparisons like: 1 <= x <= 2 will fail as Python
-        # generates an "and" of two constraints (1<=x) and (x<=2) but
-        # constraints _cannot_ be converted to booleans.
-        if not is_number(e):
-            self.fatal("operator >= on constraints requires number argument, got: {0!s}", e)
-        if self.type is LinearConstraintType.LE:
-            rhs = self.right_expr
-            if rhs.is_constant():
-                range_max = rhs.constant
-                range_min = float(e)
-                return self.model.range_constraint(range_min, self.left_expr, range_max)
-            else:
-                self.fatal("operator >= requires a constraint with numeric RHS, got: {0!s}", rhs)
-        else:
-            self.fatal("operator >= is only allowed for GE constraints, not {0!s}", self.type)
-
-    def iter_variables(self):
-        """  Iterates over all variables mentioned in the constraint.
-
-        *Note:* This inncludes variables that are mentioned with a zero coefficient. For example,
-        the iterator on the following constraint:
-
-         X <= X+Y + 1
-
-        will return X and Y, although X is mentioned with a zero coefficient.
-
-        Returns:
-            An iterator object.
-        """
-        if self._right_expr.is_constant():
-            return self._left_expr.iter_variables()
-        elif self._left_expr.is_constant():
-            return self._right_expr.iter_variables()
-        else:
-            return self.generate_ordered_vars()
-
-    def generate_ordered_vars(self):
-        left_expr = self.left_expr
-        for lv in left_expr.iter_variables():
-            yield lv
-        for rv in self.right_expr.iter_variables():
-            if rv not in left_expr:
-                yield rv
-
-    def fast_get_coef(self, dvar):
-        return self._left_expr[dvar] - self._right_expr[dvar]
-
-    def rhs(self):
-        right_cst = self._right_expr.constant
-        left_cst = self._left_expr.constant
-        return right_cst - left_cst
-
-    def _iter_net_coeffs(self):
-        # INTERNAL
-        if self._right_expr.is_constant():
-            return self._left_expr.iter_terms()
-        elif self._left_expr.is_constant():
-            self_right_expr = self._right_expr
-            opposite_right_coeffs = {v: -k for v, k in self_right_expr.iter_terms()}
-            return iteritems(opposite_right_coeffs)
-        else:
-            return self._generate_net_coefs()
-
-    def _generate_net_coefs(self):
-        for v in self.iter_variables():
-            net_k = self._left_expr[v] - self._right_expr[v]
-            yield v, net_k
-
-
-class _DummyFeasibleConstraint(LinearConstraint):
-    # INTERNAL
-    def __init__(self, model, zero_expr, name=None):
-        ctname = name or "dummy_feasible_ct"
-        LinearConstraint.__init__(self, model,
-                                  left_expr=zero_expr,
-                                  ctype=LinearConstraintType.EQ,
-                                  right_expr=zero_expr,
-                                  name=ctname)
-
-    def __repr__(self):
-        return "docplex.mp.linear.LinearConstraint._TrivialFeasible"
-
-
-class _DummyInfeasibleConstraint(LinearConstraint):
-    # INTERNAL
-    def __init__(self, model, zero, one):
-        LinearConstraint.__init__(self, model,
-                                  left_expr=zero,
-                                  ctype=LinearConstraintType.EQ,
-                                  right_expr=one,
-                                  name="_dummy_infeasible_ct_")
-
-    def __repr__(self):
-        return "docplex.mp.linear.LinearConstraint.TrivialInfeasible"
-
-
-class RangeConstraint(AbstractLinearConstraint):
-    """ This class models range constraints.
-
-    A range constraint states that an expression must stay between two
-    values, `lb` and `ub`.
-
-    This class is not meant to be instantiated by the user.
-    To create a range constraint, use the factory method :func:`docplex.mp.model.Model.add_range`
-    defined on :class:`docplex.mp.model.Model`.
-
-    """
-
-    def __init__(self, model, expr, lb, ub, name=None):
-        AbstractLinearConstraint.__init__(self, model, name)
-        model.typecheck_num(lb, 'RangeConstraint.lb')
-        model.typecheck_num(ub, 'RangeConstraint.ub')
-        self.__ub = ub
-        self.__lb = lb
-        self.__expr = expr
-
-    def equals(self, other):
-        if type(other) != RangeConstraint:
-            return False
-        if self.__lb != other.lb:
-            return False
-        if self.__ub != other.ub:
-            return False
-        if not self.__expr.equals_expr(other.expr):
-            return False
-
-        return True
-
-    def short_typename(self):
-        return "range"
-
-    def is_trivial(self):
-        return self.__expr.is_constant()
-
-    def _is_trivially_feasible(self):
-        # INTERNAL : assume self is trivial()
-        expr_num = self.__expr.constant
-        return self.__lb <= expr_num <= self.__ub
-
-    def _is_trivially_infeasible(self):
-        # INTERNAL : assume self is trivial()
-        expr_num = self.__expr.constant
-        return expr_num < self.__lb or expr_num > self.__ub
-
-    @property
-    def expr(self):
-        """ This property returns the linear expression of the range constraint.
-        """
-        return self.__expr
-
-    @property
-    def lb(self):
-        """ This property returns the lower bound of the range constraint.
-
-        """
-        return self.__lb
-
-    @property
-    def ub(self):
-        """ This property returns the upper bound of the range constraint.
-
-        """
-        return self.__ub
-
-    def is_valid(self):
-        return self.__ub >= self.__lb
-
-    def iter_variables(self):
-        """Iterates over all the variables of the range constraint.
-
-        Returns:
-           An iterator object.
-        """
-        return self.__expr.iter_variables()
-
-    def rhs(self):
-        # INTERNAL
-        return self.__lb - self.__expr.constant
-
-    def fast_get_coef(self, dvar):
-        # INTERNAL
-        return self.__expr.unchecked_get_coef(dvar)
-
-    def copy(self, target_model, var_map):
-        copied_expr = self.expr.copy(target_model, var_map)
-        copied_range = RangeConstraint(target_model, copied_expr, self.lb, self.ub, self.name)
-        return copied_range
-
-    def to_string(self):
-        return "{0} <= {1!s} <= {2}".format(self.__lb, self.__expr, self.__ub)
-
-    def __str__(self):
-        """ Returns a string representation of the range constraint.
-
-        Example:
-            1 <= x+y+z <= 3 represents the range constraint where the expression (x+y+z) is 
-            constrained to stay between 1 and 3.
-
-        Returns:
-            A string.
-        """
-        return self.to_string()
-
-    def __repr__(self):
-        printable_name = self.name if self.has_user_name() else ""
-        return "docplex.mp.linear.RangeConstraint[{0}]({1},{2!s},{3})".format(printable_name, self.lb, self.__expr,
-                                                                              self.ub)
-
-
-class IndicatorConstraint(AbstractLogicalConstraint):
-    """ This class models indicator constraints.
-
-    An indicator constraint links (one-way) the value of a binary variable to the satisfaction of a linear constraint.
-    If the binary variable equals the active value, then the constraint is satisfied, but otherwise the constraint
-    may or may not be satisfied.
-
-    This class is not meant to be instantiated by the user.
-
-    To create an indicator constraint, use the factory method :func:`docplex.mp.model.Model.add_indicator`
-    defined on :class:`docplex.mp.model.Model`.
-
-    """
-
-    def __init__(self, model, binary_var, linear_ct, active_value=1, name=None):
-        AbstractLogicalConstraint.__init__(self, model, name)
-        self._binary_var = binary_var
-        self._linear_ct = linear_ct
-        self._active_value = active_value
-        if linear_ct.is_trivial():
-            self.warning("Using trivial linear constraint in indicator, binary: {0!s}, ct: {1!s}", binary_var,
-                         linear_ct)
-
-    def equals(self, other):
-        if type(other) != IndicatorConstraint:
-            return False
-
-        if self._active_value != other.active_value:
-            return False
-        if not self._binary_var.equals(other.binary_var):
-            return False
-        if not self._linear_ct.equals(other.linear_ct):
-            return False
-
-        return True
-
-    def short_typename(self):
-        return "indicator"
-
-    @property
-    def active_value(self):
-        return self._active_value
-
-    @property
-    def indicator_var(self):
-        return self._binary_var
-
-    @property
-    def linear_constraint(self):
-        return self._linear_ct
-
-    @property
-    def logical_rhs(self):
-        """
-        This property returns the target right-hand side used to trigger the linear constraint. Returns 1 if not complemented, else 0.
-        """
-        return self.active_value
-
-    def copy(self, target_model, var_map):
-        copied_binary = var_map[self.indicator_var]
-        copied_linear_ct = self.linear_constraint.copy(target_model, var_map)
-        copied_indicator = IndicatorConstraint(target_model, copied_binary, copied_linear_ct, self.active_value,
-                                               self.name)
-        return copied_indicator
-
-    def invalidate(self):
-        """
-        Sets the binary variable to the opposite of its active value.
-        Typically used by indicator constraints with a trivial infeasible linear part.
-        For example, z=1 -> 4 <= 3 sets z to 0 and
-        z=0 -> 4 <= 3 sets z to 1.
-        This is equivalent to if z=a => False, then z *cannot* be equal to a.
-        """
-        if 0 == self.active_value:
-            # set to 1 : lb = 1
-            self.indicator_var.lb = 1
-        elif 1 == self.active_value:
-            # set to 0 ub = 0
-            self.indicator_var.ub = 0
-        else:
-            self.fatal("Unexpected active value for indicator constraint: {0!s}, value is: {1!s}, expecting 0 or 1",  # pragma: no cover
-                       self, self.active_value)  # pragma: no cover
-
-    def iter_variables(self):
-        yield self._binary_var
-        for v in self._linear_ct.iter_variables():
-            yield v
-
-    def to_string(self):
-        """
-        Displays the indicator constraint in the LP style:
-        z = 1 -> x+y+z == 2
-
-        Returns:
-            A string.
-        """
-        return "{0!s} = {1} -> {2!s}".format(self._binary_var, self.logical_rhs, self.linear_constraint)
-
-    def __str__(self):
-        return self.to_string()
-
+LinearConstraintType = ComparisonType
 
 # --- version with global functions
 
@@ -2256,15 +1670,6 @@ class ZeroExpr(AbstractLinearExpr):
 
     def equals_expr(self, other):
         return isinstance(other, ZeroExpr)
-
-    def __ge__(self, other):
-        return self._get_model().ge_constraint(self, other)
-
-    def __le__(self, other):
-        return self._get_model().le_constraint(self, other)
-
-    def __eq__(self, other):
-        return self._get_model().eq_constraint(self, other)
 
     def square(self):
         return self

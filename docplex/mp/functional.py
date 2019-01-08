@@ -62,7 +62,7 @@ class _IAdvancedExpr(Expr):
 
     def to_linear_expr(self):
         # make sure it has been resolved, then return 1 * fvar
-        return self.model.linear_expr(self._get_resolved_f_var())
+        return self.model._linear_expr(self._get_resolved_f_var())
 
     def _get_resolved_f_var(self):
         if self._f_var is None:

@@ -6,8 +6,13 @@
 # Generated automatically
 
 """
-This module contains the set of functions that allows to construct all expressions
-available in a DOcplex.CP model.
+This module contains the functions that allows to construct all operations
+and constraints that can be used in a CPO model.
+
+There is one Python function per CPO operation or constraint.
+As many operations have multiple combinations of parameters,
+the functions of this module are declared with a variable number of arguments.
+The valid combinations are detailed in the description of the function.
 """
 
 from docplex.cp.model import *
@@ -425,6 +430,7 @@ def count(*args):
     Possible argument and return type combinations are:
 
      * (array of integer expressions, integer constant) => integer expression
+     * (integer constant, array of integer expressions) => integer expression
 
     Returns:
         An expression of type integer expression
@@ -566,6 +572,9 @@ def element(*args):
 
     Possible argument and return type combinations are:
 
+     * (array of integers, integer expression) => integer expression
+     * (array of integer expressions, integer expression) => integer expression
+     * (array of floats, integer expression) => float expression
      * (integer expression, array of integers) => integer expression
      * (integer expression, array of integer expressions) => integer expression
      * (integer expression, array of floats) => float expression
@@ -909,19 +918,6 @@ def float_div(*args):
     return create_op(Oper_float_div, args)
 
 
-def float_var(*args):
-    """ Creates an expression for operation *floatVar*.
-
-    Possible argument and return type combinations are:
-
-     * (float constant, float constant) => float expression
-
-    Returns:
-        An expression of type float expression
-    """
-    return create_op(Oper_float_var, args)
-
-
 def forbid_end(*args):
     """ Forbids an interval variable to end during specified regions.
 
@@ -1201,6 +1197,7 @@ def isomorphism(*args):
     Possible argument and return type combinations are:
 
      * (array of interval variables, array of interval variables, array of integer expressions [=0], integer constant [=0]) => constraint
+     * (array of interval variables, array of interval variables, integer constant [=0], array of integer expressions [=0]) => constraint
 
     Returns:
         An expression of type constraint
@@ -1478,6 +1475,7 @@ def maximize(*args):
     Possible argument and return type combinations are:
 
      * (float expression) => objective
+     * (array of float expressions) => objective
 
     Returns:
         An expression of type objective
@@ -1515,6 +1513,19 @@ def maximize_static_lex(*args):
         An expression of type objective
     """
     return create_op(Oper_maximize_static_lex, args)
+
+
+def member(*args):
+    """ Creates an expression for operation *member*.
+
+    Possible argument and return type combinations are:
+
+     * (integer expression, array of integers) => boolean expression
+
+    Returns:
+        An expression of type boolean expression
+    """
+    return create_op(Oper_member, args)
 
 
 def min(*args):
@@ -1563,6 +1574,7 @@ def minimize(*args):
     Possible argument and return type combinations are:
 
      * (float expression) => objective
+     * (array of float expressions) => objective
 
     Returns:
         An expression of type objective
@@ -1667,6 +1679,19 @@ def no_overlap(*args):
     return create_op(Oper_no_overlap, args)
 
 
+def not_member(*args):
+    """ Creates an expression for operation *notMember*.
+
+    Possible argument and return type combinations are:
+
+     * (integer expression, array of integers) => boolean expression
+
+    Returns:
+        An expression of type boolean expression
+    """
+    return create_op(Oper_not_member, args)
+
+
 def overlap_length(*args):
     """ Returns the length of the overlap of two interval variables.
 
@@ -1741,6 +1766,20 @@ def pack(*args):
         An expression of type constraint
     """
     return create_op(Oper_pack, args)
+
+
+def phase(*args):
+    """ Creates an expression for operation *phase*.
+
+    Possible argument and return type combinations are:
+
+     * (array of integer expressions) => search phase
+     * (array of interval variables) => search phase
+
+    Returns:
+        An expression of type search phase
+    """
+    return create_op(Oper_phase, args)
 
 
 def plus(*args):
@@ -1879,6 +1918,19 @@ def range(*args):
     return create_op(Oper_range, args)
 
 
+def same_common_sub_sequence(*args):
+    """ Creates an expression for operation *sameCommonSubSequence*.
+
+    Possible argument and return type combinations are:
+
+     * (sequence variable, sequence variable, array of interval variables, array of interval variables, boolean integer (0, 1)) => constraint
+
+    Returns:
+        An expression of type constraint
+    """
+    return create_op(Oper_same_common_sub_sequence, args)
+
+
 def same_common_subsequence(*args):
     """ This function creates a same-common-subsequence constraint between two sequence variables.
 
@@ -1931,6 +1983,7 @@ def same_sequence(*args):
 
      * (sequence variable, sequence variable) => constraint
      * (sequence variable, sequence variable, array of interval variables, array of interval variables) => constraint
+     * (sequence variable, sequence variable, boolean integer (0, 1)) => constraint
 
     Returns:
         An expression of type constraint
@@ -1985,6 +2038,47 @@ def search_phase(*args):
     return create_op(Oper_search_phase, args)
 
 
+def search_phase_int(*args):
+    """ Creates an expression for operation *searchPhaseInt*.
+
+    Possible argument and return type combinations are:
+
+     * (array of integer expressions) => search phase
+     * (chooser of integer variable, chooser of integer value) => search phase
+     * (array of integer expressions, chooser of integer variable, chooser of integer value) => search phase
+
+    Returns:
+        An expression of type search phase
+    """
+    return create_op(Oper_search_phase_int, args)
+
+
+def search_phase_rank(*args):
+    """ Creates an expression for operation *searchPhaseRank*.
+
+    Possible argument and return type combinations are:
+
+     * (array of sequence variables [=0]) => search phase
+
+    Returns:
+        An expression of type search phase
+    """
+    return create_op(Oper_search_phase_rank, args)
+
+
+def search_phase_set_times(*args):
+    """ Creates an expression for operation *searchPhaseSetTimes*.
+
+    Possible argument and return type combinations are:
+
+     * (array of interval variables [=0]) => search phase
+
+    Returns:
+        An expression of type search phase
+    """
+    return create_op(Oper_search_phase_set_times, args)
+
+
 def select_largest(*args):
     """ Creates an expression for operation *selectLargest*.
 
@@ -1994,6 +2088,8 @@ def select_largest(*args):
      * (evaluator of integer variable, float constant [=0]) => selector of integer variable
      * (float constant, evaluator of integer value) => selector of integer value
      * (evaluator of integer value, float constant [=0]) => selector of integer value
+     * (evaluator of integer variable, integer constant, float constant) => selector of integer variable
+     * (evaluator of integer value, integer constant, float constant) => selector of integer value
 
     Returns:
         An expression of type selector of integer value or selector of integer variable
@@ -2036,6 +2132,8 @@ def select_smallest(*args):
      * (evaluator of integer variable, float constant [=0]) => selector of integer variable
      * (float constant, evaluator of integer value) => selector of integer value
      * (evaluator of integer value, float constant [=0]) => selector of integer value
+     * (evaluator of integer variable, integer constant, float constant) => selector of integer variable
+     * (evaluator of integer value, integer constant, float constant) => selector of integer value
 
     Returns:
         An expression of type selector of integer value or selector of integer variable
@@ -2711,6 +2809,19 @@ def value_index(*args):
     return create_op(Oper_value_index, args)
 
 
+def value_index_eval(*args):
+    """ Creates an expression for operation *valueIndexEval*.
+
+    Possible argument and return type combinations are:
+
+     * (array of integers, float constant [=-1]) => evaluator of integer value
+
+    Returns:
+        An expression of type evaluator of integer value
+    """
+    return create_op(Oper_value_index_eval, args)
+
+
 def value_success_rate(*args):
     """ Creates an expression for operation *valueSuccessRate*.
 
@@ -2748,6 +2859,19 @@ def var_index(*args):
         An expression of type evaluator of integer variable
     """
     return create_op(Oper_var_index, args)
+
+
+def var_index_eval(*args):
+    """ Creates an expression for operation *varIndexEval*.
+
+    Possible argument and return type combinations are:
+
+     * (array of integer expressions, float constant [=-1]) => evaluator of integer variable
+
+    Returns:
+        An expression of type evaluator of integer variable
+    """
+    return create_op(Oper_var_index_eval, args)
 
 
 def var_local_impact(*args):
@@ -2808,4 +2932,6 @@ CpoExpr.__pow__ = power
 CpoExpr.__rpow__ = lambda x, y: power(y, x)
 CpoExpr.__mul__ = times
 CpoExpr.__rmul__ = lambda x, y: times(y, x)
+CpoExpr.__neg__ = minus
+CpoExpr.__pos__ = lambda x: x
 

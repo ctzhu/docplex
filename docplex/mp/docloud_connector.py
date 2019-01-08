@@ -16,7 +16,6 @@ from requests.exceptions import ConnectionError
 from docloud.job import JobClient, DOcloudInterruptedException, DOcloudNotFoundError
 from docloud.status import JobSolveStatus, JobExecutionStatus
 
-from docplex.mp.progress import ProgressData
 from docplex.mp.utils import resolve_pattern, get_logger
 from docplex.mp.utils import CyclicLoop
 
@@ -25,7 +24,7 @@ def key_as_string(key):
     """For keys, we don't want the key to appear in INFO log outputs.
     Instead, we display the first 4 chars and the last 4 chars.
     """
-    return (key[:4]+"*******"+ key[-4:]) if isinstance(key, string_types) else str(key)
+    return (key[:4] + "*******" + key[-4:]) if isinstance(key, string_types) else str(key)
 
 
 class DOcloudConnectorException(Exception):
@@ -52,8 +51,6 @@ class DOcloudEvent(object):
 
 
 class DOcloudConnector(object):
-    # json keys
-    JSON_LINEAR_CTS_KEY = 'linearConstraints'
 
     def __init__(self, docloud_context, log_output=None):
         """ Starts a connector which URL and authorization are stored in the
@@ -79,16 +76,12 @@ class DOcloudConnector(object):
         self.logger.info("   waittime = " + str(docloud_context.waittime))
         self.logger.info("   timeout = " + str(docloud_context.timeout))
 
-        self.json = ""
         self.jobInfo = None
         self.run_deterministic = docloud_context.run_deterministic
         self.log_output = log_output
-        self._hasSolution = False  # submit_model_data change this
-        self.__vars = None
 
-    def _check_nonempty_json(self):
-        if not self.json:
-            raise DOcloudConnectorException("* empty JSON result!")
+        self.timed_out = False
+        self.results = {}
 
     def log(self, msg, *args):
         if self.docloud_context.verbose:
@@ -106,8 +99,8 @@ class DOcloudConnector(object):
     def submit_model_data(self,
                           attachments=None,
                           gzip=False,
-                        info_callback=None,
-                        info_to_monitor=None):
+                          info_callback=None,
+                          info_to_monitor=None):
         """Submits a job to the cloud service.
 
         Args:
@@ -122,8 +115,9 @@ class DOcloudConnector(object):
             info_to_monitor: A set of information to monitor with info_callback.
                 Currently, can be ``jobid`` and ``progress``.
         """
-        self._hasSolution = False
         self.__vars = None
+        self.timed_out = False
+        self.results.clear()
 
         if not info_to_monitor:
             info_to_monitor = {}
@@ -180,29 +174,34 @@ class DOcloudConnector(object):
                     info_callback({'progress': progress_data})
 
                 if timedout:
-                    self._hasSolution = False
+                    self.timed_out = True
                     self.log("Solve timed out after {waittime} sec".format(waittime=self.docloud_context.waittime))
-                    return None
-                # get solution
+                    return
+                # get solution => download all attachments
                 try:
-                    solution_as_string = self._as_string(client.download_job_attachment(jobid, attid="solution.json"))
-                    myjson = json.loads(solution_as_string, parse_constant='utf-8')['CPLEXSolution']
-                    self._hasSolution = bool(myjson)
+                    for a in client.get_job_attachments(jobid):
+                        if a['type'] == 'OUTPUT_ATTACHMENT':
+                            name = a['name']
+                            self.log("Downloading attachment '%s'" % name)
+                            attachment_as_string = self._as_string(client.download_job_attachment(jobid,
+                                                                                                  attid=name))
+                            self.results[name] = attachment_as_string
                 except DOcloudNotFoundError:
-                    myjson = None
-                    self._hasSolution = False
                     self.log("no solution in attachment")
                 self.log("docloud results have been received")
-                self.json = myjson
-                return myjson
-
+                # on_solve_finished_cb
+                if self.docloud_context.on_solve_finished_cb:
+                    self.docloud_context.on_solve_finished_cb(jobid=jobid,
+                                                              client=client,
+                                                              connector=self)
+                return
             finally:
-                deleted = client.delete_job(jobid)
-                self.log("delete status for job: {0!s} = {1!s}".format(jobid, deleted))
+                if self.docloud_context.delete_job:
+                    deleted = client.delete_job(jobid)
+                    self.log("delete status for job: {0!s} = {1!s}".format(jobid, deleted))
 
         finally:
             client.close()
-
 
     def wait_for_completion(self, client, jobid,
                             info_callback=None, info_to_monitor=None):
@@ -245,7 +244,7 @@ class DOcloudConnector(object):
                     level = r['level'][:4]
                     date = r['date']
                     message = r['message'].rstrip()
-                    d = datetime.utcfromtimestamp(int(float(date)*0.001))
+                    d = datetime.utcfromtimestamp(int(float(date) * 0.001))
                     m = "[{date}Z, {level}] {message}\n".format(date=d.isoformat(),
                                                                 level=level,
                                                                 message=message
@@ -269,8 +268,15 @@ class DOcloudConnector(object):
                 info_to_monitor: what info does the callback want to monitor
             """
             if 'progress' in info_to_monitor and info_callback:
+                logger = self.docloud_context.verbose_progress_logger
+                if logger:
+                    logger.info("polling progress");
                 info = loop.client.get_job(loop.jobid)
+                if logger:
+                    logger.info("job info: %s" % json.dumps(info, indent=3))
                 if 'details' in info:  # there are some info available
+                    if logger:
+                        logger.info("generating progress event using_threads = %s" % using_threads)
                     progress_data = self.map_job_info_to_progress_data(info)
                     if using_threads:
                         loop.event_queue.put(DOcloudEvent("progress", progress_data))
@@ -354,72 +360,9 @@ class DOcloudConnector(object):
 
         return loop.status
 
-    def has_solution(self):
-        return self._hasSolution
-
     def get_cplex_details(self):
         if self.jobInfo:
             return self.jobInfo.get("details")
-
-    def is_mip(self):
-        return self.json and self.json['header']['solutionMethodString'] == 'mip'
-
-    def variable_values(self):
-        return self.get_variable_attr_map('value')
-
-    def variable_reduced_costs(self):
-        return self.get_variable_attr_map('reducedCost')
-
-    def get_variable_attr_map(self, json_attr_name):
-        assert json_attr_name
-        if not self.json:
-            return {}
-        else:
-            all_vars = self._getvars()
-            attr_map = {int(v['index']): float(v[json_attr_name]) for v in all_vars}
-            return attr_map
-
-    def cplex_index_name_map(self):
-        json_res = self.json
-        if json_res:
-            return {int(v['index']): v['name'] for v in self._getvars()}
-        else:
-            return {}
-
-    def _getvars(self):
-        if self.__vars is None:
-            self.__vars = self.json.get('variables', [])
-        return self.__vars
-
-    def variable_results(self):
-        if not self.json:
-            return {}, {}
-        else:
-            all_vars = self._getvars()
-            value_map = {int(v['index']): float(v['value']) for v in all_vars}
-            rc_map = {} if self.is_mip() else {int(v['index']): float(v['reducedCost']) for v in all_vars}
-            return value_map, rc_map
-
-    def constraint_results(self):
-        if not self.json or self.is_mip():
-            return {}, {}
-        else:
-            lincst_key = self.JSON_LINEAR_CTS_KEY
-            if lincst_key in self.json:
-                all_linear_cts = self.json[lincst_key]
-                dual_map = {int(v['index']): float(v['dual']) for v in all_linear_cts}
-                slack_map = {int(v['index']): float(v['slack']) for v in all_linear_cts}
-            else:
-                dual_map = slack_map = {}
-            return dual_map, slack_map
-
-    def get_status_id(self):
-        self._check_nonempty_json()
-        return int(self.json['header']['solutionStatusValue'])
-
-    def get_objective(self):
-        self._check_nonempty_json()
-        return float(self.json['header']['objectiveValue'])
 
     def get_solve_status(self):
         if 'solveStatus' in self.jobInfo:
@@ -445,7 +388,7 @@ class DOcloudConnector(object):
         Returns:
             A ProgressData
         """
-
+        from docplex.mp.progress import ProgressData
         pg = ProgressData()
         details = info.get('details')
         if details:

@@ -6,20 +6,23 @@
 
 # gendoc: ignore
 
-import operator
 import os
 
 # docplex
 from docplex.mp.model import Model, Environment
 from docplex.mp.utils import DOcplexException
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
+from docplex.mp.constants import CplexCtSenseToPython
 # cplex
 from cplex import Cplex
 from cplex._internal._subinterfaces import ObjSense
 from cplex.exceptions import CplexError, CplexSolverError
+from docplex.mp.compat23 import izip
 
 
-class ModelReaderError(DOcplexException): pass
+class ModelReaderError(DOcplexException):
+    pass
+
 
 class _CplexReaderFileContext(object):
     def __init__(self, filename, read_method=None):
@@ -58,9 +61,6 @@ class _CplexReaderFileContext(object):
 
 
 class ModelReader(object):
-    # INTERNAL
-
-    sense_map = {'G': operator.ge, 'L': operator.le, 'E': operator.eq}
 
     # internal class to store range data
     # canno use tuples as they are immutable
@@ -72,12 +72,8 @@ class ModelReader(object):
             self.ub = ub
 
     @staticmethod
-    def _cplex_ctsense_to_python_op(cpx_sense, _sense_map=sense_map):
-        return _sense_map[cpx_sense]
-
-    @staticmethod
     def _build_linear_expr_from_sparse_pair(mdl, var_map, cpx_sparsepair):
-        expr = mdl.linear_expr()
+        expr = mdl._linear_expr()
         for cpx_index, cpx_val in zip(cpx_sparsepair.ind, cpx_sparsepair.val):
             expr.add_term(var_map[cpx_index], cpx_val)
         return expr
@@ -121,9 +117,10 @@ class ModelReader(object):
         is printed and the function returns None.
 
         Args:
-            file: a path string
+            filename: the file to read
             model_name: an optional name for the newly created model. If None,
                 the model name will be the path basename.
+            verbose: flag
             kwargs: a dict of keyword-based arguments, that are used when creating the model
                 instance.
 
@@ -178,7 +175,10 @@ class ModelReader(object):
             mdl = Model(name=name_to_use, **kwargs)
             mdl.set_quiet()  # output level set to ERROR
             vartype_cont = mdl.continuous_vartype
-            vartype_map = {'B': mdl.binary_vartype, 'I': mdl.integer_vartype, 'C': mdl.continuous_vartype}
+            vartype_map = {'B': mdl.binary_vartype,
+                           'I': mdl.integer_vartype,
+                           'C': mdl.continuous_vartype,
+                           'S': mdl.semicontinuous_vartype}
             # 1 upload variables
             nb_vars = cpx.variables.get_num()
             all_names = cpx.variables.get_names()
@@ -236,7 +236,7 @@ class ModelReader(object):
 
                 if not has_range:
                     expr = mdl.scal_prod((idx_to_var_map[idx] for idx in indices), coefs)
-                    op = self._cplex_ctsense_to_python_op(sense)
+                    op = CplexCtSenseToPython.cplex_ctsense_to_python_op(sense)
                     ct = op(expr, rhs)
                     if postpone:
                         deferred_cts.append(ct)
@@ -260,7 +260,7 @@ class ModelReader(object):
 
                     if range_data:
 
-                        label = ctname or 'c#%d' % c+1
+                        label = ctname or 'c#%d' % (c + 1)
                         if sense not in "EL":
                             raise ModelReaderError("{0} range sense is not E: {1!s}".format(label, sense))
                         if koef < 0:
@@ -279,7 +279,7 @@ class ModelReader(object):
                             range_ub = rhs + range_val
                             mdl.add_range(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
                         else:
-                            op = self._cplex_ctsense_to_python_op(sense)
+                            op = CplexCtSenseToPython.cplex_ctsense_to_python_op(sense)
                             ct = op(expr, rhs)
                             mdl.add_constraint(ct, ctname)
             if deferred_cts:
@@ -322,7 +322,7 @@ class ModelReader(object):
                 # 1 . check the bvar is ok
                 ind_bvar = idx_to_var_map[ind_bvar]
                 ind_linexpr = self._build_linear_expr_from_sparse_pair(mdl, idx_to_var_map, ind_linear)
-                op = self._cplex_ctsense_to_python_op(ind_sense)
+                op = CplexCtSenseToPython.cplex_ctsense_to_python_op(ind_sense)
                 ind_ct = op(ind_linexpr, ind_rhs)
                 mdl.add_indicator(ind_bvar, ind_ct, active_value=ind_complemented, name=ind_name)
 
@@ -331,6 +331,7 @@ class ModelReader(object):
             cpx_sense = cpx_obj.get_sense()
 
             cpx_all_obj_coeffs = cpx_obj.get_linear()
+            # noinspection PyPep8
             all_obj_vars  = []
             all_obj_coefs = []
 
@@ -348,6 +349,26 @@ class ModelReader(object):
                     mdl.maximize(obj_expr)
                 else:
                     mdl.minimize(obj_expr)
+
+            # upload sos
+            cpx_sos = cpx.SOS
+            cpx_sos_num = cpx_sos.get_num()
+            if cpx_sos_num > 0:
+                cpx_sos_types = cpx_sos.get_types()
+                cpx_sos_indices = cpx_sos.get_sets()
+                cpx_sos_names = cpx_sos.get_names()
+                if not cpx_sos_names:
+                    cpx_sos_names = [None] * cpx_sos_num
+                for sostype, sos_sparse, sos_name in izip(cpx_sos_types, cpx_sos_indices, cpx_sos_names):
+                    sos_var_indices = sos_sparse.ind
+                    isostype = int(sostype)
+                    sos_vars = [idx_to_var_map[var_ix] for var_ix in sos_var_indices]
+                    mdl.add_sos(dvars=sos_vars, sos_arg=isostype, name=sos_name)
+
+
+
+
+
             mdl.output_level = final_output_level
 
         except CplexError as cpx_e:

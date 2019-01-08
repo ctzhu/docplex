@@ -31,18 +31,37 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
+
     def solve(self, mdl, parameters):
         ''' Redefine this method for the real solve.
             Returns True if model is well-formed and a solution has been found.
         '''
         raise NotImplementedError  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         """
         Runs feasopt-like algorithm with a set of relaxable cts with preferences
         :param relaxable_groups:
-        :param optimize:
         :return:
+        """
+        raise NotImplementedError  # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        """
+        Runs conflict-refiner algorithm with an optional set constraints groups with preferences
+
+        :param mdl: The model for which conflict refinement is performed.
+        :param preferences: an optional dictionary defining constraints preferences.
+        :param groups: an optional list of 'docplex.mp.conflict_refiner.ConstraintsGroup'.
+        :param parameters:
+        :return: A list of "TConflictConstraint" namedtuples, each tuple corresponding to a constraint that is
+            involved in the conflict.
+            The fields of the "TConflictConstraint" namedtuple are:
+                - the name of the constraint or None if the constraint corresponds to a variable lower or upper bound
+                - a reference to the constraint or to a wrapper representing a Var upper or lower bound
+                - an :enum:'docplex.mp.constants.ConflictStatus' object that indicates the
+                conflict status type (Excluded, Possible_member, Member...)
+            This list is empty if no conflict is found by the conflict refiner.
         """
         raise NotImplementedError  # pragma: no cover
 
@@ -53,14 +72,6 @@ class ISolver(object):
         Default is UNKNOWN at this stage. Redefined for CPLEX and DOcplexcloud engines.
         """
         return JobSolveStatus.UNKNOWN  # pragma: no cover
-
-    def get_solutions(self, dvars):
-        """
-        Returns a dictionary of variable solution values.
-        :param dvars:
-        :return:
-        """
-        raise NotImplementedError  # pragma: no cover
 
     def get_cplex(self):
         """
@@ -126,7 +137,13 @@ class IEngine(ISolver):
     def create_indicator_constraint(self, ind):
         raise NotImplementedError  # pragma: no cover
 
+    def create_quadratic_constraint(self, qct):
+        raise NotImplementedError  # pragma: no cover
+
     def remove_constraint(self, ct):
+        raise NotImplementedError  # pragma: no cover
+
+    def remove_constraints(self, cts):
         raise NotImplementedError  # pragma: no cover
 
     def set_objective(self, sense, expr):
@@ -136,9 +153,6 @@ class IEngine(ISolver):
         raise NotImplementedError  # pragma: no cover
 
     def notify_trace_output(self, out):
-        raise NotImplementedError  # pragma: no cover
-
-    def get_var_attribute(self, var, attr_name):
         raise NotImplementedError  # pragma: no cover
 
     def set_var_lb(self, var_lbs):
@@ -153,12 +167,16 @@ class IEngine(ISolver):
     def set_var_type(self, var, new_type):
         raise NotImplementedError  # pragam: no cover
 
+
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
     def create_range_constraint(self, rangect):
         return -1  # pragma: no cover
 
     def create_indicator_constraint(self, ind):
+        return -1  # pragma: no cover
+
+    def create_quadratic_constraint(self, qct):
         return -1  # pragma: no cover
 
     def notify_trace_output(self, out):
@@ -191,15 +209,6 @@ class DummyEngine(IEngine):
     def set_var_type(self, var, new_type):
         pass  # nothing to do, except in cplex...
 
-    def get_var_attribute(self, var, attr_name):  # pragma: no cover
-        if "name" == attr_name:
-            return var.name
-        elif "lb" == attr_name:
-            return var.lb
-        elif "ub" == attr_name:
-            return var.ub
-        else:
-            raise NotImplementedError
 
     def create_binary_linear_constraint(self, binaryct):
         return -1  # pragma: no cover
@@ -208,6 +217,9 @@ class DummyEngine(IEngine):
         return [-1] * len(ct_seq)  # pragma: no cover
 
     def remove_constraint(self, ct):
+        pass  # pragma: no cover
+
+    def remove_constraints(self, cts):
         pass  # pragma: no cover
 
     def set_objective(self, sense, expr):
@@ -221,25 +233,25 @@ class DummyEngine(IEngine):
     def connect_progress_listeners(self, listeners):
         pass  # pragma: no cover
 
+    def disconnect_progress_listeners(self, listeners):
+        pass  # pragma: no cover
+
     def can_solve(self):
         return False  # pragma: no cover
 
     def solve(self, mdl, parameters):
-        return False  # pragma: no cover
+        return None  # pragma: no cover
 
     def get_solve_status(self):
         return JobSolveStatus.UNKNOWN  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
-        raise NotImplementedError  # pragma: no cover
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
+        raise None  # pragma: no cover
 
-    def get_infeasibilities(self, cts):
-        raise NotImplementedError  # pragma: no cover
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        raise None  # pragma: no cover
 
     def get_solve_attribute(self, attr_name, indices):
-        return {}  # pragma: no cover
-
-    def get_solutions(self, dvars):
         return {}  # pragma: no cover
 
     def get_cplex(self):
@@ -295,6 +307,9 @@ class IndexerEngine(DummyEngine):
     def create_indicator_constraint(self, ind):
         return self._create_one_ct()
 
+    def create_quadratic_constraint(self, ind):
+        return self._create_one_ct()
+
     def get_solve_attributes(self, attr_name, indices):
         # return empty dict
         return {}
@@ -325,9 +340,6 @@ class IndexerEngine(DummyEngine):
         """
         return parameter.get()
 
-    def get_infeasibilities(self, cts):
-        return [0 for _ in cts]
-
 
 class NoSolveEngine(IndexerEngine):
     def get_solve_details(self):
@@ -357,9 +369,13 @@ class NoSolveEngine(IndexerEngine):
         mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: model cannot be solved!")
         return None
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwite_params, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         mdl.fatal("No CPLEX DLL: model cannot be relaxed!")
-        return False, 0
+        return None
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        mdl.fatal("No CPLEX DLL: conflict refiner cannot be invoked on model!")
+        return None
 
     @staticmethod
     def make_from_model(mdl):
@@ -390,6 +406,7 @@ class ZeroSolveEngine(IndexerEngine):
     def last_solved_parameters(self):
         return self._last_solved_parameters
 
+
     @property
     def name(self):
         return "zero_solve"  # pragma: no cover
@@ -416,11 +433,14 @@ class ZeroSolveEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         params = parameters or mdl.parameters
         self._last_solved_parameters = params
         self.show_parameters(params)
-        return True, 0  # pragma: no cover
+        return None  # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        return None
 
     def get_solve_details(self):
         return SolveDetails.make_fake_details(time=0, feasible=True)
@@ -442,8 +462,11 @@ class FakeFailEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
-        return False, 0  # pragma: no cover
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
+        return None  # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        return None  # pragma: no cover
 
     def get_solve_status(self):
         return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
@@ -472,9 +495,13 @@ class TerminatedEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         self.terminate()
-        return False, 0  # pragma: no cover
+        return None  # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        self.terminate()
+        return None  # pragma: no cover
 
     def get_solve_status(self):
         return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
@@ -505,9 +532,13 @@ class RaiseErrorEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, optimize, overwrite_params, parameters=None):
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         self._simulate_error()
-        return False, 0  # pragma: no cover
+        return None  # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        self._simulate_error()
+        return None  # pragma: no cover
 
     def get_solve_status(self):
         return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover

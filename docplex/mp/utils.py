@@ -38,19 +38,29 @@ try:
     import numpy
     _numpy_is_available = True
 
-    def numpy_is_numeric(t):
-        # returns True if the specified type is numeric
-        try:
-            return numpy.issubdtype(t, numpy.number)
-        except TypeError:
-            return False
 
-    def numpy_is_integer(t):
-        # returns True if the specified type is integer
-        try:
-            return numpy.issubdtype(t, numpy.integer)
-        except TypeError:
-            return False
+    __int_types.add(numpy.bool_)
+    __int_types.add(numpy.bool)
+
+    __int_types.add(numpy.int_)
+    __int_types.add(numpy.intc)
+    __int_types.add(numpy.intp)
+
+    __int_types.add(numpy.int8)
+    __int_types.add(numpy.int16)
+    __int_types.add(numpy.int32)
+    __int_types.add(numpy.int64)
+
+    __int_types.add(numpy.uint8)
+    __int_types.add(numpy.uint16)
+    __int_types.add(numpy.uint32)
+    __float_types.add(numpy.uint64)
+
+    __float_types.add(numpy.float_)
+    __float_types.add(numpy.float16)
+    __float_types.add(numpy.float32)
+    __float_types.add(numpy.float64)
+
 
     from numpy import ndarray
     __numpy_ndslot_type = ndarray
@@ -66,17 +76,49 @@ try:
 except ImportError:
     __pandas_series_type = None
 
-
+__int_types = frozenset(__int_types)
 def is_int(s):
     type_of_s = type(s)
     return type_of_s in __int_types or (_numpy_is_available and numpy_is_integer(type(s)))
-    #return type_of_s in __int_types
 
-__all_python_num_types = __float_types.union(__int_types)
+
+__all_python_num_types = frozenset(__float_types.union(__int_types))
+
+if _numpy_is_available:
+    def numpy_is_numeric(t):
+        # returns True if the specified type is numeric
+        try:
+            flag =  numpy.issubdtype(t, numpy.number)
+            global __all_python_num_types
+            if flag is True:
+                tmp = set(__all_python_num_types)
+                tmp.add(type(t))
+                __all_python_num_types = frozenset(tmp)
+            return flag
+        except TypeError:
+            return False
+
+    def numpy_is_integer(t):
+        # returns True if the specified type is integer
+        try:
+            flag = numpy.issubdtype(t, numpy.integer)
+            if flag is True:
+                global __all_python_num_types
+                global __int_types
+                tmp = set(__all_python_num_types)
+                tmp.add(type(t))
+                __all_python_num_types = frozenset(tmp)
+
+                tmp = set(__int_types)
+                tmp.add(type(t))
+                __int_types = frozenset(tmp)
+            return flag
+        except TypeError:
+            return False
 
 def is_number(s):
-    s_type = type(s)
-    return s_type in __all_python_num_types or (_numpy_is_available and (numpy_is_numeric(s_type) or _is_numpy_ndslot(s)))
+    type_of_s = type(s)
+    return type_of_s in __all_python_num_types or (_numpy_is_available and (numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)))
 
 
 def _is_numpy_ndslot(s):
@@ -101,15 +143,22 @@ def is_pandas_series(s):
 def is_numpy_ndarray(s):
     return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
 
+string_types  = {str}
+if six_py2:
+    string_types.add(unicode)
+string_types  = frozenset(string_types)
+
 def is_string(e):
-    if e is None:
-        return False
-    elif isinstance(e, str):
-        return True
-    elif six_py2:
-        return isinstance(e, unicode)
-    else:
-        return False
+    return type(e) in string_types
+    #if e is None:
+    #    return False
+    #elif
+    #isinstance(e, str):
+    #    return True
+    #elif six_py2:
+    #    return isinstance(e, unicode)
+    #else:
+    #    return False
 
 def has_len(e):
     try:
@@ -261,6 +310,7 @@ def generate_constant(the_constant, count_max):
     while loop_counter <= count_max:
         yield the_constant
         loop_counter += 1
+
 
 def iter_emptyset():
     return iter([])
@@ -640,6 +690,10 @@ class _IndexScope(_SymbolGenerator):
     def _make_index_map(self):
         return {m.get_index(): m for m in self._obj_iter()}
 
+    @property
+    def iter(self):
+        return self._obj_iter()
+
     def get_object_by_index(self, idx):
         if self._index_map is None:
             self._index_map = self._make_index_map()
@@ -667,3 +721,44 @@ class _IndexScope(_SymbolGenerator):
     def update_indices(self):
         if self._index_map is not None:
             self._index_map = self._make_index_map()
+
+    def reindex_one(self, reindexed_index, indexer):
+        for ct in self._obj_iter():
+            old_model_index = ct.unchecked_index
+            if old_model_index > reindexed_index:
+                updated_index = indexer.get_ct_index(ct)
+                if updated_index != old_model_index:
+                    ct.set_index(updated_index)
+
+    def reindex_all(self, indexer):
+        for ct in self._obj_iter:
+            old_model_index = ct.unchecked_index
+            updated_index = indexer.get_ct_index(ct)
+            if updated_index != old_model_index:
+                ct.set_index(updated_index)
+
+
+class CplexParameterHandler(object):
+    # INTERNAL: util function to handle Cplex parameters appropriately
+
+    def __init__(self, parameters):
+        self._parameters = parameters
+
+    def get_updated_parameters(self, solver):
+        # --- limit threads if needed
+        if getattr(solver, 'max_threads', None) is not None:
+            if self._parameters.threads.get() == 0:
+                max_threads = solver.max_threads
+            else:
+                max_threads = min(solver.max_threads,
+                                  self._parameters.threads.get())
+            # we don't want to duplicate parameters unnecessary
+            if max_threads != self._parameters.threads.get():
+                self._parameters = self._parameters.copy()
+                self._parameters.threads = max_threads
+                out_stream = solver.log_output_as_stream
+                if out_stream:
+                    out_stream.write(
+                        "WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
+                    # ---
+        return self._parameters

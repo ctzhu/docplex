@@ -6,25 +6,26 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module contains the basic classes representing constraint programming model expressions.
+This module contains the basic classes representing the expressions required to
+describe a constraint programming model.
 
 In particular, it defines the following classes:
 
- * CpoExpr: the root class of each model expression node,
- * CpoIntVar: representation of an integer variable,
- * CpoIntervalVar: representation of an interval variable,
- * CpoSequenceVar: representation of an interval variable,
- * CpoSequenceVar: representation of an interval variable,
- * CpoTransitionMatrix: representation of a transition matrix,
- * CpoTupleSet: representation of a tuple set, and
- * CpoStateFunction: representation of a state function.
+ * :class:`CpoExpr`: the root class of each model expression node,
+ * :class:`CpoIntVar`: representation of an integer variable,
+ * :class:`CpoIntervalVar`: representation of an interval variable,
+ * :class:`CpoSequenceVar`: representation of an interval variable,
+ * :class:`CpoSequenceVar`: representation of an interval variable,
+ * :class:`CpoTransitionMatrix`: representation of a transition matrix,
+ * :class:`CpoTupleSet`: representation of a tuple set,
+ * :class:`CpoStateFunction`: representation of a state function.
 
 None of these classes should be created explicitly.
 There are various factory functions to do so, such as:
 
- * integer_var(), integer_var_list(), integer_var_dict() to create integer variable(s),
- * interval_var(), interval_var_list() to create an interval variable,
- * sequence_var() to create a sequence variable,
+ * :meth:`integer_var`, :meth:`integer_var_list`, :meth:`integer_var_dict` to create integer variable(s),
+ * :meth:`interval_var`, :meth:`interval_var_list` to create an interval variable(s),
+ * :meth:`sequence_var` to create a sequence variable,
  * etc.
 
 Moreover, some automatic conversions are also provided.
@@ -33,39 +34,70 @@ For example, a list of tuples of integers is automatically converted into a tupl
 
 from docplex.cp.utils import *
 from docplex.cp.catalog import *
+from docplex.cp.config import context
 import math
 import collections
 import threading
 
 
 ###############################################################################
-## Integer expressions
+## Constants
 ###############################################################################
 
-#INT_MAX = 0x1FFFFFFFFFFFFF  # (2^53 - 1) for 64 bits
-INT_MAX = 0x7FFFFFFF         # (2^31 - 1) for 32 bits
+INT_MAX = (2**53 - 1)  # (2^53 - 1) for 64 bits, (2^31 - 1) for 32 bits
 """ Maximum integer value. """
 
 INT_MIN = -INT_MAX
 """ Minimum integer value. """
 
+# Name generator for integer variables
+_INTEGER_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_INT_')
+
+# Name generator for interval variables
+_INTERVAL_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_ITV_')
+
+# Name generator for sequence variables
+_SEQUENCE_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_SEQ_')
+
+# Name generator for state functions
+_STATE_FUNCTION_ID_ALLOCATOR = SafeIdAllocator('_FUN_')
+
+# Name generator for all other variables
+_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_VAR_')
+
+# Name generator for shared expressions
+_EXPRESSION_ID_ALLOCATOR = SafeIdAllocator('_EXP_')
+
+# Name generator for constraints
+_CONSTRAINT_ID_ALLOCATOR = SafeIdAllocator('_CTR_')
+
+# Floating point precision to verify equality of floats
+_FLOATING_POINT_PRECISION = 1e-9
+
+
+###############################################################################
+## Public expression classes
+###############################################################################
+
 class CpoExpr(object):
-    """ Root constraint programming model expression.
+    """ This class is an abstract class that represents any CPO expression node.
 
-    This class represents a CPO expression atom. It does not contain links to children expressions
-    that are implemented in extending classes. However, access to children is provided with default
-    return value.
+    It does not contain links to children expressions that are implemented in extending classes.
+    However, method allowing to access to children is provided with default return value.
     """
-    # To force possible numpy operators overloading to get CPO expressions as main operand
-    __array_priority__ = 100
-
     __slots__ = ('type',       # Expression result type
                  'name',       # Name of the expression (None if none)
                  'nbrefs',     # Number of references on this expression
                 )
 
+    # To force possible numpy operators overloading to get CPO expressions as main operand
+    __array_priority__ = 100
+
+    # Expression name generator
+    __name_generator__ = _EXPRESSION_ID_ALLOCATOR
+
     def __init__(self, type, name):
-        """ Create a new expression
+        """ Constructor:
 
         Args:
             type:   Expression type.
@@ -73,11 +105,11 @@ class CpoExpr(object):
         """
         # super(CpoExpr, self).__init__()
         self.type = type
-        self.set_name(name)
+        self.name = name
         self.nbrefs = 0
         
     def __hash__(self):
-        """ Redefinition of hash (needed by Python 3)
+        """ Redefinition of hash function (mandatory for Python 3)
         """
         return int(id(self) / 16)
 
@@ -97,57 +129,74 @@ class CpoExpr(object):
     '''
 
     def set_name(self, name):
-        """ Sets the expression name.
+        """ Set the name of the expression.
 
         Args:
             name: Expression name, possibly None.
         """
-        assert (name is None) or isinstance(name, str), "Argument 'name' should be a string or None"
+        assert (name is None) or is_string(name), "Argument 'name' should be a string or None, not '{}' of type {}".format(name, type(name))
+        if name is not None:
+            name = make_unicode(name)
         self.name = name
             
     def get_name(self):
-        """ Gets the expression name.
+        """ Return the name of the expression.
 
         Returns:
-            Expression name, possibly None.
+            Name of the expression, possibly None.
         """
         return self.name
             
-    def _get_alias_then_name(self):
-        """ Get the name of the expression (alias are for variables only)
-
-        Returns:
-            Expression name
-        """
-        return self.name
-
-
     def has_name(self):
-        """ Checks if the expression has a name.
+        """ Check if the expression has a name.
 
         Returns:
-            True if expression has a name, False otherwise.
+            True if the expression has a name, False otherwise.
         """
         return (self.name is not None)
-            
+
+    @classmethod
+    def _generate_name(cls):
+        """ Generate a name for this type of expression
+        Return
+            Unused name for this type of object
+        """
+        return cls.__name_generator__.allocate()
+
+    def _set_generated_name(self):
+        """ Generate a name for this type of expression (with corresponding generator)
+        """
+        self.name = make_unicode(self._generate_name())
+
     def get_type(self):
-        """ Gets the type of this expression.
+        """ Return the type of this expression.
 
         Returns:
             Expression type descriptor.
         """
         return self.type
             
+    def is_type(self, xtyp):
+        """ Check if the type of this expression is a given one
+
+        Args:
+            xtyp:  Expected type
+        Returns:
+            True if expression type is the expected one
+        """
+        return self.type == xtyp
+
     def is_kind_of(self, tp):
-        """ Checks if this expression type is a kind of another type.
+        """ Checks if the type of this expression type is compatible with another type.
 
         Args:
             tp: Other type to check.
         Returns:
-           True if this expression type type is a kind of tp.
+           True if this expression type is a kind of tp.
         """
         # Check if required type is the same
-        return (tp.base_type in self.type.higher_types)
+        return self.type.is_kind_of(tp)
+        #return (tp.base_type in self.type.higher_types)
 
     def is_variable(self):
         """ Checks if this expression is a variable.
@@ -158,7 +207,7 @@ class CpoExpr(object):
         return self.type.is_variable()
             
     def is_constant(self):
-        """ Checks if this expression is constant.
+        """ Checks if this expression is a constant, possibly array.
 
         Returns:
             True if this expression is a constant, False otherwise.
@@ -173,8 +222,16 @@ class CpoExpr(object):
         """
         return False
 
+    def is_constraint_or_bool_expr(self):
+        """ Checks if this expression is a constraint or a boolean expression
+
+        Returns:
+            True if this expression is a constraint or a boolean expression
+        """
+        return self.type in (Type_Constraint, Type_BoolExpr)
+
     def get_priority(self):
-        """ Gets the expression operation priority.
+        """ Return the operation priority of this expression.
 
         Returns:
             Operation priority, -1 for none.
@@ -188,6 +245,14 @@ class CpoExpr(object):
             List of children expressions, None if none
         """
         return None
+
+    def is_leaf(self):
+        """ Checks if this expression is a leaf (no children)
+
+        Returns:
+            True if this expression is a leaf
+        """
+        return self._get_children() is None
 
     def get_max_depth(self):
         """ Gets the maximum expression depth.
@@ -216,12 +281,29 @@ class CpoExpr(object):
         return depth
 
     def equals(self, other):
-        """ Checks the equality of this expression with another.
+        """ Checks the equality of this expression with another object.
 
-        Implementation is required with this name because '==' is already overloaded to construct an expression.
+        Implementation is required with a different name than __eq__ name because this function is already
+        overloaded to construct model expression with operator '=='.
 
         Args:
             other: Other object to compare with.
+        Return:
+            True if 'other' is equal to this object, False otherwise.
+        """
+        return _is_equal_expressions(self, other)
+
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Return:
+            True if 'other' is equal to this object, False otherwise.
         """
         return (type(self) == type(other)) and (self.type == other.type) and (self.name == other.name)
 
@@ -236,46 +318,58 @@ class CpoExpr(object):
         if (self.nbrefs > 1) and not(self.is_atom_constant()):
             # Add expression id if none
             if self.name is None:
-                self.name = _allocate_identifier()
+                self.name = self._generate_name()
 
-    def _get_string(self):
-        """ Get the string representing this expression (without name)
+    def _get_expr_string(self):
+        """ Get the string representing this expression, name excluded.
+
         Returns:
             String representation of this expression
-            This default implementation returns the name of the type
         """
-        return self.get_type().get_name()
+        return "None"
 
-    def _to_string(self, root):
+
+    def _to_string(self, root=True):
         """ Get the string representing this expression
+
+        If 'root' flag is True, then expression is printed as [<name> =] <expression>. All sub-expressions
+        are printed with 'root' flag to False.
+
+        If 'root' flag is False, then only name is printed if any. Otherwise expression is printed
+        and sub-expressions are printed with 'root' flag to False.
+
         Args:
-            root: Expression root indicator
+            root: Indicate a root level print.
         Returns:
             String representation of this expression
+            This default implementation returns the name of the expression
         """
-        # Check named expression not at root
-        name = self.name
-        if name:
-            if not root:
-                return name
-            return name + " = " + self._get_string()
-        return self._get_string()
+        name = self.get_name();
+        if root:
+            if is_string(name):
+                return to_printable_symbol(name) + " = " + self._get_expr_string()
+            else:
+                return self._get_expr_string()
+        elif is_string(name):
+            return to_printable_symbol(name)
+        else:
+            return self._get_expr_string()
 
     def __str__(self):
         """ Convert this expression into a string """
-        return self._to_string(True)
+        return self._to_string()
 
 
 class CpoValue(CpoExpr):
-    """ Expression representing a constant. """
+    """ CPO model expression node representing a constant value. """
     __slots__ = ('value',  # Python value of the constant
                 )
 
     def __init__(self, value, type):
-        """ Creates a new constant expression.
+        """ Constructor
 
         Args:
-            value:  Python value.
+            value:  Constant value.
             vtyp :  Value type.
         """
         assert isinstance(type, CpoType), "Argument 'type' should be a CpoType"
@@ -285,7 +379,7 @@ class CpoValue(CpoExpr):
         self.value = value
 
     def get_value(self):
-        """ Gets the value of the constant.
+        """ Return the value of the constant.
 
         Returns:
             Value of the constant.
@@ -293,36 +387,33 @@ class CpoValue(CpoExpr):
         return self.value
 
     def is_atom_constant(self):
-        """ Checks if this expression is an atomic constant (boolean, int, float).
+        """ Checks if this expression is an atomic constant (boolean, int or float).
 
         Returns:
             True if this expression is an atomic constant.
         """
-        return (self.type in (Type_Int, Type_Float, Type_Bool))
+        return self.type.is_constant_atom()
 
-    def equals(self, other):
-        """ Checks equality of this expression with another.
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
 
-        Implementation is required with this name because '==' is overloaded to construct expressions.
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
 
         Args:
             other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
         """
         # Call super
-        if not super(CpoValue, self).equals(other):
+        if not super(CpoValue, self)._equals(other):
             return False
-        # Check value
+        # For array of expr, managed as a recursive call by _equals_expressions().
         if self.type.is_array_of_expr():
-            sval = self.value
-            oval = other.value
-            if len(oval) != len(sval):
-                return False
-            for i in range(len(sval)):
-                if not sval[i].equals(oval[i]):
-                    return False
             return True
-        else:
-            return self.value == other.value
+        # Check value
+        return _is_equal_values(self.value, other.value)
 
     def _get_children(self):
         """ Get the list of children expressions if any
@@ -334,28 +425,32 @@ class CpoValue(CpoExpr):
             return self.value
         return None
 
-    def _get_string(self):
-        """ Get the string representing this expression (without name)
+    def _get_expr_string(self, root=True):
+        """ Get the string representing this expression, name excluded.
+
         Returns:
             String representation of this expression
         """
+        # Build expression string
+        if is_array(self.value):
+            return "[" + ", ".join(x._to_string(False) if isinstance(x, CpoExpr) else str(x) for x in self.value) + "]"
         return str(self.value)
 
 
 class CpoExprList(list):
     """ List of CPO expressions.
 
-    This extension of a standard Python list overwrites __getitem__ to call element() constraint
-    if the index is a CPO integer expression.
+    This extension of a standard Python list overwrites __getitem__ to call :func:`docplex.cp.modeler.element`
+    constraint if the index is a CPO integer expression.
 
-    This object is used as returned object by constructor methods integer_var_list() in this module.
+    This object is returned by the constructor method :meth:`integer_var_list` in this module.
     """
 
     def __init__(self):
         super(CpoExprList, self).__init__()
 
     def __getitem__(self, nx):
-        """ Overloading of [] to create a CPO element() expression if index is a CPO integer expression.
+        """ Overloading of operator '[]' to create a CPO element() expression if index is a CPO integer expression.
 
         Args:
             nx: Element index
@@ -368,15 +463,17 @@ class CpoExprList(list):
         return super(CpoExprList, self).__getitem__(nx)
 
 
-
 class CpoFunctionCall(CpoExpr):
-    """ Constraint programming model expression representing a function call. """
+    """ This class represent all model expression nodes that call a predefined modeler function.
+
+    All modeling functions are available in module :mod:`docplex.cp.modeler`.
+    """
     __slots__ = ('signature',  # Signature of the operation (None if none)
                  'operands',   # List of operand expressions, or Python value for constants
                 )
 
     def __init__(self, sign, oprnds):
-        """ Create a new function call expression
+        """ Constructor
 
         Args:
             sign:   Operation signature (children is operands).
@@ -388,31 +485,40 @@ class CpoFunctionCall(CpoExpr):
 
         # Check no toplevel constraints
         if oprnds:
-            for e in oprnds:
-                if (e.get_type() == Type_Constraint):
-                    raise CpoException("The constraint " + str(e) + " can not be member of an expression.")
+            if any(e.is_type(Type_Constraint) for e in oprnds):
+                raise CpoException("A constraint can not be operand of an expression.")
             self.operands = _update_references(oprnds)
         else:
             self.operands = None
 
     def get_signature(self):
-        """ Gets the expression signature.
+        """ Return the signature of the expression.
 
-        Returns:
+        Return:
             Expression signature.
         """
         return self.signature
 
     def get_operation(self):
-        """ Gets the expression operation.
+        """ Return the operation of the expression signature.
 
         Returns:
             Expression operation, None if none.
         """
         return self.signature.operation
 
+    def is_operation(self, op):
+        """ Checks if the operation of the expression signature is an expected one.
+
+        ARgs:
+            op:  Expected operation
+        Returns:
+            True if expression operation is the expected one, False otherwise.
+        """
+        return self.signature.operation == op
+
     def get_priority(self):
-        """ Gets the expression operation priority.
+        """ Return the priority of the operation of this expression.
 
         Returns:
             Operation priority, -1 for none.
@@ -420,65 +526,57 @@ class CpoFunctionCall(CpoExpr):
         return self.signature.get_priority()
 
     def get_operands(self):
-        """ Gets the expression operands.
+        """ Return the operands of this expression.
 
         Returns:
-            Expression operands (list of child expressions), None if none.
+            List of operand expressions, None if no operands.
         """
         return self.operands
 
-    def equals(self, other):
-        """ Checks the equality of this expression with .
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
 
-        Implementation is required with this name because '==' is already overloaded to construct an expression.
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
 
         Args:
             other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
         """
-        # Call super
-        if not super(CpoFunctionCall, self).equals(other):
-            return False
-
-        # Check signature
-        if self.signature != other.signature:
-            return False
-
-        # Check operands
-        if self.signature.is_parameters():
-            soprds = self.operands
-            ooprds = other.operands
-            if len(soprds) != len(ooprds):
-                return False
-            for i in range(len(soprds)):
-                if not soprds[i].equals(ooprds[i]):
-                    return False
-        return True
+        return super(CpoFunctionCall, self)._equals(other) and (self.signature == other.signature)
 
     def _get_children(self):
-        """ Get the list of children expressions if any
+        """ Return the list of children expressions if any
 
         Returns:
             List of children expressions, None if none
         """
         return self.operands
 
-    def _get_string(self):
-        """ Get the string representing this expression (without name)
+    def _get_expr_string(self, root=True):
+        """ Get the string representing this expression, name excluded.
+
         Returns:
             String representation of this expression
-            This default implementation returns the name of the type
+            This default implementation returns the name of the expression as there is no value.
         """
-        # Check named expression not at root
         opsgn = self.signature
         oprnds = self.operands
         return opsgn.get_operation().get_py_name() + "(" + ", ".join(x._to_string(False) for x in oprnds) + ")"
+        return self.get_name()
 
 
 class CpoVariable(CpoExpr):
-    """ Expression representing a variable. """
+    """ This class is an abstract class extended by all expression nodes that represent a CPO variable.
+    """
+
+    # Expression name generator
+    __name_generator__ = _VARIABLE_ID_ALLOCATOR
 
     def __init__(self, type, name):
-        """ Creates a new variable expression.
+        """ Constructor:
 
         Args:
             type:   Expression type.
@@ -486,7 +584,7 @@ class CpoVariable(CpoExpr):
         """
         # Check name length
         if name is None:
-            name = _allocate_var_name()
+            name = self._generate_name()
         super(CpoVariable, self).__init__(type, name)
         self.alias = None
 
@@ -494,16 +592,20 @@ class CpoVariable(CpoExpr):
         """ Checks if this expression is a variable.
 
         Returns:
-            True if this expression is a variable, False otherwise.
+            Always True.
         """
         return True
 
 
 class CpoIntVar(CpoVariable):
-    """ Integer variable. """
+    """ This class represents an *integer variable* that can be used in a CPO model.
+    """
     __slots__ = ('domain',  # Variable domain
                  )
     
+    # Expression name generator
+    __name_generator__ = _INTEGER_VARIABLE_ID_ALLOCATOR
+
     def __init__(self, dom, name):
         # Private constructor
         super(CpoIntVar, self).__init__(Type_IntVar, name)
@@ -535,24 +637,38 @@ class CpoIntVar(CpoVariable):
         """
         return self.domain
     
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "integer_var(" + self.get_name() + ")"
-        
+    def _get_expr_string(self, root=True):
+        """ Get the string representing this expression, name excluded.
+
+        Returns:
+            String representation of this expression
+            This default implementation returns the name of the expression as there is no value.
+        """
+        return "integer_var(" + str(self.get_domain()) + ")"
+
+    def equals(self, other):
+        """ Checks if this expression is equivalent to another
+
+        Args:
+            other: Other object to compare with.
+        Return:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        return super(CpoIntVar, self).equals(other) and (self.domain == other.domain)
+
 
 ###############################################################################
 ## Scheduling expressions
 ###############################################################################
 
-#INTERVAL_MAX = 0xFFFFFFFFFFFFE  # (2^52 - 2) for 64 bits
-INTERVAL_MAX = 0x3FFFFFFE        # (2^30 - 2) for 32 bits
-""" Maximum interval variable range. """
+INTERVAL_MAX = (INT_MAX // 2) - 1
+""" Maximum interval variable range value """
 
 INTERVAL_MIN = -INTERVAL_MAX
-""" Minimum interval variable range. """
+""" Minimum interval variable range value """
 
 INFINITY = float('inf')
-""" Infinity. """
+""" Infinity """
 
 DEFAULT_INTERVAL = (0, INTERVAL_MAX)
 """ Default interval. """
@@ -564,15 +680,19 @@ _PRES_OPTIONAL  = "optional"  # Present or absent, choice made by the solver
 
 
 class CpoIntervalVar(CpoVariable):
-    """ Interval variable. """
+    """ This class represents an *interval variable* that can be used in a CPO model.
+    """
     __slots__ = ('start',        # Start domain
                  'end',          # End domain
                  'length',       # Length domain
                  'size',         # Size domain
                  'intensity',    # Specifies relation between size and length of the interval.
-                 'granularity',  # Scale of the intensity function.
-                 'presence',     # Presence requirement
+                 'granularity',  # Scale of the intensity function (int)
+                 'presence',     # Presence requirement (in _PRES_*)
                  )
+
+    # Expression name generator
+    __name_generator__ = _INTERVAL_VARIABLE_ID_ALLOCATOR
 
     def __init__(self, start, end, length, size, intensity, granularity, presence, name):
         # Private constructor
@@ -771,6 +891,30 @@ class CpoIntervalVar(CpoVariable):
         assert (granularity is None) or (is_int(granularity) and (granularity >= 0)), "Argument 'granularity' should be None or positive integer"
         self.granularity = granularity 
 
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        # Call super
+        if not super(CpoIntervalVar, self)._equals(other):
+            return False
+
+        # Check same attributes (intensity processed as a children)
+        return self.start == other.start and \
+               self.end == other.end and \
+               self.length == other.length and \
+               self.size == other.size and \
+               self.granularity == other.granularity and \
+               self.presence == other.presence
+
     def _get_children(self):
         """ Get the list of children expressions if any
 
@@ -779,17 +923,26 @@ class CpoIntervalVar(CpoVariable):
         """
         return (self.intensity,) if self.intensity else None
 
-    def __str__(self):
-        """ Convert this expression into a string """
-        return "interval_var(" + self.get_name() + ")"
+    def _get_expr_string(self, root=True):
+        """ Get the string representing this expression, name excluded.
+
+        Returns:
+            String representation of this expression
+            This default implementation returns the name of the expression as there is no value.
+        """
+        return "intervar_var(start=" + str(self.get_start()) + ", end=" + str(self.get_end()) + ")"
 
 
 class CpoSequenceVar(CpoVariable):
-    """ Sequence variable. """
+    """ This class represents an *sequence variable* that can be used in a CPO model.
+    """
     __slots__ = ('vars',   # List of variables
                  'types',  # Variable types
                 )
     
+    # Expression name generator
+    __name_generator__ = _SEQUENCE_VARIABLE_ID_ALLOCATOR
+
     def __init__(self, vars, types=None, name=None):
         """ Creates a new sequence variable.
 
@@ -798,10 +951,18 @@ class CpoSequenceVar(CpoVariable):
             types: Variable types (same size as vars), default is None.
             name:  Name of the sequence, None for automatic naming.
         """
-        # Check  arguments 
-        assert is_array_of_type(vars, CpoIntervalVar), "Argument 'vars' should be an array of CpoIntervalVar"
+        # Check  arguments
+        if isinstance(vars, CpoValue):
+            assert vars.is_type(Type_IntervalVarArray)
+            vars = vars.value
+        else:
+            assert is_array_of_type(vars, CpoIntervalVar), "Argument 'vars' should be an array of CpoIntervalVar"
         if types is not None:
-            types = _check_and_expand_interval_tuples('types', types)
+            if isinstance(types, CpoValue):
+                assert types.is_type(Type_IntArray)
+                types = types.value
+            else:
+                types = _check_and_expand_interval_tuples('types', types)
         # Store attributes
         super(CpoSequenceVar, self).__init__(Type_SequenceVar, name)
         self.vars = vars
@@ -823,13 +984,37 @@ class CpoSequenceVar(CpoVariable):
         """
         return self.types
     
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        return super(CpoSequenceVar, self)._equals(other)
+        # List of variables is processed as expression children
+
+    def _get_children(self):
+        """ Get the list of children expressions if any
+
+        Returns:
+            List of children expressions, None if none
+        """
+        return self.vars
+
     def __str__(self):
         """ Convert this expression into a string """
         return "SequenceVar" + to_string(self.vars)
 
 
 class CpoTransitionMatrix(CpoExpr):
-    """ Transition matrix (transition distances). """
+    """ This class represents a *transition matrix* that is used in CPO model to represent transition distances.
+    """
     __slots__ = ('size',    # Matrix width/height
                  'matrix',  # Matrix values
                 )
@@ -838,11 +1023,11 @@ class CpoTransitionMatrix(CpoExpr):
         """ Creates a new empty transition matrix (square matrix of integers).
 
         Args:
-            size:   Matrix size (width or height).
+            size (optional):   Matrix size (width or height).
                     If not given, the `values` argument must be given.
-            values: Optional list of matrix values.
+            values (optional): List of matrix values.
                     If not given, the method `set_value()` should be called to initialize matrix content.
-            name:   Name of the matrix. None by default.
+            name (optional):   Name of the matrix. None by default.
         """
         super(CpoTransitionMatrix, self).__init__(Type_TransitionMatrix, name)
         if (size is not None):
@@ -856,13 +1041,14 @@ class CpoTransitionMatrix(CpoExpr):
         elif (values is not None):
             assert is_array_of_type(values, int), "Argument 'values' should be an array of integers"
             size = math.sqrt(len(values))
-            assert (len(values) == (size * size)), "Argument 'values' should hae a length that is a perfect square"
+            assert (len(values) == (size * size)), "Argument 'values' should have a length that is a perfect square"
             self.matrix = values
+            self.size = size
         else:
             assert False, "At least 'size' or 'values' should be given"
          
     def get_size(self):
-        """ Gets the matrix size.
+        """ Returns the size of the matrix.
 
         Returns:
             Matrix size.
@@ -870,7 +1056,7 @@ class CpoTransitionMatrix(CpoExpr):
         return self.size
 
     def get_value(self, from_state, to_state):
-        """ Gets a value in the transition matrix.
+        """ Returns a value in the transition matrix.
 
         Args:
             from_state: Index of the from state.
@@ -883,7 +1069,7 @@ class CpoTransitionMatrix(CpoExpr):
         return self.matrix[(from_state * self.size) + to_state]
 
     def get_matrix(self):
-        """ Gets the complete transition matrix.
+        """ Returns the complete transition matrix.
 
         Returns:
             Transition value (list of lists).
@@ -902,22 +1088,40 @@ class CpoTransitionMatrix(CpoExpr):
         assert_arg_int_interval(to_state, 0, self.size, "to_state")
         self.matrix[from_state * self.size + to_state] = value
 
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        return super(CpoTransitionMatrix, self)._equals(other) and \
+               (self.size == other.size) and \
+               (self.matrix == other.matrix)
+
     def __str__(self):
         """ Convert this expression into a string """
         return "TransitionMatrix" + to_string(self.matrix)
     
     
 class CpoTupleSet(CpoExpr):
-    """ Tuple set. """
+    """ This class is used to represent a set of integer tuples.
+    """
     __slots__ = ('size',      # Size of a single tuple
                  'tupleset',  # List of tuples
                  )
     
     def __init__(self, size=-1, name=None):
-        """ Creates a new empty tuple set.
+        """ Constructor
 
         Args:
-            size: Tuple size; default value is -1 for automatic size.
+            size (optional): Tuple size; default value is -1 for automatic size.
+            name (optional): Name of the tuple set. Default is None.
         """
         assert is_int(size), "Argument 'size' should be an int"
         super(CpoTupleSet, self).__init__(Type_TupleSet, name)
@@ -925,7 +1129,7 @@ class CpoTupleSet(CpoExpr):
         self.tupleset = []
          
     def get_size(self):
-        """ Gets the tuple size.
+        """ Returns the size of one tuple in this set.
 
         Returns:
             Tuple size, -1 if undefined.
@@ -933,21 +1137,21 @@ class CpoTupleSet(CpoExpr):
         return self.size
 
     def add(self, tpl):
-        """ Adds a tuple in this tuple set.
+        """ Appends a tuple at the end of this tuple set.
 
         Args:
             tpl: Tuple to add.
         """
         # Check for intervals
         tpl = _check_and_expand_interval_tuples("tpl", tpl)
-        if (self.size < 0):
+        if self.size < 0:
             self.size = len(tpl)
         elif len(tpl) != self.size:
             raise CpoException("You must add only tuples of size " + str(self.size))
         self.tupleset.append(tpl)
 
     def add_set(self, tpls):
-        """ Adds a set of tuples in this tuple set.
+        """ Appends a set of tuples in this tuple set.
 
         Args:
             tpls: Iterator of tuples to add.
@@ -956,12 +1160,28 @@ class CpoTupleSet(CpoExpr):
             self.add(t)
 
     def get_tuple_set(self):
-        """ Gets the complete tuple set.
+        """ Returns the complete tuple set.
 
         Returns:
-            Tuple set.
+            Tuple set (list of tuples)
         """
         return self.tupleset
+
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        return super(CpoTupleSet, self)._equals(other) and \
+               (self.size == other.size) and \
+               (self.tupleset == other.tupleset)
 
     def __str__(self):
         """ Convert this expression into a string """
@@ -969,16 +1189,24 @@ class CpoTupleSet(CpoExpr):
     
     
 class CpoStateFunction(CpoVariable):
-    """ State function. """
+    """ This class represents a *state function* expression node.
+
+    State functions are used by *interval variables* to represent the evolution of a state variable over time.
+    """
     __slots__ = ('trmtx',      # Transition matrix
                 )
+
+    # Expression name generator
+    __name_generator__ = _STATE_FUNCTION_ID_ALLOCATOR
 
     def __init__(self, trmtx=None, name=None):
         """ Creates a new state function.
 
         Args:
-            trmtx:  Transition matrix.
-            name:   Name of the state function.
+            trmtx (optional):  Transition matrix.
+                               If not given in the constructor, method :meth:`set_transition_matrix` should be called
+                               after the constructor.
+            name (optional):   Name of the state function.
         """
         # Force name for state functions
         super(CpoStateFunction, self).__init__(Type_StateFunction, name)
@@ -996,12 +1224,26 @@ class CpoStateFunction(CpoVariable):
         self.trmtx = trmtx
 
     def get_transition_matrix(self):
-        """ Gets the transition matrix.
+        """ Returns the transition matrix.
 
         Returns:
             Transition matrix, None if none.
         """
         return self.trmtx
+
+    def _equals(self, other):
+        """ Checks the equality of this expression with another object.
+
+        This particular method just checks local attributes, but does not check recursively children if any.
+        Recursion is implemented by method equals() that uses a self-managed stack to avoid too many
+        recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+        Args:
+            other: Other object to compare with.
+        Returns:
+            True if 'other' is semantically identical to this object, False otherwise.
+        """
+        return super(CpoStateFunction, self)._equals(other)
 
     def _get_children(self):
         """ Get the list of children expressions if any
@@ -1026,27 +1268,28 @@ def integer_var(min, max=None, name=None):
     An integer variable is a decision variable with a set of potential values called 'domain of the variable'.
     This domain can be expressed either:
 
-    * as a single interval, with a minimum and a maximum values that are included in the domain,
-    * or as an extensive list of values and/or intervals.
+     * as a single interval, with a minimum and a maximum bounds included in the domain,
+     * or as an extensive list of values and/or intervals.
 
     When the domain is given extensively, an interval of the domain is represented by a tuple (min, max).
     Examples of variable domains expressed extensively are:
 
-    * (1, 2, 3, 4)
-    * (1, 2, (3, 7), 9)
-    * ((1, 2), (7, 9))
+     * (1, 2, 3, 4)
+     * (1, 2, (3, 7), 9)
+     * ((1, 2), (7, 9))
 
     Following integer variable declarations are equivalent:
 
-    * v = integer_var(0, 9, "X")
-    * v = integer_var((0, 1, 2, 3, 4, 5, 6, 7, 8, 9), "X")
-    * v = integer_var((0, (1, 5), (6, 7), 8, 9), "X")
-    * v = integer_var(((0, 9)), "X")
+     * v = integer_var(0, 9, "X")
+     * v = integer_var((0, 1, 2, 3, 4, 5, 6, 7, 8, 9), "X")
+     * v = integer_var((0, (1, 5), (6, 7), 8, 9), "X")
+     * v = integer_var(((0, 9)), "X")
 
     Args:
         min:  Domain min value, or extensive list of values and/or intervals expressed as tuples of integers.
-        max:  Domain max value, default is None and indicates that 'min' should contain an extensive list of values.
-        name: Variable name, default is None for automatic name.
+        max (optional):  Domain max value.
+                         Default is None and indicates that 'min' should contain an extensive list of values.
+        name (optional): Variable name, default is None for automatic name.
     Returns:
         CpoIntVar expression
     """
@@ -1065,15 +1308,16 @@ def integer_var_list(size, min, max=None, name=None):
     name concatenated with the index of the variable in the list, starting by zero.
 
     Args:
-        size: List size.
+        size: Size of the list of variables
         min:  Domain min value, or extensive list of values and/or intervals expressed as tuples of integers.
-        max:  Domain max value, default is None and indicates that 'min' should contain an extensive list of values.
-        name: Variable name prefix, default is None for automatic name.
+        max (optional):  Domain max value.
+                         Default is None and indicates that 'min' should contain an extensive list of values.
+        name (optional): Variable name prefix. If not given, a name prefix is generated automatically.
     Returns:
         List of integer variables.
     """
     if name is None:
-        name = _allocate_var_name() + "_"
+        name = CpoIntVar._generate_name() + "_"
     dom = _build_int_var_domain(min, max)
     res = CpoExprList()
     for i in range(size):
@@ -1097,18 +1341,19 @@ def integer_var_dict(keys, min, max=None, name=None):
     Args:
         keys: Iterable of variable keys.
         min:  Domain min value, or extensive list of values and/or intervals expressed as tuples of integers.
-        max:  Domain max value, default is None and indicates that 'min' should contain an extensive list of values.
-        name: Variable name prefix, default is None for automatic name.
-              Or function to be called on dictionary key (example: str).
+        max (optional):  Domain max value.
+                         Default is None and indicates that 'min' should contain an extensive list of values.
+        name (optional): Variable name prefix, or function to be called on dictionary key (example: str).
+                         If not given, a name prefix is generated automatically.
     Returns:
         Dictionary of IntVars (OrderedDict).
     """
     if name is None:
-        name = _allocate_var_name() + "_"
+        name = CpoIntVar._generate_name() + "_"
     dom = _build_int_var_domain(min, max)
     res = collections.OrderedDict()
     i = 0
-    isnamestr = isinstance(name, str)
+    isnamestr = is_string(name)
     for k in keys:
         if isnamestr:
             vname = name + str(i) 
@@ -1120,27 +1365,25 @@ def integer_var_dict(keys, min, max=None, name=None):
 
 
 def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                 intensity=None, granularity=None, optional=False, name=None, present=True):
+                 intensity=None, granularity=None, optional=False, name=None):
     """ Creates an interval variable.
 
     Represents an interval of integers. Interval variables are used mostly for scheduling to represent a
     task as an interval of time.
     In its most basic form, an interval variable can be seen as a pair of two integer variables start and end
-    such that start ? end.
+    such that start < end.
     However there is an important difference: the interval variable can be absent to represent the fact that the
     interval does not exist at all (which is different from a zero-length interval).
 
     Args:
-        start:       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
-        end:         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
-        length:      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
-        size:        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
-        intensity:   StepFunction that specifies relation between size and length of the interval.
-        granularity: Scale of the intensity function.
-        optional:    Optional presence indicator.
-        name:        Name of the variable.
-    Deprecated:
-        present:     Presence indicator. present=False is equivalent to optional=True)
+        start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+        end (optional):         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+        length (optional):      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+        size (optional):        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
+        intensity (optional):   StepFunction that specifies relation between size and length of the interval.
+        granularity (optional): Scale of the intensity function.
+        optional (optional):    Optional presence indicator.
+        name (optional):        Name of the variable. If not given, a name is generated automatically.
     Returns:
         IntervalVar expression.
     """
@@ -1149,29 +1392,28 @@ def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_IN
     length = _check_arg_interval(length, "length")
     size   = _check_arg_interval(size,   "size")
     _check_arg_intensity(intensity, granularity)
-    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    #presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional")) else _PRES_PRESENT
     return CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name)
 
 
 def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                 intensity=None, granularity=None, optional=False, name=None, present=True):
+                 intensity=None, granularity=None, optional=False, name=None):
     """ Creates a list of interval variables.
 
     If a name is given, each variable of the array is created with this
     name concatenated with the index of the variable in the list.
 
     Args:
-        asize:       Result list size.
-        start:       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
-        end:         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
-        length:      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
-        size:        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
-        intensity:   StepFunction that specifies relation between size and length of the interval.
-        granularity: Scale of the intensity function.
-        optional:    Optional presence indicator.
-        name:        Variable name prefix.
-    Deprecated:
-        present:     Presence indicator. present=False is equivalent to optional=True)
+        asize:                  Size of the list of variables
+        start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+        end (optional):         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+        length (optional):      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+        size (optional):        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
+        intensity (optional):   StepFunction that specifies relation between size and length of the interval.
+        granularity (optional): Scale of the intensity function.
+        optional (optional):    Optional presence indicator.
+        name (optional):        Name of the variable. If not given, a name is generated automatically.
     Returns:
         List of interval variables.
     """
@@ -1180,12 +1422,13 @@ def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, lengt
     length = _check_arg_interval(length, "length")
     size   = _check_arg_interval(size,   "size")
     _check_arg_intensity(intensity, granularity)
-    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    #presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_PRESENT
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional")) else _PRES_PRESENT
     if name is None:
-        name = _allocate_var_name() + "_"
+        name = CpoIntervalVar._generate_name() + "_"
     res = []
     for i in range(asize):
-        res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name+str(i)))
+        res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name + str(i)))
     return res
 
 
@@ -1194,13 +1437,11 @@ def sequence_var(ivars, types=None, name=None):
 
     Args:
         ivars:   Array of interval variables.
-        types:   Variable types (same size than vars), default is None.
+        types (optional):   Variable types (same size than vars), default is None.
         name:    Variable name, default is None for automatic name.
     Returns:
         IntervalVar expression.
     """
-    if name is None:
-        name = _allocate_var_name()
     return CpoSequenceVar(ivars, types, name)
 
 
@@ -1254,8 +1495,14 @@ def state_function(trmtx=None, name=None):
 ##  Public Functions
 ###############################################################################
 
-# Map of CPO expressions corresponding to Python values
-_CPO_VALUES_FROM_PYTHON = KeyIdDict()
+# Cache of CPO expressions corresponding to Python values
+# This cache is used to retrieve the CPO expression that corresponds to a Python expression
+# that is used multiple times in a model.
+# This allows to:
+#  - speed-up conversion as expression type has not to be recompute again
+#  - reduce CPO file length as common expressions are easily identified.
+_CACHE_CONTEXT = context.model.cache
+_CPO_VALUES_FROM_PYTHON = ObjectCache(_CACHE_CONTEXT.size)
 
 # Lock to protect the map
 _CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
@@ -1280,28 +1527,33 @@ def build_cpo_expr(val):
     if val is None:
         return None
 
-    #  Check iterators
-    if isinstance(val, collections.Iterator):
-        val = tuple(val)
+    #  Check atoms (not cached)
+    if is_number(val):
+        return create_cpo_expr(val)
 
-    # Check if already converted
-    _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-    cpval = _CPO_VALUES_FROM_PYTHON.get(val)
-    _CPO_VALUES_FROM_PYTHON_LOCK.release()
-    if cpval is not None:
-        return cpval
+    # Check if already in the cache
+    cactive = _CACHE_CONTEXT.active
+    if cactive:
+        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
+        cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+        _CPO_VALUES_FROM_PYTHON_LOCK.release()
+        if cpval is not None:
+            return cpval
+
+    # Expand iterators
+    if isinstance(val, collections.Iterator):
+        rval = tuple(val)
+    else:
+        rval = val
 
     # Build new expression
-    cpval = create_cpo_expr(val)
-    _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-    _CPO_VALUES_FROM_PYTHON.set(val, cpval)
-    _CPO_VALUES_FROM_PYTHON_LOCK.release()
+    cpval = create_cpo_expr(rval)
+    if cactive:
+        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
+        _CPO_VALUES_FROM_PYTHON.set(val, cpval)
+        _CPO_VALUES_FROM_PYTHON_LOCK.release()
     return cpval
 
-
-# Constant for True and False
-_CONSTANT_TRUE  = CpoValue(True, Type_Bool)
-_CONSTANT_FALSE = CpoValue(False, Type_Bool)
 
 def create_cpo_expr(value):
     """ Create a new CP expression from a given Python value
@@ -1318,28 +1570,25 @@ def create_cpo_expr(value):
     if typ is None:
         raise CpoException("Impossible to build a CPO expression with python value '" + to_string(value) + "'")
 
-    # Check special types
+    # Convert array elements if required
+    if typ.is_array_of_expr():
+        nval = []
+        narr = False
+        for v in value:
+            if isinstance(v, CpoExpr):
+                nval.append(v)
+            else:
+                nval.append(create_cpo_expr(v))
+                narr = True
+        return CpoValue(nval if narr else value, typ)
+
     if typ == Type_TupleSet:
         res = CpoTupleSet()
         res.add_set(value)
-    elif typ == Type_Bool:
-        #res = CpoFunctionCall((Oper_true if value else Oper_false).signatures[0], ())
-        res = _CONSTANT_TRUE if value else _CONSTANT_FALSE
-    else:
-        # Check if array of exprs contains only expressions
-        if typ.is_array_of_expr():
-            if not all(isinstance(x, CpoExpr) for x in value):
-                nval = []
-                for v in value:
-                    if isinstance(v, CpoExpr):
-                        nval.append(v)
-                    else:
-                        nval.append(create_cpo_expr(v))
-                value = nval
-        res = CpoValue(value, typ)
+        return res
 
-    # Return
-    return res
+    # Default
+    return CpoValue(value, typ)
 
 
 def _create_operation(oper, params):
@@ -1358,17 +1607,15 @@ def _create_operation(oper, params):
     """
     assert isinstance(oper, CpoOperation)
 
-    # Check if the operation contains a single signature
-
     # Convert arguments in CPO expressions
     args = tuple(map(build_cpo_expr, params))
       
     # Search corresponding signature
     s = _get_matching_signature(oper, args)
     if s is None:
-        raise CpoException("The combination of parameters (" + ", ".join(map(_get_cpo_type_str, args))
-                           + ") is not allowed for operation '" + oper.get_py_name() + "'")
-    
+        raise CpoException("The combination of parameters ({}) is not allowed for operation '{}' ({})"
+                           .format(", ".join(map(_get_cpo_type_str, args)), oper.get_py_name(), oper.get_cpo_name()))
+
     # Check arguments values when applicable
     # TODO (range currently not in parameters)
     
@@ -1437,9 +1684,8 @@ def _check_arg_domain(val, name):
         Exception if argument has the wrong format
     """
     assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
-    for v in val:
-        if not is_int(v):
-            assert is_interval_tuple(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+    assert all(is_int(v) or is_interval_tuple(v) for v in val), \
+           "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
     return val
 
 
@@ -1482,11 +1728,11 @@ def _check_arg_intensity(intensity, granularity):
        granularity: Granularity
     """
     if __debug__ and (intensity is not None):
-        assert isinstance(intensity, CpoExpr) and (intensity.get_type() == Type_StepFunction), "Interval variable 'intensity' should be None or a StepFunction"
+        assert isinstance(intensity, CpoExpr) and (intensity.is_type(Type_StepFunction)), "Interval variable 'intensity' should be None or a StepFunction"
+        if granularity is None:
+            granularity = 100
         for (s, v) in intensity.get_step_list():
             assert is_int(s), "'intensity' step start should be an integer"
-            if granularity is None:
-                granularity = 100
             assert is_int(v) and (v >= 0) and (v <= granularity), "'intensity' step value should be in [0..granularity]"
 
 
@@ -1500,7 +1746,7 @@ def _check_and_expand_interval_tuples(name, arr):
     Raises:
         Exception if wrong type
     """
-    assert isinstance(arr, (list, tuple)), "Argument '" + name + "' should be a list of integers or intervals"
+    assert isinstance(arr, (list, tuple)), "Argument '{}' (type {}) should be a list of integers or intervals".format(name, type(arr))
     res = None
     for i in range(len(arr)):
         v = arr[i]
@@ -1508,7 +1754,7 @@ def _check_and_expand_interval_tuples(name, arr):
             if res:
                 res.append(v)
         else:
-            assert is_interval_tuple(v), "Argument '" + name + "' should be a list of integers or intervals"
+            assert is_interval_tuple(v), "Argument '{}' (type {}) should be a list of integers or intervals".format(name, type(arr))
             if not res:
                 res = arr[:i]
             res.extend(range(v[0], v[1] + 1))
@@ -1533,15 +1779,15 @@ def _get_cpo_type(val):
 
     # Check numpy Array Scalars (special case when called from overloaded)
     if IS_NUMPY_AVAILABLE and type(val) is numpy.ndarray and not val.shape:
-        return(_PYTHON_TO_CPO_TYPE.get(val.dtype.type))
+        return _PYTHON_TO_CPO_TYPE.get(val.dtype.type)
 
     # Check arrays
     if not isinstance(val, (list, tuple)):
-        return(None)
+        return None
     
     # Check empty Array
     if (len(val) == 0):
-        return(Type_IntArray)
+        return Type_IntArray
 
     # Get the most common type to all array elements
     gt = None
@@ -1553,18 +1799,15 @@ def _get_cpo_type(val):
         else:
             nt = _get_cpo_type(v)
             if nt is None:
-                return(None)
+                return None
         # Combine with global type
-        if gt is None:
-            gt = nt
-        else:
-            gt = gt.get_common_type(nt)
+        gt = nt if gt is None else gt.get_common_type(nt)
         if gt is None:
             return None
     
     # Determine array type for result element type
     if gt == Type_IntArray:
-        return(Type_TupleSet)
+        return Type_TupleSet
     return gt.get_array_type()
     
     
@@ -1587,13 +1830,14 @@ def _update_references(oprnds):
     Returns:
         Tuple of operands with nbref incremented
     """
+    # Build a tuple if not
+    if not isinstance(oprnds, tuple):
+        oprnds = tuple(oprnds)
+
     # Increment reference count
     for c in oprnds:
         c._incr_ref_count()
 
-    # Build a tuple if not
-    if not isinstance(oprnds, tuple):
-        oprnds = tuple(oprnds)
     return oprnds
 
 
@@ -1607,10 +1851,11 @@ def _get_matching_signature(oper, args):
         Matching signature, None if not found
     """
     # Search corresponding signature
-    for s in oper.get_signatures():
-        if _is_matching_arguments(s, args):
-            return(s)
-    return None
+    # for s in oper.get_signatures():
+    #     if _is_matching_arguments(s, args):
+    #         return(s)
+    # return None
+    return next((s for s in oper.get_signatures() if _is_matching_arguments(s, args)), None)
 
 
 def _is_matching_arguments(sgn, args):
@@ -1622,34 +1867,118 @@ def _is_matching_arguments(sgn, args):
     Returns:
         True if the arguments are matching signature
     """
-    params = sgn.get_parameters()
-    if len(args) > len(params):
-        return(False)
-    # Check types compatibility
-    nbargs = len(args)
-    for i in range(0, nbargs):
-        if not args[i].get_type().is_kind_of(params[i].get_type()):
-            return(False)
-    # Check that remaining parameters, if any, have a default value
-    for i in range(nbargs, len(params)):
-        if (not params[i].is_default_value()):
-            return(False)
-    return True   
+    for a, p in zip_longest(args, sgn.get_parameters()):
+        if a:
+            # Accepted if there is a parameter descriptor that is compatible with argument type
+            if not (p and a.get_type().is_kind_of(p.get_type())):
+                return False
+        else:
+            # Argument absent, check that parameter has a default value
+            if not p.is_default_value():
+                return False
+    return True
 
 
-_ANONYMOUS_VAR_ID_ALLOCATOR = SafeIdAllocator('_ANM_')
-def _allocate_var_name():
-    """ Allocate a new variable name for anonymous variables
+def _is_equal_expressions(v1, v2):
+    """ Check if two expressions can be considered as equivalent.
+
+    This method handles values that can be CPO expressions, None, and manage possible
+    differences between number representations.
+
+    It is implemented outside expression objects and use a self-managed stack to avoid too many
+    recursive calls that may lead to an exception 'RuntimeError: maximum recursion depth exceeded'.
+
+    Args:
+        v1:  First CPO expression
+        v2:  Second CPO expression
     Returns:
-        New variable name
+        True if both values are 'equivalent'
     """
-    return _ANONYMOUS_VAR_ID_ALLOCATOR.allocate()
+    # Initialize expression stack
+    estack = [[v1, v2, -1]]  # [expr1, expr2, child index]
+
+    # Loop while expression stack is not empty
+    while estack:
+        # Get expressions to compare
+        edscr = estack[-1]
+        v1, v2, cx = edscr
+        #print("v1: {}, v2: {}, cx: {}".format(v1, v2, cx))
+
+        # Check same object type
+        if type(v1) != type(v2):
+            #print("   No the same type")
+            return False
+
+        # Check physical equality
+        if v1 is v2:
+            estack.pop()
+            continue
+
+        # Check if expression is a CPO expression
+        if isinstance(v1, CpoExpr):
+            # Check objects itself
+            if (cx < 0) and not v1._equals(v2):
+                #print("   Not basically equal. Types: {}, {}".format(v1.get_type(), v2.get_type()))
+                return False
+            # Access children
+            ar1 = v1._get_children()
+            ar2 = v2._get_children()
+            if ar1 is None:
+                if ar2 is not None:
+                    return False
+                estack.pop()
+                continue
+            if ar2 is None:
+                return False
+            # Check children
+            alen = len(ar1)
+            if (cx < 0) and (alen != len(ar2)):
+                return False
+            cx += 1
+            if (cx >= alen):
+                estack.pop()
+                continue
+            # Store new child index in descriptor
+            edscr[2] = cx
+            # Stack children to compare it
+            estack.append([ar1[cx], ar2[cx], -1])
+
+        # Else, expressions are Python values
+        else:
+            if not _is_equal_values(v1, v2):
+                return False
+
+    # Expressions identical
+    return True
 
 
-_IDENTIFIER_ALLOCATOR = SafeIdAllocator('_ID_')
-def _allocate_identifier():
-    """ Allocate a new expression identifier
+def _is_equal_values(v1, v2):
+    """ Check if two values can be considered as equivalent.
+
+    This method handles values that can be CPO expressions, None, and manage possible
+    differences between number representations.
+
+    Args:
+        v1:  First value
+        v2:  Second value
     Returns:
-        New identifier
+        True if both values are 'equivalent'
     """
-    return _IDENTIFIER_ALLOCATOR.allocate()
+    # Check obvious cases
+    if v1 is v2:
+        return True
+    # Check specifically CPO expressions (to not call '==' operator on it)
+    if isinstance(v1, CpoExpr):
+        return v1.equals(v2)
+    if isinstance(v2, CpoExpr):
+        return False
+    # Check basic equality
+    if v1 == v2:
+        return True
+    # Check floats
+    if is_float(v1):
+        return is_float(v2) and (abs(v1 - v2) <= _FLOATING_POINT_PRECISION * max(abs(v1), abs(v2)))
+    if is_array(v1):
+        return is_array(v2) and (len(v1) == len(v2)) and all(_is_equal_values(x1, x2) for x1, x2 in zip(v1, v2))
+    return False
+

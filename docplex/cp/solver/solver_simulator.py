@@ -144,8 +144,9 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
             Random model solution expressed as CpoModelSolution
         """
         # Build fake feasible solution
-        msol = CpoSolveResult(self.model)
-        msol._set_solve_status(SOLVE_STATUS_FEASIBLE)
+        ssol = CpoSolveResult(self.model)
+        ssol._set_solve_status(SOLVE_STATUS_FEASIBLE)
+        msol = ssol.solution
 
         # Generate objective
         x = self.model.get_optimization_expression()
@@ -165,7 +166,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         for var in self.model.get_all_variables():
             if isinstance(var, CpoIntVar):
                 vsol = CpoIntVarSolution(var.get_name(), _random_value_in_complex_domain(var.get_domain()))
-                msol._add_var_solution(vsol)
+                msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoIntervalVar):
                 # Generate presence
@@ -188,7 +189,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                 size = _random_value_in_interval_domain(var.get_size())
                 # Add variable to solution
                 vsol = CpoIntervalVarSolution(var.get_name(), present, start, end, size)
-                msol._add_var_solution(vsol)
+                msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoStateFunction):
                 # Build list of steps
@@ -199,7 +200,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                     lsteps.append((cstart, cstart + size, random.randint(0, 10)))
                     cstart += size
                 vsol = CpoStateFunctionSolution(var.get_name(), lsteps)
-                msol._add_var_solution(vsol)
+                msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoSequenceVar):
                 # Build sequence or results
@@ -208,10 +209,10 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                     lvres.append(msol.get_var_solution(v.get_name()))
                 random.shuffle(lvres)
                 vsol = CpoSequenceVarSolution(var.get_name(), lvres)
-                msol._add_var_solution(vsol)
+                msol.add_var_solution(vsol)
 
         # Return
-        return msol
+        return ssol
 
 
 ###############################################################################

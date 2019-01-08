@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 from six import iteritems
 
-from docplex.mp.linear import Expr, LinearConstraintType, AbstractLinearExpr, Var, ZeroExpr
+from docplex.mp.compat23 import unitext
+from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
 from docplex.mp.utils import *
 
 from docplex.mp.xcounter import FastOrderedDict
@@ -65,24 +66,37 @@ class VarPair(object):
 class QuadExpr(Expr):
     """QuadExpr()
 
-    This class models linear expressions.
+    This class models quadratic expressions.
     This class is not intended to be instantiated. Quadratic expressions are built
-    either using operators or using `Model.quad_expr()`.
+    either by using operators or by using :func:`docplex.mp.model.Model.quad_expr`.
 
     """
-    qterms_dict_type = FastOrderedDict
+    _qterms_dict_type = FastOrderedDict
 
     def copy(self, target_model, var_mapping):
-        return None  # pragma: no cover
+        copied_quads = self._qterms_dict_type()
+        for qv1, qv2, qk in self.iter_quad_triplets():
+            new_v1 = var_mapping[qv1]
+            new_v2 = var_mapping[qv2]
+            copied_quads[VarPair(new_v1, new_v2)] = qk
+
+        copied_linear = self._linexpr.copy(target_model, var_mapping)
+        return QuadExpr(model=target_model,
+                        quads=copied_quads,
+                        linexpr=copied_linear,
+                        name=self.name,
+                        safe=True)
 
     def is_quad_expr(self):
         return True
 
-    def is_quadratic(self):
+    def has_quadratic_term(self):
+        """ Returns true if there is at least one quadratic term in the expression.
+        """
         return len(self._quadterms) > 0
 
     def square(self):
-        if self.is_quadratic():
+        if self.has_quadratic_term():
             self.fatal("Cannot take the square of a quadratic term: {0!s}".format(self))
         else:
             return self._linexpr.square()
@@ -95,7 +109,9 @@ class QuadExpr(Expr):
         lin_value = self._linexpr._get_solution_value()
         return quad_value + lin_value
 
-    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False, _qterm_type=qterms_dict_type):
+    __slots__ = ('_quadterms', '_linexpr')
+
+    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False, _qterm_type=_qterms_dict_type):
         Expr.__init__(self, model, name)
         model._quadexpr_instance_counter += 1
         if quads is None:
@@ -142,7 +158,7 @@ class QuadExpr(Expr):
             self.fatal("unexpected argument for QuadExpr: {0!r}", quads)
 
         if linexpr is None:
-            self._linexpr = self.model.linear_expr()
+            self._linexpr = self.model._linear_expr()
         else:
             self._linexpr = self.model._to_linear_expr(linexpr)
 
@@ -181,32 +197,41 @@ class QuadExpr(Expr):
     def iter_quad_triplets(self):
         """ Iterates over quadratic terms.
 
-        This iterator returns triplets of the form v1,v2,k where v1 and v2 are decision
-        variables and k is a number.
+        This iterator returns triplets of the form `v1,v2,k`, where `v1` and `v2` are decision
+        variables and `k` is a number.
 
+        Returns:
+            An iterator object.
         """
         return self.generate_quad_triplets()
 
+    def iter_terms(self):
+        return self._linexpr.iter_terms()
 
     @property
     def number_of_quadratic_terms(self):
-        """ Returns the number of quadratic terms.
+        """ This property returns the number of quadratic terms.
 
         Counts both the square and product terms.
 
         Examples:
-            q1 = x**2
-            q1.number_of-quadratic_terms
-            >>> 1
-            q2 = (x+y+1)**2
-            q2.number_of_quadratic_terms
-            >>> 3
+        
+        .. code-block:: python
+
+           q1 = x**2
+           q1.number_of_quadratic_terms
+           >>> 1
+           q2 = (x+y+1)**2
+           q2.number_of_quadratic_terms
+           >>> 3
         """
         return len(self._quadterms)
 
     def is_separable(self):
-        """ Returns True if all quadratic terms are separable.
+        """ Checks if all quadratic terms are separable.
 
+        Returns:
+            True if all quadratic terms are separable.
         """
         for qv, _ in self.iter_quads():
             if not qv.is_square():
@@ -232,12 +257,35 @@ class QuadExpr(Expr):
             return justifier or (1, None)  # (1, None) is for separable, convex
 
     def get_quadratic_coefficient(self, var1, var2=None):
+        ''' Returns the coefficient of a quadratic term in the expression.
+
+        Returns the coefficient of the quadratic term `var1*var2` in the expression, if any.
+        If the product is not present in the expression, returns 0.
+
+        Args:
+            var1: The first variable of the product (an instance of class Var)
+            var2: the second variable of the product. If passed None, returns the coefficient
+                of the square of `var1` in the expression.
+
+        Example:
+            Assuming `x` and `y` are decision variables and `q` is the expression `2*x**2 + 3*x*y + 5*y**2`, then
+
+            `q.get_quadratic_coefficient(x)` returns 2
+
+            `q.get_quadratic_coefficient(x, y)` returns 3
+
+            `q.get_quadratic_coefficient(y)` returns 5
+
+        Returns:
+            The coefficient of one quadratic product term in the expression.
+        '''
         self.model.typecheck_var(var1)
         if var2 is None:
             var2 = var1
         else:
             self.model.typecheck_var(var2)
         return self._get_quadratic_coefficient(var1, var2)
+
 
     def _get_quadratic_coefficient(self, var1, var2):
         # INTERNAL, no checks
@@ -261,7 +309,7 @@ class QuadExpr(Expr):
         return self._linexpr.equals_expr(other._linexpr)
 
     def is_constant(self):
-        return not self.is_quadratic() and self._linexpr.is_constant()
+        return not self.has_quadratic_term() and self._linexpr.is_constant()
 
     @property
     def constant(self):
@@ -289,13 +337,17 @@ class QuadExpr(Expr):
         else:
             return False
 
+    def contains_quad(self, qv):
+        # INTERNAL
+        return qv in self._quadterms
+
     def __repr__(self):
         return "docplex.mp.quad.QuadExpr(%s)" % self.truncated_str()
 
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         q = 0
         # noinspection PyPep8Naming
-        SP = ' '
+        SP = u' '
         for qv1, qv2, qk in self.iter_quad_triplets():
             if 0 == qk:
                 continue  # pragma: no cover
@@ -305,7 +357,7 @@ class QuadExpr(Expr):
             # at the end of this block coeff is positive
             wrote_sign = False
             if qk < 0 or q > 0:
-                oss.write('-' if qk < 0 else '+')
+                oss.write(u'-' if qk < 0 else u'+')
                 wrote_sign = True
                 if qk < 0:
                     qk = -qk
@@ -319,15 +371,15 @@ class QuadExpr(Expr):
             if 1 != qk:
                 self._num_to_stringio(oss, num=qk, ndigits=nb_digits)
                 if prod_symbol:
-                    oss.write(prod_symbol)
+                    oss.write(unitext(prod_symbol))
 
-            oss.write(varname1)
+            oss.write(unitext(varname1))
             if qv1 is qv2:
-                oss.write("^2")
+                oss.write(u"^2")
             else:
                 if prod_symbol:
-                    oss.write(prod_symbol)
-                oss.write(var_namer(qv2))
+                    oss.write(unitext(prod_symbol))
+                oss.write(unitext(var_namer(qv2)))
             q += 1
         # problem for linexpr: force '+' ssi c>0
         linexpr = self._linexpr
@@ -336,9 +388,9 @@ class QuadExpr(Expr):
             if k == 0 and q > 0:
                 pass
             else:
-                sign = '-' if k < 0 else '+'
+                sign = u'-' if k < 0 else u'+'
                 if use_space:
-                    oss.write(' ')
+                    oss.write(u' ')
                 if k < 0 or q > 0:
                     oss.write(sign)
                     if use_space:
@@ -359,9 +411,9 @@ class QuadExpr(Expr):
                     print_plus_sign = True
             # ---
             if use_space:
-                oss.write(' ')
+                oss.write(u' ')
             if print_plus_sign:
-                oss.write("+")
+                oss.write(u"+")
                 if use_space:
                     oss.write(SP)
             self._linexpr.to_stringio(oss, nb_digits, prod_symbol, use_space, var_namer)
@@ -558,7 +610,7 @@ class QuadExpr(Expr):
 
 
     def clear(self):
-        self._quadterms = self.qterms_dict_type()  # clear quads
+        self._quadterms = self._qterms_dict_type()  # clear quads
         self._linexpr = self.zero_expr()
 
     # quad-specific
@@ -571,7 +623,7 @@ class QuadExpr(Expr):
             self._add_one_quad_term(oqv, -oqk)
 
     def to_linear_expr(self):
-        if self.is_quadratic():
+        if self.has_quadratic_term():
             raise DOCPlexQuadraticArithException(
                 "quadratic expression [{0!s}] cannot be converted to a linear expression", self)
         else:
@@ -586,13 +638,10 @@ class QuadExpr(Expr):
 
     # --- relational operators
     def __eq__(self, other):
-        self._quadratic_constraint_not_implemented(other, LinearConstraintType.EQ)
+        return self._model._qfactory.new_eq_constraint(self, other)
 
     def __le__(self, other):
-        self._quadratic_constraint_not_implemented(other, LinearConstraintType.LE)
+        return self._model._qfactory.new_le_constraint(self, other)
 
     def __ge__(self, other):
-        self._quadratic_constraint_not_implemented(other, LinearConstraintType.GE)
-
-    def _quadratic_constraint_not_implemented(self, other, ctype):
-        self.fatal("Quadratic constraints are not implemented (yet)")
+        return self._model._qfactory.new_ge_constraint(self, other)

@@ -8,11 +8,12 @@
 # ------------------------------
 from __future__ import print_function
 import sys
-from textwrap import TextWrapper
 
+import six
 from six import iteritems
 
 # gendoc: ignore
+
 
 class _NumPrinter(object):
     """
@@ -90,7 +91,7 @@ class ModelPrinter(object):
         if out is None:
             # prints on standard output
             self.print_model_to_stream(sys.stdout, mdl)
-        elif isinstance(out, str):
+        elif isinstance(out, six.string_types):
             # a string is interpreted as a path name
             ext = self.extension()
             path = out if out.endswith(ext) else out + ext
@@ -102,7 +103,7 @@ class ModelPrinter(object):
         else:
             try:
                 self.print_model_to_stream(out, mdl)
-            except AttributeError:  # pragma: no cover
+            except AttributeError as ea:  # pragma: no cover
                 pass  # pragma: no cover
                 # stringio will raise an attribute error here, due to with
                 # print("Cannot use this an output: %s" % str(out))
@@ -118,22 +119,7 @@ class ModelPrinter(object):
 class TextModelPrinter(ModelPrinter):
     DEFAULT_ENCODING = "ENCODING=ISO-8859-1"
 
-    @staticmethod
-    def create_wrapper(line_width=78, initial_indent=0):
-        """
-        :param initial_indent: basic indent
-        :param line_width: maximum line width used by the wrapper
-        :return: an instance of wrapper
-        """
-        wrapper = TextWrapper()
-        wrapper.break_long_words = False
-        wrapper.initial_indent = ' ' * initial_indent
-        wrapper.width = line_width
-        wrapper.break_on_hyphens = False
-        wrapper.expand_tabs = False
-        wrapper.drop_whitespace = False
-        wrapper.replace_whitespace = False
-        return wrapper
+
 
     def __init__(self, comment_start, indent=1,
                  hide_user_names=False,
@@ -145,19 +131,24 @@ class TextModelPrinter(ModelPrinter):
 
         self.line_width = 79
         # noinspection PyArgumentEqualDefault
-        self.wrapper = self.create_wrapper(line_width=78, initial_indent=0)
 
         self._comment_start = comment_start
         self._hide_user_names = hide_user_names
         self._encoding = encoding  # None is a valid value, in which case no encoding is printed
-        #
+        # -----------------------
+        # TODO: refactor these maps as scope objects...
         self._var_name_map = {}
-        self._ct_name_map = {}  # linear constraints
+        self._linct_name_map = {}  # linear constraints
         self._ic_name_map = {}  # indicators have a seperate index space.
+        self._qc_name_map = {}
 
         # created on demand if model is not fully indexed
         self._local_var_indices = None
-        self._local_ct_indices = None
+        self._local_linear_ct_indices = None
+        self._local_indicator_ct_indices = None
+        self._local_qct_indices = None
+        # ------------------------
+
         self._rangeData = {}
         self._num_printer = _NumPrinter(nb_digits_for_floats)
         self._indent_level = indent
@@ -275,14 +266,16 @@ class TextModelPrinter(ModelPrinter):
         """
         :param model: the model being printed
         """
-        # if not model._is_fully_indexed():
         # use printer local indexing for name generation.
         self._local_var_indices = {dv: k for k, dv in enumerate(model.iter_variables())}
-        self._local_ct_indices = {ct: k for k, ct in enumerate(model.iter_constraints())}
+        self._local_linear_ct_indices = {ct: k for k, ct in enumerate(model.iter_linear_constraints())}
+        self._local_indicator_ct_indices = {ct: k for k, ct in enumerate(model.iter_indicator_constraints())}
+        self._local_qct_indices = {qct: k for k, qct in enumerate(model.iter_quadratic_constraints())}
 
         self._var_name_map = self._precompute_name_dict(model.iter_variables(), self._local_var_indices, prefix='x')
-        self._ct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_ct_indices,prefix='c')
-        self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_ct_indices, prefix='ic')
+        self._linct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_linear_ct_indices, prefix='c')
+        self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_indicator_ct_indices, prefix='ic')
+        self._qc_name_map = self._precompute_name_dict(model.iter_quadratic_constraints(), self._local_qct_indices, prefix='qc')
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -316,10 +309,13 @@ class TextModelPrinter(ModelPrinter):
         return name_to_var_map
 
     def ct_print_name(self, ct):
-        return self._ct_name_map.get(ct._index)
+        return self._linct_name_map.get(ct._index)
 
     def ic_print_name(self, indicator):
         return self._ic_name_map.get(indicator._index)
+
+    def qc_print_name(self, quad_constraint):
+        return self._qc_name_map.get(quad_constraint._index)
 
     def max_var_name_len(self):
         """
@@ -331,15 +327,16 @@ class TextModelPrinter(ModelPrinter):
         """
         :return: the maximum length of constraint names
         """
-        return max([len(cn) for cn in self._ct_name_map.values()]) if self._ct_name_map else 0
+        return max([len(cn) for cn in self._linct_name_map.values()]) if self._linct_name_map else 0
 
     def get_extra_var_name(self, model, pattern='x%d'):
-        """
-        :param pattern: a format string with one %d
-        :return: a variable name f the form pattern %k
-        where k is an integer, starting at max variable index+2
-        we loop until a free name is found.
-        """
+        # UNUSED
+        # """
+        # :param pattern: a format string with one %d
+        # :return: a variable name f the form pattern %k
+        # where k is an integer, starting at max variable index+2
+        # we loop until a free name is found.
+        # """
         if model.number_of_variables:
             safe_index = max([dv.index for dv in model.iter_variables()]) + 2  # add1 for next, add 1 for start at 1
         else:
@@ -411,26 +408,117 @@ class TextModelPrinter(ModelPrinter):
                          var_namer=lambda v: self._var_name_map[v._index])
 
 
-    def wrap_and_print(self, out, oss, subsequent_level=1):
-        """
-        Takes input from a stringIO object, wraps it using the wrapper object, prints the
-        wrapped text, and sets the subsequent indent.
-        :param oss:
-        :param subsequent_level:
-        """
-        self_wrapper = self.wrapper
-        raw = oss.getvalue()
-        indent = self._get_indent_from_level(subsequent_level)
-        self_wrapper.subsequent_indent = indent
-        printed_len = len(indent) + len(raw)
+    def _print_expr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False, force_first_plus=False):
+        # prints an expr to a stream
+        term_iter = expr.iter_terms()
+        k = expr.get_constant() if print_constant else None
+        self._print_expr_iter(wrapper, num_printer, var_name_map, term_iter, constant=k, allow_empty=allow_empty,
+                              force_first_plus=force_first_plus)
 
-        if printed_len > self.line_width:
-            printed_line = self_wrapper.fill(raw)
-            out.write(printed_line)
+    def _print_expr_iter(self, wrapper, num_printer, var_name_map,
+                         expr_iter,
+                         allow_empty=False,
+                         force_first_plus=False,
+                         constant=None):
+        num2string_fn = num_printer.to_string
+        c = 0
+        for (v, coeff) in expr_iter:
+            curr_token = ''
+            if 0 == coeff:
+                continue  # pragma: no cover
+
+            if coeff < 0:
+                curr_token += '-'
+                wrote_sign = True
+                coeff = - coeff
+            elif c > 0 or force_first_plus:
+                # here coeff is positive, we write the '+' only if term is non-first
+                curr_token += '+'
+                wrote_sign = True
+            else:
+                wrote_sign = False
+
+            if 1 != coeff:
+                if wrote_sign:
+                    curr_token += ' '
+                curr_token += num2string_fn(coeff)
+            if wrote_sign or 1 != coeff:
+                curr_token += ' '
+            curr_token += var_name_map[v._index]
+
+            wrapper.write(curr_token)
+            c += 1
+
+        if constant is not None:
+            # here constant is a number
+            if 0 != constant:
+                if constant > 0:
+                    if c > 0 or force_first_plus:
+                        wrapper.write('+')
+                wrapper.write(num2string_fn(constant))
+            elif 0 == c and not allow_empty:
+                wrapper.write('0')
+
         else:
-            out.write(' ')
-            out.write(raw)
-        self._newline(out)
+            # constant is none here
+            if not c and not allow_empty:
+                # expr is empty, if we must print something, print 0
+                wrapper.write('0')
+
+    def _print_qexpr_obj(self, wrapper, num_printer, var_name_map, quad_expr, force_initial_plus):
+        # writes a quadratic expression
+        # in the form [ 2a_ij a_i.a_j ] / 2
+        # Note that all coefficients must be doubled due to the tQXQ formulation
+
+        if force_initial_plus:
+            wrapper.write('+')
+
+        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_quads(), use_double=True)
+
+
+    def _print_qexpr_iter(self, wrapper, num_printer, var_name_map, iter_quads, use_double=False):
+        q = 0
+        wrapper.write('[')
+        varname_getter = self._var_print_name
+        for qvp, qk in iter_quads:
+            curr_token = ''
+            if 0 == qk:
+                continue  # pragma: no cover
+            abs_qk = qk
+            if qk < 0:
+                curr_token += '-'
+                abs_qk = - qk
+                wrote_sign = True
+            elif q > 0:
+                curr_token += '+'
+                wrote_sign = True
+            else:
+                wrote_sign = False
+            if wrote_sign:
+                curr_token += ' '
+
+            # all coefficients must be doubled because of the []/2 pattern.
+            abs_qk2 = 2 * abs_qk if use_double else abs_qk
+            if abs_qk2 != 1:
+
+                curr_token += num_printer.to_string(abs_qk2)
+                curr_token += ' '
+
+            if qvp.is_square():
+                qv_name = varname_getter(qvp[0])
+                curr_token += "%s^2" % qv_name
+            else:
+                qv1 = qvp[0]
+                qv2 = qvp[1]
+                curr_token += "%s*%s" % (varname_getter(qv1), varname_getter(qv2))
+
+            wrapper.write(curr_token)
+
+            q += 1
+        closer = ']/2' if use_double else ']'
+        wrapper.write(closer)
+        return q
+
 
 
 class _ExportWrapper(object):
@@ -439,7 +527,6 @@ class _ExportWrapper(object):
     """
     __new_line_sep = '\n'
 
-    #__slots__ = ("_oss", "_indent_str", "_line_width", "_curr_line", "_wrote")
 
     def __init__(self, oss, indent_str, line_width=80):
         self._oss = oss
@@ -454,6 +541,18 @@ class _ExportWrapper(object):
         self._curr_line = ''
         self._wrote = False
 
+    def is_empty(self):
+        return not self._wrote
+
+    def set_indent(self, new_indent):
+        self._indent_str = new_indent
+
+    def begin_line(self, indented=False):
+        # reset dynamic line data
+        self._wrote = False
+        self._curr_line = self._indent_str if indented else ''
+
+
     # The 'write' function is invoked intensively when exporting a model.
     # Any piece of code that can be saved here will improve performance in a visible way.
     def write(self, token, separator=True):
@@ -464,20 +563,25 @@ class _ExportWrapper(object):
                 self._curr_line = self._indent_str + token
             else:
                 # 1 separator
-                self._curr_line += (' ' + token) if (separator and self._wrote) else token
+                if separator and self._wrote:
+                    self._curr_line += (' ' + token)
+                else:
+                    self._curr_line += token
             self._wrote = True
+
         except TypeError:
             # An exception will occur if token is None. In that case, there is nothing to write and
             # one can safely return.
             pass
 
-    def flush(self, print_newline):
+    def flush(self, print_newline=True, reset=False):
         self._oss.write(self._curr_line)
         if print_newline:
             self._oss.write('\n')
         # Reset '_wrote' flag so that no separator will be added when writing first token of next line
         self._wrote = False
-        self._curr_line = self._indent_str
+        # if reset, start a new line.
+        self._curr_line = '' if reset else self._indent_str
 
     def newline(self):
         self._oss.write('\n')

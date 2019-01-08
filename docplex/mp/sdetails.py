@@ -20,13 +20,17 @@ class SolveDetails(object):
 
     _unknown_label = "*unknown*"
 
-    _NO_GAP = float('nan')  # value used when no gap is available
+    NOT_A_NUM = float('nan')
+
+    _NO_GAP = NOT_A_NUM  # value used when no gap is available
+    _NO_BEST_BOUND = NOT_A_NUM
 
     def __init__(self, time=0,
                  status_code=-1, status_string=None,
                  problem_type=None,
                  ncolumns=0, nonzeros=0,
-                 miprelgap=None):
+                 miprelgap=None,
+                 best_bound=None):
         self._time = max(time, 0)
         self._solve_status_code = status_code
         self._solve_status = status_string or self._unknown_label
@@ -37,6 +41,7 @@ class SolveDetails(object):
         self._solution_method = -1
         # --
         self._miprelgap = self._NO_GAP if miprelgap is None else miprelgap
+        self._best_bound = self._NO_BEST_BOUND if best_bound is None else best_bound
 
         self._md5 = self._unknown_label
 
@@ -49,6 +54,8 @@ class SolveDetails(object):
                        }
         if not isnan(self._miprelgap):
             worker_dict["PROGRESS_GAP"] = self._miprelgap
+        if not isnan(self._best_bound):
+            worker_dict['PROGRESS_BEST_OBJECTIVE'] = self._best_bound
         return worker_dict
 
     _problemtype_map = {0: "LP",
@@ -94,6 +101,7 @@ class SolveDetails(object):
                     ("_ncolumns", "cplex.columns", int, 0),
                     ("_linear_nonzeros", "MODEL_DETAIL_NON_ZEROS", int, 0),
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),
+                    ('_best_bound', 'PROGRESS_BEST_OBJECTIVE', float, _NO_BEST_BOUND),
                     ("_md5", "cplex.model.md5", str, "")
                     )
 
@@ -231,6 +239,16 @@ class SolveDetails(object):
         return self._miprelgap
 
     mip_relative_gap = property(get_mip_relative_gap)
+
+    def get_best_bound(self):
+        """ This property returns the MIP best bound at the end of the solve.
+
+        Note:
+            * This property returns NaN when the problem is not a MIP.
+        """
+        return self._best_bound
+
+    best_bound = property(get_best_bound)
 
     def __repr__(self):
         return "docplex.mp.solution.SolveDetails(time={0:g}, status={2:s})" \

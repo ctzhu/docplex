@@ -8,12 +8,6 @@
 
 import math
 
-# _all_zeros = frozenset({0, 0.0})
-#
-#
-# def is_zero(x):
-#     return is_number(x) and x in _all_zeros
-
 
 def round_nearest_halfway_from_zero(x, infinity=1e+20):
     """ Rounds the argument to the nearest integer.

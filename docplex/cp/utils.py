@@ -15,75 +15,27 @@ import time
 import logging
 import sys
 import threading
+import io
+from collections import deque
+
 
 ###############################################################################
 ## Constants
 ###############################################################################
 
+# Python 2 indicator
+IS_PYTHON_2 = (sys.version_info[0] == 2)
+
+# Check if numpy is available
+try:
+    import numpy
+    IS_NUMPY_AVAILABLE = True
+except:
+    IS_NUMPY_AVAILABLE = False
+
 # Constant used to indicate to set a parameter to its default value
 # Useful if default value is not static
 DEFAULT = "default"
-
-# Determine list of types representing the different python scalar types
-BOOL_TYPES    = {bool}
-INTEGER_TYPES = {int}
-FLOAT_TYPES   = {float}
-STRING_TYPES  = {str}
-
-# Add Python2 long if any
-try:
-    if type(long) is type:
-        INTEGER_TYPES.add(long)
-except:
-    pass
-
-# Add Python2 unicode if any
-try:
-    if type(unicode) is type:
-        STRING_TYPES.add(unicode)
-except:
-    pass
-
-# Numpy available indicator
-IS_NUMPY_AVAILABLE = False
-
-# Add numpy types if any
-try:
-    import numpy
-
-    BOOL_TYPES.add(numpy.bool_)
-    BOOL_TYPES.add(numpy.bool)
-
-    INTEGER_TYPES.add(numpy.int_)
-    INTEGER_TYPES.add(numpy.intc)
-    INTEGER_TYPES.add(numpy.intp)
-
-    INTEGER_TYPES.add(numpy.int8)
-    INTEGER_TYPES.add(numpy.int16)
-    INTEGER_TYPES.add(numpy.int32)
-    INTEGER_TYPES.add(numpy.int64)
-
-    INTEGER_TYPES.add(numpy.uint8)
-    INTEGER_TYPES.add(numpy.uint16)
-    INTEGER_TYPES.add(numpy.uint32)
-    INTEGER_TYPES.add(numpy.uint64)
-
-    FLOAT_TYPES.add(numpy.float_)
-    FLOAT_TYPES.add(numpy.float16)
-    FLOAT_TYPES.add(numpy.float32)
-    FLOAT_TYPES.add(numpy.float64)
-
-    IS_NUMPY_AVAILABLE = True
-except:
-    pass
-
-# Build all number type sets
-INTEGER_TYPES = frozenset(INTEGER_TYPES)
-FLOAT_TYPES   = frozenset(FLOAT_TYPES)
-BOOL_TYPES    = frozenset(BOOL_TYPES)
-NUMBER_TYPES  = frozenset(INTEGER_TYPES.union(FLOAT_TYPES))
-BASIC_TYPES   = frozenset(NUMBER_TYPES.union(BOOL_TYPES).union(STRING_TYPES))
-
 
 ###############################################################################
 ## Public classes
@@ -273,6 +225,18 @@ class Context(dict):
         """
         return self.log_output and ((vrb is None) or (self.verbose and (self.verbose >= vrb)))
 
+    def get_log_output(self):
+        """ Get this context log output
+
+        This method returns the log_output defined in attribute 'log_output' and convert
+        it to sys.stdout if its value is True
+
+        Returns:
+            Log output stream, None if none
+        """
+        out = self.log_output
+        return sys.stdout if out == True else out
+
     def log(self, vrb, *msg):
         """ Log a message if log is enabled with enough verbosity
 
@@ -284,7 +248,7 @@ class Context(dict):
             msg:  Message elements to log (concatenated on one line)
         """
         if self.is_log_enabled(vrb):
-            out = self.log_output
+            out = self.get_log_output()
             prfx = self.log_prefix
             if prfx:
                 out.write(str(prfx))
@@ -309,7 +273,7 @@ class Context(dict):
             if isinstance(v, Context):
                 sctxs.append((k, v))
             else:
-                if isinstance(v, str):
+                if is_string(v):
                     # Check if value must be masked
                     if (k in ("key", "secret")):
                         v = "**********" + v[-4:]
@@ -345,6 +309,14 @@ class IdAllocator(object):
         self.prefix = prefix
         self.count = 0
         self.bdgts = bdgts
+
+    def get_prefix(self):
+        """ Get the name prefix used by this allocator.
+
+        Returns:
+            Name prefix
+        """
+        return self.prefix
 
     def get_count(self):
         """ Get the number of id that has been allocated by this allocator.
@@ -396,6 +368,14 @@ class SafeIdAllocator(object):
         self.bdgts = bdgts
         self.lock = threading.Lock()
 
+    def get_prefix(self):
+        """ Get the name prefix used by this allocator.
+
+        Returns:
+            Name prefix
+        """
+        return self.prefix
+
     def get_count(self):
         """ Get the number of id that has been allocated by this allocator.
 
@@ -425,10 +405,10 @@ class SafeIdAllocator(object):
 
 
 class KeyIdDict(object):
-    """ Dictionary using id of the keys as key.
+    """ Dictionary using id of the key objects as key.
 
-    This object allows to use any Python object as key, and to map a value on the
-    physical instance of the value.
+    This object allows to use any Python object as key (with no __hash__() function),
+    and to map a value on the physical instance of the key.
     """
     __slots__ = ('kdict',  # Dictionary of objects
                  )
@@ -478,10 +458,82 @@ class KeyIdDict(object):
         return len(self.kdict)
 
 
+class ObjectCache(object):
+    """ Object cache that uses object id as key.
+
+    This object allows to associate an object to a key.
+    It is implemented using a dict that uses the id of the key as dict key.
+    This allows to:
+     * Use any Python object as key, even if it does not implement __hash__() function,
+     * Use different key objects that are logically equal
+
+    This cache is limited in size. This means that, if the max size is reached, adding a new
+    object will remove the oldest.
+    """
+    __slots__ = ('kdict',    # Dictionary of objects
+                 'max_size', # Max cache size
+                 'lkeys',    # Ordered list of objects keys in the cache
+                 )
+
+    def __init__(self, maxsize):
+        super(ObjectCache, self).__init__()
+        self.kdict = {}
+        self.max_size = maxsize
+        self.lkeys = deque()
+
+    def set(self, key, value):
+        """ Set a value in the cache
+
+        Args:
+            key:   Key
+            value: Value
+        """
+        kid = id(key)
+        # Check if key already in cache
+        if kid in self.kdict:
+            # Just replace the value
+            self.kdict[kid] = (key, value)
+        else:
+            # Remove older object if max size is reached
+            if len(self.lkeys) == self.max_size:
+                self.kdict.pop(id(self.lkeys.popleft()))
+            # Store value in dictionary
+            self.kdict[kid] = value
+            # Append key in deque (side effect is that key is preserved to preserve its id)
+            self.lkeys.append(key)
+
+    def get(self, key):
+        """ Get a value from the cache
+
+        Args:
+            key:  Key
+        Returns:
+            Value corresponding to the key, None if not found
+        """
+        return self.kdict.get(id(key))
+
+    def keys(self):
+        """ Get the list of all keys """
+        return list(self.lkeys)
+
+    def values(self):
+        """ Get the list of all values """
+        return list(self.kdict.values())
+
+    def clear(self):
+        """ Clear all dictionary content """
+        self.kdict.clear()
+        self.lkeys.clear()
+
+    def __len__(self):
+        """ Returns the number of elements in this dictionary """
+        return len(self.kdict)
+
+
 class IdentityAccessor(object):
     """ Object implementing a __getitem__ that returns the key as value """
     def __getitem__(self, key):
-        return(key)
+        return key
 
 
 class Chrono(object):
@@ -537,8 +589,7 @@ class Barrier:
     def __init__(self, parties):
         """ Create a new barrier
         Args:
-
-        parties:  Number of parties required before unlocking the barrier
+            parties:  Number of parties required before unlocking the barrier
         """
         self.parties = parties
         self.count = 0
@@ -556,6 +607,53 @@ class Barrier:
         if self.count < self.parties:
            self.barrier.acquire()
         self.barrier.release()
+
+
+class FunctionCache:
+    """ Object caching the result of a function.
+    Future calls with same parameters returns a result stored in a cache dictionary.
+
+    This object is not thread-safe.
+    """
+    __slots__ = ('values',  # Function returned values. Key is the parameters passed to the function,
+                            # value is function result if function has already been called.
+                 'lock',    # Lock protecting values dictionary
+                 'funct',   # Function whose results is cached.
+                 )
+    def __init__(self, f):
+        """
+        Args:
+            f:  Function whose results should be cached.
+        """
+        self.values = {}
+        self.funct = f
+        self.lock = threading.Lock()
+
+    def get(self, *param):
+        """ Get the function result for a given parameter
+        Args:
+            param:  Function parameters
+        Returns:
+            Function result
+        """
+        res = self.values.get(param)
+        if res is None:
+            # First check if None is the actual result
+            if param in self.values:
+                return None
+            # Call function to get actual result
+            res = self.funct(*param)
+            # Add result to the cache
+            self.values[param] = res
+        return res
+
+    def clear(self):
+        """ Clear all dictionary content """
+        self.values.clear()
+
+    def __len__(self):
+        """ Returns the number of elements in this cache """
+        return len(self.values)
 
 
 
@@ -576,98 +674,7 @@ def check_default(val, default):
     Returns:
         val if val is different from DEFAULT, default otherwise
     """
-    if (val is DEFAULT):
-        return default
-    return val
-
-
-def is_bool(val):
-    """ Check if a value is a boolean, including numpy variants if any
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is a boolean.
-    """
-    return type(val) in BOOL_TYPES
-
-
-def is_int(val):
-    """ Check if a value is an integer, including numpy variants if any
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is an integer.
-    """
-    return type(val) in INTEGER_TYPES
-
-
-def is_float(val):
-    """ Check if a value is a float, including numpy variants if any
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is a float
-    """
-    return type(val) in FLOAT_TYPES
-
-
-def is_number(val):
-    """ Check if a value is a number, including numpy variants if any
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is a number
-    """
-    return type(val) in NUMBER_TYPES
-
-
-def is_string(val):
-    """ Check if a value is a string or a variant
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is a string
-    """
-    return type(val) in STRING_TYPES
-
-
-def is_array(val):
-    """ Check if a value is an array (list or tuple)
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is an array (list or tuple)
-    """
-    return isinstance(val, (list, tuple))
-
-
-def is_array_of_type(val, typ):
-    """ Check that a value is an array with all elements instances of a given type
-
-    Args:
-        val: Value to check
-        typ: Expected element type
-    Returns:
-        True if value is an array with all elements with expected type
-    """
-    return isinstance(val, (list, tuple)) and (all(isinstance(x, typ) for x in val))
-
-
-def is_interval_tuple(val):
-    """ Check if a value is a tuple representing an integer interval
-
-    Args:
-        val:  Value to check
-    Returns:
-        True if value is a tuple representing an interval
-    """
-    return isinstance(val, tuple) and (len(val) == 2) and is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])
+    return default if (val is DEFAULT) else val
 
 
 def assert_arg_int_interval(val, mn, mx, name=None):
@@ -698,11 +705,11 @@ def to_string(val):
         if (len(val) == 1):
             return "(" + to_string(val[0]) + ",)"
         return "(" + ", ".join(map(to_string, val)) + ")"
-    
+
     # Check list
     if (isinstance(val, list)):
         return "[" + ", ".join(map(to_string, val)) + "]"
-    
+
     # Default
     return str(val)
 
@@ -736,17 +743,12 @@ def _get_vars(obj):
         res = ()
     return sorted(res)
 
+
 def _equals_lists(l1, l2):
     """ Utility function for equals() to check two lists.
     """
-    # Check same object (also covers some primitive types as int, float and strings, but not guarantee)
-    l = len(l1)
-    if not (l == len(l2)):
-        return False
-    for i in range(l):
-        if not equals(l1[i], l2[i]):
-            return False
-    return True
+    return (len(l1) == len(l2)) and all(equals(v1, v2) for v1, v2 in zip(l1, l2))
+
 
 def equals(v1, v2):
     """ Check that two values are logically equal, i.e. with the same attributes with the same values, recursively
@@ -762,30 +764,22 @@ def equals(v1, v2):
     # Check same object (also covers some primitive types as int, float and strings, but not guarantee)
     if v1 is v2:
         return True
-    
+
     # Check same type
     t = type(v1)
     if not (t is type(v2)):
         return False
-    
+
     # Check basic types
     if (t in BASIC_TYPES):
         return (v1 == v2)
-    
+
     # Check list or tuple
     if isinstance(v1, (list, tuple, bytes, bytearray)):
-        l = len(v1)
-        if not (l == len(v2)):
-            return False
-        for i in range(l):
-            if not equals(v1[i], v2[i]):
-                return False
-        return True
-    
+        return _equals_lists(v1, v2)
+
     # Check dictionary
     if isinstance(v1, dict):
-        if not (len(v1) == len(v2)):
-            return False
         # Compare keys
         k1 = sorted(tuple(v1.keys()))
         if not _equals_lists(k1, sorted(tuple(v2.keys()))):
@@ -798,8 +792,6 @@ def equals(v1, v2):
 
     # Check sets
     if isinstance(v1, (set, frozenset)):
-        if not (len(v1) == len(v2)):
-            return False
         # Compare values
         return _equals_lists(sorted(tuple(v1)), sorted(tuple(v2)))
 
@@ -817,7 +809,7 @@ def make_directories(path):
     """ Ensure a directory path exists
 
     Args:
-        path: Directory path to check or create 
+        path: Directory path to check or create
     Raises:
         Any IO exception if directory creation is not possible
     """
@@ -905,6 +897,188 @@ def format_text(txt, size):
         return res
 
 
+def open_utf8(file, mode='r'):
+    """ Open a stream with UTF-8 encoding
+
+    Args:
+        mode:  Open mode
+    """
+    encd = 'utf-8-sig' if mode.startswith('r') else 'utf-8'
+    return io.open(file, mode=mode, encoding=encd)
+
+
+#-----------------------------------------------------------------------------
+# Checking of object types
+#-----------------------------------------------------------------------------
+
+# Determine list of types representing the different python scalar types
+BOOL_TYPES    = {bool}
+INTEGER_TYPES = {int}
+FLOAT_TYPES   = {float}
+STRING_TYPES  = {str}
+
+# Add Python2 specific unicode if any
+if IS_PYTHON_2:
+    INTEGER_TYPES.add(long)
+    STRING_TYPES.add(unicode)
+
+# Add numpy types if any
+if IS_NUMPY_AVAILABLE:
+    BOOL_TYPES.add(numpy.bool_)
+    BOOL_TYPES.add(numpy.bool)
+
+    INTEGER_TYPES.add(numpy.int_)
+    INTEGER_TYPES.add(numpy.intc)
+    INTEGER_TYPES.add(numpy.intp)
+
+    INTEGER_TYPES.add(numpy.int8)
+    INTEGER_TYPES.add(numpy.int16)
+    INTEGER_TYPES.add(numpy.int32)
+    INTEGER_TYPES.add(numpy.int64)
+
+    INTEGER_TYPES.add(numpy.uint8)
+    INTEGER_TYPES.add(numpy.uint16)
+    INTEGER_TYPES.add(numpy.uint32)
+    INTEGER_TYPES.add(numpy.uint64)
+
+    FLOAT_TYPES.add(numpy.float_)
+    FLOAT_TYPES.add(numpy.float16)
+    FLOAT_TYPES.add(numpy.float32)
+    FLOAT_TYPES.add(numpy.float64)
+
+# Build all number type sets
+INTEGER_TYPES = frozenset(INTEGER_TYPES)
+FLOAT_TYPES   = frozenset(FLOAT_TYPES)
+BOOL_TYPES    = frozenset(BOOL_TYPES)
+NUMBER_TYPES  = frozenset(INTEGER_TYPES.union(FLOAT_TYPES))
+STRING_TYPES  = frozenset(STRING_TYPES)
+BASIC_TYPES   = frozenset(NUMBER_TYPES.union(BOOL_TYPES).union(STRING_TYPES))
+
+
+def is_bool(val):
+    """ Check if a value is a boolean, including numpy variants if any
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is a boolean.
+    """
+    return type(val) in BOOL_TYPES
+
+if IS_NUMPY_AVAILABLE:
+
+    def is_int(val):
+        """ Check if a value is an integer, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is an integer.
+        """
+        return (type(val) in INTEGER_TYPES) or numpy.issubdtype(type(val), numpy.integer)
+
+
+    def is_float(val):
+        """ Check if a value is a float, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is a float
+        """
+        return (type(val) in FLOAT_TYPES) or numpy.issubdtype(type(val), numpy.float)
+
+
+    def is_number(val):
+        """ Check if a value is a number, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is a number
+        """
+        return (type(val) in NUMBER_TYPES) or numpy.issubdtype(type(val), numpy.number)
+
+else:
+
+    def is_int(val):
+        """ Check if a value is an integer, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is an integer.
+        """
+        return type(val) in INTEGER_TYPES
+
+
+    def is_float(val):
+        """ Check if a value is a float, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is a float
+        """
+        return type(val) in FLOAT_TYPES
+
+
+    def is_number(val):
+        """ Check if a value is a number, including numpy variants if any
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is a number
+        """
+        return type(val) in NUMBER_TYPES
+
+
+def is_string(val):
+    """ Check if a value is a string or a variant
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is a string
+    """
+    return type(val) in STRING_TYPES
+
+
+def is_array(val):
+    """ Check if a value is an array (list or tuple)
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is an array (list or tuple)
+    """
+    return isinstance(val, (list, tuple))
+
+
+def is_array_of_type(val, typ):
+    """ Check that a value is an array with all elements instances of a given type
+
+    Args:
+        val: Value to check
+        typ: Expected element type
+    Returns:
+        True if value is an array with all elements with expected type
+    """
+    return isinstance(val, (list, tuple)) and (all(isinstance(x, typ) for x in val))
+
+
+def is_interval_tuple(val):
+    """ Check if a value is a tuple representing an integer interval
+
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a tuple representing an interval
+    """
+    return isinstance(val, tuple) and (len(val) == 2) and is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])
+
+
 #-----------------------------------------------------------------------------
 # String conversion functions
 #-----------------------------------------------------------------------------
@@ -916,7 +1090,10 @@ _FROM_SPECIAL_CHARS = {'n': "\n", 't': "\t", 'r': "\r", 'f': "\f", 'b': "\b", '\
 _TO_SPECIAL_CHARS = {'\n': "\\n", '\t': "\\t", '\r': "\\r", '\f': "\\f", '\b': "\\b", '\\': "\\\\", '\"': "\\\""}
 
 # Set of symbol characters
-_SYMBOL_CHARS = set(x for x in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+_SYMBOL_CHARS = frozenset(x for x in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+# Set of digit characters
+_DIGIT_CHARS = frozenset(x for x in "0123456789")
 
 
 def is_symbol_char(c):
@@ -932,26 +1109,25 @@ def is_symbol_char(c):
     return (c in _SYMBOL_CHARS)
 
 
-def to_printable_string(str):
+def to_printable_symbol(id):
     """ Build a printable string from raw string (add escape sequences and quotes if necessary)
 
     Args:
-        str: Identifier string
+        id: Identifier string
     Returns:
-        CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
+        Unicode CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
     """
+    # Check empty string
+    if len(id) == 0:
+        return u'""'
     # Check is string can be used as it is
-    if (all(is_symbol_char(c) for c in str)):
-        return(str)
+    if (all((c in _SYMBOL_CHARS) for c in id)) and not id[0] in _DIGIT_CHARS:
+        return make_unicode(id)
     # Build result string
-    res = ['"']
-    for c in str:
-        res.append(_TO_SPECIAL_CHARS.get(c, c))
-    res.append('"')
-    return(''.join(res))
+    return(u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in id) + u'"')
 
 
-def to_internal_string(str):
+def to_internal_string(strg):
     """ Convert string (with enclosing quotes) into internal string (interpret escape sequences)
 
     Args:
@@ -961,19 +1137,41 @@ def to_internal_string(str):
     """
     res = []
     i = 1
-    slen = len(str) - 1
+    slen = len(strg) - 1
     while i < slen:
-        c = str[i]
+        c = strg[i]
         if (c == '\\'):
             i += 1
-            c = _FROM_SPECIAL_CHARS.get(str[i], None)
+            c = _FROM_SPECIAL_CHARS.get(strg[i], None)
             if c is None:
-                raise CpoException("Unknown special character '\\" + str[i] + "'")
+                raise CpoException("Unknown special character '\\" + strg[i] + "'")
         res.append(c)
         i += 1
-    return ''.join(res)
-    
-    
+    return u''.join(res)
+
+
+if IS_PYTHON_2:
+    def make_unicode(s):
+        """ Convert a string in unicode
+
+        Args:
+            s: String to convert
+        Returns:
+            String in unicode
+        """
+        return s if type(s) is unicode else unicode(s)
+else:
+    def make_unicode(s):
+        """ Convert a string in unicode
+
+        Args:
+            s: String to convert
+        Returns:
+            String in unicode
+        """
+        return s
+
+
 def int_to_base(val, bdgts):
     """ Convert an integer into a string with a given base
 
@@ -1020,3 +1218,16 @@ def log(*msg):
         sys.stdout.write(str(m))
     sys.stdout.write('\n')
 
+
+#-----------------------------------------------------------------------------
+# Zip iterator functions to scan lists simultaneously
+#-----------------------------------------------------------------------------
+
+import itertools
+if IS_PYTHON_2:
+    zip = itertools.izip
+    zip_longest = itertools.izip_longest
+else:
+    # For Python 3.
+    zip = zip
+    zip_longest = itertools.zip_longest

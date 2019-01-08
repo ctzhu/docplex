@@ -6,28 +6,43 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-Representation of a solution of a constraint programming model.
+This module contains the different elements that represent a solution resulting
+from the solve of a model.
 
-This module implements one class per solution element:
+This module implements the following object classes to represent solution elements:
 
- * CpoIntVarSolution: solution of an integer variable,
- * CpoIntervalVarSolution: solution of an interval variable,
- * CpoSequenceVarSolution: solution of a sequence variable,
- * CpoStateFunctionSolution: solution of a state function, and
- * CpoModelSolution: aggregation of all individual model element solutions,
- * CpoSolveResult: result of a model solve, including model solution and other associated information
-   (solve details, log, etc)
- * CpoRefineConflictResult: result of an invocation of the conflict refiner.
+ * :class:`CpoIntVarSolution`: solution of an integer variable,
+ * :class:`CpoIntervalVarSolution`: solution of an interval variable,
+ * :class:`CpoSequenceVarSolution`: solution of a sequence variable,
+ * :class:`CpoStateFunctionSolution`: solution of a state function, and
+ * :class:`CpoModelSolution`: aggregation of all individual model element solutions,
+
+and the following ones to represent results:
+
+ * :class:`CpoSolveResult`: result of a model solve, including a solution to the model (if any)
+   plus other technical information (solve details, log, etc)
+ * :class:`CpoRefineConflictResult`: result of an invocation of the conflict refiner.
+
+The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc) can be used in multiple ways:
+
+ * To represent a *complete* (fully instantiated) solution, where each model has a unique fixed value, as returned
+   by a successful model solve.
+ * To represent a *partial* model solution, that is proposed as a solve starting point
+   (see :meth:`docplex.cp.model.CpoModel.set_starting_point`)
+   In this case, not all variables are present in the solution, and some of them may be partially instantiated.
+ * To represent a *partial* model solution that is returned by the solver as result of calling method
+   :meth:`docplex.cp.solver.solver.CpoSolver.propagate`.
 """
 
-import os, sys, json
+import os, sys, json, io
 
 from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX
 import docplex.cp.utils as utils
 from docplex.cp.utils import *
+from docplex.cp.parameters import CpoParameters
 
 ###############################################################################
-##  Public constants
+##  Constants
 ###############################################################################
 
 # Solve status: Unknown
@@ -52,6 +67,7 @@ SOLVE_STATUS_JOB_FAILED = "JobFailed"
 ALL_SOLVE_STATUSES = (SOLVE_STATUS_UNKNOWN,
                       SOLVE_STATUS_INFEASIBLE, SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL,
                       SOLVE_STATUS_JOB_ABORTED, SOLVE_STATUS_JOB_FAILED)
+""" List of all possible search statuses """
 
 # Fail status: Unknown
 FAIL_STATUS_UNKNOWN = "Unknown"
@@ -85,6 +101,13 @@ ALL_FAIL_STATUSES = (FAIL_STATUS_UNKNOWN,
                      FAIL_STATUS_FAILED_NORMALLY, FAIL_STATUS_NOT_FAILED,
                      FAIL_STATUS_ABORT, FAIL_STATUS_EXCEPTION, FAIL_STATUS_EXIT, FAIL_STATUS_LABEL,
                      FAIL_STATUS_TIME_LIMIT, FAIL_STATUS_SEARCH_COMPLETED)
+""" List of all possible fail statuses """
+
+# Name of some useful CPO solver information attributes
+INFO_NUMBER_OF_CONSTRAINTS        = 'NumberOfConstraints'
+INFO_NUMBER_OF_INTEGER_VARIABLES  = 'NumberOfIntegerVariables'
+INFO_NUMBER_OF_INTERVAL_VARIABLES = 'NumberOfIntervalVariables'
+INFO_NUMBER_OF_SEQUENCE_VARIABLES = 'NumberOfSequenceVariables'
 
 
 ###############################################################################
@@ -92,12 +115,13 @@ ALL_FAIL_STATUSES = (FAIL_STATUS_UNKNOWN,
 ###############################################################################
 
 class CpoVarSolution(object):
-    """ Super class for solution to a variable. """
+    """ This class is a super class of all classes representing a solution to a variable.
+    """
     __slots__ = ('name',  # Variable name
                  )
     
     def __init__(self, name):
-        """ Creates a new solution for a variable.
+        """ Constructor:
 
         Args:
             name: Variable name, or object providing a name with a function get_name() or an attribute 'name'.
@@ -117,7 +141,7 @@ class CpoVarSolution(object):
         """ Gets the name of the variable.
 
         Returns:
-            Variable name.
+            Name of the variable.
         """
         return self.name
     
@@ -126,7 +150,7 @@ class CpoVarSolution(object):
         This method is overloaded by each class extending this class.
 
         Returns:
-            None.
+            Value of the variable, represented according to its semantic (see specific variable documentation).
         """
         return None
 
@@ -142,17 +166,25 @@ class CpoVarSolution(object):
 
 
 class CpoIntVarSolution(CpoVarSolution):
-    """ Solution to an integer variable. """
+    """ This class represents a solution to an integer variable.
+
+    The solution can be:
+     * *complete* when the value is a single integer,
+     * *partial* when the value is a domain, set of multiple values.
+
+    A domain is a list of discrete integer values and/or intervals of values represented by a tuple containing
+    interval min and max values (included).
+
+    For example, following are valid domains for an integer variable:
+     * 7 (complete solution)
+     * (1, 2, 4, 9)
+     * (2, 3, (5, 7), 9, (11, 13))
+    """
     __slots__ = ('value',  # Variable value / domain
                 )
     
     def __init__(self, name, value):
-        """ Creates a new integer variable solution.
-
-        The solution can be complete if the value is a single integer, or partial if the value
-        is a domain, expressed as
-          * a list of integers or tuples denoting possible values or intervals
-          * a single tuple denoting a single interval
+        """ Constructor:
 
         Args:
             name:  Variable name
@@ -162,7 +194,7 @@ class CpoIntVarSolution(CpoVarSolution):
         self.value = _check_arg_domain(value, 'value')
         
     def get_value(self):
-        """ Gets the variable value, or domain if partially instantiated.
+        """ Gets the value of the variable.
 
         Returns:
             Variable value (integer), or domain (list of integers or intervals)
@@ -175,34 +207,37 @@ class CpoIntVarSolution(CpoVarSolution):
         
 
 class CpoIntervalVarSolution(CpoVarSolution):
-    """ Solution to an interval variable. """
+    """ This class represents a solution to an interval variable.
+
+    The solution can be complete if all attribute values are integers, or partial if at least one
+    of them is an interval expressed as a tuple.
+    """
     __slots__ = ('start',    # Interval start
                  'end',      # Interval end
                  'size',     # Interval size
+                 'length',   # Interval length
                  'presence', # Presence indicator
                 )
     
     def __init__(self, name, presence=None, start=None, end=None, size=None):
-        """ Creates a new interval variable solution.
-
-        The solution can be complete if all attribute values are integers, or partial if at least one
-        of them is an interval expressed as a tuple.
-
-        Args:
-            name:     Name of the variable.
-            presence: Presence indicator (true for present, false for absent, None for undetermined). Default is None.
-            start:    Value of start, or tuple representing the start range
-            end:      Value of end, or tuple representing the end range
-            size:     Value of size, or tuple representing the size range
-        """
+        # """ Constructor:
+        #
+        # Args:
+        #     name:     Name of the variable.
+        #     presence: Presence indicator (true for present, false for absent, None for undetermined). Default is None.
+        #     start:    Value of start, or tuple representing the start range. Default is None.
+        #     end:      Value of end, or tuple representing the end range. Default is None.
+        #     size:     Value of size, or tuple representing the size range. Default is None.
+        # """
         super(CpoIntervalVarSolution, self).__init__(name)
         self.presence = presence
         self.start = start
         self.end   = end
         self.size  = size
-        
+        self.length = None
+
     def is_present(self):
-        """ Gets whether the interval is present.
+        """ Check if the interval is present.
 
         Returns:
             True if interval is present.
@@ -210,7 +245,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         return self.presence is True
 
     def is_absent(self):
-        """ Gets whether the interval is absent.
+        """ Check if the interval is absent.
 
         Returns:
             True if interval is absent.
@@ -218,7 +253,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         return self.presence is False
 
     def is_optional(self):
-        """ Gets whether the interval is optional.
+        """ Check if the interval is optional.
 
         Returns:
             True if interval is optional.
@@ -229,7 +264,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval start.
 
         Returns:
-            Interval start.
+            Interval start value, or domain (tuple (min, max)) if not fully instantiated
         """
         return self.start
 
@@ -237,7 +272,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval end.
 
         Returns:
-            Interval end.
+            Interval end value, or domain (tuple (min, max)) if not fully instantiated
         """
         return self.end
 
@@ -245,75 +280,107 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval size.
 
         Returns:
-            Interval size.
+            Interval size value, or domain (tuple (min, max)) if not fully instantiated
         """
         return self.size
+
+    def get_length(self):
+        """ Gets the interval length.
+
+        Returns:
+            Interval length value, or domain (tuple (min, max)) if not fully instantiated
+        """
+        if self.length is None:
+            return self.end - self.start
+        return self.length
 
     def get_value(self):
         """ Gets the interval variable value as a tuple (start, end, size), or () if absent.
 
+        If the variable is absent, then the result is an empty tuple.
+
+        If the variable is fully instantiated, the result is a tuple of 3 integers (start, end, size).
+        The variable length, easy to compute as end - start, can also be retrieved by calling :meth:`get_length`.
+
+        If the variable is partially instantiated, the result is a tuple (start, end, size, length) where each
+        individual value can be an integer or an interval expressed as a tuple.
+
         Returns:
-            Interval variable value as tuple.
+            Interval variable value as a tuple.
         """
         if (self.is_present()):
-            return (self.start, self.end, self.size)
+            if self.length is None:
+                return (self.start, self.end, self.size)
+            else:
+                return (self.start, self.end, self.size, self.length)
         return ()
     
     def __str__(self):
         """ Convert this expression into a string """
-        if (self.is_present()):
-            return self.get_name() + ": (start=" + str(self.get_start()) + ", end=" + str(self.get_end()) + ", size=" + str(self.get_size()) + ")"
-        if (self.is_optional()):
-            return self.get_name() + ": optional(start=" + str(self.get_start()) + ", end=" + str(self.get_end()) + ", size=" + str(self.get_size()) + ")"
-        return self.get_name() + ": absent"
-        
+        res = [self.get_name(), ': ']
+        if (self.is_absent()):
+            res.append("absent")
+        else:
+            if (self.is_optional()):
+                res.append("optional")
+            res.append("(start=" + str(self.get_start()))
+            res.append(", end=" + str(self.get_end()))
+            res.append(", size=" + str(self.get_size()))
+            res.append(", length=" + str(self.get_length()))
+            res.append(")")
+        return ''.join(res)
+
      
 class CpoSequenceVarSolution(CpoVarSolution):
-    """ Solution to a sequence variable. """
+    """ This class represents a solution to a sequence variable.
+    """
     __slots__ = ('lvars',  # List of interval variable solutions
                 )
     
     def __init__(self, name, lvars):
-        """ Creates a new sequence variable solution.
+        """ Constructor:
 
         Args:
-            lvars: List of interval variables (objects CpoIntervalVarSolution).
+            lvars: List of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
         """
         super(CpoSequenceVarSolution, self).__init__(name)
         self.lvars = lvars
         
     def get_interval_variables(self):
-        """ Gets the list of CpoIntervalVarSolution of this sequence.
+        """ Gets the list of CpoIntervalVarSolution in this sequence.
 
         Returns:
-            List of CpoIntervalVarSolution of this sequence.
+            List of CpoIntervalVarSolution in this sequence.
         """
         return self.lvars
 
     def get_value(self):
-        """ Gets the list of CpoIntervalVarSolution of this sequence.
+        """ Gets the list of CpoIntervalVarSolution in this sequence.
 
         Returns:
-            List of CpoIntervalVarSolution of this sequence.
+            List of CpoIntervalVarSolution in this sequence.
         """
         return self.lvars
     
     def __str__(self):
         """ Convert this expression into a string """
-        #print("List of variables: " + str(self.lvars))
         return self.get_name() + ": (" + ", ".join([v.get_name() for v in self.lvars]) + ")"
         
      
 class CpoStateFunctionSolution(CpoVarSolution):
-    """ Solution to a step function. """
+    """ This class represents a solution to a step function.
+
+    A solution to a step function is represented by a list of steps.
+    A step is a triplet (start, end, value) that gives the value of the function on the interval [start, end).
+    """
     __slots__ = ('steps',  # List of function steps
                 )
     
     def __init__(self, name, steps):
-        """ Creates a new state function solution.
+        """ Constructor:
 
         Args:
-            steps: List of function steps (tuples (start, end, value)).
+            steps: List of function steps represented as tuples (start, end, value).
         """
         super(CpoStateFunctionSolution, self).__init__(name)
         self.steps = steps
@@ -340,22 +407,27 @@ class CpoStateFunctionSolution(CpoVarSolution):
         
      
 class CpoModelSolution(object):
-    """ Solution of a model.
+    """ This class represents a solution to a model. It contains the solutions of model variables plus
+    the value of objective, if any.
 
-    This object represent a solution of a the model. It contains the solutions of model variables,
-    handled in a map whose key is variable name, and value is
-    either CpoIntVarSolution, CpoIntervalVarSolution, CpoSequenceVarSolution, CpoStateFunctionSolution.
+    Each variable solution is accessed with its name
+    and its value is either :class:`CpoIntVarSolution`, :class:`CpoIntervalVarSolution`,
+    :class:`CpoSequenceVarSolution` or :class:`CpoStateFunctionSolution` depending on the type of the variable.
 
-    This object is used to handle a complete solution, where every variable has a final solution,
-    but also partial solutions where not all variables are defined, and/or with domains instead of discrete value.
+    The solution can be:
+      * *complete*, if each variable is assigned to a single value,
+      * *partial* if not all variables are defined, or if some variables are defined with domains that are not
+        restricted to a single value.
+
+    An instance of this class may be created explicitly by the programmer of the model to express a *starting point*
+    that can be passed to the model to optimize its solve
+    (see :meth:`docplex.cp.model.CpoModel.set_starting_point` for details).
     """
     __slots__ = ('vars',          # Map of variable solutions
                  'objvalues',     # Objective values
                 )
 
     def __init__(self):
-        """ Creates a new empty model solution.
-        """
         super(CpoModelSolution, self).__init__()
         self.vars = {}
         self.objvalues = None
@@ -364,34 +436,34 @@ class CpoModelSolution(object):
         """ Set the numeric values of all objectives.
 
         Args:
-            ovals: Array of all objective values
+            ovals: Array of objective values
         """
         self.objvalues = ovals
 
     def get_objective_values(self):
         """ Gets the numeric values of all objectives.
 
+        If the solution is partial, each objective value may be an interval expressed as a tuple (min, max)
+
         Returns:
-            Array of all objective values, None if none.
+            Array of objective values, None if none.
         """
         return self.objvalues
 
     def add_var_solution(self, vsol):
-        """ Add a variable solution to this model solution.
+        """ Add a solution to a variable to this model solution.
 
         Args:
-            vsol: Variable solution
+            vsol: Variable solution (object of a class extending :class:`CpoVarSolution`)
         """
         assert isinstance(vsol, CpoVarSolution)
         self.vars[vsol.get_name()] = vsol
 
     def add_integer_var_solution(self, name, value):
-        """ Add a new integer variable solution.
+        """ Add a new integer variable solution from its name and value..
 
         The solution can be complete if the value is a single integer, or partial if the value
-        is a domain, expressed as
-          * a list of integers or tuples denoting possible values or intervals
-          * a single tuple denoting a single interval
+        is a domain, given as a list of integers or intervals expressed as tuples.
 
         Args:
             name:  Variable name
@@ -420,7 +492,7 @@ class CpoModelSolution(object):
         Args:
             name: Variable name or variable expression.
         Returns:
-            Variable solution (class CpoVarSolution), None if not found.
+            Variable solution (class extending :class:`CpoVarSolution`), None if not found.
         """
         if isinstance(name, CpoExpr):
             name = name.get_name()
@@ -430,22 +502,27 @@ class CpoModelSolution(object):
         """ Gets the list of all variable solutions from this model solution.
 
         Returns:
-            List of all variable solutions (class CpoVarSolution).
+            List of all variable solutions (class extending :class:`CpoVarSolution`).
         """
         return list(self.vars.values())
 
     def get_value(self, name):
         """ Gets the value of a variable.
 
-        For IntVar, value is an integer.
-        For IntervalVar, value is a tuple (start, end, size), () if absent.
-        For SequenceVar, value is list of interval variable solutions.
-        For StateFunction, value is list of steps.
+        This method first find the variable with :meth:`get_var_solution` and, if exists,
+        returns the result of a call to the method get_value() on this variable.
+
+        The result depends on the type of the variable. For details, please consult documentation of methods:
+
+         * :meth:`CpoIntVarSolution.get_value`
+         * :meth:`CpoIntervalVarSolution.get_value`
+         * :meth:`CpoSequenceVarSolution.get_value`
+         * :meth:`CpoStateFunctionSolution.get_value`
 
         Args:
             name: Variable name, or model variable descriptor.
         Returns:
-            Variable value, None if variable not found.
+            Variable value, None if variable is not found.
         """
         var = self.get_var_solution(name)
         if (var is None):
@@ -456,7 +533,7 @@ class CpoModelSolution(object):
         """ Add a json solution to this solution descriptor
 
         Args:
-            jsol:   JSON document representing solution, or string containing its JSON representation.
+            jsol: JSON document representing solution, or string containing its JSON representation.
         """
         # Parse json string if needed
         if not isinstance(jsol, dict):
@@ -465,19 +542,25 @@ class CpoModelSolution(object):
         # Add objectives
         ovals = jsol.get('objectives', None)
         if ovals:
-            self._set_objective_values(ovals)
+            self._set_objective_values([tuple(v) if isinstance(v, list) else v for v in ovals])
 
         # Add integer variables
         vars = jsol.get('intVars', ())
         for vname in vars:
-            self.add_var_solution(CpoIntVarSolution(vname, _get_num_value(vars[vname])))
+            self.add_var_solution(CpoIntVarSolution(vname, _get_domain(vars[vname])))
 
         # Add interval variables
         vars = jsol.get('intervalVars', ())
         for vname in vars:
             v = vars[vname]
             if 'start' in v:
-                vsol = CpoIntervalVarSolution(vname, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
+                # Check partially instanciated
+                if 'presence' in v:
+                    vsol = CpoIntervalVarSolution(vname,  True if v['presence'] == 1 else None,
+                                                  _get_domain(v['start']), _get_domain(v['end']), _get_domain(v['size']))
+                    vsol.length = _get_domain(v['length'])
+                else:
+                    vsol = CpoIntervalVarSolution(vname, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
             else:
                 vsol = CpoIntervalVarSolution(vname, False)
             self.add_var_solution(vsol)
@@ -509,6 +592,9 @@ class CpoModelSolution(object):
     def print_solution(self, out=None):
         """ Prints the solution on a given output.
 
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
@@ -517,9 +603,8 @@ class CpoModelSolution(object):
             out = sys.stdout
 
         # Check file
-        if isinstance(out, str):
-            utils.make_directories(os.path.dirname(out))
-            with open(out, 'w') as f:
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
                 self._write_solution(f)
         else:
             self._write_solution(out)
@@ -553,11 +638,9 @@ class CpoModelSolution(object):
 
 
 class CpoRunResult(object):
-    """ Abstract class representing a run result.
+    """ This class is an abstract class extended by classes representing the result of a call to the solver.
     """
     def __init__(self):
-        """ Creates a new run result.
-        """
         super(CpoRunResult, self).__init__()
         self.solverLog = None                      # Solver log
 
@@ -570,7 +653,7 @@ class CpoRunResult(object):
         self.solverLog = log
 
     def get_solver_log(self):
-        """ Gets the solver log.
+        """ Gets the log of the solver.
 
         Returns:
             Solver log as a string, None if unknown.
@@ -578,21 +661,20 @@ class CpoRunResult(object):
         return self.solverLog
 
 class CpoSolveResult(CpoRunResult):
-    """ Model solve result.
+    """ This class represents the result of a call to the solve of a model.
 
-    This object contains all the elements composing a solve result:
-
+    It contains the following elements:
        * solve status,
        * solver parameters,
        * solver information
        * output log
-       * solution, if any
+       * solution, if any (class :class:`CpoModelSolution`)
 
-    For convenience and compatibility, retrieving solution elements is made available directly from
-    this solve result using direct accessors.
+    If this result contains a solution, the methods implemented in the class :class:`CpoModelSolution`
+    to access solution elements are available directly from this class.
     """
     def __init__(self, model):
-        """ Creates a new empty solve result.
+        """ Constructor:
 
         Args:
            model: Related model
@@ -601,13 +683,9 @@ class CpoSolveResult(CpoRunResult):
         self.model = model
         self.solve_status = SOLVE_STATUS_UNKNOWN   # Solve status, with value in SOLVE_STATUS_*
         self.fail_status = FAIL_STATUS_UNKNOWN     # Fail status, with values in FAIL_STATUS_*
-        self.nbintvars = 0                         # Number of integer variables
-        self.nbintervalvars = 0                    # Number of interval variables
-        self.nbsequencevars = 0                    # Number of sequence variables
-        self.nbconstraints = 0                     # Number of constraints
         self.solveTime = 0                         # Solve time
-        self.parameters = {}                       # Solving parameters map
-        self.infos = {}                            # Solving information attributes map
+        self.parameters = None                     # Solving parameters
+        self.infos = None                          # Solving information attributes map
         self.solution = CpoModelSolution()         # Solution
 
     def _set_solve_status(self, ssts):
@@ -622,7 +700,7 @@ class CpoSolveResult(CpoRunResult):
         """ Gets the solve status.
 
         Returns:
-            Solve status, values in ALL_SOLVE_STATUSES.
+            Solve status, element of the global list :const:`ALL_SOLVE_STATUSES`.
         """
         return self.solve_status
 
@@ -638,7 +716,7 @@ class CpoSolveResult(CpoRunResult):
         """ Gets the solving fail status.
 
         Returns:
-            Fail status, values in ALL_FAIL_STATUSES.
+            Fail status, element of the global list :const:`ALL_FAIL_STATUSES`.
         """
         return self.fail_status
 
@@ -666,7 +744,7 @@ class CpoSolveResult(CpoRunResult):
         """ Checks if this descriptor contains a valid solution to the problem.
 
         A solution is present if the solve status is 'Feasible' or 'Optimal'.
-        Optimality of the solution should be tested with `is_solution_optimal()`.
+        Optimality of the solution should be tested using method :meth:`is_solution_optimal()`.
 
         Returns:
             True if there is a solution.
@@ -677,17 +755,9 @@ class CpoSolveResult(CpoRunResult):
         """ Checks if this descriptor contains an optimal solution to the problem.
 
         Returns:
-            True if there is an optimal solution.
+            True if there is a solution that is optimal.
         """
         return self.solve_status is SOLVE_STATUS_OPTIMAL
-
-    def _set_objective_values(self, ovals):
-        """ Set the numeric values of all objectives.
-
-        Args:
-            ovals: Array of all objective values
-        """
-        self.solution._set_objective_values(ovals)
 
     def get_objective_values(self):
         """ Gets the numeric values of all objectives.
@@ -697,60 +767,62 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.solution.get_objective_values()
 
-    def _set_parameters(self, params):
-        """ Set the solving parameters.
-
-        Args:
-            params: Dictionary of parameters
-        """
-        self.parameters = params
-
     def get_parameters(self):
         """ Gets the complete dictionary of solving parameters.
-        Identical to get the attribute `parameters` of this object.
 
         Returns:
-            Dictionary of parameters.
+            Solving parameters (object of class CpoParameters), None if undefined.
         """
         return self.parameters
 
-    def get_parameter(self, name):
+    def get_parameter(self, name, default=None):
         """ Get a particular solving parameter.
-        Semantically equivalent to 'parameters[name]' on this object, except that it returns None if not found.
-
-        Returns:
-            Parameter value, None if not found.
-        """
-        return self.parameters.get(name, None)
-
-    def _set_infos(self, infos):
-        """ Set the solving information attributes.
 
         Args:
-            infos: Dictionary of information attributes
+            name:    Name of the parameter to get
+            default: (optional) Default value if not found. None by default.
+        Returns:
+            Parameter value, default value if not found.
         """
-        self.infos = infos
+        if self.parameters is None:
+            return default
+        return self.parameters.get(name, default)
+
+    def _add_infos(self, infos):
+        """ Add solving information to existing ones.
+
+        Args:
+            infos: Dictionary of information attributes to append
+        """
+        if self.infos is None:
+            self.infos = {}
+        self.infos.update(infos)
 
     def get_infos(self):
         """ Gets the complete dictionary of information attributes.
-        Identical to get the attribute 'info' of this object.
 
         Returns:
-            Dictionary of information attributes.
+            Dictionary of information attributes, None if undefined.
         """
         return self.infos
 
-    def get_info(self, name):
+    def get_info(self, name, default=None):
         """ Gets a particular information attribute.
-        Semantically equivalent to `info[name]` on this object, except that it returns None if not found.
 
+        Args:
+            name:    Name of the information to get
+            default: (optional) Default value if not found. None by default.
         Returns:
             Information attribute value, None if not found.
         """
-        return self.infos.get(name, None)
+        if self.infos is None:
+            return default
+        return self.infos.get(name, default)
 
     def _set_model_attributes(self, nbintvars=0, nbitvvars=0, nbseqvars=0, nbctrs=0):
         """ Set the general model attributes.
+
+        This method is called when solve is done on the cloud, when not all information is available from the solver.
 
         Args:
             nbintvars: Number of integer variables
@@ -758,10 +830,10 @@ class CpoSolveResult(CpoRunResult):
             nbseqvars: Number of sequence variables
             nbctrs:    Number of constraints
         """
-        self.nbintvars = nbintvars
-        self.nbintervalvars = nbitvvars
-        self.nbconstraints = nbctrs
-        self.nbsequencevars = nbseqvars
+        self._add_infos({INFO_NUMBER_OF_INTEGER_VARIABLES: nbintvars,
+                         INFO_NUMBER_OF_INTERVAL_VARIABLES: nbitvvars,
+                         INFO_NUMBER_OF_SEQUENCE_VARIABLES: nbseqvars,
+                         INFO_NUMBER_OF_CONSTRAINTS: nbctrs})
 
     def _set_solve_time(self, time):
         """ Set the solve time required for this solution.
@@ -785,7 +857,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Number of integer variables.
         """
-        return self.nbintvars
+        return self.get_info(INFO_NUMBER_OF_INTEGER_VARIABLES, 0)
 
     def get_number_of_interval_vars(self):
         """ Gets the number of interval variables in the model.
@@ -793,7 +865,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Number of interval variables.
         """
-        return self.nbintervalvars
+        return self.get_info(INFO_NUMBER_OF_INTERVAL_VARIABLES, 0)
 
     def get_number_of_sequence_vars(self):
         """ Gets the number of sequence variables in the model.
@@ -801,7 +873,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Number of sequence variables.
         """
-        return self.nbsequencevars
+        return self.get_info(INFO_NUMBER_OF_SEQUENCE_VARIABLES, 0)
 
     def get_number_of_constraints(self):
         """ Gets the number of constraints in the model.
@@ -809,15 +881,7 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Number of constraints.
         """
-        return self.nbconstraints
-
-    def _add_var_solution(self, vsol):
-        """ Add a variable solution to this model solution.
-
-        Args:
-            vsol: Variable solution
-        """
-        self.solution.add_var_solution(vsol)
+        return self.get_info(INFO_NUMBER_OF_CONSTRAINTS, 0)
 
     def get_var_solution(self, name):
         """ Gets a variable solution from this model solution.
@@ -848,7 +912,7 @@ class CpoSolveResult(CpoRunResult):
         Args:
             name: Variable name, or model variable descriptor.
         Returns:
-            Variable value, None if variable not found.
+            Variable value, None if variable is not found.
         """
         return self.solution.get_value(name)
 
@@ -872,21 +936,18 @@ class CpoSolveResult(CpoRunResult):
                 self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
 
         # Add parameters
-        self._set_parameters(jsol.get('parameters', {}))
+        prms = jsol.get('parameters', None)
+        if prms is not None:
+            self.parameters = CpoParameters()
+            self.parameters.update(prms)
 
         # Add information attributes
-        cpinf = jsol.get('cpInfo', {})
-        self._set_infos(cpinf)
+        cpinf = jsol.get('cpInfo', None)
+        if cpinf is not None:
+            self._add_infos(cpinf)
 
         # Add solution
         self.solution._add_json_solution(jsol)
-
-        # Retrieve critical solving information
-        self.nbconstraints = cpinf.get('NumberOfConstraints', self.nbconstraints)
-        self.nbintvars = cpinf.get('NumberOfIntegerVariables', self.nbintvars)
-        self.nbintervalvars = cpinf.get('NumberOfIntervalVariables', self.nbintervalvars)
-        self.nbsequencevars = cpinf.get('NumberOfSequenceVariables', self.nbsequencevars)
-
 
     def __getitem__(self, name):
         """ Overloading of [] to get a variable solution from this model solution
@@ -901,6 +962,9 @@ class CpoSolveResult(CpoRunResult):
     def print_solution(self, out=None):
         """ Prints the solution on a given output.
 
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
@@ -909,9 +973,8 @@ class CpoSolveResult(CpoRunResult):
             out = sys.stdout
 
         # Check file
-        if isinstance(out, str):
-            utils.make_directories(os.path.dirname(out))
-            with open(out, 'w') as f:
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
                 self._write_solution(f)
         else:
             self._write_solution(out)
@@ -951,7 +1014,7 @@ class CpoSolveResult(CpoRunResult):
 
 
 class CpoRefineConflictResult(CpoRunResult):
-    """ Model conflict refiner result.
+    """ This class represents the result of a call to the conflict refiner.
 
     A conflict is a subset of the constraints and/or variables of the model which are
     mutually contradictory.
@@ -968,11 +1031,11 @@ class CpoRefineConflictResult(CpoRunResult):
     conflict analysis.
     """
     def __init__(self, model):
-        """ Creates a new empty conflict refiner result.
-
-        Args:
-           model: Related model
-        """
+        # """ Creates a new empty conflict refiner result.
+        #
+        # Args:
+        #    model: Related model
+        # """
         super(CpoRefineConflictResult, self).__init__()
         self.model = model
         self.member_constraints = []    # List of member constraints
@@ -1053,6 +1116,9 @@ class CpoRefineConflictResult(CpoRunResult):
     def print_conflict(self, out=None):
         """ Prints this conflict on a given output.
 
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
@@ -1061,9 +1127,8 @@ class CpoRefineConflictResult(CpoRunResult):
             out = sys.stdout
 
         # Check file
-        if isinstance(out, str):
-            utils.make_directories(os.path.dirname(out))
-            with open(out, 'w') as f:
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
                 self._write_conflict(f)
         else:
             self._write_conflict(out)
@@ -1081,12 +1146,12 @@ class CpoRefineConflictResult(CpoRunResult):
         if lc:
             out.write("Member constraints:\n")
             for c in lc:
-                out.write("   {}\n".format(c))
+                out.write("   {}\n".format(_build_conflict_constraint_string(c)))
         lc = self.get_all_possible_constraints()
         if lc:
             out.write("Possible member constraints:\n")
             for c in lc:
-                out.write("   {}\n".format(c))
+                out.write("   {}\n".format(_build_conflict_constraint_string(c)))
         # Print variables in the conflict
         lc = self.get_all_member_variables()
         if lc:
@@ -1121,6 +1186,35 @@ class CpoRefineConflictResult(CpoRunResult):
 _CONSTANTS_VALUES = {'intmin': INT_MIN, 'intmax': INT_MAX, 'intervalmin': INTERVAL_MIN, 'intervalmax': INTERVAL_MAX,
                      'NaN': float('nan'), 'Infinity': float('inf'), '-Infinity': -float('inf')}
 
+# Marker of interval with holes
+_HOLE_MARKER = "holes"
+
+def _get_domain(val):
+    """ Convert a solution value into domain.
+
+    Args:
+        val: Value to convert
+    Returns:
+        Variable domain
+    """
+    if is_array(val):
+        res = []
+        for v in val:
+            if is_array(v):
+                vl = len(v)
+                if (vl == 2):
+                    res.append((_get_num_value(v[0]), _get_num_value(v[1])))
+                elif vl == 3:
+                    res.append((_get_num_value(v[0]), _get_num_value(v[1]), _HOLE_MARKER))
+                    assert v[2] == _HOLE_MARKER, "Domain interval with 3 elements must contains '{}' as last one".format(_HOLE_MARKER)
+                else:
+                    assert False, "Domain interval should contain only 2 elements"
+            else:
+                res.append(_get_num_value(v))
+        return tuple(res)
+    else:
+        return _get_num_value(val)
+
 def _get_num_value(val):
     """ Convert a solution value into number.
     Interpret intmin, intmax, intervalmin, intervalmax, NaN, Infinity if any.
@@ -1130,15 +1224,14 @@ def _get_num_value(val):
     Returns:
         Converted value, itself if not found
     """
-    return(_CONSTANTS_VALUES.get(val, val))
+    return _CONSTANTS_VALUES.get(val, val)
 
 def _check_arg_domain(val, name):
     """ Check that an argument is a correct domain and raise error if wrong
 
     Domain is:
        * a single integer for a fixed domain
-       * a list of integers or tuples denoting possible values or intervals
-       * a single tuple denoting a single interval
+       * a list of integers or intervals expressed as tuples.
 
     Args:
         val:  Argument value
@@ -1151,14 +1244,43 @@ def _check_arg_domain(val, name):
     # Check single integer
     if is_int(val):
         return val
-    # Check single interval
-    if is_interval_tuple(val):
-        return list(val)
-    # Check list og integers or tuples
+    # Check list of integers or tuples
     assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
     for v in val:
         if not is_int(v):
-            assert _is_interval_tuple(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+            assert _is_domain_interval(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
     return val
+
+
+def _is_domain_interval(val):
+    """ Check if a value is representing a valid domain interval
+    Args:
+        val:  Value to check
+    Returns:
+        True if value is a tuple representing an interval
+    """
+    if not isinstance(val, tuple):
+        return False
+    if not (is_int(val[0]) and is_int(val[1]) and (val[1] >= val[0])):
+        return False
+    vl = len(val)
+    if vl == 2:
+        return True
+    if vl == 3:
+        return val[2] == _HOLE_MARKER
+    return False
+
+
+def _build_conflict_constraint_string(ctr):
+    """ Build the string used to represent a constraint in conflict refiner
+    Args:
+        ctr:  Constraint to print
+    Returns:
+        Constraint string
+    """
+    cn = ctr.get_name()
+    if (cn is None) or (cn.startswith('_')):
+        return ctr._get_expr_string()
+    return ctr._to_string()
 
 

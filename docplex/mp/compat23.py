@@ -7,7 +7,7 @@
 # gendoc: ignore
 
 # This file contains all compatibility stuff between py2/py3
-
+import sys
 
 # py2/py3 compatibility
 try:
@@ -45,3 +45,10 @@ try:
     from itertools import izip
 except ImportError:  # pragma : no cover
     izip = zip       # pragma : no cover
+
+# we want unicode in py2, str otherwise
+# unitext() returns a unicode representation of its parameter
+if sys.version_info[0] == 3:
+    unitext = str
+else:
+    unitext = unicode

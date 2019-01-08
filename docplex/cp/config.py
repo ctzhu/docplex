@@ -5,44 +5,59 @@
 # --------------------------------------------------------------------------
 
 """
-Configuration of the CPO Python API
+Configuration of the CP Optimizer Python API
 
 This module is the top-level handler of the configuration parameters for
-the Python API to CPO. It contains the default values of the different
+the CP Optimizer Python API. It contains the default values of the different
 configuration parameters.
 
 It should NOT be changed directly.
-The preferable way is to add at least one of the
-following files that contain the changes to be performed:
+The preferable way is to add at least one of the following files that contain the changes
+to be performed:
 
-* cpo_config.py, a local set of changes on these parameters,
-* cpo_config_<hostname>.py, a hostname dependent set of changes.
+ * *cpo_config.py*, a local set of changes on these parameters,
+ * *cpo_config_<hostname>.py*, a hostname dependent set of changes.
+ * *docloud_config.py* (for DOcloud url and key, file shared with docplex.mp package).
 
-Final set of parameters is obtained by loading first this module,
-then cpo_config.py and finally cpo_config_<hostname>.py.
-These modules should be visible from the PYTHONPATH and are loaded in
+Final set of parameters is obtained by reading first this module, and then those
+listed above.
+These modules should be visible from the *PYTHONPATH* and are loaded in
 this order to overwrite default values.
 
-If called as main, this module prints the configuration on standard output.
+This module also defines two global variables:
+
+ * *DOCLOUD_CONTEXT*, that contains the configuration necessary to solve a model on DOcloud.
+   This context is the context by default, referenced by the global variable 'context'.
+ * *LOCAL_CONTEXT*, that contains the configuration appropriate to solve a model with a local
+   installation of the CPO solver.
+   This configuration is not available for solver with version lower or equal to 12.6.3.
+
+The method :meth:`set_default` allows to set the default configuration to one that is predefined,
+or another that has been totally customized.
+
+If called as main, this module prints the actual configuration on standard output, including
 """
 
 from docplex.cp.utils import Context, CpoException
 from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
-import sys, socket, os
+import sys, socket, os, platform
+
+EXE_EXTENSION = ".exe" if platform.system() == 'Windows' else ""
 
 
 ##############################################################################
-## Default configuration parameters
+## Define default context for DOcloud solving
 ##############################################################################
 
 #-----------------------------------------------------------------------------
 # Global context
 
 # Create default context infrastructure
-context = Context(model=Context(),
-                  params=CpoParameters(),
-                  solver=Context())
+DOCLOUD_CONTEXT = Context(model=Context(),
+                          params=CpoParameters(),
+                          solver=Context())
+context = DOCLOUD_CONTEXT
 
 # Default log output
 context.log_output = sys.stdout
@@ -65,6 +80,13 @@ context.model.name_all_constraints = True
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
+
+# Expression cache
+context.model.cache = Context()
+context.model.cache.size = 10000
+context.model.cache.active = True
+
+
 
 
 #-----------------------------------------------------------------------------
@@ -150,11 +172,32 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 
 
 ##############################################################################
+## Define context for local solving
+##############################################################################
+
+LOCAL_CONTEXT = context.clone()
+
+LOCAL_CONTEXT.params.TimeLimit = None
+LOCAL_CONTEXT.params.Workers = None
+
+LOCAL_CONTEXT.solver.trace_log = True
+LOCAL_CONTEXT.solver.agent = 'local'
+LOCAL_CONTEXT.solver.max_threads = None
+
+LOCAL_CONTEXT.solver.local = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverAngel",
+                                     execfile   = "cpoptimizer" + EXE_EXTENSION,
+                                     parameters = ['-angel'],
+                                     log_prefix = "[Angel] ")
+
+
+##############################################################################
 ## Public functions
 ##############################################################################
 
 def get_default():
     """ Get the default context
+
+    Default context is also accessible with the global variable 'context' in this module.
 
     Returns:
         Current default context
@@ -162,12 +205,12 @@ def get_default():
     return context
 
 def set_default(ctx):
-    """ Set the default context
+    """ Set the default context.
+
+    Default context becomes accessible in the global variable 'context' in this module.
 
     Args:
         ctx: New default context
-    Returns:
-        Current default context
     """
     if ctx is None:
         ctx = Context()

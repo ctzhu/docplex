@@ -133,8 +133,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
 
         # Trace on output if required
         if ctx.trace_log:
-            out = ctx.log_output
-            if out is not None:
+            out = ctx.get_log_output()
+            if out:
                 for rec in records:
                     out.write(rec['message'])
                     out.write('\n')
@@ -175,12 +175,12 @@ def _add_details(msol, detls):
     # Set objective value
     oval = detls.get('PROGRESS_CURRENT_OBJECTIVE', None)
     if oval is not None:
-        msol._set_objective_values([float(v) for v in oval.split(";")])
+        msol.solution._set_objective_values([float(v) for v in oval.split(";")])
     # Set model characteristics
-    nbctrs = detls.get('MODEL_DETAIL_CONSTRAINTS', 0)
-    nbintvars = detls.get('MODEL_DETAIL_INTEGER_VARS', 0)
-    nbitvvars = detls.get('MODEL_DETAIL_INTERVAL_VARS', 0)
-    nbseqvars = detls.get('MODEL_DETAIL_SEQUENCE_VARS', 0)
+    nbctrs = int(detls.get('MODEL_DETAIL_CONSTRAINTS', 0))
+    nbintvars = int(detls.get('MODEL_DETAIL_INTEGER_VARS', 0))
+    nbitvvars = int(detls.get('MODEL_DETAIL_INTERVAL_VARS', 0))
+    nbseqvars = int(detls.get('MODEL_DETAIL_SEQUENCE_VARS', 0))
     msol._set_model_attributes(nbintvars=nbintvars, nbitvvars=nbitvvars, nbseqvars=nbseqvars, nbctrs=nbctrs)
         
         

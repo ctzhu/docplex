@@ -604,9 +604,17 @@ class DOcloudContext(object):
         self._progress_poll_interval = None
         self.ignored_keys = "ENTER YOUR KEY HERE"
         self.ignored_urls = "ENTER YOUR URL HERE"
+        self.verbose_progress_logger = None
+        self.delete_job = True
         # if true, download job info after solve() has finished and fire
         # the last details as a progress_info. Mostly for debug.
         self.fire_last_progress = False
+        # Mostly for debug: This callback is called when the solve is finished.
+        # It should be a method taking **kwargs. It will be called with those kwargs:
+        # - jobid: the jobid
+        # - client: the docloud client used to connect to docloud
+        # - connector: the DOcloudConnector
+        self.on_solve_finished_cb = None
 
 
     # This maps "old property names" to the corresponding new qualified name.

@@ -15,9 +15,34 @@ from six import iteritems, iterkeys
 from docloud.status import JobSolveStatus
 
 from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import is_iterable, is_number, is_string
+from docplex.mp.utils import is_iterable, is_number, is_string, str_holo
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
+
+from collections import defaultdict
+
+
+class OutputStreamAdapter:
+    # With this class, we kind of automatically handle binary/non binary output streams
+    # it automatically perform encoding of strings when needed,
+    # and if the stream is a String stream, strings are just written without conversion
+    def __init__(self, stream, encoding='utf-8'):
+        self.stream = stream
+        self.stream_is_binary = False
+        if hasattr(stream, 'mode') and 'b' in stream.mode:
+            self.stream_is_binary = True
+        from io import TextIOBase
+        if not isinstance(stream, TextIOBase):
+            self.stream_is_binary = True
+
+        self.encoding = encoding
+
+    def write(self, s):
+        # s is supposed to be a string
+        output_s = s
+        if self.stream_is_binary:
+            output_s = s.encode(self.encoding)
+        self.stream.write(output_s)
 
 
 # noinspection PyAttributeOutsideInit
@@ -28,6 +53,11 @@ class SolveSolution(object):
 
     # a symbolic value for no objective ?
     NO_OBJECTIVE_VALUE = -1e+75
+    # attribute keys
+    SLACK_KEY = 'slacks'
+    DUAL_KEY = 'duals'
+    REDCOST_KEY = 'reduced_costs'
+    INFEAS_KEY = 'infeasibities'
 
     @staticmethod
     def _is_discrete_value(v):
@@ -57,14 +87,14 @@ class SolveSolution(object):
         assert obj is None or is_number(obj)
 
         self.__model = model
-        self._checker = model
+        self._checker = model._checker
         self._name = name
         self._problem_name = model.name
         self._problem_objective_expr = model.objective_expr if model.has_objective() else None
         self.__objective__ = self.NO_OBJECTIVE_VALUE if obj is None else obj
         self.__engine_name = engine_name
         self.__var_value_map = {}
-        self.__attr_map = {}
+        self._attribute_map = defaultdict(dict)
         self.__round_discrete = rounding
         self._solve_status = JobSolveStatus.UNKNOWN
 
@@ -72,13 +102,15 @@ class SolveSolution(object):
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
     @staticmethod
-    def make_engine_solution(model, var_value_map=None, obj=None, engine_name=None):
+    def make_engine_solution(model, var_value_map=None, obj=None, engine_name=None, solve_status=None):
         # INTERNAL
         sol = SolveSolution(model,
                             var_value_map=var_value_map, obj=obj,
                             engine_name=engine_name,
                             rounding=True,
                             keep_zeros=False)
+        if solve_status is not None:
+            sol._set_solve_status(solve_status)
         return sol
 
     def _get_var_by_name(self, varname):
@@ -91,7 +123,7 @@ class SolveSolution(object):
         """
         self.__var_value_map = {}
         self.__objective__ = self.NO_OBJECTIVE_VALUE
-        self.__attr_map = {}
+        self._attribute_map = {}
         self._solve_status = JobSolveStatus.UNKNOWN
 
     def is_empty(self):
@@ -189,7 +221,7 @@ class SolveSolution(object):
         self.__var_value_map[var] = stored_value
 
     def is_attributes_fetched(self, attr_name):
-        return attr_name and attr_name in self.__attr_map
+        return attr_name and attr_name in self._attribute_map
 
     @property
     def model(self):
@@ -250,9 +282,18 @@ class SolveSolution(object):
             self.set_var_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding, do_warn_on_rounding=False)
 
     def _store_attribute_results(self, var_rc_results, ct_dual_results, ct_slacks_results):
-        self._store_attribute_result("reduced_costs", var_rc_results, is_variable=True)
-        self._store_attribute_result("duals", ct_dual_results, is_variable=False)
-        self._store_attribute_result("slacks", ct_slacks_results, is_variable=False)
+        self._store_attribute_result(self.REDCOST_KEY, var_rc_results, is_variable=True)
+        self._store_attribute_result(self.DUAL_KEY, ct_dual_results, is_variable=False)
+        self._store_attribute_result(self.SLACK_KEY, ct_slacks_results, is_variable=False)
+
+    def store_slacks(self, slacks, slack_key=SLACK_KEY):
+        # INTERNAL
+        assert isinstance(slacks, dict)
+        self._attribute_map[slack_key] = slacks
+
+    def store_infeasibilities(self, infeasibilities, infeas_key=INFEAS_KEY):
+        assert isinstance(infeasibilities, dict)
+        self._attribute_map[infeas_key] = infeasibilities
 
     def _store_attribute_result(self, attr_name, attr_idx_map, is_variable):
         """
@@ -270,7 +311,7 @@ class SolveSolution(object):
                             if obj_mapper(idx) is not None and attr_val != 0}
         else:
             attr_obj_map = {}
-        self.__attr_map[attr_name] = attr_obj_map
+        self._attribute_map[attr_name] = attr_obj_map
 
     def iter_var_values(self):
         """Iterates over the (variable, value) pairs in the solution.
@@ -366,20 +407,25 @@ class SolveSolution(object):
         return True
 
     def get_attribute(self, mobjs, attr, default_attr_value=0):
-        assert not self.is_empty()
         assert is_iterable(mobjs)
         if not mobjs:
             return []
-        elif attr not in self.__attr_map:
+        elif attr not in self._attribute_map:
             # warn
             return [0] * len(mobjs)
         else:
-            attr_map = self.__attr_map[attr]
+            attr_map = self._attribute_map[attr]
             return [attr_map.get(mobj, default_attr_value) for mobj in mobjs]
 
+    def get_slack(self, ct, slack_key=SLACK_KEY):
+        return self._attribute_map[slack_key].get(ct, 0)
+
+    def get_infeasibility(self, ct, infeas_key=INFEAS_KEY):
+        return self._attribute_map[infeas_key].get(ct, 0)
+
     def display_attributes(self):
-        for attr_key in self.__attr_map:
-            attr_value_map = self.__attr_map[attr_key]
+        for attr_key in self._attribute_map:
+            attr_value_map = self._attribute_map[attr_key]
 
             print("#{0}={1:d}".format(attr_key, len(attr_value_map)))
             for obj, attr_val in iteritems(attr_value_map):
@@ -455,7 +501,8 @@ class SolveSolution(object):
         else:
             s_obj = "obj=N/A"
         s_values = ",".join(["{0}:{1:g}".format(var.name, val) for var, val in iteritems(self.__var_value_map)])
-        return "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
+        r = "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
+        return str_holo(r, maxlen=72)
 
     def print_mst(self):
         """
@@ -506,13 +553,15 @@ class SolveSolution(object):
         if mst_path:
             self.print_mst_to_stream(mst_path)
 
+
     def get_printer(self, key):
         printers = {'json': SolutionJSONPrinter,
-            'xml': SolutionMSTPrinter
-            }
+                    'xml': SolutionMSTPrinter
+                    }
+
         printer = printers.get(key.lower())
         if not printer:
-            raise ValueError("format must be one of {}".format(self.printers.keys()))
+            raise ValueError("format key must be one of {}".format(printers.keys()))
         return printer
 
 
@@ -542,17 +591,9 @@ class SolveSolution(object):
                 fp.close()
 
     def export_as_string(self, format="json"):
-        if format == "json":
-            from io import BytesIO
-            oss = BytesIO()
-        else:
-            oss = StringIO()
+        oss = StringIO()
         self.export(oss, format=format)
-        if format == "json":
-            r = oss.getvalue().decode('utf-8')
-        else:
-            r = oss.getvalue()
-        return r
+        return oss.getvalue()
 
 
     def check_as_mip_start(self, error_handler=None):
@@ -571,7 +612,7 @@ class SolveSolution(object):
         """
         if 0 == len(self.__var_value_map):
             if error_handler:
-                error_handler.error("MIP start solution is empty, provide at least one intere/boolean variable value")
+                error_handler.error("MIP start solution is empty, provide at least one discrete variable value")
             return False
 
         discrete_vars = (dv for dv in self.iter_variables() if dv.is_discrete())
@@ -579,7 +620,7 @@ class SolveSolution(object):
         count_errors = 0
         for dv in discrete_vars:
             sol_value = self.get_value(dv)
-            if not dv.typecheck_initial_value(sol_value):
+            if not dv.accept_initial_value(sol_value):
                 count_errors += 1
                 if error_handler:
                     error_handler.error("Wrong initial value for variable {0}: {1}, type: {2!s}",  # pragma: no cover
@@ -620,8 +661,8 @@ class SolutionMSTPrinter(object):
     @staticmethod
     def print_signature(out):
         from docplex.version import docplex_version_string
-
-        out.write("<!-- This file has been generated by DOcplex version {}  -->\n".format(docplex_version_string))
+        osa = OutputStreamAdapter(out)
+        osa.write("<!-- This file has been generated by DOcplex version {}  -->\n".format(docplex_version_string))
 
     @classmethod
     def print(cls, out, solutions):
@@ -639,52 +680,54 @@ class SolutionMSTPrinter(object):
 
     @classmethod
     def print_one_solution(cls, sol, out, print_header=True):
+        osa = OutputStreamAdapter(out)
         if print_header:
-            out.write(cls.mst_header)
+            osa.write(cls.mst_header)
             cls.print_signature(out)
         # <CPLEXSolution version="1.0">
-        out.write(cls.one_solution_start_tag)
-        out.write("\n")
+        osa.write(cls.one_solution_start_tag)
+        osa.write("\n")
 
         # <header
         # problemName="foo"
         # objectiveValue="42"
         # />
-        out.write(" <header\n   problemName=\"{0}\"\n".format(sol.problem_name))
+        osa.write(" <header\n   problemName=\"{0}\"\n".format(sol.problem_name))
         if sol.has_objective():
-            out.write("   objectiveValue=\"{0}:g\"\n".format(sol.objective_value))
-        out.write("  />\n")
+            osa.write("   objectiveValue=\"{0:g}\"\n".format(sol.objective_value))
+        osa.write("  />\n")
 
         #  <variables>
         #    <variable name="x1" index ="1" value="3.14"/>
         #  </variables>
-        out.write(" <variables>\n")
+        osa.write(" <variables>\n")
         for dvar, val in sol.iter_var_values():
             var_name = dvar.name
             var_value = sol[dvar]
             var_index = dvar.index
-            out.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\"/>\n"
+            osa.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\"/>\n"
                       .format(var_name, var_index, var_value))
-        out.write(" </variables>\n")
+        osa.write(" </variables>\n")
 
         #  </CPLEXSolution version="1.0">
-        out.write(cls.one_solution_end_tag)
-        out.write("\n")
+        osa.write(cls.one_solution_end_tag)
+        osa.write("\n")
 
     @classmethod
     def print_many_solutions(cls, sol_seq, out):
-        out.write(cls.mst_header)
+        osa = OutputStreamAdapter(out)
+        osa.write(cls.mst_header)
         cls.print_signature(out)
         # <CPLEXSolutions version="1.0">
-        out.write(cls.many_solution_start_tag)
-        out.write("\n")
+        osa.write(cls.many_solution_start_tag)
+        osa.write("\n")
 
         for sol in sol_seq:
             cls.print_one_solution(sol, out, print_header=False)
 
         # <CPLEXSolutions version="1.0">
-        out.write(cls.many_solution_end_tag)
-        out.write("\n")
+        osa.write(cls.many_solution_end_tag)
+        osa.write("\n")
 
     @classmethod
     def print_to_stream(cls, solutions, out, extension=mst_extension):
@@ -751,26 +794,16 @@ class SolutionJSONPrinter(object):
     @classmethod
     def print(cls, out, solutions, indent=None):
         # solutions can be either a plain solution or a sequence or an iterator
-        if not is_iterable(solutions):
-            cls.print_one_solution(solutions, out, indent=indent)
-        else:
-            sol_seq = list(solutions)
-            nb_solutions = len(sol_seq)
-            assert nb_solutions > 0
-            if 1 == nb_solutions:
-                cls.print_one_solution(sol_seq[0], out, indent=indent)
-            else:
-                cls.print_many_solutions(sol_seq, out, indent=indent)
-
-    @classmethod
-    def print_one_solution(cls, sol, out, indent=None):
-        out.write(json.dumps(sol, cls=SolutionJSONEncoder, indent=indent).encode())
-
-    @classmethod
-    def print_many_solutions(cls, sol_seq, out, indent=None):
+        sol_to_print = list(solutions) if is_iterable(solutions) else [solutions]
+        # encode all solutions in dict ready for json output
         encoder = SolutionJSONEncoder()
-        n = {"CPLEXSolutions": [encoder.default(sol) for sol in sol_seq]}
-        out.write(json.dumps(n, indent=indent))
+        solutions_as_dict = [encoder.default(sol) for sol in sol_to_print]
+        # use an output stream adapter for py2/py3 and str/unicode compatibility
+        osa = OutputStreamAdapter(out)
+        if len(sol_to_print) == 1:  # if only one solution, use at root node
+            osa.write(json.dumps(solutions_as_dict[0], indent=indent))
+        else:  # for multiple solutions, we want a "CPLEXSolutions" root
+            osa.write(json.dumps({"CPLEXSolutions": solutions_as_dict}, indent=indent))
 
     @classmethod
     def print_to_stream(cls, solutions, out, extension=json_extension, indent=None):
@@ -784,13 +817,8 @@ class SolutionJSONPrinter(object):
                 cls.print_to_stream(solutions, of, indent=indent)
                 # print("* file: %s overwritten" % path)
         else:
-            try:
-                cls.print(out, solutions, indent=indent)
+            cls.print(out, solutions, indent=indent)
 
-            except AttributeError:  # pragma: no cover
-                pass  # pragma: no cover
-                # stringio will raise an attribute error here, due to with
-                # print("Cannot use this an output: %s" % str(out))
 
     @classmethod
     def print_to_string(cls, solutions, indent=None):

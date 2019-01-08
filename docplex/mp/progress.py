@@ -38,7 +38,33 @@ class ProgressData(object):
 
 class ProgressListener(object):
     def __init__(self):
-        pass
+        self._cb = None
+        self._aborted = False
+
+    def disconnect(self):
+        self._cb = None
+
+    def connect_cb(self, cb):
+        self._cb = cb
+        self._aborted = False
+
+    def abort(self):
+        ''' Aborts the CPLEX search.
+
+        This method tells CPLEX to stop the MIP search.
+        You may use this method in a custom progress listener to stop the search based on your
+        criteria (for example, when improvements in gap go below a minimum threshold).
+
+        PROOFREAD
+
+        '''
+        if self._cb is not None and not self._aborted:
+            #print('---- actually aborting cplex')
+            self._aborted = True
+            self._cb.abort()
+
+    def has_aborted(self):
+        return self._aborted
 
     def requires_solution(self):
         """ Returns True if the listener wants solution information at each intermediate solution.
@@ -58,7 +84,7 @@ class ProgressListener(object):
         """ The method called when a solve has been initiated on a model.
 
         Defaul behavior is to do nothing.
-        Put here any code to reinitializae the state of the listener
+        Put here any code to reinitialize the state of the listener
         """
         pass
 

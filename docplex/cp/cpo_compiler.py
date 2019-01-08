@@ -6,7 +6,7 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-Compiler converting internal model representation to CPO file format
+Compiler converting internal model representation to CPO file format.
 """
 
 from docplex.cp.expression import *
@@ -14,12 +14,26 @@ from docplex.cp.solution import *
 from docplex.cp.utils import *
 import docplex.cp.config as config
 
-import sys
+import sys, io
 
 try:
     from StringIO import StringIO
 except ImportError:
     from io import StringIO
+
+###############################################################################
+## Constants
+###############################################################################
+
+# Map of CPO names for each array type
+_ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
+                Type_IntExprArray: 'intExprArray', Type_FloatExprArray: 'floatExprArray',
+                Type_IntervalVarArray: 'intervalVarArray', Type_SequenceVarArray: 'sequenceVarArray',
+                Type_CumulAtomArray: '_cumulAtomArray'}
+
+
+# Set of CPO types represented by an integer
+_INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 
 
 ###############################################################################
@@ -57,18 +71,29 @@ class CpoCompiler(object):
         # Initialize processing
         self.model = model
         self.params = context.params
-        self.sourceloc = True
         self.alias_min_name_length = None
         self.id_strings = {}
 
         # Set model parameters
         mctx = context.model
         if mctx is not None:
-            self.sourceloc = mctx.add_source_location
             self.alias_min_name_length = mctx.length_for_alias
+
+        # Initialize source location
+        if (self.params is not None) and (self.params.UseFileLocations is not None):
+            self.sourceloc = (self.params.UseFileLocations in('On', True))
+        elif (mctx is not None) and (mctx.add_source_location is not None):
+            self.sourceloc = mctx.add_source_location
+        else:
+            self.sourceloc = True
+        self.last_loc = None
+
 
     def print_model(self, out=None):
         """ Compile the model and print the CPO file format in a given output.
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
 
         Args:
             out: Target output, stream or file name. Default is sys.stdout.
@@ -76,11 +101,12 @@ class CpoCompiler(object):
         # Check file name
         if out is None:
             out = sys.stdout
-        if isinstance(out, str):
-            with open(os.path.abspath(out), 'w') as f:
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
                 self._write_model(f)
         else:
             self._write_model(out)
+
 
     def get_as_string(self):
         """ Compile the model in CPO file format into a string
@@ -93,7 +119,12 @@ class CpoCompiler(object):
         self._write_model(out)
         res = out.getvalue()
         out.close()
+
+        # Convert in unicode if required
+        if IS_PYTHON_2 and (type(res) is str):
+            res = unicode(res)
         return res
+
 
     def _write_model(self, out):
         """ Compile the model
@@ -107,15 +138,23 @@ class CpoCompiler(object):
         self.last_loc = None
 
         # Write header
-        banner = "/" * 79 + "\n"
+        banner = u"/" * 79 + "\n"
         sfile = model.get_source_file()
         out.write(banner)
-        out.write("// CPO file generated from:\n")
-        out.write("// " + sfile + "\n")
+        out.write(u"// CPO file generated from:\n")
+        out.write(u"// " + sfile + "\n")
         out.write(banner)
 
+        # Write version if any
+        ver = model.get_format_version()
+        if ver is not None:
+            out.write(u"\n//--- Internals ---\n")
+            out.write(u"internals {\n")
+            out.write(u"   version({});\n".format(ver))
+            out.write(u"}\n")
+
         # Write variables
-        out.write("\n//--- Variables ---\n")
+        out.write(u"\n//--- Variables ---\n")
         vlist = model.get_all_variables()
         for v in self._expand_expressions(vlist):
             self._write_expression(out, v)
@@ -131,58 +170,59 @@ class CpoCompiler(object):
                     continue
                 # Compute CPO printable variable name
                 vname = v.get_name()
-                vpname = strname = to_printable_string(vname)
+                vpname = strname = to_printable_symbol(vname)
                 if len(vpname) > mnl:
                     # Replace by an alias
                     vpname = alias_gen.allocate()
                     # Trace alias
                     if not aliasfound:
                         aliasfound = True
-                        out.write("\n//--- Aliases ---\n")
-                        out.write("// To reduce CPO file size, the following aliases have been used to replace variable names longer than " + str(mnl) + "\n")
+                        out.write(u"\n//--- Aliases ---\n")
+                        out.write(u"// To reduce CPO file size, the following aliases have been used to replace variable names longer than " + str(mnl) + "\n")
                     out.write(vpname + " = " + strname + ";\n")
                 self.id_strings[vname] = vpname
 
         # Write expressions
-        out.write("\n//--- Expressions ---\n")
+        out.write(u"\n//--- Expressions ---\n")
         self.last_loc = None
-        lexpr = model.get_expressions()
+        lexpr = model.get_all_expressions()
         for x in self._expand_expressions(lexpr):
             self._write_expression(out, x)
 
         # Write search phases 
         phases = model.get_search_phases()
         if phases:
-            out.write("\n//--- Search phases ---\n")
-            out.write("search {\n")
+            out.write(u"\n//--- Search phases ---\n")
+            out.write(u"search {\n")
             for x in self._expand_expressions(phases):
                 self._write_expression(out, x)
-            out.write("}\n")
+            out.write(u"}\n")
 
         # Write starting point
         spoint = model.get_starting_point()
         if spoint is not None:
-            out.write("\n//--- Starting point ---\n")
+            out.write(u"\n//--- Starting point ---\n")
             if self.last_loc is not None:
-                out.write("#line off\n")
-            out.write("startingPoint {\n")
+                out.write(u"#line off\n")
+            out.write(u"startingPoint {\n")
             for var in spoint.get_all_var_solutions():
                 self._write_starting_point(out, var)
-            out.write("}\n")
+            out.write(u"}\n")
 
         # Write parameters
-        out.write("\n//--- Parameters ---\n")
+        out.write(u"\n//--- Parameters ---\n")
         if self.params and (len(self.params) > 0):
             if self.last_loc is not None:
-                out.write("#line off\n")
-            out.write("parameters {\n")
+                out.write(u"#line off\n")
+            out.write(u"parameters {\n")
             for k in sorted(self.params.keys()):
                 v = self.params[k]
                 if v is not None:
-                    out.write("   " + k + " = " + str(v) + ";\n")
-            out.write("}\n")
+                    out.write(u"   {} = {};\n".format(k, v))
+            out.write(u"}\n")
         else:
-            out.write("// None\n")
+            out.write(u"// None\n")
+
 
     def _write_expression(self, out, xnode):
         """ Write model expression
@@ -196,13 +236,10 @@ class CpoCompiler(object):
         lloc = self.last_loc
         if self.sourceloc and (loc is not None) and (loc != lloc):
             (file, line) = loc
-            out.write("#line ")
-            out.write(str(line))
+            out.write(u"#line {}".format(line))
             if (lloc is None) or (file != lloc[0]):
-                out.write(' "')
-                out.write(file)
-                out.write('"')
-            out.write("\n")
+                out.write(u' "{}"'.format(file))
+            out.write(u"\n")
             self.last_loc = loc
 
         # Write expression
@@ -210,12 +247,13 @@ class CpoCompiler(object):
         if id is not None:
             wid = self._get_id_string(id)
             out.write(wid)
-            out.write(" = ")
+            out.write(u" = ")
         out.write(self._compile_expression(expr))
-        out.write(";\n")
+        out.write(u";\n")
         if root and id is not None:
             out.write(wid)
-            out.write(";\n")
+            out.write(u";\n")
+
 
     def _write_starting_point(self, out, var):
         """ Write a starting point variable
@@ -234,9 +272,10 @@ class CpoCompiler(object):
             raise CpoException("Internal error: unsupported starting point variable: " + str(var))
         # Write variable starting point
         out.write(self._get_id_string(var.get_name()))
-        out.write(" = ")
+        out.write(u" = ")
         out.write(''.join(cout))
-        out.write(";\n")
+        out.write(u";\n")
+
 
     def _get_id_string(self, id):
         """ Get the string representing an identifier
@@ -250,9 +289,10 @@ class CpoCompiler(object):
         res = self.id_strings.get(id, None)
         if res is None:
             # Convert id into string and store result for next call
-            res = to_printable_string(id)
+            res = to_printable_symbol(id)
             self.id_strings[id] = res
         return res
+
 
     def _compile_expression(self, expr, root=True):
         """ Compile an expression in a string in CPO format
@@ -286,13 +326,17 @@ class CpoCompiler(object):
                 if t.is_array():
                     vals = e.get_value()
                     if len(vals) == 0:
-                        cout.append("intArray[]")
+                        cout.append(_ARRAY_TYPES[t])
+                        cout.append("[]")
                     else:
                         cout.append('[')
-                        cout.append(', '.join(str(v) for v in vals))
+                        self._compile_var_domain(vals, cout)
+                        #cout.append(', '.join(str(v) for v in vals))
                         cout.append(']')
                 elif (t == Type_Bool):
                     cout.append("true()" if e.get_value() else "false()")
+                elif (t in _INTEGER_TYPES):
+                    cout.append(_number_value_string(e.get_value()))
                 elif (t == Type_TransitionMatrix):
                     self._compile_transition_matrix(e, cout)
                 elif (t == Type_TupleSet):
@@ -302,7 +346,7 @@ class CpoCompiler(object):
                 elif (t == Type_SegmentedFunction):
                     self._compile_segmented_function(e, cout)
                 else:
-                    cout.append(str(e.get_value()))
+                    cout.append(_number_value_string(e.get_value()))
 
             # Check variables
             elif t.is_variable():
@@ -319,19 +363,26 @@ class CpoCompiler(object):
             # Check expression array
             elif (t.is_array()):
                 oprnds = e._get_children()
-                cnx = edscr[1]
-                if (cnx < 0):
-                    cout.append("[")
-                cnx += 1
-                if (cnx >= len(oprnds)):
-                    cout.append("]")
+                alen = len(oprnds)
+                if alen == 0:
+                    cout.append(_ARRAY_TYPES[t])
+                    cout.append("[]")
                     estack.pop()
                 else:
-                    edscr[1] = cnx
-                    if (cnx > 0):
-                        cout.append(", ")
-                    estack.append([oprnds[cnx], -1])
+                    cnx = edscr[1]
+                    if (cnx < 0):
+                        cout.append("[")
+                    cnx += 1
+                    if (cnx >= alen):
+                        cout.append("]")
+                        estack.pop()
+                    else:
+                        edscr[1] = cnx
+                        if (cnx > 0):
+                            cout.append(", ")
+                        estack.append([oprnds[cnx], -1])
 
+            # General expression
             else:
                 # Get signature
                 sign = e.get_signature()
@@ -344,6 +395,7 @@ class CpoCompiler(object):
                 oper = sign.operation
                 prio = oper.priority
                 oprnds = e.get_operands()
+                oplen = 0 if (oprnds is None) else len(oprnds)
                 cnx = edscr[1]
 
                 # Check if function call
@@ -353,7 +405,7 @@ class CpoCompiler(object):
                         cout.append(oper.keyword)
                         cout.append("(")
                     cnx += 1
-                    if (oprnds is None) or (cnx >= len(oprnds)):
+                    if (cnx >= oplen):
                         cout.append(")")
                         estack.pop()
                     else:
@@ -362,22 +414,25 @@ class CpoCompiler(object):
                             cout.append(", ")
                         estack.append([oprnds[cnx], -1])
 
+                # Write operation
                 else:
                     # Check parenthesis required
                     parents = False
                     if (len(estack) > 1):
                         oprio = estack[-2][0].get_priority()
+                        ocnx = estack[-2][1]
                         if (oprio >= 0):
-                            parents = (prio > oprio) or (prio > 5)
+                            # Parenthesis required if priority is greater than parent node, or if this node is not first child
+                            parents = (prio > oprio) or (prio >= 5) or ((prio == oprio) and (ocnx > 0))
 
                     # Write operation
                     if (cnx < 0):
+                        if (oplen == 1):
+                            cout.append(oper.keyword)
                         if parents:
                             cout.append("(")
-                        if (oprnds is None) or (len(oprnds) == 1):
-                            cout.append(oper.keyword)
                     cnx += 1
-                    if (oprnds is None) or (cnx >= len(oprnds)):
+                    if (cnx >= oplen):
                         if parents:
                             cout.append(")")
                         estack.pop()
@@ -392,7 +447,8 @@ class CpoCompiler(object):
         # Check output exists
         if not cout:
             raise CpoException("Internal error: unable to compile expression: " + str(expr))
-        return ''.join(cout)
+        return u''.join(cout)
+
 
     def _compile_int_var(self, v, cout):
         """ Compile a IntVar in a string in CPO format
@@ -404,6 +460,7 @@ class CpoCompiler(object):
         self._compile_var_domain(v.get_domain(), cout)
         cout.append(")")
 
+
     def _compile_int_var_starting_point(self, v, cout):
         """ Compile a starting point IntVar in a string in CPO format
         Args:
@@ -414,6 +471,7 @@ class CpoCompiler(object):
         self._compile_var_domain(v.get_value(), cout)
         cout.append(")")
 
+
     def _compile_interval_var(self, v, cout):
         """ Compile a IntervalVar in a string in CPO format
         Args:
@@ -421,31 +479,25 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("intervalVar(")
+        args = []
         if v.is_absent():
-            cout.append("absent")
-        elif v.is_present():
-            cout.append("present")
-        else:
-            cout.append("optional")
+            args.append("absent")
+        elif v.is_optional():
+            args.append("optional")
         if (v.start != DEFAULT_INTERVAL):
-            cout.append(", start=")
-            cout.append(_build_interval_var_domain_string(v.start))
+            args.append("start=" + _interval_var_domain_string(v.start))
         if (v.end != DEFAULT_INTERVAL):
-            cout.append(", end=")
-            cout.append(_build_interval_var_domain_string(v.end))
+            args.append("end=" + _interval_var_domain_string(v.end))
         if (v.length != DEFAULT_INTERVAL):
-            cout.append(", length=")
-            cout.append(_build_interval_var_domain_string(v.length))
+            args.append("length=" + _interval_var_domain_string(v.length))
         if (v.size != DEFAULT_INTERVAL):
-            cout.append(", size=")
-            cout.append(_build_interval_var_domain_string(v.size))
+            args.append("size=" + _interval_var_domain_string(v.size))
         if (v.intensity is not None):
-            cout.append(", intensity=")
-            cout.append(self._compile_expression(v.intensity, root=False))
+            args.append("intensity=" + self._compile_expression(v.intensity, root=False))
         if (v.granularity is not None):
-            cout.append(", granularity=")
-            cout.append(str(v.granularity))
-        cout.append(")")
+            args.append("granularity=" + str(v.granularity))
+        cout.append(", ".join(args) + ")")
+
 
     def _compile_interval_var_starting_point(self, v, cout):
         """ Compile a starting IntervalVar in a string in CPO format
@@ -472,6 +524,7 @@ class CpoCompiler(object):
             self._compile_var_domain([rng], cout)
         cout.append(")")
 
+
     def _compile_sequence_var(self, sv, cout):
         """ Compile a SequenceVar in a string in CPO format
         Args:
@@ -479,11 +532,19 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("sequenceVar(")
-        cout.append("[" + ", ".join(self._get_id_string(v.get_name()) for v in sv.get_interval_variables()) + "]")
+        lvars = sv.get_interval_variables()
+        if len(lvars) == 0:
+            cout.append("intervalVarArray[]")
+        else:
+            cout.append("[" + ", ".join(self._get_id_string(v.get_name()) for v in lvars) + "]")
         types = sv.get_types()
         if (types is not None):
-            cout.append(", [" + ", ".join(str(t) for t in types) + "]")
+            if len(lvars) == 0:
+                cout.append(", intArray[]")
+            else:
+                cout.append(", [" + ", ".join(str(t) for t in types) + "]")
         cout.append(")")
+
 
     def _compile_state_function(self, stfct, cout):
         """ Compile a State in a string in CPO format
@@ -493,8 +554,11 @@ class CpoCompiler(object):
            cout:  Output string list
         """
         cout.append("stateFunction(")
-        cout.append(self._compile_expression(stfct.get_transition_matrix(), root=False))
+        trmx = stfct.get_transition_matrix()
+        if trmx is not None:
+            cout.append(self._compile_expression(trmx, root=False))
         cout.append(")")
+
 
     def _compile_transition_matrix(self, tm, cout):
         """ Compile a TransitionMatrix in a string in CPO format
@@ -506,6 +570,7 @@ class CpoCompiler(object):
         cout.append("transitionMatrix(")
         cout.append(", ".join(str(v) for v in tm.get_matrix()))
         cout.append(")")
+
 
     def _compile_tuple_set(self, tplset, cout):
         """ Compile a TupleSet in a string in CPO format
@@ -523,6 +588,7 @@ class CpoCompiler(object):
             cout.append("]")
         cout.append("]")
 
+
     def _compile_var_domain(self, dom, cout):
         """ Compile a variable domain in CPO format
 
@@ -535,11 +601,12 @@ class CpoCompiler(object):
                 if i > 0:
                     cout.append(", ")
                 if (isinstance(d, (list, tuple))):
-                    cout.append(_build_int_var_domain_string(d))
+                    cout.append(_int_var_domain_string(d))
                 else:
-                    cout.append(str(d))
+                    cout.append(_number_value_string(d))
         else:
-            cout.append(str(dom))
+            cout.append(_number_value_string(dom))
+
 
     def _compile_list_of_integers(self, lint, cout):
         """ Compile a list of integers in CPO format
@@ -562,6 +629,7 @@ class CpoCompiler(object):
                 cout.append(str(lint[i]))
             i = j
 
+
     def _compile_step_function(self, stfct, cout):
         """ Compile a StepFunction in a string in CPO format
 
@@ -570,8 +638,12 @@ class CpoCompiler(object):
            cout:  Output string list
         """
         cout.append("stepFunction(")
-        cout.append(", ".join(map(to_string, stfct.get_step_list())))
+        for i, s in enumerate(stfct.get_step_list()):
+            if i > 0:
+                cout.append(", ")
+            cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
         cout.append(")")
+
 
     def _compile_segmented_function(self, sgfct, cout):
         """ Compile a SegmentedFunction in a string in CPO format
@@ -583,6 +655,7 @@ class CpoCompiler(object):
         cout.append("segmentedFunction(")
         cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
         cout.append(")")
+
 
     def _expand_expressions(self, lexpr):
         """ Scan a list of expressions and extract named expression before usage.
@@ -650,15 +723,37 @@ def get_cpo_model(model, **kwargs):
 ## Private functions
 ###############################################################################
 
-def _build_int_var_domain_bound_string(ibv):
-    """ Build the string representing an integer variable domain bound
+_NUMBER_CONSTANTS = {INT_MIN: "intmin", INT_MAX: "intmax",
+                     INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax"}
+
+def _number_value_string(val):
+    """ Build the string representing a number value
+
+    This methods checks for special values INT_MIN, INT_MAX, INTERVAL_MIN and INTERVAL_MAX.
+
+    Args:
+        val: Integer value
+    Returns:
+        String representation of the value
+    """
+    try:
+        s = _NUMBER_CONSTANTS.get(val)
+    except:
+        # Case where value is not hashable, like numpy.ndarray that can be the value type
+        # when numpy operand appears in the left of an overloaded operator.
+        s = None
+    return s if s else str(val)
+
+
+def _int_var_value_string(ibv):
+    """ Build the string representing an integer variable domain value
 
     This methods checks for special values INT_MIN and INT_MAX.
 
     Args:
-        ibv: Interval bound value
+        ibv: Integer value value
     Returns:
-        String representation of the interval
+        String representation of the value
     """
     if (ibv == INT_MIN):
         return ("intmin")
@@ -668,7 +763,7 @@ def _build_int_var_domain_bound_string(ibv):
         return str(ibv)
 
 
-def _build_int_var_domain_string(intv):
+def _int_var_domain_string(intv):
     """ Build the string representing an interval domain
 
     Args:
@@ -676,18 +771,18 @@ def _build_int_var_domain_string(intv):
     Returns:
         String representation of the interval
     """
-    return _build_int_var_domain_bound_string(intv[0]) + ".." + _build_int_var_domain_bound_string(intv[1])
+    return _int_var_value_string(intv[0]) + ".." + _int_var_value_string(intv[1])
 
 
-def _build_interval_var_domain_bound_string(ibv):
-    """ Build the string representing an interval variable domain bound
+def _interval_var_value_string(ibv):
+    """ Build the string representing an interval variable domain value
 
     This methods checks for special values INTERVAL_MIN and INTERVAL_MAX.
 
     Args:
-        ibv: Interval bound value
+        ibv: Interval value
     Returns:
-        String representation of the interval
+        String representation of the value
     """
     if (ibv == INTERVAL_MIN):
         return ("intervalmin")
@@ -697,7 +792,7 @@ def _build_interval_var_domain_bound_string(ibv):
         return str(ibv)
 
 
-def _build_interval_var_domain_string(intv):
+def _interval_var_domain_string(intv):
     """ Build the string representing an interval_var domain
 
     Args:
@@ -708,8 +803,8 @@ def _build_interval_var_domain_string(intv):
     smn = intv[0]
     smx = intv[1]
     if (smn == smx):
-        return _build_interval_var_domain_bound_string(smn)
-    return _build_interval_var_domain_bound_string(smn) + ".." + _build_interval_var_domain_bound_string(smx)
+        return _interval_var_value_string(smn)
+    return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
 
 
 def _get_id_sub_expressions(expr):

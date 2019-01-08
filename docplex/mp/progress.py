@@ -6,6 +6,8 @@
 
 # gendoc: ignore
 
+from docplex.mp.solution import SolveSolution
+
 
 class ProgressData(object):
     """ A container class to hold data retrived from progress callbacks.
@@ -36,6 +38,20 @@ class ProgressData(object):
 
 class ProgressListener(object):
     def __init__(self):
+        pass
+
+    def requires_solution(self):
+        """ Returns True if the listener wants solution information at each intermediate solution.
+        The default is False, do not require solution information.
+        """
+        return False
+
+    def notify_solution(self, s):
+        """ Redefine this method to handle an intermediate solution from the callback.
+        Args:
+            s: solution
+        :return:
+        """
         pass
 
     def notify_start(self):
@@ -162,6 +178,7 @@ class _ProgressFilter(object):
 
         return accept
 
+
 class TextProgressListener(ProgressListener):
     """ A simple implementation of Progress Listener, which prints messages to stdout
     """
@@ -256,3 +273,38 @@ class RecordProgressListener(ProgressListener):
 
     def iter_progress_data(self):
         return iter(self.__recorded)
+
+
+class SolutionListener(ProgressListener):
+
+    def __init__(self, model):
+        ProgressListener.__init__(self)
+        self._model = model
+        self._engine_name = model.get_engine().name
+        self._current_solution = None
+        self._current_objective = 1e+75
+
+    def requires_solution(self):
+        # this class of listeneres requires solution information
+        return True
+
+    def notify_progress(self, progress_data):
+        if progress_data.has_incumbent:
+            self._current_objective = progress_data.current_objective
+
+    def notify_solution(self, incumbents):
+        # create a new instance and replace current solution
+        # check performance impact
+        sol = SolveSolution(self._model, obj=self._current_objective, engine_name=self._engine_name)
+        for v in self._model.iter_variables():
+            # incumbent values are provided as a list with indices as positions.
+            incumbent_value = incumbents[v._index]
+            if 0 != incumbent_value:
+                # silently round discrete values, just as with engine solutions.
+                sol._set_var_value_internal(v, incumbent_value, rounding=True, do_warn_on_non_discrete=False)
+        self._current_solution = sol
+
+    @property
+    def current_solution(self):
+        return self._current_solution
+

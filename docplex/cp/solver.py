@@ -12,7 +12,7 @@ The solver is created passing the source model as first parameter.
 The solving itself is performed by calling the solve() method.
 
 Solving is executed as defined in the configuration (see config.py module to see how to customize it).
-For an execution on DOcloud, the configuration must contain the target URL and the authentication key.
+For an execution on DOcplexcloud, the configuration must contain the target URL and the authentication key.
 """
 
 import docplex.cp.config as config
@@ -27,6 +27,33 @@ import time, importlib, inspect
 ##  Public classes
 ###############################################################################
 
+class CpoSolutionIterator(object):
+    """ Iterator over the different solver solutions provided by next() method.
+    """
+
+    def __init__(self, solver):
+        """ Create a new solution iterator
+        """
+        self.solver = solver
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        """ Get the next available solution.
+        Returns:
+            Next model solution (object of class  CpoModelSolution)
+        """
+        msol = self.solver.next()
+        if msol:
+            return msol
+        else:
+            raise StopIteration()
+
+    def __next__(self): # Compatibility for Python 3
+        return self.next()
+
+
 class CpoSolverAgent(object):
     """ CPO model abstract solver agent
 
@@ -34,12 +61,12 @@ class CpoSolverAgent(object):
     """
 
     def __init__(self, model, params, context):
-        """ Create a new solver using DOcloud web service
+        """ Create a new solver using DOcplexcloud web service
 
         Args:
             model:    Model to solve
             params:   Solving parameters
-            context:  DOcloud Solver context
+            context:  Solver context
         Raises:
             CpoException if jar file does not exists
         """
@@ -48,14 +75,23 @@ class CpoSolverAgent(object):
         self.params = params
         self.context = context
 
-
     def solve(self):
         """ Solve the model
 
         Returns:
-            Model solution (type CpoModelSolution)
+            Model solution (object of class CpoModelSolution)
         """
-        raise CpoException("The solve() method not implemented")
+        raise CpoException("Method not implemented in this solver agent.")
+
+    def next(self):
+        """ Get the next available solution.
+
+        (This method starts search automatically.)
+
+        Returns:
+            Next model solution (object of class  CpoModelSolution)
+        """
+        raise CpoException("Method not implemented in this solver agent.")
 
     def _get_cpo_model_string(self):
         """ Get the CPO model as a string, according to configuration
@@ -94,24 +130,6 @@ class CpoSolverAgent(object):
         """
         return self.context.add_log_to_solution or self.context.trace_log
 
-    def _set_solver_log(self, logstr, msol):
-        """ Notify the content of the log, for storing in solution and tracing if required
-
-        Args:
-            logstr:  Solver log
-            msol:    Model solution
-        """
-        '''
-        lout = self.context.log_output
-        if lout and (self.context.trace_log):
-            lout.write("Model '" + str(self.model.get_name()) + "' solver log:\n")
-            lout.write(logstr)
-            lout.write("\n")
-            lout.flush()
-        '''
-        if self.context.add_log_to_solution:
-            msol._set_solver_log(logstr)
-
 
 class CpoSolver(object):
     """ Generic CPO model solver
@@ -128,8 +146,6 @@ class CpoSolver(object):
             context:        Global solving context. If not given, context is the default context that is set in config.py.
         Optional args:
             params:         Solving parameters (CpoParameters) that overwrites those in solving context
-            url:            URL of the DOcloud service that overwrites the one defined in solving context.
-            key:            Authentication key of the DOcloud service that overwrites the one defined in solving context.
             etc             All other context parameters that can be changed
         """
         super(CpoSolver, self).__init__()
@@ -139,19 +155,21 @@ class CpoSolver(object):
             context = config.context
         context = _update_context(context, kwargs)
 
+        # If defined, limit the number of threads
+        mxt = context.solver.max_threads
+        if isinstance(mxt, int):
+            # Maximize number of workers
+            nbw = context.params.Workers
+            if (nbw is None) or (nbw > mxt):
+                context.params.Workers = mxt
+                print("WARNING: Number of workers has been reduced to " + str(mxt) + " to comply with platform limitations.")
+
         # Save attributes
         self.model = model
         self.context = context
 
-    def solve(self):
-        """ Solve the model
-
-        Returns:
-            Model solution (type CpoModelSolution)
-        """
-        sctx = self.context.solver
-
         # Determine appropriate solver agent
+        sctx = context.solver
         aname = sctx.agent
         if aname is None:
             aname = "docloud"
@@ -162,13 +180,21 @@ class CpoSolver(object):
         # Retrieve solver agent class and create instance
         actx = sctx[aname]
         sclass = _get_solver_agent_class(aname, actx)
-        solver = sclass(self.model, sctx.params, actx)
+        self.solver = sclass(self.model, sctx.params, actx)
+
+
+    def solve(self):
+        """ Solve the model
+
+        Returns:
+            Model solution (object of class CpoModelSolution)
+        """
 
         # Solve model
         stime = time.time()
-        msol = solver.solve()
+        msol = self.solver.solve()
         stime = time.time() - stime
-        sctx.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+        self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
 
         # Set solve time in solution if not done
         if msol.get_solve_time() == 0:
@@ -178,26 +204,60 @@ class CpoSolver(object):
         return msol
         
      
+    def next(self):
+        """ Get the next available solution.
+
+        (This method starts search automatically.)
+
+        Returns:
+            Next model solution (object of class CpoModelSolution)
+        """
+        # Solve model
+        stime = time.time()
+        msol = self.solver.next()
+        stime = time.time() - stime
+        self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+
+        # Set solve time in solution if not done
+        if msol.get_solve_time() == 0:
+            msol._set_solve_time(stime)
+
+        # Return solution
+        return msol
+
+    def solutions_iterator(self):
+        """ Get an iterator on the sequence of solutions
+
+        Returns:
+            Solution iterator (each item is object of class CpoModelSolution)
+        """
+        return CpoSolutionIterator(self)
+
+
 ###############################################################################
 ##  Private Functions
 ###############################################################################
+
+# Attribute values denoting a default value
+DEFAULT_VALUES = ("ENTER YOUR KEY HERE", "ENTER YOUR URL HERE", "default")
+
 
 def _update_context(ctx, kwargs):
     """ Build real context from source and list of replacements
 
     Args:
         ctx:     Source context
-        kwargs:  Dixtionary of replacements
+        kwargs:  Dictionary of replacements
     Returns:
         Updated context (source context is cloned)
     """
     ctx = ctx.clone()
     rplist = []  # List of replacements to be done in solving parameters
     for k, v in kwargs.items():
-        if v is not DEFAULT:
+        if v not in DEFAULT_VALUES:
             rp = ctx.search_and_replace_attribute(k, v)
             # If not found, set in solving parameters
-            if not rp:
+            if (rp is None):
                 rplist.append((k, v))
     # Replace in parameters
     params = ctx.params

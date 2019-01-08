@@ -237,7 +237,7 @@ class AbstractErrorHandler(IErrorHandler):
 
 
 def docplex_error_stop_here():
-    """ A function to set breakpoints. It does nothing."""
+    # INTERNAL, use to set breakpoints
     pass
 
 

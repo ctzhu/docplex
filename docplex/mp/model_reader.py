@@ -18,6 +18,9 @@ from cplex import Cplex
 from cplex._internal._subinterfaces import ObjSense
 from cplex.exceptions import CplexError, CplexSolverError
 
+
+class ModelReaderError(DOcplexException): pass
+
 class _CplexReaderFileContext(object):
     def __init__(self, filename, read_method=None):
         self._cplex = None
@@ -155,6 +158,7 @@ class ModelReader(object):
         # print("-> start reading file: {0}".format(filename))
         cpx = Cplex()
         # no warnings
+        cpx.set_results_stream(None)
         cpx.set_log_stream(None)
         cpx.set_warning_stream(None)
         cpx.set_error_stream(None)  # remove messages about names
@@ -166,14 +170,15 @@ class ModelReader(object):
             return None
 
         range_map = {}
+        final_output_level = kwargs.get("output_level", "info")
 
         #  print("-> end CPLEX read file: {0}".format(filename))
         try:
 
             mdl = Model(name=name_to_use, **kwargs)
-            mdl.set_quiet()
-            vartype_cont = mdl.vartype_continuous
-            vartype_map = {'B': mdl.vartype_binary, 'I': mdl.vartype_integer, 'C': mdl.vartype_continuous}
+            mdl.set_quiet()  # output level set to ERROR
+            vartype_cont = mdl.continuous_vartype
+            vartype_map = {'B': mdl.binary_vartype, 'I': mdl.integer_vartype, 'C': mdl.continuous_vartype}
             # 1 upload variables
             nb_vars = cpx.variables.get_num()
             all_names = cpx.variables.get_names()
@@ -215,8 +220,6 @@ class ModelReader(object):
             deferred_cts = []
             deferred_ctnames = []
             postpone = self._use_block_constraints
-            # if postpone:
-            #     print("* all constraints will be added in one pass")
 
             for c in range(nb_linear_cts):
                 row = all_rows[c]
@@ -247,15 +250,27 @@ class ModelReader(object):
                         if var:
                             expr._add_term(var, koef)
                         elif idx in range_map:
-                            assert range_data is None  # cannot use two range vars
+                            # this is a range: coeff must be 1 or -1
+                            abscoef = koef if koef >= 0 else -koef
+                            assert abscoef == 1, "range var has coef different from 1: {}".format(koef)
+                            assert range_data is None, "range_data is not None: {0!s}".format(range_data)  # cannot use two range vars
                             range_data = range_map[idx]
                         else:
-                            print("ERROR: index not in var map or range map: {0}".format(idx))
+                            raise ModelReaderError("ERROR: index not in var map or range map: {0}".format(idx))
 
                     if range_data:
-                        assert sense == 'E'
-                        rng_lb = rhs
-                        rng_ub = rhs + range_data.ub
+
+                        label = ctname or 'c#%d' % c+1
+                        if sense not in "EL":
+                            raise ModelReaderError("{0} range sense is not E: {1!s}".format(label, sense))
+                        if koef < 0:
+                            rng_lb = rhs
+                            rng_ub = rhs + range_data.ub
+                        elif koef > 0:
+                            rng_lb = rhs - range_data.ub
+                            rng_ub = rhs
+                        else:
+                            raise DOcplexException("bad range coef")
                         mdl.add_range(lb=rng_lb, expr=expr, ub=rng_ub, rng_name=ctname)
                     else:
                         if sense == 'R':
@@ -315,13 +330,22 @@ class ModelReader(object):
             cpx_obj = cpx.objective
             cpx_sense = cpx_obj.get_sense()
             obj_expr = mdl.linear_expr()
+            # for v in range(nb_vars):
+            #     if v in idx_to_var_map:
+            #         obj_coef = cpx_obj.get_linear(v)
+            #         obj_expr._add_term(idx_to_var_map[v], obj_coef)
+
+            cpx_all_obj_coeffs = cpx_obj.get_linear()
+            all_obj_vars  = []
+            all_obj_coefs = []
+
             for v in range(nb_vars):
                 if v in idx_to_var_map:
-                    obj_coef = cpx_obj.get_linear(v)
-                    if obj_coef != 0:
-                        obj_expr._add_term(idx_to_var_map[v], obj_coef)
-                else:
-                    pass
+                    obj_coeff = cpx_all_obj_coeffs[v]
+                    all_obj_coefs.append(obj_coeff)
+                    all_obj_vars.append(idx_to_var_map[v])
+                    #  obj_expr._add_term(idx_to_var_map[v], cpx_all_obj_coeffs[v])
+            obj_expr = mdl.dot(all_obj_vars, all_obj_coefs)
             is_maximize = cpx_sense == ObjSense.maximize
 
             if not obj_expr.is_constant():
@@ -329,13 +353,18 @@ class ModelReader(object):
                     mdl.maximize(obj_expr)
                 else:
                     mdl.minimize(obj_expr)
+            mdl.output_level = final_output_level
 
         except CplexError as cpx_e:
             print("* CPLEX error: {0} reading file {1}, code={2}".format(cpx_e.args[0], filename, cpx_e.args[2]))
             mdl = None
 
-        except DOcplexException as do_e:
-            print("! Internal DOcplex error raised: {0!s} while reading file {1}".format(do_e, filename))
+        except ModelReaderError as mre:
+            print("! Model reader error: {0!s} while reading file {1}".format(mre, filename))
+            mdl = None
+
+        except DOcplexException as doe:
+            print("! Internal DOcplex error: {0!s} while reading file {1}".format(doe, filename))
             mdl = None
 
         except Exception as any_e:
@@ -345,6 +374,7 @@ class ModelReader(object):
         finally:
             # clean up CPLEX instance...
             del cpx
+
 
         return mdl
 

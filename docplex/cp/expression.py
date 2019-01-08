@@ -50,7 +50,12 @@ INT_MIN = -INT_MAX
 """ Minimum integer value. """
 
 class CpoExpr(object):
-    """ Root constraint programming model expression. """
+    """ Root constraint programming model expression.
+
+    This class represents a CPO expression atom. It does not contain links to children expressions
+    that are implemented in extending classes. However, access to children is provided with default
+    return value.
+    """
     # To force possible numpy operators overloading to get CPO expressions as main operand
     __array_priority__ = 100
 

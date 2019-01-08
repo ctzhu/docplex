@@ -7,7 +7,7 @@
 #         with help from previous version written by Viu LONG KONG
 
 """
-This module implements a DOcloud client allowing to submit a CPO model for solving on DOcloud.
+This module implements a DOcplexcloud client allowing to submit a CPO model for solving on DOcplexcloud.
 """
 
 import time, json, requests
@@ -31,7 +31,7 @@ _DEFAULT_POLLING = Context(min=1, max=3, incr=0.2)
 ###############################################################################
 
 class DocloudException(CpoException):
-    """ The base class for exceptions raised by the DOcloud client
+    """ The base class for exceptions raised by the DOcplexcloud client
     """
     def __init__(self, msg):
         """ Create a new exception
@@ -42,8 +42,8 @@ class DocloudException(CpoException):
 
 
 class JobClient(object):
-    """ A client to create, submit and monitor one job on DOcloud. """
-    __slots__ = ('ctx',      # DOcloud context parameters
+    """ A client to create, submit and monitor one job on DOcplexcloud. """
+    __slots__ = ('ctx',      # DOcplexcloud context parameters
                  'jobid',    # Id of the job handled by this client
                  'headers',  # Default headers
                 )
@@ -51,7 +51,7 @@ class JobClient(object):
     def __init__(self, ctx):
         """ Initialize a new job client.
         Args:
-            ctx: DOcloud context
+            ctx: DOcplexcloud context
         """
         self.ctx = ctx
         self.jobid = "Unknown"
@@ -237,7 +237,7 @@ class JobClient(object):
         return ljobs
 
     def _request(self, mth, url, astc, **kwargs):
-        """ Send a request to DOcloud with default headers and check response.
+        """ Send a request to DOcplexcloud with default headers and check response.
         Args:
             mth:     HTTP method name
             url:     Target url

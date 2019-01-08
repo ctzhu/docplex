@@ -10,7 +10,7 @@
 import json
 
 from datetime import datetime
-from six import iteritems
+from six import iteritems, string_types
 from requests.exceptions import ConnectionError
 
 from docloud.job import JobClient, DOcloudInterruptedException, DOcloudNotFoundError
@@ -19,6 +19,13 @@ from docloud.status import JobSolveStatus, JobExecutionStatus
 from docplex.mp.progress import ProgressData
 from docplex.mp.utils import resolve_pattern, get_logger, normalize_basename
 from docplex.mp.utils import CyclicLoop
+
+
+def key_as_string(key):
+    """For keys, we don't want the key to appear in INFO log outputs.
+    Instead, we display the first 4 chars and the last 4 chars.
+    """
+    return (key[:4]+"*******"+ key[-4:]) if isinstance(key, string_types) else str(key)
 
 
 class DOcloudConnectorException(Exception):
@@ -48,15 +55,15 @@ class DOcloudConnector(object):
     # json keys
     JSON_LINEAR_CTS_KEY = 'linearConstraints'
 
-    def __init__(self, docloud_context, verbose=False, log_output=None):
-        """ Starts a connector which URL and authorization are stored in the specified context, 
-        along with other connection parameters
-        
+    def __init__(self, docloud_context, log_output=None):
+        """ Starts a connector which URL and authorization are stored in the
+        specified context, along with other connection parameters
+
         Args:
             log_output: The log output stream
         """
         if docloud_context is None or not docloud_context.has_credentials():
-            raise DOcloudConnectorException("Please provide DOcloud credentials")
+            raise DOcloudConnectorException("Please provide DOcplexcloud credentials")
 
         # store this for future usage
         self.docloud_context = docloud_context
@@ -64,17 +71,12 @@ class DOcloudConnector(object):
         url = docloud_context.url
         auth = docloud_context.key
 
-        self._verbose = verbose or docloud_context.verbose
+        self.logger = get_logger('DOcloudConnector', self.docloud_context.verbose)
 
-        self.logger = get_logger('DOcloudConnector', self._verbose)
+        self.logger.info("DOcplexcloud connection using url = " + str(url) + " api_key = " + key_as_string(auth))
+        self.logger.info("DOcplexcloud SSL verification = " + str(docloud_context.verify))
 
-        self.logger.info("DOcloud connection using url = " + str(url) + " api_key = " + str(auth))
-
-        self.logger.info("DOcloud SSL verification = " + str(docloud_context.verify))
-
-        self.waittime = docloud_context.waittime
-        self.logger.info("   waittime = " + str(self.waittime))
-
+        self.logger.info("   waittime = " + str(docloud_context.waittime))
         self.logger.info("   timeout = " + str(docloud_context.timeout))
 
         self.json = ""
@@ -88,12 +90,8 @@ class DOcloudConnector(object):
         if not self.json:
             raise DOcloudConnectorException("* empty JSON result!")
 
-    @property
-    def is_verbose(self):
-        return self._verbose
-
     def log(self, msg, *args):
-        if self.is_verbose:
+        if self.docloud_context.verbose:
             log_msg = "* {0}".format(resolve_pattern(msg, args))
             self.logger.info(log_msg)
             if self.log_output is not None:
@@ -180,7 +178,7 @@ class DOcloudConnector(object):
 
                 # execute job
                 client.execute_job(jobid)
-                self.log("DOcloud execute submitted has been started")
+                self.log("DOcplexcloud execute submitted has been started")
                 # get job execution status until it's processed or failed
                 timedout = False
                 try:
@@ -195,7 +193,7 @@ class DOcloudConnector(object):
                 self.jobInfo = client.get_job(jobid)
                 if timedout:
                     self._hasSolution = False
-                    self.log("Solve timed out after {waittime} sec".format(waittime=self.waittime))
+                    self.log("Solve timed out after {waittime} sec".format(waittime=self.docloud_context.waittime))
                     return None
                 # get solution
                 try:
@@ -365,9 +363,9 @@ class DOcloudConnector(object):
 
         # If there's a waittime, configure an event to stop the loop after
         # ``waittime``
-        if self.waittime:
-            loop.enter(self.waittime, 1, waittime_timeout, (loop, ))
-            self.log("waiting for job completion with a wait time of {waittime} sec".format(waittime=self.waittime))
+        if self.docloud_context.waittime:
+            loop.enter(self.docloud_context.waittime, 1, waittime_timeout, (loop, ))
+            self.log("waiting for job completion with a wait time of {waittime} sec".format(waittime=self.docloud_context.waittime))
         else:
             self.log("waiting for job completion with no wait time")
 
@@ -394,7 +392,7 @@ class DOcloudConnector(object):
 
         if loop.timed_out:
             self.log("Job Timed out")
-            raise DOcloudInterruptedException("Timeout after {0}".format(self.waittime), jobid=jobid)
+            raise DOcloudInterruptedException("Timeout after {0}".format(self.docloud_context.waittime), jobid=jobid)
 
         return loop.status
 
@@ -472,7 +470,7 @@ class DOcloudConnector(object):
             return None
 
     def _rest_callback(self, method, url, *args, **kwargs):
-        """The callback called by the DOcloud client to log REST operations
+        """The callback called by the DOcplexcloud client to log REST operations
         """
         self.logger.info("{0} {1}".format(method, url))
         if len(args) > 0:

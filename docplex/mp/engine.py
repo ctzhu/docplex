@@ -47,10 +47,10 @@ class ISolver(object):
         raise NotImplementedError  # pragma: no cover
 
     def get_solve_status(self):
-        """  Return a DOcloud-style solve status.
+        """  Return a DOcplexcloud-style solve status.
 
         Possible enums are in docloud/status.py
-        Default is UNKNOWN at this stage. Redefined for CPLEX and DOcloud engines.
+        Default is UNKNOWN at this stage. Redefined for CPLEX and DOcplexcloud engines.
         """
         return JobSolveStatus.UNKNOWN  # pragma: no cover
 
@@ -141,11 +141,17 @@ class IEngine(ISolver):
     def notify_trace_output(self, out):
         raise NotImplementedError  # pragma: no cover
 
-    def set_var_attribute(self, var, attr_name, attr_val):
-        raise NotImplementedError  # pragma: no cover
-
     def get_var_attribute(self, var, attr_name):
         raise NotImplementedError  # pragma: no cover
+
+    def set_var_lb(self, var_lbs):
+        raise NotImplementedError  # pragma: no cover
+
+    def set_var_ub(self, var_ubs):
+        raise NotImplementedError  # pragma: no cover
+
+    def rename_var(self, var, new_name):
+        raise NotImplementedError  # pragam: no cover
 
 
 # noinspection PyAbstractClass
@@ -174,8 +180,14 @@ class DummyEngine(IEngine):
     def create_variables(self, keys, vartype, lb, ub, namer):
         return [-1] * len(keys)  # pragma: no cover
 
-    def set_var_attribute(self, dvar, attr_name, attr_val):
-        return attr_val  # pragma: no cover
+    def set_var_lb(self, var_lbs):
+        pass
+
+    def set_var_ub(self, var_ubs):
+        pass
+
+    def rename_var(self, var, new_name):
+        pass  # nothing to do, except in cplex...
 
     def get_var_attribute(self, var, attr_name):  # pragma: no cover
         if "name" == attr_name:
@@ -343,7 +355,7 @@ class NoSolveEngine(IndexerEngine):
         """
         This solver cannot solve. never ever.
         """
-        mdl.fatal("No CPLEX DLL and no DOcloud credentials: model cannot be solved!")
+        mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: model cannot be solved!")
         return None
 
     def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
@@ -433,6 +445,37 @@ class FakeFailEngine(IndexerEngine):
         return True  # pragma: no cover
 
     def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+        return False, 0  # pragma: no cover
+
+    def get_solve_status(self):
+        return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
+
+    def get_solve_details(self):
+        return SolveDetails.make_fake_details(time=0, feasible=False)
+
+
+class TerminatedEngine(IndexerEngine):
+    # INTERNAL: a dummy engine that says it can solve
+    # but always fail, and returns None.
+    def terminate(self):
+        raise DOcplexException("model has been terminated, no solve is possible...")
+
+    def __init__(self, mdl, **kwargs):
+        IndexerEngine.__init__(self)  # pragma: no cover
+
+    def name(self):
+        return "no_solve_engine"  # pragma: no cover
+
+    def solve(self, mdl, parameters):
+        # solve fails equivalent to returning None
+        self.terminate()
+        return None  # pragma: no cover
+
+    def can_solve(self):
+        return True  # pragma: no cover
+
+    def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+        self.terminate()
         return False, 0  # pragma: no cover
 
     def get_solve_status(self):

@@ -12,6 +12,7 @@ from docplex.mp.params.parameter_hierarchy_12630 import make_root_params_12630
 def _make_default_parameters():
     return make_root_params_12630()
 
+
 def get_params_from_cplex_version(cpx_version):
     # INTERNAL
     # returns a parameter tree depending on the cplex version, if any.

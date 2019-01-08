@@ -809,7 +809,7 @@ class CpoParameters(Context):
         for visual inspection only, not for mechanized parsing. In particular, the log may change from
         version to version of CP Optimizer in order to improve the quality of information displayed in the
         log. Any code based on the log output for correct functioning may have to be updated when a new
-        version of CP Optimizer is released. </note>
+        version of CP Optimizer is released.
         The value must be a symbol in [Quiet, Terse, Normal, Verbose].
         Default value is Normal.
         """
@@ -824,7 +824,7 @@ class CpoParameters(Context):
         for visual inspection only, not for mechanized parsing. In particular, the log may change from
         version to version of CP Optimizer in order to improve the quality of information displayed in the
         log. Any code based on the log output for correct functioning may have to be updated when a new
-        version of CP Optimizer is released. </note>
+        version of CP Optimizer is released.
         The value must be a symbol in [Quiet, Terse, Normal, Verbose].
         Default value is Normal.
         """

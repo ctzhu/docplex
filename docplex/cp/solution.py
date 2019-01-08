@@ -21,7 +21,7 @@ This module implements one class per solution element:
 import os, sys, json
 
 from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX
-from docplex.cp.utils import make_directories, IdentityAccessor
+import docplex.cp.utils as utils
 
 ###############################################################################
 ##  Public constants
@@ -74,11 +74,14 @@ FAIL_STATUS_LABEL = "SearchStoppedByLabel"
 # Fail status: Stopped by time limit
 FAIL_STATUS_TIME_LIMIT = "SearchStoppedByLimit"
 
+# Fail status: Search completed
+FAIL_STATUS_SEARCH_COMPLETED = "SearchCompleted"
+
 # List of all possible search statuses
 ALL_FAIL_STATUSES = (FAIL_STATUS_UNKNOWN,
                      FAIL_STATUS_FAILED_NORMALLY, FAIL_STATUS_NOT_FAILED,
                      FAIL_STATUS_ABORT, FAIL_STATUS_EXCEPTION, FAIL_STATUS_EXIT, FAIL_STATUS_LABEL,
-                     FAIL_STATUS_TIME_LIMIT)
+                     FAIL_STATUS_TIME_LIMIT, FAIL_STATUS_SEARCH_COMPLETED)
 
 
 ###############################################################################
@@ -113,10 +116,20 @@ class CpoVarSolution(object):
         """
         return None
 
-     
+    def __eq__(self, other):
+        """ Overwrite equality comparison
+
+        Args:
+            other: Other object to compare with
+        Returns:
+            True if this object is equal to the other, False otherwise
+        """
+        return utils.equals(self, other)
+
+
 class CpoIntVarSolution(CpoVarSolution):
     """ Solution to an integer variable. """
-    __slots__ = ('value'  # Variable value
+    __slots__ = ('value',  # Variable value
                 )
     
     def __init__(self, name, value):
@@ -328,6 +341,14 @@ class CpoModelSolution(object):
         """
         return self.solve_status
 
+    def _set_fail_status(self, fsts):
+        """ Set the fail status
+
+        Args:
+            fsts: Fail status
+        """
+        self.fail_status = fsts
+
     def get_fail_status(self):
         """ Gets the solving fail status.
 
@@ -365,7 +386,7 @@ class CpoModelSolution(object):
         Returns:
             True if there is a solution.
         """
-        return self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)
+        return (self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)
 
     def is_solution_optimal(self):
         """ Checks if this descriptor contains an optimal solution to the problem.
@@ -651,7 +672,7 @@ class CpoModelSolution(object):
 
         # Check file
         if isinstance(out, str):
-            make_directories(os.path.dirname(out))
+            utils.make_directories(os.path.dirname(out))
             with open(out, 'w') as f:
                 self._write_solution(f)
         else:
@@ -687,6 +708,19 @@ class CpoModelSolution(object):
             for v in lvars:
                 out.write(str(self.get_var_solution(v)))
                 out.write('\n')
+
+    def __eq__(self, other):
+        """ Overwrite equality comparison
+
+        Args:
+            other: Other object to compare with
+        Returns:
+            True if this object is equal to the other, False otherwise
+        """
+        return utils.equals(self, other)
+
+
+
 
 ###############################################################################
 ##  Private functions

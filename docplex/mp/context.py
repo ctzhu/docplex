@@ -82,8 +82,32 @@ class open_filename_universal(object):
             self.fh.close()
         return False
 
+
+def is_ignored(what, key):
+    try:
+        # if string, allow comma separated form
+        if isinstance(what, six.string_types):
+            values = what.split(",")
+            if key in values:
+                return True
+        elif key in what:
+            return True
+    except AttributeError:
+        # no ignored_keys, just pass
+        pass
+    return False
+
+
+def is_key_ignored(context, key):
+    return is_ignored(context.solver.docloud.ignored_keys, key)
+
+
+def is_url_ignored(context, url):
+    return is_ignored(context.solver.docloud.ignored_urls, url)
+
+
 class BaseContext(dict):
-    """ Class for handling the list of parameters. """
+    # Class for handling the list of parameters.
     def __init__(self, **kwargs):
         """ Create a new context.
 
@@ -113,19 +137,7 @@ class BaseContext(dict):
 
 
 class SolverContext(BaseContext):
-    """The context to store parameters for solver.
-
-    A SolverContext within a Context is initialized with the following attributes:
-
-    Attributes:
-        log_output: This attribute can have the following values:
-
-            * True: When True, logs are printed to sys.out.
-            * False: When False, logs are not printed.
-            * A file-type object: Logs are printed to that file-type object.
-
-        docloud: The :class:`DOcloudContext` to store context for solving on DOcloud.
-    """
+    # for internal use
     def __init__(self, **kwargs):
         super(SolverContext, self).__init__(**kwargs)
         self.log_output = False
@@ -180,14 +192,40 @@ class SolverContext(BaseContext):
 
 
 class Context(BaseContext):
-    """ The context used to create a model.
+    """ The context used to control the behavior of solve engine.
 
     Attributes:
-        solver: Solver attributes. See :class:`SolverContext`.
-        solver.docloud: A :class:`DOcloudContext` to store the DOcloud context.
-        cplex_parameters: A 
+        cplex_parameters: A
            :class:`docplex.mp.params.parameters.RootParameterGroup` to store
            CPLEX parameters.
+        solver.log_output: This attribute can have the following values:
+
+            * True: When True, logs are printed to sys.out.
+            * False: When False, logs are not printed.
+            * A file-type object: Logs are printed to that file-type object.
+
+        solver.docloud: The parent node for attributes controlling solve on Decision Optimization on Cloud.
+        solver.docloud.url: The DOcplexcloud service URL.
+        solver.docloud.key: The DOcplexcloud service API key.
+        solver.docloud.ignored_keys: A collection or a string that is comma separated list of
+            values to ignore. If any ``key`` passed has a value in this list,
+            the key is ignored.
+        solver.docloud.ignored_urls: A collection or a string that is comma separated list of
+            values to ignore. If any ``url`` passed has a value in this list,
+            the url is ignored.
+        solver.docloud.run_deterministic: Specific engine parameters are uploaded to keep the
+            run deterministic.
+        solver.docloud.verbose: Makes the connector verbose.
+        solver.docloud.timeout: The timeout for requests.
+        solver.docloud.waittime: The wait time to wait for jobs to finish.
+        solver.docloud.verify: If True, verifies SSL certificates.
+        solver.docloud.log_requests: If True, the REST requests are logged.
+        solver.docloud.log_poll_interval: The interval for log polling.
+        solver.docloud.progress_poll_interval: The interval for progress polling.
+        solver.docloud.exchange_format: The exchange format to use.
+            When setting the format, you can use the following strings: "lp".
+            When getting the format, the property type is
+            `docplex.mp.format.ExchangeFormat`.
     """
     def __init__(self, **kwargs):
         # initialize default env
@@ -206,7 +244,7 @@ class Context(BaseContext):
 
 
     @staticmethod
-    def make_default_context(file_list=None, logger=None,**kwargs):
+    def make_default_context(file_list=None, logger=None, **kwargs):
         """Creates a default context.
 
         If `file_list` is a string, then it is considered to be the name
@@ -216,7 +254,7 @@ class Context(BaseContext):
         of a config files to be read.
 
         if `file_list` is None or not specified, the following files are
-        read if they exsist:
+        read if they exist:
 
             * the PYTHONPATH is searched for the following files:
 
@@ -232,7 +270,7 @@ class Context(BaseContext):
            As of V1.0, reading ``.docplexrc`` is deprecated, and ``.py`` files for
            configuration should be used instead.
 
-        A ``.docplexrc`` file is like a Java properties file (``=`` or ``:`` separated
+        A ``.docplexrc`` file is similar to a Java properties file (``=`` or ``:`` separated
         pairs of `key,values`) or a Python file if it ends with ``.py``.
         Python files are evaluated with a `context` object in the current
         scope, and you set values from this context::
@@ -244,8 +282,7 @@ class Context(BaseContext):
 
         Args:
             file_list: The list of config files to read.
-            docloud: A :class:`DOcloudContext` to use in this context.
-            cplex_parameters: A :class:`docplex.mp.params.parameters.ParameterGroup` to use as CPLEX parameters.
+            kwargs: context parameters to override. See :func:`docplex.mp.context.Context.update`
         """
         context = Context()
         context.read_settings(file_list=file_list, logger=logger)
@@ -301,19 +338,28 @@ class Context(BaseContext):
                 setattr(o, to_be_set, property_value)
 
     def update(self, kwargs, create_missing_nodes=False):
-        """ Updates this context from child parameters specified in `kwargs`.
+        """ Updates this context from child parameters specified in ``kwargs``.
 
+        The following keys are recognized:
+        
+            - cplex_parameters: A set of CPLEX parameters to use instead of the parameters defined as ``context.cplex_parameters``.
+            - agent: Changes the ``context.solver.agent`` parameter.
+                Supported agents include:
+
+                - ``docloud``: forces the solve operation to use DOcplexcloud
+                - ``local``: forces the solve operation to use native CPLEX
+
+            - url: Overwrites the URL of the DOcplexcloud service defined by ``context.solver.docloud.url``.
+            - key: Overwrites the authentication key of the DOcplexcloud service defined by ``context.solver.docloud.key``.
+            - log_output: if ``True``, solver logs are output to stdout.
+                If this is a stream, solver logs are output to that stream object.
+                Overwrites the ``context.solver.log_output`` parameter.
+        
         Args:
-            docloud_context: An optional instance of :class:`DOcloudContext` that
-                overwrites the `context.docloud` DOcloud context service.
-            cplex_parameters: An optional set of CPLEX parameters to use
-                instead of the parameters defined as
-                `context.cplex_parameters`.
-            url: An optional parameter that overwrites the URL of the
-                DOcloud service defined by `context.solver.docloud.url`.
-            key: An optional parameter that overwrites the
-                authentication key of the DOcloud service defined by
-                `context.solver.docloud.key`.
+            kwargs: A ``dict`` containing keyword args to use to update this context.
+            create_missing_nodes: When a keyword arg specify a parameter that is not already member of this context,
+                creates the parameter if ``create_missing_nodes`` is True.
+        
         """
         for k in kwargs:
             value = kwargs.get(k)
@@ -323,6 +369,7 @@ class Context(BaseContext):
 
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
         if k is 'docloud_context':
+            warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
             self.solver.docloud = value
         elif k is 'cplex_parameters':
             self.cplex_parameters = value
@@ -337,6 +384,8 @@ class Context(BaseContext):
         elif k is '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
+        elif k is 'agent':
+            self.solver.agent = value
         else:
             if create_missing_nodes:
                 self[k] = value
@@ -354,7 +403,7 @@ class Context(BaseContext):
         of config files to be read.
 
         if `file_list` is None or not specified, the following files are
-        read if they exsist:
+        read if they exist:
 
             * the PYTHONPATH is searched for the following files:
 
@@ -370,7 +419,7 @@ class Context(BaseContext):
            As of V1.0, reading ``.docplexrc`` is deprecated, and ``.py`` files for
            configuration should be used instead.
         
-        A ``.docplexrc`` file is like a Java properties file (``=`` or ``:`` separated
+        A ``.docplexrc`` file is similar to a Java properties file (``=`` or ``:`` separated
         pairs of `key,values`) or a Python file if it ends with ``.py``.
         Python files are evaluated with a `context` object in the current
         scope, and you set values from this context::
@@ -488,30 +537,9 @@ class Context(BaseContext):
 
 
 class DOcloudContext(object):
-    """ The context to solve models on DOcloud.
-
-    The context contains properties that alter the behavior of the DOcloud
-    connector.
-
-    Attributes:
-        url: The DOcloud service URL.
-        api_key: The DOcloud service API key to use.
-        run_deterministic: Specific engine parameters are uploaded to keep the
-            run deterministic.
-        verbose: Makes the connector verbose.
-        timeout: The timeout for requests.
-        waittime: The wait time to wait for jobs to finish.
-        verify: If True, verifies SSL certificates.
-        log_requests: If True, the REST requests are logged.
-        log_poll_interval: The interval for log polling.
-        progress_poll_interval: The interval for progress polling.
-        exchange_format: The exchange format to use.
-            When setting the format, you can use the following strings: "lp".
-            When getting the format, the property type is
-            `docplex.mp.format.ExchangeFormat`.
-    """
+    # for internal use only
     def __init__(self, url=None, api_key=None):
-        """ Creates a new DOcloud context.
+        """ Creates a new DOcplexcloud context.
         """
         # There'se a bunch of properties defined so that we can set
         # any values
@@ -528,6 +556,8 @@ class DOcloudContext(object):
         self.debug_dump_dir = None
         self._log_poll_interval = None
         self._progress_poll_interval = None
+        self.ignored_keys = "ENTER YOUR KEY HERE"
+        self.ignored_urls = "ENTER YOUR URL HERE"
 
 
     # This maps "old property names" to the corresponding new qualified name.
@@ -662,22 +692,25 @@ class DOcloudContext(object):
         are not valid.
 
         Returns:
-            has_credentials, message - `has_credentials` is True if this context contains syntactical credentials. `message` contains a message if applicable.
+            Boolean: `has_credentials` - True if this context contains syntactical credentials.
+        Returns:
+            string: `message`  - contains a message if applicable.
         """
         has_credentials = True
         message = None
         if not self.url or not self.key:
             has_credentials = False
         elif not is_string(self.url):
-            message = "DOcloud: URL is not a string: {0!s}".format(self.url)
-            has_credentials = False
-        elif not self.url.startswith("http"):
-            message = "DOcloud: not a valid URL: {0!s}, expecting https://...".format(self.url)
+            message = "DOcplexcloud: URL is not a string: {0!s}".format(self.url)
             has_credentials = False
         elif not is_string(self.key):
             message = "API key is not a string: {0!s}".format(self.key)
             has_credentials = False
+        # process ignored_keys
+        if self.key and has_credentials:
+            has_credentials = not is_ignored(self.ignored_keys, self.key)
         return has_credentials, message
+
 
     def has_credentials(self):
         """Checks if this context has valid credentials.
@@ -706,144 +739,4 @@ class DOcloudContext(object):
         return self.to_string()
 
 
-    def read_from_rcfile(self, filename):
-        # Reads this context from the given resource file.
-        #
-        # The specified resource file contains `name=value` pairs. For example::
-        #
-        #   url = "https://docloud.service.com/job_manager/rest/v1"
-        #   api_key = "example api_key"
-        #
-        # Args:
-        #    filename (str): The name of the file to evaluate.
-        list_of_properties = []
-        with open_universal_newline(filename, "r") as f:
-            current_name = None
-            current_value = None
-            lineno = 0
-            for l in f:
-                lineno += 1
-                l = l.strip()
-                if len(l) == 0:
-                    continue
-                if l[-1] is '\\':
-                    s = l[:-1]
-                else:
-                    s = l
-                # process case of continuation
-                if current_value is not None:
-                    current_value += s
-                else:
-                    if s.startswith("#"):
-                        continue
-                    spl = s.split("=", 1)
-                    if len(spl) != 2:
-                        # try with ":"
-                        spl = s.split(":", 1)
-                        if len(spl) != 2:
-                            raise ValueError("Syntax error in line %s" % lineno)
-                    current_name = spl[0].strip()
-                    current_value = spl[1].strip()
-                # continuation ?
-                if l[-1] is not '\\':
-                    list_of_properties.append((current_name, current_value))
-                    current_name = None
-                    current_value = None
-            # cases where last line of file ends with '\'
-            if current_name is not None:
-                list_of_properties.append((current_name, current_value))
-        self.update_from_list(list_of_properties)
 
-    def update_from_list(self, values):
-        # Updates this context from the list of properties specified as
-        # `(name, value)` tuples.
-        #
-        # Args:
-        #    values : List of properties.
-        d = {}
-        for name, v in values:
-            d[name] = v
-
-        url = _get_value_as_string(d, "url")
-        if url is not None:
-            # strip url from trailing '/'
-            if url.endswith('/'):
-                slash_index = 0
-                while url[slash_index - 1] == '/':
-                    slash_index = slash_index - 1
-                if slash_index != 0:
-                    url = url[:slash_index]
-            self.url = url
-
-        # the key value here is api_key for compat reasons
-        api_key = _get_value_as_string(d, "api_key")
-        if api_key is not None:
-            self.key = api_key
-
-        run_deterministic = _get_value_as_boolean(d, "run_deterministic")
-        if run_deterministic is not None:
-            self.run_deterministic = run_deterministic
-
-        verbose = _get_value_as_boolean(d, "verbose")
-        if verbose is not None:
-            self.verbose = verbose
-
-        timeout = _get_value_as_int(d, "timeout")
-        if timeout is not None:
-            self.timeout = timeout
-
-        waittime = _get_value_as_int(d, "waittime")
-        if waittime is not None:
-            self.waittime = waittime
-
-        debug_dump = _get_value_as_boolean(d, "debug_dump")
-        if debug_dump is not None:
-            self.debug_dump = debug_dump
-
-        debug_dump_dir = _get_value_as_string(d, "debug_dump_dir")
-        if debug_dump_dir is not None:
-            self.debug_dump_dir = debug_dump_dir
-
-        verify = _get_value_as_boolean(d, "verify")
-        # defaults to True, and we need to test against None to differentiate from False
-        self.verify = verify if verify is not None else True
-
-        log_requests = _get_value_as_boolean(d, "log_requests")
-        if log_requests is not None:
-            self.log_requests = log_requests
-
-        xformat = _get_value_as_string(d, "exchange_format")
-        if xformat is not None:
-            self.exchange_format = xformat  # None or other stuff handled in property
-
-
-    @staticmethod
-    def make_from_config_parser(config, section_name=None):
-        # Reads this context from the given `ConfigParser`.
-        #
-        # Config is read from section 'DOcloudConnector'.
-        #
-        # Recognized options have the same names as the attributes of :class:`DOcloudContext`.
-        try:
-            import configparser
-        except ImportError:
-            try:
-                import ConfigParser
-            except Exception as e:
-                raise Exception("readFromConfigParser works only when configparser is installed")
-
-        context = DOcloudContext()
-        context.update_from_list(config.items(section_name))
-        return context
-
-    @staticmethod
-    def make_default_context(url=None, api_key=None):
-        warnings.warn("DOcloudContext is deprecated, use docloud.mp.context.Context instead",
-                      DeprecationWarning, stacklevel=2)
-        context = DOcloudContext(url, api_key)
-        if api_key is None:
-            home = os.path.expanduser("~")
-            rcfile = os.path.join(home, ".docplexrc")
-            if os.path.isfile(rcfile):
-                context.read_from_rcfile(rcfile)
-        return context

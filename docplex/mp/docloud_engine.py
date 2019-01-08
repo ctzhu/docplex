@@ -15,7 +15,7 @@ from docplex.mp.solution import SolveSolution, SolutionMSTPrinter
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.format import LP_format
-from docplex.mp.utils import StringIO
+from docplex.mp.compat23 import StringIO
 
 
 # gendoc: ignore
@@ -52,8 +52,7 @@ class DOcloudEngine(IndexerEngine):
         # --- log output can be overridden at solve time, so use te one from the context, not the model's
         actual_log_output = kwargs.get('log_output') or mdl.log_output
 
-        verbose = docloud_context.verbose if docloud_context is not None else None
-        self.__connector = DOcloudConnector(docloud_context, verbose=verbose, log_output=actual_log_output)
+        self.__connector = DOcloudConnector(docloud_context, log_output=actual_log_output)
         self.__error_handler = mdl.error_handler
         self.__exchange_format = exchange_format
 
@@ -76,7 +75,7 @@ class DOcloudEngine(IndexerEngine):
 
     def _lazy_get_printer(self, errh):
         if not self.__printer:
-            self.__printer = ModelPrinterFactory.new_printer(self.__exchange_format, errh, self.__hide_user_names)
+            self.__printer = ModelPrinterFactory.new_printer(self.__exchange_format, self.__hide_user_names)
         return self.__printer
 
     def name(self):
@@ -94,11 +93,11 @@ class DOcloudEngine(IndexerEngine):
 
     def connect_progress_listeners(self, progress_listener_list):
         if progress_listener_list:
-            self.__error_handler.warning("Progress listeners are not supported on DOcloud.")
+            self.__error_handler.warning("Progress listeners are not supported on DOcplexcloud.")
 
 
     def _docloud_cplex_version(self):
-        # INTERNAL: returns the version of CPLEX used in DOcloud
+        # INTERNAL: returns the version of CPLEX used in DOcplexcloud
         # for now returns a string. maybe we could ping Docloud and get a dynamic answer.
         return "12.6.3.0"
 
@@ -146,16 +145,9 @@ class DOcloudEngine(IndexerEngine):
             filemode = "w"
             oss = StringIO()
 
-        #t = time.time()
         printer.printModel(mdl, oss)
-        #elapsed_t = time.time() - t
-        #self_connector.log("elapsed time in model printing = {0}".format(elapsed_t))
 
-        var_name_encoding = printer.get_var_name_encoding()
-
-        if var_name_encoding:
-            # reverse map
-            self._var_name_encoding = {printer_name: dv for dv, printer_name in iteritems(var_name_encoding)}
+        self._var_name_encoding = printer.get_name_to_var_map(mdl)
 
         # DEBUG: dump request file
         if self.debug_dump:

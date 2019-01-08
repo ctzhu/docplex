@@ -4,10 +4,9 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-# gendoc: ignore
-# This file is generated !
-# See script tools/gen_version.py
-docplex_version_major = 1
-docplex_version_minor = 0
-docplex_version_micro = 573
-docplex_version_string = '1.0.573'
+"""
+This package contains all modules related to the solving of a CPO model.
+
+It contains in particular the different implementations of the 'solver agents'
+allowing to solve on the cloud, locally, etc.
+"""

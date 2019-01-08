@@ -114,7 +114,7 @@ def is_url_ignored(context, url):
 
 
 def is_auto_publishing_solve_details(context):
-    if get_solve_hook() == None:
+    if get_solve_hook == None:
         return False  # not in a worker
     try:
         auto_publish_details = context.solver.auto_publish.solve_details
@@ -127,7 +127,7 @@ def is_auto_publishing_solve_details(context):
 
 
 def is_auto_publishing_json_solution(context):
-    if get_solve_hook() == None:
+    if get_solve_hook == None:
         return False  # not in a worker
     try:
         auto_publish = context.solver.auto_publish.json_solution

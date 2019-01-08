@@ -11,6 +11,7 @@ from docplex.mp.basic import _SubscriptionMixin
 from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
 from docplex.mp.utils import *
 from docplex.mp.xcounter import FastOrderedDict
+from docplex.mp.xcounter import update_dict_from_item_value
 
 
 def _compare_vars(v1, v2):
@@ -104,7 +105,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
     def has_quadratic_term(self):
         """ Returns true if there is at least one quadratic term in the expression.
         """
-        return len(self._quadterms) > 0
+        return any(qk for _, qk in self.iter_quads())
 
     def square(self):
         if self.has_quadratic_term():
@@ -122,23 +123,26 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     __slots__ = ('_quadterms', '_linexpr', '_transient', '_subscribers')
 
-    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False, qterm_dict_type=FastOrderedDict):
+    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False):
         Expr.__init__(self, model, name)
         model._quadexpr_instance_counter += 1
         self._transient = False
-        self._subscribers = set()  # used by subscription mixin
+        self._subscribers = []  # used by subscription mixin
         if quads is None:
-            self._quadterms = qterm_dict_type()
+            self._quadterms = model._term_dict_type()
         elif isinstance(quads, dict):
             if safe:
                 self._quadterms = quads
             else:
                 # check
-                for qv, qk in six_iteritems(quads):
+                safe_quads = model._term_dict_type()
+                for qvp, qk in six_iteritems(quads):
                     model.typecheck_num(qk)
-                    if not isinstance(qv, VarPair):
-                        self.fatal("Expecting variable-pair, got: {0!s}", qv)
-                self._quadterms = qterm_dict_type(quads)
+                    if not isinstance(qvp, VarPair):
+                        self.fatal("Expecting variable-pair, got: {0!r}", qvp)
+                    else:
+                        safe_quads[qvp] = qk
+                self._quadterms = safe_quads
 
         elif isinstance(quads, tuple):
             try:
@@ -147,14 +151,17 @@ class QuadExpr(_SubscriptionMixin, Expr):
                     model.typecheck_var(v1)
                     model.typecheck_var(v2)
                     model.typecheck_num(qk, 'QuadExpr')
-                self._quadterms = qterm_dict_type()
+                self._quadterms = model._term_dict_type()
                 self._quadterms[VarPair(v1, v2)] = qk
 
             except ValueError:  # pragma: no cover
                 self.fatal("QuadExpr accepts tuples of len: 3, got: {0!r}", quads)
 
         elif is_iterable(quads):
-            self._quadterms = qterm_dict_type(quads)
+            qterms = model._term_dict_type()
+            for qv1, qv2, qk in quads:
+                qterms[VarPair(qv1, qv2)] = qk
+            self._quadterms = qterms
         else:
             self.fatal("unexpected argument for QuadExpr: {0!r}", quads)  # pragma: no cover
 
@@ -163,6 +170,15 @@ class QuadExpr(_SubscriptionMixin, Expr):
         else:
             self._linexpr = model._to_linear_expr(linexpr)
 
+    def clone_if_necessary(self):
+        #  INTERNAL
+        if self._transient and not self._model._keep_all_exprs and not self.is_in_use():
+            return self
+        else:
+            return self.clone()
+
+    def keep(self):
+        self._transient = False
 
     def clone(self):
         """ Makes a copy of the quadratic expression and returns it.
@@ -170,9 +186,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
         Returns:
             A quadratic expression.
         """
-        if self._transient:
-            return self
-
         self._model._quadexpr_clone_counter += 1
         cloned_linear = self._linexpr.clone()
         self_name = self.name
@@ -200,7 +213,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def iter_sorted_quads(self):
         if self.is_model_ordered():
-            return self._quadterms.iteritems()
+            return six_iteritems(self._quadterms)
         else:
             return self._iter_sorted_quads()
 
@@ -335,7 +348,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
             self_quadterms[vp] = k
         self.notify_modified(event)
 
-
     # ---
     def equals(self, other):
         if not isinstance(other, QuadExpr):
@@ -350,8 +362,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def is_constant(self):
         return not self.has_quadratic_term() and self._linexpr.is_constant()
-
-
 
     def get_constant(self):
         return self._linexpr.constant
@@ -414,15 +424,15 @@ class QuadExpr(_SubscriptionMixin, Expr):
         # noinspection PyPep8Naming
         SP = u' '
         for qvp, qk in self.iter_sorted_quads():
+            if not qk:
+                continue
             qv1 = qvp.first
             qv2 = qvp.second
             # ---
             # sign is printed if  non-first OR negative
             # at the end of this block coeff is positive
-            wrote_sign = False
             if qk < 0 or q > 0:
                 oss.write(u'-' if qk < 0 else u'+')
-                wrote_sign = True
                 if qk < 0:
                     qk = -qk
                 if use_space and q > 0:
@@ -467,17 +477,18 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 self._linexpr.to_stringio(oss, nb_digits, use_space, var_namer)
 
             elif lin_constant:
-                self._num_to_stringio(oss, lin_constant, nb_digits, print_sign=True, force_plus=q>0, use_space=use_space)
+                self._num_to_stringio(oss, lin_constant, nb_digits, print_sign=True, force_plus=q > 0,
+                                      use_space=use_space)
             elif not q:
                 oss.write(u'0')
 
     def plus(self, other):
-        cloned = self.clone()
+        cloned = self.clone_if_necessary()
         cloned.add(other)
         return cloned
 
     def minus(self, other):
-        cloned = self.clone()
+        cloned = self.clone_if_necessary()
         cloned.subtract(other)
         return cloned
 
@@ -627,7 +638,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 self_linexpr = self._linexpr
                 for v1, k1 in self_linexpr.iter_terms():
                     for v2, k2 in other_linexpr.iter_terms():
-                        self._add_one_quad_triplet(v1, v2, k1*k2)
+                        self._add_one_quad_term(VarPair(v1, v2), k1 * k2)
                 other_cst = other.get_constant()
                 self_cst = self_linexpr.get_constant()
                 if other_cst:
@@ -684,33 +695,18 @@ class QuadExpr(_SubscriptionMixin, Expr):
             pass
 
     def _add_one_quad_term(self, qv, qk):
-        if qk:
-            qterms = self._quadterms
-            if qv in qterms:
-                new_qk = qterms[qv] + qk
-                if new_qk:
-                    qterms[qv] = new_qk
-                else:
-                    del qterms[qv]
-            else:
-                qterms[qv] = qk
-
-    def _add_one_quad_triplet(self, qv1, qv2, qk):  # pragma: no cover
-        self._add_one_quad_term(VarPair(qv1, qv2), qk)
-
+        qterms = self._quadterms
+        if qk or qv in qterms:
+            qterms[qv] = qterms.get(qv, 0) + qk
 
     def normalize(self):  # pragma: no cover
         # INTERNAL
-        if self._quadterms:
-            return self
-        elif self._linexpr and not self._linexpr.is_constant():
-            return self._linexpr
-        else:
-            k = self.get_constant()
-            if 0 == k:
-                return self.get_linear_factory().new_zero_expr()
-            else:
-                return self._linexpr
+        quadterms = self._quadterms
+        if quadterms:
+            to_remove = [qvp for qvp,qk in self.iter_quads() if not qk]
+            for rvp in to_remove:
+                del quadterms[rvp]
+        self._linexpr.normalize()
 
     def clear(self):
         self._quadterms.clear()
@@ -730,15 +726,16 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def _subtract_quad(self, other_quad):
         # subtract quad
+        quadterms = self._quadterms
         for oqv, oqk in other_quad.iter_quads():
-            self._add_one_quad_term(oqv, -oqk)
+            update_dict_from_item_value(quadterms, oqv, -oqk)
         # subtract linear part
         self._linexpr.subtract(other_quad._linexpr)
 
     def to_linear_expr(self):  # pragma: no cover
         self.fatal("Quadratic expression [{0!s}] cannot be converted to a linear expression", self)
 
-    def _is_normal_form(self):  # pragma: no cover
+    def is_normalized(self):  # pragma: no cover
         # INTERNAL
         for _, qk in self.iter_quads():
             if not qk:
@@ -758,5 +755,5 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def notify_expr_modified(self, expr, event):
         if expr is self._linexpr:
-            #something to do..
+            # something to do..
             self.notify_modified(event, )

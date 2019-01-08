@@ -79,7 +79,7 @@ class LPModelPrinter(TextModelPrinter):
         self._print_expr_iter(wrapper, num_printer, var_name_map, iter_diff_coeffs,
                               allow_empty=True,  # when expr is empty print nothing
                               force_first_plus=force_first_sign)
-        wrapper.write(_symbol_map.get(binary_ct.type, " ?? "), separator=False)
+        wrapper.write(_symbol_map.get(binary_ct.sense, " ?? "), separator=False)
         wrapper.write(num_printer.to_string(binary_ct.cplex_num_rhs()), separator=False)
 
     def _print_ranged_ct(self, wrapper, num_printer, var_name_map, ranged_ct):
@@ -218,9 +218,14 @@ class LPModelPrinter(TextModelPrinter):
         raw_name = mobj.name
 
         # anonymous constraints must be named in a LP (we follow CPLEX here)
-        if hide_names or not mobj.has_user_name() or mobj.is_generated() or not raw_name:
+        if hide_names or not raw_name or mobj.is_generated():
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         elif not self._is_lp_compliant(raw_name):
+            if raw_name[0] in 'eE':
+                # fixing eE non-LP names
+                fixed_name = '_' + raw_name
+                if  self._is_lp_compliant(fixed_name):
+                    return fixed_name
             self._non_compliant_lp_name_stop_here(raw_name)
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
@@ -369,7 +374,6 @@ class LPModelPrinter(TextModelPrinter):
 
     #  @profile
     def print_model_to_stream(self, out, model):
-
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
             sys.__stdout__.write("\DOcplex: refine variable names\n")
@@ -394,7 +398,6 @@ class LPModelPrinter(TextModelPrinter):
         wrapper = _ExportWrapper(out, indent_str=self.__expr_indent)
         wrapper.write(' obj:')
         objexpr = model.objective_expr
-        obj_offset = objexpr.get_constant()
 
         if objexpr.is_quad_expr():
             objlin = objexpr.linear_part
@@ -420,6 +423,7 @@ class LPModelPrinter(TextModelPrinter):
                                   force_initial_plus=printed)
             printed = True
 
+        obj_offset = objexpr.get_constant()
         if obj_offset:
             if printed and obj_offset > 0:
                 wrapper.write(u'+')
@@ -439,11 +443,12 @@ class LPModelPrinter(TextModelPrinter):
         var_print_name_fn = self._var_print_name
         for dvar in model.iter_variables():
             lp_varname = var_print_name_fn(dvar)
+            var_lb = dvar._get_lb()
+            var_ub = dvar._get_ub()
             if dvar.is_binary():
-                print_var_bounds_fn(out, self_num_printer, lp_varname, 0, 1)
+                print_var_bounds_fn(out, self_num_printer, lp_varname, var_lb, var_ub)
             else:
-                var_lb = dvar.get_lb()
-                var_ub = dvar.get_ub()
+
                 free_lb = dvar.has_free_lb()
                 free_ub = dvar.has_free_ub()
                 if free_lb and free_ub:

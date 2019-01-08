@@ -71,7 +71,7 @@ class JobClient(object):
         """ Create a new model solving job. JobId is stored in this object.
         Args:
             name:    Job name
-            cpodata: Model to be solved in CPO format
+            cpodata: Model to be solved in CPO format, already encoded in UTF8
         """
         # Create attachment name
         name = _normalize_job_name(name)
@@ -82,7 +82,6 @@ class JobClient(object):
         self.ctx.log(2, "Job created: ", self.jobid)
         # Upload attachments
         hdrs = self.headers.copy()
-        cpodata = cpodata.encode('utf-8')
         hdrs['Content-Type'] = 'application/octet-stream'
         self._request('put', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + name + "/blob", [204], data=cpodata, headers=hdrs)
         self.ctx.log(2, "Model data '", name, "' uploaded (", len(cpodata), " bytes)")
@@ -169,17 +168,17 @@ class JobClient(object):
             Attachment content as a string
         """
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + aname + "/blob", [200])
-        return rsp.content.decode('utf-8')
+        return rsp.content
 
 
     def get_log_blob(self):
         """ Get the whole job execution log as a string.
         Returns:
-            The whole job log as a string.
+            The whole job log as a string, to be decoded in UTF8.
         """
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/log/blob", [200])
         self.ctx.log(2, "Log retrieved")
-        return rsp.content.decode('utf-8')
+        return rsp.content
 
 
     def get_log_items(self, start):

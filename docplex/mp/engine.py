@@ -23,6 +23,10 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
+    def register_callback(self, cb):
+        raise NotImplementedError  # pragma: no cover
+
+
     def connect_progress_listeners(self, listeners):
         """
         Connects progress listeners
@@ -134,7 +138,7 @@ class IEngine(ISolver):
     def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
         raise NotImplementedError  # pragma: no cover
 
-    def create_binary_linear_constraint(self, binaryct):
+    def create_linear_constraint(self, binaryct):
         raise NotImplementedError  # pragma: no cover
 
     def create_block_linear_constraints(self, ct_seq):
@@ -144,6 +148,9 @@ class IEngine(ISolver):
         raise NotImplementedError  # pragma: no cover
 
     def create_indicator_constraint(self, ind):
+        raise NotImplementedError  # pragma: no cover
+
+    def create_block_indicator_constraints(self, inds):
         raise NotImplementedError  # pragma: no cover
 
     def create_quadratic_constraint(self, qct):
@@ -241,11 +248,14 @@ class DummyEngine(IEngine):
     def set_var_type(self, var, new_type):
         pass  # nothing to do, except in cplex...
 
-    def create_binary_linear_constraint(self, binaryct):
+    def create_linear_constraint(self, binaryct):
         return -1  # pragma: no cover
 
     def create_block_linear_constraints(self, ct_seq):
         return [-1] * len(ct_seq)  # pragma: no cover
+
+    def create_block_indicator_constraints(self, ind_seq):
+        return [-1] * len(ind_seq)  # pragma: no cover
 
     def remove_constraint(self, ct):
         pass  # pragma: no cover
@@ -262,6 +272,9 @@ class DummyEngine(IEngine):
     def end(self):
         """ terminate the engine
         """
+        pass  # pragma: no cover
+
+    def register_callback(self, cb):
         pass  # pragma: no cover
 
     def connect_progress_listeners(self, listeners):
@@ -318,15 +331,15 @@ class IndexerEngine(DummyEngine):
         DummyEngine.__init__(self)
         self._initial_index = initial_index  # CPLEX indices start at 0, not 1
         self.__var_counter = self._initial_index
-        self.__ct_counter = self._initial_index
+        self._ct_counter = self._initial_index
 
     def _increment_vars(self, size=1):
         self.__var_counter += size
         return self.__var_counter
 
     def _increment_cts(self, size=1):
-        self.__ct_counter += size
-        return self.__ct_counter
+        self._ct_counter += size
+        return self._ct_counter
 
     def create_one_variable(self, vartype, lb, ub, name):
         old_count = self.__var_counter
@@ -344,23 +357,28 @@ class IndexerEngine(DummyEngine):
         return list(range(old_count, new_count))
 
     def _create_one_ct(self):
-        old_ct_count = self.__ct_counter
+        old_ct_count = self._ct_counter
         self._increment_cts(1)
         return old_ct_count
 
-    def create_binary_linear_constraint(self, binaryct):
+    def create_linear_constraint(self, binaryct):
         return self._create_one_ct()
 
     def create_block_linear_constraints(self, ct_seq):
-        old_ct_count = self.__ct_counter
+        old_ct_count = self._ct_counter
         self._increment_cts(len(ct_seq))
-        return range(old_ct_count, self.__ct_counter)
+        return range(old_ct_count, self._ct_counter)
 
     def create_range_constraint(self, rangect):
         return self._create_one_ct()
 
     def create_indicator_constraint(self, ind):
         return self._create_one_ct()
+
+    def create_block_indicator_constraints(self, indicators):
+        old_ct_count = self._ct_counter
+        self._increment_cts(len(indicators))
+        return range(old_ct_count, self._ct_counter)
 
     def create_quadratic_constraint(self, ind):
         return self._create_one_ct()
@@ -475,11 +493,7 @@ class ZeroSolveEngine(IndexerEngine):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)
-        # ---
-        # return a feasible value: max of zero and the lower bound
-        zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb != 0}
-        obj = mdl.objective_expr.constant
-        return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, solved_by=self.name)  # pragma: no cover
+        return self.make_zero_solution(mdl)
 
     def get_solutions(self, args):
         if not args:
@@ -490,11 +504,17 @@ class ZeroSolveEngine(IndexerEngine):
     def can_solve(self):
         return True  # pragma: no cover
 
+    def make_zero_solution(self, mdl):
+        # return a feasible value: max of zero and the lower bound
+        zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb != 0}
+        obj = mdl.objective_expr.constant
+        return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, solved_by=self.name)  # pragma: no cover
+
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         params = parameters or mdl.parameters
         self._last_solved_parameters = params
         self.show_parameters(params)
-        return None  # pragma: no cover
+        return self.make_zero_solution(mdl)
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
         return None

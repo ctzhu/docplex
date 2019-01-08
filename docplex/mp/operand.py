@@ -33,6 +33,13 @@ class Operand(object):
         pass
     # ---
 
+    def keep(self):
+        pass
+
+    def resolve(self):
+        # used for lazy expansions
+        pass
+
     def get_linear_part(self):
         return self
 
@@ -65,7 +72,8 @@ class LinearOperand(Operand):
         Returns:
             iterator: An iterator over all variables present in the operand.
         """
-        raise NotImplementedError  # pragma: no cover
+        for v, k in self.iter_terms():
+            yield v
 
     def iter_terms(self):
         # iterates over alllinear terms, if any
@@ -83,11 +91,9 @@ class LinearOperand(Operand):
         # redefine this for subclasses.
         return False  # pragma: no cover
 
-    def is_variable(self):
-        # return True if the expression is infact one variable.
-        # if True, assume you can replace the expression by the first variable
-        # returned by iter_variables()
-        return False
+    def as_variable(self):
+        # return a variable if the expression is actually one variable, else None
+        return None
 
     def is_zero(self):
         return False

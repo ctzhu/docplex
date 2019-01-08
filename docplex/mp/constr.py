@@ -3,26 +3,31 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import ModelingObject, Priority
-from docplex.mp.constants import ComparisonType, UpdateEvent
+from docplex.mp.basic import ModelingObject, Priority, _BendersAnnotatedMixin
+from docplex.mp.constants import ComparisonType, UpdateEvent, CplexScope
 from docplex.mp.utils import is_number, iter_emptyset
 
+import warnings
 
-class AbstractConstraint(ModelingObject):
-    # noinspection PyRedundantParentheses
-    __slots__ = ('_priority')
+
+class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
+    __slots__ = ('_priority',)
 
     def __init__(self, model, name=None):
         ModelingObject.__init__(self, model, name)
-        self._priority = None
+        # self._priority = None
 
-    def get_priority(self):
-        return self._priority
+    @property
+    def priority(self):
+        return getattr(self, '_priority', None)
+
+    @priority.setter
+    def priority(self, newprio):
+        self.set_priority(newprio)
 
     def set_priority(self, newprio):
-        self._priority = Priority._parse(newprio, logger=self.error_handler, accept_none=True)
+        self._priority = Priority.parse(newprio, logger=self.error_handler, accept_none=True)
 
-    priority = property(get_priority, set_priority)
 
     def set_mandatory(self):
         ''' Sets the constraint as mandatory.
@@ -117,6 +122,10 @@ class AbstractConstraint(ModelingObject):
     def get_indicator(self):
         return getattr(self, '_ind', None)
 
+    def resolve(self):
+        raise NotImplementedError
+
+
 
 # noinspection PyAbstractClass
 class BinaryConstraint(AbstractConstraint):
@@ -126,7 +135,7 @@ class BinaryConstraint(AbstractConstraint):
         self._ctsense = new_sense
 
     def __init__(self, model, left_expr, ctsense, right_expr, name=None):
-        AbstractConstraint.__init__(self, model, name)
+        ModelingObject.__init__(self, model, name)
         self._ctsense = ctsense
         # noinspection PyPep8
         self._left_expr = left_expr
@@ -186,12 +195,11 @@ class BinaryConstraint(AbstractConstraint):
             return u"%s: %s %s %s" % (self_name,
                                       left_string,
                                       self._ctsense.operator_symbol,
-                                  right_string)
+                                      right_string)
         else:
             return u"%s %s %s" % (left_string,
                                   self._ctsense.operator_symbol,
                                   right_string)
-
 
     def cplex_num_rhs(self):
         # INTERNAL
@@ -202,7 +210,7 @@ class BinaryConstraint(AbstractConstraint):
     def __repr__(self):
         classname = self.__class__.__name__
         user_name = self._get_safe_name()
-        typename = self.type.short_name
+        typename = self.sense.short_name
         sleft = self._left_expr.truncated_str()
         sright = self._right_expr.truncated_str()
         return "docplex.mp.linear.{0}[{1}]({2!s},{3},{4!s})". \
@@ -210,12 +218,12 @@ class BinaryConstraint(AbstractConstraint):
 
     def _is_trivially_feasible(self):
         # INTERNAL : assume self is trivial()
-        op_func = self.type.python_operator
+        op_func = self.sense.python_operator
         return op_func(self._left_expr.get_constant(), self._right_expr.get_constant()) if op_func else False
 
     def _is_trivially_infeasible(self):
         # INTERNAL: assume self is trivial .
-        op_func = self.type.python_operator
+        op_func = self.sense.python_operator
         return not op_func(self._left_expr.get_constant(), self._right_expr.get_constant()) if op_func else False
 
     def is_trivial_feasible(self):
@@ -314,12 +322,23 @@ class BinaryConstraint(AbstractConstraint):
         else:  # pragma: no cover
             self.fatal('Unexpected expression position: {0!r}, expecting 0 or 1', pos)
 
+    def is_satisfied(self, solution, tolerance=1e-6):
+        left_value = self._left_expr._get_solution_value(solution)
+        right_value = self._right_expr._get_solution_value(solution)
+        return ComparisonType.almost_compare(left_value, self._ctsense, right_value, eps=tolerance)
+
+    def resolve(self):
+        self._left_expr.resolve()
+        self._right_expr.resolve()
+
 
 class LinearConstraint(BinaryConstraint):
     """ The class that models all constraints of the form `<expr1> <OP> <expr2>`,
             where <expr1> and <expr2> are linear expressions.
     """
-    __slots__ = ('_ind',)  # for enclosing indicator if any
+    __slots__ = ('_ind', '_status_var')  # for enclosing indicator if any
+
+    allow_status_var = False
 
     def __init__(self, model, left_expr, ctsense, right_expr, name=None):
         BinaryConstraint.__init__(self, model, left_expr, ctsense, right_expr, name)
@@ -329,13 +348,17 @@ class LinearConstraint(BinaryConstraint):
     def is_linear(self):
         return True
 
+    def is_discrete(self):
+        return self.get_left_expr().is_discrete() and self.get_right_expr().is_discrete()
+
     def copy(self, target_model, var_map):
         copied_left = self.left_expr.copy(target_model, var_map)
         copied_right = self.right_expr.copy(target_model, var_map)
-        copy_name = self.name if self.has_user_name() else None
-        return LinearConstraint(target_model, copied_left, self.type, copied_right, copy_name)
+        copy_name = self.name
+        return LinearConstraint(target_model, copied_left, self.sense, copied_right, copy_name)
 
-    def get_sense(self):
+    @property
+    def sense(self):
         """ This property is used to get or set the sense of the constraint; sense is an enumerated value
         of type :class:`ComparisonType`, with three possible values:
 
@@ -350,15 +373,23 @@ class LinearConstraint(BinaryConstraint):
         """
         return self._ctsense
 
-    def set_sense(self, arg_newtype):
-        self.get_linear_factory().set_linear_constraint_type(self, arg_newtype)
+    @sense.setter
+    def sense(self, new_sense):
+        self.set_sense(new_sense)
 
-    sense = property(get_sense, set_sense)
+    def set_sense(self, new_sense):
+        self.get_linear_factory().set_linear_constraint_sense(self, new_sense)
 
     # compatibility
-    type = property(get_sense, set_sense)
+    @property
+    def type(self):
+        warnings.warn(
+            "ct.type is deprecated, use ct.sense instead.",
+            DeprecationWarning, stacklevel=2)
+        return self._ctsense
 
-    def get_left_expr(self):
+    @property
+    def left_expr(self):
         """ This property returns the left expression in the constraint.
 
         Example:
@@ -366,7 +397,8 @@ class LinearConstraint(BinaryConstraint):
         """
         return self._left_expr
 
-    def get_right_expr(self):
+    @property
+    def right_expr(self):
         """ This property returns the right expression in the constraint.
 
         Example:
@@ -374,15 +406,15 @@ class LinearConstraint(BinaryConstraint):
         """
         return self._right_expr
 
-    def set_right_expr(self, new_rexpr):
+    @right_expr.setter
+    def right_expr(self, new_rexpr):
         self.get_linear_factory().set_linear_constraint_right_expr(ct=self, new_rexpr=new_rexpr)
 
-    right_expr = property(get_right_expr, set_right_expr)
 
-    def set_left_expr(self, new_lexpr):
+    @left_expr.setter
+    def left_expr(self, new_lexpr):
         self.get_linear_factory().set_linear_constraint_left_expr(ct=self, new_lexpr=new_lexpr)
 
-    left_expr = property(get_left_expr, set_left_expr)
 
     # aliases
     lhs = left_expr
@@ -400,9 +432,11 @@ class LinearConstraint(BinaryConstraint):
         # INTERNAL
         # TODO: quads are not allowed here...
         if old_expr is self._left_expr:
-            self.get_linear_factory().set_linear_constraint_expr_from_pos(lct=self, pos=0, new_expr=new_expr, update_subscribers=False)
+            self.get_linear_factory().set_linear_constraint_expr_from_pos(lct=self, pos=0, new_expr=new_expr,
+                                                                          update_subscribers=False)
         elif old_expr is self._right_expr:
-            self.get_linear_factory().set_linear_constraint_expr_from_pos(lct=self, pos=1, new_expr=new_expr, update_subscribers=False)
+            self.get_linear_factory().set_linear_constraint_expr_from_pos(lct=self, pos=1, new_expr=new_expr,
+                                                                          update_subscribers=False)
         else:
             # should not happen
             pass
@@ -471,7 +505,7 @@ class LinearConstraint(BinaryConstraint):
         # constraints _cannot_ be converted to booleans.
         if not is_number(e):
             self.fatal("operator <= on constraint requires numeric argument, got: {0!s}", e)
-        if self.type is ComparisonType.GE:
+        if self.sense is ComparisonType.GE:
             rhs = self.right_expr
             if rhs.is_constant():
                 range_min = rhs.constant
@@ -480,7 +514,7 @@ class LinearConstraint(BinaryConstraint):
             else:
                 self.fatal("operator <= requires a constraint with numeric RHS, rhs is: {0!s}", rhs)
         else:
-            self.fatal("operator <= is only allowed for LE constraints, type is: {0!s}", self.type)
+            self.fatal("operator <= is only allowed for LE constraints, type is: {0!s}", self.sense)
 
     def __ge__(self, e):
         # INTERNAL: define ranges with operators.
@@ -490,7 +524,7 @@ class LinearConstraint(BinaryConstraint):
         # constraints _cannot_ be converted to booleans.
         if not is_number(e):
             self.fatal("operator >= on constraints requires number argument, got: {0!s}", e)
-        if self.type is ComparisonType.LE:
+        if self.sense is ComparisonType.LE:
             rhs = self.right_expr
             if rhs.is_constant():
                 range_max = rhs.constant
@@ -499,7 +533,7 @@ class LinearConstraint(BinaryConstraint):
             else:
                 self.fatal("operator >= requires a constraint with numeric RHS, got: {0!s}", rhs)
         else:
-            self.fatal("operator >= is only allowed for GE constraints, not {0!s}", self.type)
+            self.fatal("operator >= is only allowed for GE constraints, not {0!s}", self.sense)
 
     def iter_variables(self):
         """  Iterates over all variables mentioned in the constraint.
@@ -549,7 +583,7 @@ class LinearConstraint(BinaryConstraint):
                 yield rv
 
     def fast_get_coef(self, dvar):
-        return self._left_expr[dvar] - self._right_expr[dvar]
+        return self._left_expr.unchecked_get_coef(dvar) - self._right_expr.unchecked_get_coef(dvar)
 
     def iter_net_linear_coefs(self):
         # INTERNAL
@@ -561,6 +595,54 @@ class LinearConstraint(BinaryConstraint):
             return self._generate_opposite_linear_coefs(right_expr)
         else:
             return self._generate_net_linear_coefs2_sorted(left_expr, right_expr)
+
+    def cplex_scope(self):
+        return CplexScope.LINEAR_CT_SCOPE
+
+    def _get_status_var(self):
+        # not resolving in this call
+        return getattr(self, '_status_var', None)
+
+    def get_resolved_status_var(self):
+        if not self.allow_status_var:
+            self.fatal('Conversion from constraint to expression is not available')
+
+        # INTERNALS
+        if not self.is_discrete():
+            self.fatal('Conversion from constraint to expression is available only for discrete constraint, not {0!s}',
+                       self)
+
+        # lazy allocation of status variable...
+        status_var = self._get_status_var()
+        if status_var is None:
+            status_var = self.get_linear_factory().new_constraint_status_var(self)
+            if self.has_valid_index():
+                # status variable is bound
+                status_var.lb = 1
+            self._status_var = status_var
+        return status_var
+
+    def to_linear_expr(self):
+        return self.get_resolved_status_var()
+
+    def notify_deleted(self):
+        super(LinearConstraint, self).notify_deleted()
+        svar = self._get_status_var()  # possibly not resolved
+        if svar:
+            svar.lb = 0
+
+    @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a constraint.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)
 
 
 class RangeConstraint(AbstractConstraint):
@@ -610,39 +692,44 @@ class RangeConstraint(AbstractConstraint):
         # compatible with cplex...
         return -slack
 
-    def get_expr(self):
+    def fast_get_coef(self, dvar):
+        return self._expr.unchecked_get_coef(dvar)
+
+    @property
+    def expr(self):
         """ This property returns the linear expression of the range constraint.
         """
         return self._expr
 
-    def set_expr(self, new_expr):
+    @expr.setter
+    def expr(self, new_expr):
         self.get_linear_factory().set_range_constraint_expr(self, new_expr)
 
-    expr = property(get_expr, set_expr)
-
-    def get_lb(self):
+    @property
+    def lb(self):
         """ This property returns the lower bound of the range constraint.
 
         """
         return self._lb
 
-    def set_lb(self, new_lb):
+    @lb.setter
+    def lb(self, new_lb):
         self._model.typecheck_num(new_lb)
         self.get_linear_factory().set_range_constraint_lb(self, new_lb)
 
-    lb = property(get_lb, set_lb)
 
-    def get_ub(self):
+    @property
+    def ub(self):
         """ This property returns the upper bound of the range constraint.
 
         """
         return self._ub
 
-    def set_ub(self, new_ub):
+    @ub.setter
+    def ub(self, new_ub):
         self._model.typecheck_num(new_ub)
         self.get_linear_factory().set_range_constraint_ub(self, new_ub)
 
-    ub = property(get_ub, set_ub)
 
     def _internal_set_lb(self, new_lb):
         self._lb = new_lb
@@ -688,7 +775,7 @@ class RangeConstraint(AbstractConstraint):
 
     def copy(self, target_model, var_map):
         copied_expr = self.expr.copy(target_model, var_map)
-        copy_name = self.name if self.has_user_name() else None
+        copy_name = self.name
         copied_range = RangeConstraint(target_model, copied_expr, self.lb, self.ub, copy_name)
         return copied_range
 
@@ -711,6 +798,25 @@ class RangeConstraint(AbstractConstraint):
         printable_name = self._get_safe_name()
         return "docplex.mp.linear.RangeConstraint[{0}]({1},{2!s},{3})".format(printable_name, self.lb, self._expr,
                                                                               self.ub)
+
+    def cplex_scope(self):
+        return CplexScope.LINEAR_CT_SCOPE
+
+    def resolve(self):
+        self._expr.resolve()
+
+    @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a constraint.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)
 
 
 class IndicatorConstraint(AbstractConstraint):
@@ -738,11 +844,17 @@ class IndicatorConstraint(AbstractConstraint):
             expr.notify_used(self)
         linear_ct._ind = self
 
+    def resolve(self):
+        self._linear_ct.resolve()
+
     def _get_index_scope(self):
         return self._model._indicator_scope
 
     def short_typename(self):
         return "indicator"
+
+    def cplex_scope(self):
+        return CplexScope.IND_CT_SCOPE
 
     @property
     def active_value(self):
@@ -757,16 +869,38 @@ class IndicatorConstraint(AbstractConstraint):
         return self._linear_ct
 
     @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a constraint.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)
+
+    @property
     def logical_rhs(self):
         """
         This property returns the target right-hand side used to trigger the linear constraint. Returns 1 if not complemented, else 0.
         """
         return self.active_value
 
+    def get_linear_constraint(self):
+        return self._linear_ct
+
+    def get_active_value(self):
+        return self._active_value
+
+    def get_indicator_var(self):
+        return self._binary_var
+
     def copy(self, target_model, var_map):
         copied_binary = var_map[self.indicator_var]
         copied_linear_ct = self.linear_constraint.copy(target_model, var_map)
-        copy_name = self.name if self.has_user_name() else None
+        copy_name = self.name
         copied_indicator = IndicatorConstraint(target_model,
                                                copied_binary,
                                                copied_linear_ct,
@@ -816,6 +950,7 @@ class IndicatorConstraint(AbstractConstraint):
         self.get_linear_factory().update_indicator_constraint_expr(self, event, expr)
 
 
+
 class QuadraticConstraint(BinaryConstraint):
     """ The class models quadratic constraints.
 
@@ -828,7 +963,7 @@ class QuadraticConstraint(BinaryConstraint):
         # noinspection PyPep8
         copied_left_expr = self.left_expr.copy(target_model, var_map)
         copied_right_expr = self.right_expr.copy(target_model, var_map)
-        copy_name = self.name if self.has_user_name() else None
+        copy_name = self.name
         return QuadraticConstraint(target_model, copied_left_expr, self.type, copied_right_expr, copy_name)
 
     def is_quadratic(self):
@@ -836,6 +971,9 @@ class QuadraticConstraint(BinaryConstraint):
 
     def _get_index_scope(self):
         return self._model._quadct_scope
+
+    def cplex_scope(self):
+        return CplexScope.QUAD_CT_SCOPE
 
     __slots__ = ()
 
@@ -892,9 +1030,19 @@ class QuadraticConstraint(BinaryConstraint):
 
     right_expr = property(BinaryConstraint.get_right_expr, _set_right_expr)
 
-    def notify_expr_modified(self, expr, event):
-        # INTERNAL
-        self.get_quadratic_factory().update_quadratic_constraint(self, expr, event)
+
+    @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a constraint.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)
 
     @property
     def slack_value(self):
@@ -905,7 +1053,8 @@ class QuadraticConstraint(BinaryConstraint):
         """
         return self._model.slack_values(cts=self)
 
-    def get_sense(self):
+    @property
+    def sense(self):
         """ This property is used to get or set the sense of the constraint; sense is an enumerated value
         of type :class:`ComparisonType`, with three possible values:
 
@@ -920,17 +1069,25 @@ class QuadraticConstraint(BinaryConstraint):
         """
         return self._ctsense
 
-    def set_sense(self, arg_newsense):
-        self.get_quadratic_factory().set_quadratic_constraint_type(self, arg_newsense)
+    @sense.setter
+    def sense(self, new_sense):
+        self.set_sense(new_sense)
 
-    sense = property(get_sense, set_sense)
+    def set_sense(self, new_sense):
+        self.get_quadratic_factory().set_quadratic_constraint_sense(self, new_sense)
 
     # compat
-    type = property(get_sense, set_sense)
+    @property
+    def type(self):
+        return self._ctsense
 
     def has_net_quadratic_term(self):
         # INTERNAL
         return any(nk for _, nk in self.iter_net_quads())
+
+    def notify_expr_modified(self, expr, event):
+        # INTERNAL
+        self.get_quadratic_factory().update_quadratic_constraint(self, expr, event)
 
 
 class PwlConstraint(AbstractConstraint):
@@ -944,31 +1101,37 @@ class PwlConstraint(AbstractConstraint):
 
     def __init__(self, model, pwl_expr, name=None):
         AbstractConstraint.__init__(self, model, name)
-        self.__pwl_expr = pwl_expr
-        self.__pwl_func = pwl_expr.pwl_func
-        self.__expr = pwl_expr._x_var
-        self.__y = None
+        self._pwl_expr = pwl_expr
+        self._pwl_func = pwl_expr.pwl_func
+        self._expr = pwl_expr._x_var
+        self._y = None
         self.__usage_counter = pwl_expr.usage_counter
+
+    def resolve(self):
+        self._pwl_expr.resolve()
+
+    def cplex_scope(self):
+        return CplexScope.PWL_CT_SCOPE
 
     @property
     def expr(self):
         """ This property returns the linear expression of the piecewise linear constraint.
         """
-        return self.__expr
+        return self._expr
 
     @property
     def pwl_func(self):
         """ This property returns the piecewise linear function of the piecewise linear constraint.
         """
-        return self.__pwl_func
+        return self._pwl_func
 
     @property
     def y(self):
         """ This property returns the output variable associated with the piecewise linear constraint.
         """
-        if self.__y is None:
-            self.__y = self.__pwl_expr.functional_var
-        return self.__y
+        if self._y is None:
+            self._y = self._pwl_expr.functional_var
+        return self._y
 
     @property
     def usage_counter(self):

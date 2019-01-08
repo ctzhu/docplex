@@ -22,6 +22,7 @@ access the configuration context *context.solver.<agent>* that contains the deta
 For example, the default configuration refers to *docloud* as default solver agent, to solve model using *DOcplexcloud*
 services. This means that at least following configuration elements must be set:
 ::
+
    context.solver.agent = 'docloud'
    context.solver.docloud.url = <URL of the service>
    context.solver.docloud.key = <Access key of the service>
@@ -42,6 +43,7 @@ When a method is not available, an exception *CpoNotSupportedException* is raise
 If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
 the :class:`CpoSolver` object can acts as an iterator. All solutions can be retrieved using a loop like:
 ::
+
    solver = CpoSolver(mdl)
    for sol in solver:
        sol.print_solution()
@@ -55,11 +57,11 @@ Detailed description
 """
 
 import docplex.cp.config as config
-from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context, is_array, is_string
+from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context, is_array, is_string, parse_json_string
 import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
 import docplex.cp.solver.environment_client as runenv
-import sys
+from docplex.cp.solution import CpoProcessInfos
 
 import time, importlib, inspect
 
@@ -76,6 +78,7 @@ STATUS_SEARCH_WAITING    = "SearchWaiting"    # Search started or waiting to cal
 STATUS_SEARCH_RUNNING    = "NextRunning"      # Search of next solution in progress
 STATUS_REFINING_CONFLICT = "RefiningConflict" # Solver refine conflict in progress
 STATUS_PROPAGATING       = "Propagating"      # Propagation in progress
+
 
 ###############################################################################
 ##  Public classes
@@ -97,16 +100,27 @@ class CpoSolverAgent(object):
             CpoException if jar file does not exists
         """
         super(CpoSolverAgent, self).__init__()
-        self.model = model
-        self.params = params
-        self.context = context
-        self.last_json_result = None
+        self.model = model             # Source model
+        self.params = params           # Model parameters
+        self.context = context         # Solve context
+        self.last_json_result = None   # Last result
+        self.log_data = []             # Log data (list of strings)
+        self.rename_map = None         # Map of renamed variables. Key is new name, value is original name
+        self.process_infos = CpoProcessInfos()
+
+        # Initialize log
+        self.log_output = context.get_log_output()                            # Log output stream
+        self.log_print = context.trace_log and (self.log_output is not None)  # Print log indicator
+        self.log_buffer = [] if context.add_log_to_solution else None         # Log buffer
+        self.log_enabled = self.log_print or (self.log_data is not None)      # Global log process indicator
+
 
     def solve(self):
         """ Solve the model
 
         Returns:
-            Model solve result (object of class CpoSolveResult)
+            Model solve result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -126,7 +140,8 @@ class CpoSolverAgent(object):
         """ Search the next available solution.
 
         Returns:
-            Next solve result (object of class CpoSolveResult)
+            Next solve result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -137,7 +152,8 @@ class CpoSolverAgent(object):
         """ End current search.
 
         Returns:
-            Last (fail) solve result with last solve information (type CpoSolveResult)
+            Last (fail) solve result with last solve information,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -157,7 +173,8 @@ class CpoSolverAgent(object):
         does not guarantee feasibility of the remaining model.
 
         Returns:
-            Conflict result (object of class CpoRefineConflictResult)
+            Conflict result,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -179,7 +196,8 @@ class CpoSolverAgent(object):
         However, in this case, variable domains may not be completely defined.
 
         Returns:
-            Propagation result (object of class CpoSolveResult)
+            Propagation result,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -202,27 +220,52 @@ class CpoSolverAgent(object):
         """
         # Build string
         ctx = self.context
-        cpostr = CpoCompiler(self.model, params=self.params).get_as_string()
+        stime = time.time()
+        cplr = CpoCompiler(self.model, params=self.params, context=self.context.get_root())
+        cpostr = cplr.get_as_string()
+        self.rename_map = cplr.get_rename_map()
+        self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
+        self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
 
         # Trace CPO model if required
         lout = ctx.get_log_output()
         if lout and ctx.trace_cpo:
+            stime = time.time()
             lout.write("Model '" + str(self.model.get_name()) + "' in CPO format:\n")
             lout.write(cpostr)
             lout.write("\n")
             self.model.print_information(lout)
             lout.write("\n")
             lout.flush()
+            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
 
         # Dump in dump directory if required
         if ctx.model.dump_directory:
+            stime = time.time()
             make_directories(ctx.model.dump_directory)
-            file = ctx.model.dump_directory + "/" + utils.get_file_name_only(self.model.get_source_file()) + ".cpo"
+            mname = self.model.get_name()
+            if mname is None:
+                mname = "Anonymous"
+            file = ctx.model.dump_directory + "/" + mname + ".cpo"
             with utils.open_utf8(file, 'w') as f:
                 f.write(cpostr)
+            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
 
         # Return
         return cpostr
+
+
+    def _add_log_data(self, data):
+        """ Add new log data
+        Args:
+            data:  Data to log (String)
+        """
+        if self.log_enabled:
+            if self.log_print:
+                self.log_output.write(data)
+                self.log_output.flush()
+            if self.log_buffer is not None:
+                self.log_buffer.append(data)
 
 
     def _set_last_json_result_string(self, json):
@@ -244,13 +287,42 @@ class CpoSolverAgent(object):
         return self.last_json_result
 
 
-    def _is_log_required(self):
-        """ Check if solver log is required.
-
-        Return:
-            True if solver log is required, False otherwise
+    def _create_result_object(self, rclass, jsol):
+        """ Create a new result object and fill it with necessary data
+        Args:
+            rclass: Result object class
+            jsol:   JSON solution string
+        Returns:
+            New result object preinitialized
         """
-        return self.context.add_log_to_solution or self.context.trace_log
+        res = rclass(self.model)
+        res.process_infos.update(self.process_infos)
+
+        # Process JSON solution
+        self.context.log(3, "JSON result:\n", jsol)
+        self.last_json_result = jsol
+
+        # Parse JSON solution
+        if jsol:
+            # Parse JSON
+            stime = time.time()
+            jsol = parse_json_string(jsol)
+            # Replace variable names if rename was used
+            if self.rename_map:
+                _replace_names_in_json_dict(jsol.get('intVars'),        self.rename_map)
+                _replace_names_in_json_dict(jsol.get('intervalVars'),   self.rename_map)
+                _replace_names_in_json_dict(jsol.get('sequenceVars'),   self.rename_map)
+                _replace_names_in_json_dict(jsol.get('stateFunctions'), self.rename_map)
+                self.context.log(3, "Updated JSON result:\n", jsol)
+            # Build result structure
+            res._add_json_solution(jsol)
+            res.process_infos[CpoProcessInfos.RESULT_PARSE_TIME] = time.time() - stime
+
+        # Process Log
+        if self.log_buffer is not None:
+            res._set_solver_log(''.join(self.log_buffer))
+            self.log_buffer = []
+        return res
 
 
     def _raise_not_supported(self):
@@ -332,9 +404,10 @@ class CpoSolver(object):
         if exists, plus different information on the solving process.
 
         Returns:
-            Model solution (object of class CpoSolveResult)
+            Model solution,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
-            :class:`docplex.cp.utils.CpoException` (or derived) if error.
+            CpoException: (or derived) if error.
         """
         # Notify start solve to environment
         runenv.start_solve(self)
@@ -346,6 +419,7 @@ class CpoSolver(object):
         self.status = STATUS_IDLE
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+        msol.process_infos[CpoProcessInfos.SOLVE_TOTAL_TIME] = stime
 
         # Set solve time in solution if not done
         if msol.get_solve_time() == 0:
@@ -367,7 +441,8 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution (object of class CpoModelSolution)
+            Next model solution,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
@@ -414,7 +489,8 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Last (fail) model solution with last solve information (type CpoModelSolution)
+            Last (fail) model solution with last solve information,
+            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
@@ -454,7 +530,8 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            List of constraints that cause the conflict (object of class CpoRefineConflictResult)
+            List of constraints that cause the conflict,
+            object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
@@ -482,7 +559,7 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Propagation result (object of class CpoSolveResult)
+            Propagation result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -522,8 +599,7 @@ class CpoSolver(object):
         msol = self.search_next()
         if msol:
             return msol
-        else:
-            raise StopIteration()
+        raise StopIteration()
 
 
     def __next__(self):
@@ -585,6 +661,7 @@ class CpoSolver(object):
 
         # Log solver agent
         sctx.log(1, "Solve model '", self.model.get_name(), "' with agent '", aname, "'")
+        agent.process_infos[CpoProcessInfos.SOLVER_AGENT] = aname
         return agent
 
 
@@ -677,4 +754,20 @@ def _get_solver_agent_class(aname, sctx):
 
     # Return
     return sclass
+
+def _replace_names_in_json_dict(jdict, renmap):
+    """ Replace keys that has been renamed in a JSON result directory
+    Args:
+        jdict:  Json result dictionary
+        renmap: Renaming map, key is name to replace, value is name to use instead
+    """
+    if jdict:
+        for k in list(jdict.keys()):
+            nk = renmap.get(k)
+            if nk:
+                jdict[nk] = jdict[k]
+                del jdict[k]
+
+
+
 

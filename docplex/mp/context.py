@@ -16,11 +16,12 @@ from os.path import isfile, isabs
 
 from docplex.util.environment import get_environment
 
-from docplex.mp.format import ExchangeFormat
 from docplex.mp.utils import is_string, open_universal_newline
 from docplex.mp.environment import Environment
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
+from docplex.mp.params.parameters import RootParameterGroup
 from docplex.mp.utils import DOcplexException
+from docplex.mp.error_handler import docplex_fatal
 
 try:
     from docplex.worker.solvehook import get_solve_hook
@@ -216,11 +217,6 @@ class BaseContext(dict):
             raise AttributeError
         res = self.get(name, default)
         return res
-        """ iii
-        if res is not None:
-            return res
-        raise AttributeError("'{0}' object has no attribute '{1}'".format(type(self).__name__, name))
-        """
 
 class SolverContext(BaseContext):
     # for internal use
@@ -326,6 +322,7 @@ class Context(BaseContext):
             When setting the format, you can use the following strings: "lp".
             When getting the format, the property type is
             `docplex.mp.format.ExchangeFormat`.
+        solver.docloud.job_parameters: dict of job parameters passed to DOCplexcloud.
     """
     def __init__(self, **kwargs):
         # store env used for initialization
@@ -410,7 +407,7 @@ class Context(BaseContext):
         # attribute.
         for name, value in values:
             try:
-                    self._set_value(self, name, value)
+                self._set_value(self, name, value)
             except AttributeError:
                 if logger is not None:
                     logger.warning("Ignoring undefined attribute : {0}".format(name))
@@ -475,7 +472,23 @@ class Context(BaseContext):
             warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
             self.solver.docloud = value
         elif k is 'cplex_parameters':
-            self.cplex_parameters = value
+            if isinstance(value, RootParameterGroup):
+                self.cplex_parameters = value
+            else:
+                new_params = self.cplex_parameters.copy()
+                # try a dictionary of parameter keys,parameter values
+                try:
+                    for pk, pv in iteritems(value):
+                        p = new_params.find_parameter(key=pk)
+                        if not p:
+                            docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))
+                        else:
+                            p.set(pv)
+                    self.cplex_parameters = new_params
+
+                except (TypeError, AttributeError):
+                    docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(value))
+
         elif k is 'url':
             self.solver.docloud.url = value
         elif k is 'api_key' or k is 'key':
@@ -609,5 +622,7 @@ def CreateDefaultDOcloudContext():
     dctx.on_solve_finished_cb = None
     # The proxies
     dctx.proxies = None
+    # additional job parameters
+    dctx.job_parameters = None
     return dctx
 

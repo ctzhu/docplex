@@ -241,6 +241,10 @@ def docplex_error_stop_here():
     pass
 
 
+def docplex_add_trivial_infeasible_ct(ct):
+    # INTERNAL: set breakpoint here to inspect ct
+    pass
+
 def docplex_fatal(msg, *args):
     resolved_message = resolve_pattern(msg, args)
     docplex_error_stop_here()

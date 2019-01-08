@@ -160,7 +160,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
             ovals = []
             for i in range(nbval):
                 ovals.append(random.randint(0, MAX_SIMULATED_VALUE))
-            msol._set_objective_values(ovals)
+            msol.objective_values = ovals
 
         # Generate a solution for each variable
         for var in self.model.get_all_variables():

@@ -43,6 +43,10 @@ class ComparisonType(Enum):
         return self.name
 
     @property
+    def cplex_code(self):
+        return self._cplex_code
+
+    @property
     def operator_symbol(self):
         """ Returns a string operator for the constraint.
 
@@ -79,6 +83,20 @@ class ComparisonType(Enum):
     @classmethod
     def cplex_ctsense_to_python_op(cls, cpx_sense):
         return cls.parse(cpx_sense).python_operator
+
+    @classmethod
+    def almost_compare(cls, lval, op, rval, eps):
+        if op is cls.LE:
+            # lval <= rval with eps tolerance means lval-rval <= e
+            return lval -rval <= eps
+        elif op is cls.GE:
+            # lval >= rval with eps tolerance means lval-rval >= -eps
+            return lval - rval >= -eps
+        elif op is cls.EQ:
+            return abs(lval - rval) <= eps
+        else:
+            raise TypeError
+
 
 
 class RelaxationMode(Enum):
@@ -134,6 +152,7 @@ class ConflictStatus(Enum):
     """
     Excluded, Possible_member, Possible_member_lower_bound, Possible_member_upper_bound, \
         Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
+
 
 class SOSType(Enum):
     """This enumerated class defines the SOS types:
@@ -206,6 +225,7 @@ class SolveAttribute(Enum):
                 docplex_fatal('cannot convert this to a solve attribute: {0!r}'.format(arg))
             else:
                 return None
+
 
 class UpdateEvent(Enum):
     # INTERNAL
@@ -301,3 +321,21 @@ class ObjectiveSense(Enum):
         else:
             docplex_fatal("cannot convert: <{}> to objective sense".format(arg))
 
+
+# noinspection PyPep8
+class CplexScope(Enum):
+
+    def __new__(cls, code, prefix):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj.prefix = prefix
+        return obj
+    # INTERNAL
+    VAR_SCOPE       = 0, 'x'
+    LINEAR_CT_SCOPE = 1, 'c'
+    IND_CT_SCOPE    = 2, 'ic'
+    QUAD_CT_SCOPE   = 3, 'qc'
+    PWL_CT_SCOPE    = 4, 'pwl'
+    SOS_SCOPE       = 5, 'sos'
+    UNKNOWN_SCOPE   = 9999, '?'

@@ -38,13 +38,15 @@ _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 
 class CpoCompiler(object):
     """ Compiler to CPO file format """
-    __slots__ = ('model',                  # Source model
-                 'params',                 # Solving parameters
-                 'sourceloc',              # Indicator to add location traces in generated output
-                 'alias_min_name_length',  # Minimum variable name length to replace it by an alias
-                 'id_strings',             # Dictionary of printable string for each identifier
-                 'last_loc',               # Last source location (file, line)
-                 'exprset',                # Set of ids of named expressions already compiled
+    __slots__ = ('model',                      # Source model
+                 'parameters',                 # Solving parameters
+                 'add_source_location',        # Indicator to add location traces in generated output
+                 'min_name_length_for_alias',  # Minimum variable name length to use an alias
+                 'min_name_length_for_rename', # Minimum variable name length to replace it by an alias
+                 'identifier_strings',         # Dictionary of printable string for each identifier
+                 'last_location',              # Last source location (file, line)
+                 'compiled_expressions',       # Set of ids of named expressions already compiled
+                 'rename_map',                 # Dictionary of variables rename (key=new name, value = original name)
                  )
 
     def __init__(self, model, **kwargs):
@@ -62,27 +64,43 @@ class CpoCompiler(object):
         super(CpoCompiler, self).__init__()
 
         # Build effective context
+        if model:
+            mparams = model.get_parameters()
+            if mparams:
+                pparams = kwargs.get('params')
+                if pparams:
+                    mparams = mparams.clone()
+                    mparams.add(pparams)
+                kwargs['params'] = mparams
         context = config._get_effective_context(**kwargs)
 
         # Initialize processing
         self.model = model
-        self.params = context.params
-        self.alias_min_name_length = None
-        self.id_strings = {}
+        self.parameters = context.params
+
+        self.min_name_length_for_alias = None
+        self.min_name_length_for_rename = None
+        self.identifier_strings = {}
+        self.rename_map = None
 
         # Set model parameters
         mctx = context.model
         if mctx is not None:
-            self.alias_min_name_length = mctx.length_for_alias
+            ma = mctx.length_for_alias
+            mr = mctx.length_for_rename
+            if (mr is not None) and (ma is not None) and (ma >= mr):
+                ma = None
+            self.min_name_length_for_alias = ma
+            self.min_name_length_for_rename = mr
 
         # Initialize source location
-        if (self.params is not None) and (self.params.UseFileLocations is not None):
-            self.sourceloc = (self.params.UseFileLocations in('On', True))
+        if (self.parameters is not None) and (self.parameters.UseFileLocations is not None):
+            self.add_source_location = (self.parameters.UseFileLocations in ('On', True))
         elif (mctx is not None) and (mctx.add_source_location is not None):
-            self.sourceloc = mctx.add_source_location
+            self.add_source_location = mctx.add_source_location
         else:
-            self.sourceloc = True
-        self.last_loc = None
+            self.add_source_location = True
+        self.last_location = None
 
 
     def print_model(self, out=None):
@@ -122,6 +140,18 @@ class CpoCompiler(object):
         return res
 
 
+    def get_rename_map(self):
+        """ Get the map of variables that has been renamed.
+
+        This map is required to retrieve the original variable name from the name returned in the solution.
+
+        Returns:
+            Map of variable renamings. Key is new variable name, Value is original variable name.
+            None if no renaming has been done.
+        """
+        return self.rename_map
+
+
     def _write_model(self, out):
         """ Compile the model
 
@@ -130,15 +160,20 @@ class CpoCompiler(object):
         """
         # Expand model expressions if not done
         model = self.model
-        self.exprset = set()
-        self.last_loc = None
+        self.compiled_expressions = set()
+        self.last_location = None
 
         # Write header
         banner = u"/" * 79 + "\n"
+        mname = model.get_name()
         sfile = model.get_source_file()
         out.write(banner)
-        out.write(u"// CPO file generated from:\n")
-        out.write(u"// " + sfile + "\n")
+        if mname:
+            out.write(u"// CPO file generated for model: {}\n".format(mname))
+        else:
+            out.write(u"// CPO file generated for anonymous model\n")
+        if sfile:
+            out.write(u"// Source file: {}\n".format(sfile))
         out.write(banner)
 
         # Write version if any
@@ -149,24 +184,43 @@ class CpoCompiler(object):
             out.write(u"   version({});\n".format(ver))
             out.write(u"}\n")
 
+        # Get working variables
+        all_vars = model.get_all_variables()
+        idstrings = self.identifier_strings
+
+        # Rename variables if required
+        mnl = self.min_name_length_for_rename
+        if mnl is not None:
+            # Rename variables whose name is too long
+            rename_gen = IdAllocator('_R_', IdAllocator.LETTERS_AND_DIGITS)
+            renmap = self.rename_map if self.rename_map else {}
+            for v in all_vars:
+                # Compute CPO printable variable name
+                vname = v.name
+                vpname = self._get_id_string(vname)
+                if (len(vpname) > mnl) and (vpname[0] != '_'):
+                    # Rename variable
+                    vpname = rename_gen.allocate()
+                    renmap[vpname] = vname
+                    idstrings[vname] = vpname
+            self.rename_map = None if len(renmap) == 0 else renmap
+
         # Write variables
         out.write(u"\n//--- Variables ---\n")
-        for v in model.get_all_variables():
+        for v in all_vars:
             self._write_expression(out, v, None)
 
         # If aliases are requested, print as comment list of aliases
-        mnl = self.alias_min_name_length
+        mnl = self.min_name_length_for_alias
         if mnl is not None:
             # Preload string map with aliases when relevant
             aliasfound = False
-            alias_gen = IdAllocator('_A_', "0123456789abcdefghijklmnopqrstuvwxyz")
-            for v in model.get_all_variables():
-                if isinstance(v, CpoStateFunction):
-                    continue
+            alias_gen = IdAllocator('_A_', IdAllocator.LETTERS_AND_DIGITS)
+            for v in all_vars:
                 # Compute CPO printable variable name
                 vname = v.name
-                vpname = strname = to_printable_symbol(vname)
-                if len(vpname) > mnl:
+                vpname = strname = self._get_id_string(vname)
+                if (len(vpname) > mnl) and (vpname[0] != '_'):
                     # Replace by an alias
                     vpname = alias_gen.allocate()
                     # Trace alias
@@ -175,11 +229,11 @@ class CpoCompiler(object):
                         out.write(u"\n//--- Aliases ---\n")
                         out.write(u"// To reduce CPO file size, the following aliases have been used to replace variable names longer than " + str(mnl) + "\n")
                     out.write(vpname + " = " + strname + ";\n")
-                self.id_strings[vname] = vpname
+                    idstrings[vname] = vpname
 
         # Write expressions
         out.write(u"\n//--- Expressions ---\n")
-        self.last_loc = None
+        self.last_location = None
         for x, loc in model.get_all_expressions():
             self._write_expression(out, x, loc)
 
@@ -196,7 +250,7 @@ class CpoCompiler(object):
         spoint = model.get_starting_point()
         if spoint is not None:
             out.write(u"\n//--- Starting point ---\n")
-            if self.last_loc is not None:
+            if self.last_location is not None:
                 out.write(u"#line off\n")
             out.write(u"startingPoint {\n")
             for var in spoint.get_all_var_solutions():
@@ -204,13 +258,13 @@ class CpoCompiler(object):
             out.write(u"}\n")
 
         # Write parameters
-        if self.params and (len(self.params) > 0):
+        if self.parameters and (len(self.parameters) > 0):
             out.write(u"\n//--- Parameters ---\n")
-            if self.last_loc is not None:
+            if self.last_location is not None:
                 out.write(u"#line off\n")
             out.write(u"parameters {\n")
-            for k in sorted(self.params.keys()):
-                v = self.params[k]
+            for k in sorted(self.parameters.keys()):
+                v = self.parameters[k]
                 if v is not None:
                     out.write(u"   {} = {};\n".format(k, v))
             out.write(u"}\n")
@@ -228,14 +282,14 @@ class CpoCompiler(object):
             loc:   Location (file, line), None if unknown
         """
         # Trace location if required
-        lloc = self.last_loc
-        if self.sourceloc and (loc is not None) and (loc != lloc):
+        lloc = self.last_location
+        if self.add_source_location and (loc is not None) and (loc != lloc):
             (file, line) = loc
-            out.write(u"#line {}".format(line))
+            lline = u"#line " + str(line)
             if (lloc is None) or (file != lloc[0]):
-                out.write(u' "{}"'.format(file))
-            out.write(u"\n")
-            self.last_loc = loc
+                lline += u' "' + file + '"'
+            out.write(lline + u"\n")
+            self.last_location = loc
 
         # Write sub-expressions if any
         for sx in self._get_all_sub_expressions(expr):
@@ -243,8 +297,7 @@ class CpoCompiler(object):
 
         # Write expression label (for constraints)
         if expr.name and not expr.type.is_variable:
-            out.write(self._get_id_string(expr.name))
-            out.write(u";\n")
+            out.write(self._get_id_string(expr.name) + u";\n")
 
 
     def _write_sub_expression(self, out, expr):
@@ -257,9 +310,7 @@ class CpoCompiler(object):
         # Write expression
         id = expr.name
         if id is not None:
-            wid = self._get_id_string(id)
-            out.write(wid)
-            out.write(u" = ")
+            out.write(self._get_id_string(id) + u" = ")
         out.write(self._compile_expression(expr))
         out.write(u";\n")
 
@@ -280,10 +331,7 @@ class CpoCompiler(object):
         else:
             raise CpoException("Internal error: unsupported starting point variable: " + str(var))
         # Write variable starting point
-        out.write(self._get_id_string(var.name))
-        out.write(u" = ")
-        out.write(u''.join(cout))
-        out.write(u";\n")
+        out.write(self._get_id_string(var.name) + u" = " + u''.join(cout) + u";\n")
 
 
     def _get_id_string(self, id):
@@ -295,11 +343,11 @@ class CpoCompiler(object):
             CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
         """
         # Check if already converted
-        res = self.id_strings.get(id, None)
+        res = self.identifier_strings.get(id)
         if res is None:
             # Convert id into string and store result for next call
             res = to_printable_symbol(id)
-            self.id_strings[id] = res
+            self.identifier_strings[id] = res
         return res
 
 
@@ -342,17 +390,17 @@ class CpoCompiler(object):
                         self._compile_var_domain(vals, cout)
                         #cout.append(', '.join(str(v) for v in vals))
                         cout.append(']')
-                elif (t == Type_Bool):
+                elif (t is Type_Bool):
                     cout.append("true()" if e.value else "false()")
                 elif (t in _INTEGER_TYPES):
                     cout.append(_number_value_string(e.value))
-                elif (t == Type_TransitionMatrix):
+                elif (t is Type_TransitionMatrix):
                     self._compile_transition_matrix(e, cout)
-                elif (t == Type_TupleSet):
+                elif (t is Type_TupleSet):
                     self._compile_tuple_set(e, cout)
-                elif (t == Type_StepFunction):
+                elif (t is Type_StepFunction):
                     self._compile_step_function(e, cout)
-                elif (t == Type_SegmentedFunction):
+                elif (t is Type_SegmentedFunction):
                     self._compile_segmented_function(e, cout)
                 else:
                     cout.append(_number_value_string(e.value))
@@ -360,13 +408,13 @@ class CpoCompiler(object):
             # Check variables
             elif t.is_variable:
                 estack.pop()
-                if (t == Type_IntVar):
+                if (t is Type_IntVar):
                     self._compile_int_var(e, cout)
-                elif (t == Type_IntervalVar):
+                elif (t is Type_IntervalVar):
                     self._compile_interval_var(e, cout)
-                elif (t == Type_SequenceVar):
+                elif (t is Type_SequenceVar):
                     self._compile_sequence_var(e, cout)
-                elif (t == Type_StateFunction):
+                elif (t is Type_StateFunction):
                     self._compile_state_function(e, cout)
 
             # Check expression array
@@ -438,9 +486,7 @@ class CpoCompiler(object):
                         edscr[1] = cnx
                         if (cnx > 0):
                             # Add operator
-                            cout.append(" ")
-                            cout.append(oper.keyword)
-                            cout.append(" ")
+                            cout.append(" " + oper.keyword + " ")
                         # Check if operand will require to have parenthesis
                         arg = oprnds[cnx]
                         nprio = arg.priority
@@ -449,7 +495,6 @@ class CpoCompiler(object):
                                   or (nprio >= 5) \
                                   or ((nprio == prio) and (cnx > 0)) \
                                   or ((oplen == 1) and not parents and oprnds[0].children)
-
                         # Put operand on stack
                         estack.append([arg, -1, chparnts])
 
@@ -593,7 +638,8 @@ class CpoCompiler(object):
             if i > 0:
                 cout.append(", ")
             cout.append("[")
-            self._compile_list_of_integers(tpl, cout)
+            cout.append(", ".join(str(x) for x in tpl))
+            #self._compile_list_of_integers(tpl, cout)
             cout.append("]")
         cout.append("]")
 
@@ -680,7 +726,7 @@ class CpoCompiler(object):
             Last expression should be the root expression, only if not already compiled.
         """
         # Expand expressions
-        exprset = self.exprset  # Set of named expressions already compiled
+        exprset = self.compiled_expressions  # Set of named expressions already compiled
         estack = [expr]
         enx = 0
         while enx < len(estack):
@@ -694,9 +740,20 @@ class CpoCompiler(object):
         while estack:
             e = estack.pop()
             eid = id(e)
-            if not eid in exprset and (e.name or e is expr):
-                subexpr.append(e)
-                exprset.add(eid)
+            if not eid in exprset:
+                if e.name:
+                   subexpr.append(e)
+                   exprset.add(eid)
+                elif e is expr:
+                    if e.reference_count > 1:
+                        e.name = e._generate_name()
+                    subexpr.append(e)
+                    exprset.add(eid)
+                elif e.reference_count > 1:
+                    e.name = e._generate_name()
+                    subexpr.append(e)
+                    exprset.add(eid)
+
         return subexpr
 
 
@@ -707,14 +764,14 @@ class CpoCompiler(object):
 def get_cpo_model(model, **kwargs):
     """ Convert a model into a string with CPO file format.
 
-        Args:
-            model:  Source model
-        Optional args:
-            context:             Global solving context. If not given, context is the default context that is set in config.py.
-            params:              Solving parameters (CpoParameters) that overwrites those in solving context
-            add_source_location: Add source location into generated text
-            length_for_alias:    Minimum name length to use shorter alias instead
-            (others):            All other context parameters that can be changed
+    Args:
+        model:  Source model
+    Optional args:
+        context:             Global solving context. If not given, context is the default context that is set in config.py.
+        params:              Solving parameters (CpoParameters) that overwrites those in solving context
+        add_source_location: Add source location into generated text
+        length_for_alias:    Minimum name length to use shorter alias instead
+        (others):            All other context parameters that can be changed
     Returns:
         String of the model in CPO file format
     """

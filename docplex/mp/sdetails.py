@@ -30,7 +30,9 @@ class SolveDetails(object):
                  problem_type=None,
                  ncolumns=0, nonzeros=0,
                  miprelgap=None,
-                 best_bound=None):
+                 best_bound=None,
+                 n_iterations=0,
+                 n_nodes_processed=0):
         self._time = max(time, 0)
         self._solve_status_code = status_code
         self._solve_status = status_string or self._unknown_label
@@ -42,6 +44,9 @@ class SolveDetails(object):
         # --
         self._miprelgap = self._NO_GAP if miprelgap is None else miprelgap
         self._best_bound = self._NO_BEST_BOUND if best_bound is None else best_bound
+        # -- progress
+        self._n_iterations = n_iterations
+        self._n_nodes_processed = n_nodes_processed
 
         self._md5 = self._unknown_label
 
@@ -140,20 +145,17 @@ class SolveDetails(object):
                                problem_type=None)
         return details
 
-    # time
-    def get_time(self):
+    @property
+    def time(self):
         """ This property returns the solve time in seconds.
 
         """
         return self._time
 
-    time = property(get_time)
-
-    # status
-    def get_status_code(self):
+    @property
+    def status_code(self):
         return self._solve_status_code
 
-    status_code = property(get_status_code)
 
     # status string
     # CPX_STAT_ABORT_DETTIME_LIM =  25
@@ -189,7 +191,8 @@ class SolveDetails(object):
     # CPX_STAT_OPTIMAL_RELAXED_SUM =  15
     # CPX_STAT_UNBOUNDED =  2
 
-    def get_status(self):
+    @property
+    def status(self):
         """ This property returns the solve status as a string.
 
         Example:
@@ -200,36 +203,29 @@ class SolveDetails(object):
         """
         return self._solve_status
 
-    status = property(get_status)
 
-    # problem type
-    def get_problem_type(self):
+    @property
+    def problem_type(self):
         """  This property returns the problem type as a string.
 
         """
         return self._problem_type
 
-    problem_type = property(get_problem_type)
-
-    # nb columns
-    def get_nb_columns(self):
+    @property
+    def columns(self):
         """  This property returns the number of columns.
         """
         return self._ncolumns
 
-    columns = property(get_nb_columns)
-
-    # linear nonzeros
-    def get_nb_linear_nonzeros(self):
+    @property
+    def nb_linear_nonzeros(self):
         """ This property returns the number of linear non-zeros in the matrix solved.
 
         """
         return self._linear_nonzeros
 
-    nb_linear_nonzeros = property(get_nb_linear_nonzeros)
-
-    # MIP relative gap
-    def get_mip_relative_gap(self):
+    @property
+    def mip_relative_gap(self):
         """ This property returns the MIP relative gap.
 
         Note:
@@ -238,9 +234,9 @@ class SolveDetails(object):
         """
         return self._miprelgap
 
-    mip_relative_gap = property(get_mip_relative_gap)
 
-    def get_best_bound(self):
+    @property
+    def best_bound(self):
         """ This property returns the MIP best bound at the end of the solve.
 
         Note:
@@ -248,7 +244,21 @@ class SolveDetails(object):
         """
         return self._best_bound
 
-    best_bound = property(get_best_bound)
+    @property
+    def nb_iterations(self):
+        """ This property returns the number of iterations at the end of the solve.
+
+        Note:
+            The nature of the iterations depend on the algorithm usd to solve the model.
+        """
+        return self._n_iterations
+
+    @property
+    def nb_nodes_processed(self):
+        """ This property returns the number of nodes processed at the end of solve.
+
+        """
+        return self._n_nodes_processed
 
     def __repr__(self):
         return "docplex.mp.SolveDetails(time={0:g},status={1!r})" \
@@ -258,7 +268,8 @@ class SolveDetails(object):
         print("status  = {0}".format(self._solve_status))
         print("time    = {0:g} s.".format(self._time))
         print("problem = {0}".format(self._problem_type))
-        print("columns = {0}".format(self._ncolumns))
+        print("columns = {0:d}".format(self._ncolumns))
+        print("iterations={0:d}".format(self._n_iterations))
         # print("nonzeros= {0}".format(self._linear_nonzeros))
         if self._miprelgap >= 0:
             print("gap     = {0:g}%".format(100 * self._miprelgap))

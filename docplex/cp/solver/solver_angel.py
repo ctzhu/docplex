@@ -96,12 +96,6 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         #if not os.path.isfile(context.execfile):
         #    raise CpoException("Executable file '" + str(context.execfile) + "' does not exists")
 
-        # Init log elements
-        self.lout = context.get_log_output()
-        self.printlog = context.trace_log and (self.lout is not None)
-        self.loglines = [] if context.add_log_to_solution else None
-        self.logenabled = self.printlog or (self.loglines is not None)
-
         # Create solving process
         cmd = [context.execfile]
         if context.parameters is not None:
@@ -128,8 +122,15 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Convert model into CPO format
         cpostr = self._get_cpo_model_string()
 
+        # Encode model
+        stime = time.time()
+        cpostr = cpostr.encode('utf-8')
+        self.process_infos[CpoProcessInfos.MODEL_ENCODE_TIME] = time.time() - stime
+
         # Send CPO model to process
+        stime = time.time()
         self._write_message(CMD_SET_CPO_MODEL, cpostr)
+        self.process_infos[CpoProcessInfos.MODEL_SEND_TIME] = time.time() - stime
         context.log(3, "Model sent.")
         self._wait_event(EVT_SUCCESS)
 
@@ -157,8 +158,11 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Start solve
         self._write_message(CMD_SOLVE_MODEL)
 
-        # Wait for next solution
-        return self._wait_json_result()
+        # Wait JSON result
+        jsol = self._wait_json_result(EVT_SOLVE_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoSolveResult, jsol)
 
 
     def start_search(self):
@@ -179,8 +183,11 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Request next solution
         self._write_message(CMD_SEARCH_NEXT)
 
-        # Wait next solution
-        return self._wait_json_result()
+        # Wait JSON result
+        jsol = self._wait_json_result(EVT_SOLVE_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoSolveResult, jsol)
 
 
     def end_search(self):
@@ -193,8 +200,11 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Request end search
         self._write_message(CMD_END_SEARCH)
 
-        # Wait next solution
-        return self._wait_json_result()
+        # Wait JSON result
+        jsol = self._wait_json_result(EVT_SOLVE_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoSolveResult, jsol)
 
 
     def refine_conflict(self):
@@ -212,14 +222,25 @@ class CpoSolverAngel(solver.CpoSolverAgent):
             # Build and send new CPO model string
             self.context.model.name_all_constraints = True
             cpostr = self._get_cpo_model_string()
+            # Encode model
+            stime = time.time()
+            cpostr = cpostr.encode('utf-8')
+            self.process_infos.incr(CpoProcessInfos.MODEL_ENCODE_TIME, time.time() - stime)
+            # Send CPO model to process
+            stime = time.time()
             self._write_message(CMD_SET_CPO_MODEL, cpostr)
+            self.process_infos.incr(CpoProcessInfos.MODEL_SEND_TIME, time.time() - stime)
+
             self._wait_event(EVT_SUCCESS)
 
         # Request refine conflict
         self._write_message(CMD_REFINE_CONFLICT)
 
-        # Wait next solution
-        return self._wait_json_conflict()
+        # Wait JSON result
+        jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoRefineConflictResult, jsol)
 
 
     def propagate(self):
@@ -235,8 +256,11 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Request propagation
         self._write_message(CMD_PROPAGATE)
 
-        # Wait next solution
-        return self._wait_json_propagate()
+        # Wait JSON result
+        jsol = self._wait_json_result(EVT_PROPAGATE_RESULT)
+
+        # Build result object
+        return self._create_result_object(CpoSolveResult, jsol)
 
 
     def end(self):
@@ -272,18 +296,13 @@ class CpoSolverAngel(solver.CpoSolverAgent):
             if evt == xevt:
                 return data
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
-                if self.logenabled:
-                    ldata = data.decode('utf-8')
-                    if self.printlog:
-                        self.lout.write(ldata)
-                        self.lout.flush()
-                    if self.loglines is not None:
-                        self.loglines.append(ldata)
+                if self.log_enabled:
+                    self._add_log_data(data.decode('utf-8'))
             elif evt == EVT_SOLVER_ERR_STREAM:
                 ldata = data.decode('utf-8')
                 if firsterror is None:
                     firsterror = ldata.replace('\n', '')
-                out = self.lout if self.lout is not None else sys.stdout
+                out = self.log_output if self.log_output is not None else sys.stdout
                 out.write("ERROR: ")
                 out.write(ldata)
                 out.flush()
@@ -303,80 +322,36 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         return data
 
 
-    def _wait_json_result(self):
-        """ Wait for a solution while forwarding logs if any.
+    def _wait_json_result(self, evt):
+        """ Wait for a JSON reesult while forwarding logs if any.
+        Args:
+            evt: Event to wait for
         Returns:
-            Model solution (type CpoSolveResult)
+            JSON solution string, decoded from UTF8
         """
 
         # Wait JSON result
-        data = self._wait_event(EVT_SOLVE_RESULT)
+        data = self._wait_event(evt)
+        self.process_infos[CpoProcessInfos.RESULT_DATA_SIZE] = len(data)
+
+        # Decode json result
+        stime = time.time()
         jsol = data.decode('utf-8')
-        self._set_last_json_result_string(jsol)
+        self.process_infos[CpoProcessInfos.RESULT_DECODE_TIME] = time.time() - stime
 
-        # Build response solution
-        msol = CpoSolveResult(self.model)
-        msol._add_json_solution(jsol)
-        if self.loglines is not None:
-            msol._set_solver_log(''.join(self.loglines))
-            self.loglines = []
-
-        return msol
-
-
-    def _wait_json_conflict(self):
-        """ Wait for a conflict while forwarding logs if any.
-        Returns:
-            Conflict result (type CpoConflictRefinerResult)
-        """
-
-        # Wait JSON result
-        data = self._wait_event(EVT_CONFLICT_RESULT)
-        jsol = data.decode('utf-8')
-        self._set_last_json_result_string(jsol)
-
-        # Build response
-        csol = CpoRefineConflictResult(self.model)
-        csol._add_json_solution(jsol)
-        if self.loglines is not None:
-            csol._set_solver_log(''.join(self.loglines))
-            self.loglines = []
-
-        return csol
-
-
-    def _wait_json_propagate(self):
-        """ Wait for a solution while forwarding logs if any.
-        Returns:
-            Partial model solution (type CpoModelSolution)
-        """
-
-        # Wait JSON result
-        data = self._wait_event(EVT_PROPAGATE_RESULT)
-        jsol = data.decode('utf-8')
-        self._set_last_json_result_string(jsol)
-
-        # Build response solution
-        msol = CpoSolveResult(self.model)
-        msol._add_json_solution(jsol)
-        if self.loglines is not None:
-            msol._set_solver_log(''.join(self.loglines))
-            self.loglines = []
-
-        return msol
+        return jsol
 
 
     def _write_message(self, cid, data=None):
         """ Write a message to the solver process
         Args:
             cid:   Command name
-            data:  Value to write
+            data:  Data to write, already encoded in UTF8 if required
         """
         # Build header
         cid = cid.encode('utf-8')
         tlen = len(cid)
         if data is not None:
-            data = data.encode('utf-8')
             tlen += len(data) + 1
         if tlen > 0xffffffff:
             raise AngelException("Try to send a message with length {}, greater than {}.".format(tlen, 0xffffffff))
@@ -389,11 +364,11 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         frame[5] = tlen         & 0xFF
 
         # Add data if any
+        self.context.log(5, "Send message: cmd=", cid, ", tsize=", tlen)
         if data is None:
             frame = frame + cid
         else:
             frame = frame + cid + bytearray(1) + data
-        self.context.log(5, "Send message: cmd=", cid, ", tsize=", tlen)
 
         # Write message frame
         self.pout.write(frame)

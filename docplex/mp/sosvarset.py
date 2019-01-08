@@ -3,10 +3,11 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import ModelingObject
+from docplex.mp.basic import ModelingObject, _BendersAnnotatedMixin
+from docplex.mp.constants import CplexScope
 
 
-class SOSVariableSet(ModelingObject):
+class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
     ''' This class models :index:`Special Ordered Sets` (SOS) of decision variables.
         An SOS has a type (SOS1, SOS2) and an ordered list of variables.
 
@@ -21,6 +22,8 @@ class SOSVariableSet(ModelingObject):
         self._sos_type = sos_type
         self._variables = variable_sequence[:]  # copy sequence
 
+    def cplex_scope(self):
+        return CplexScope.SOS_SCOPE
 
     @property
     def sos_type(self):
@@ -92,8 +95,21 @@ class SOSVariableSet(ModelingObject):
         return repr_s
 
     def copy(self, target_model, var_mapping):
-        copy_variables = [ var_mapping[v] for v in self.iter_variables()]
+        copy_variables = [var_mapping[v] for v in self.iter_variables()]
         return SOSVariableSet(model=target_model,
                               variable_sequence=copy_variables,
                               sos_type=self.sos_type,
                               name=self.name)
+
+    @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a SOS variable set.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)

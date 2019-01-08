@@ -12,6 +12,7 @@ import sys
 def env_is_64_bit():
     return sys.maxsize > 2**32
 
+
 # noinspection PyPep8
 class Environment(object):
     """ This class detects and contains information regarding other modules of interest, such as
@@ -46,6 +47,9 @@ class Environment(object):
 
         if start_auto_configure:
             self.auto_configure()
+
+    # class variable
+    env_is_python36 = platform.python_version() >= '3.6'
 
     def _get_numpy_hook(self):
         return self._numpy_hook

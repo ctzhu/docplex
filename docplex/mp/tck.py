@@ -12,7 +12,6 @@ from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate
 from docplex.mp.compat23 import izip
 from docplex.mp.error_handler import docplex_fatal
 
-from docplex.mp.basic import Priority
 from docplex.mp.vartype import VarType
 from docplex.mp.linear import Var, Expr
 from docplex.mp.constr import AbstractConstraint
@@ -45,6 +44,14 @@ class StaticTypeChecker(object):
                 # ok
                 pass
 
+    @classmethod
+    def logical_method_empty_args_error(cls, mdl, method_name):
+        msg = '{0:s} requires a non-empty sequence of binary variables'.format(method_name)
+        mdl.fatal(msg)
+
+
+
+
 class IDocplexTypeChecker(object):
     def typecheck_iterable(self, arg):
         raise NotImplementedError  # pragma: no cover
@@ -58,7 +65,7 @@ class IDocplexTypeChecker(object):
     def typecheck_var(self, obj):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_var_seq(self, seq):
+    def typecheck_var_seq(self, seq, vtype=None):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
@@ -68,6 +75,9 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_constraint(self, obj):
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_ct_to_add(self, ct, mdl, header):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_linear_constraint(self, obj):
@@ -81,6 +91,9 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_num(self, arg, caller=None):
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_int(self, arg, accept_negative=False, caller=None):
         raise NotImplementedError  # pragma: no cover
 
     def check_vars_domain(self, lbs, ubs, names):
@@ -154,12 +167,16 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if not isinstance(obj, Var):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
 
-    def typecheck_var_seq(self, seq):
+    def typecheck_var_seq(self, seq, vtype=None):
         # build a list to avoid consuming an iterator
         checked_var_list = list(seq)
         for i, x in enumerate(checked_var_list):
             if not isinstance(x, Var):
                 self.fatal("Expecting sequence of variables, got: {0!r} at position {1}", x, i)
+            if vtype and x.vartype != vtype:
+                self.fatal("Expecting sequence of type {0} variables, got: {1!r} at position {2}",
+                           vtype.short_name, x, i)
+
         return checked_var_list
 
     def typecheck_var_seq_all_different(self, seq):
@@ -180,6 +197,11 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_constraint(self, obj):
         if not isinstance(obj, AbstractConstraint):
             self.fatal("Expecting constraint, got: {0!s} with type: {1!s}", obj, type(obj))
+
+    def typecheck_ct_to_add(self, ct, mdl, header):
+        if not isinstance(ct, AbstractConstraint):
+            self.fatal("Expecting constraint, got: {0!r} with type: {1!s}", ct, type(ct))
+        self.typecheck_in_model(mdl, ct, header)
 
     def typecheck_linear_constraint(self, obj):
         if not isinstance(obj, AbstractConstraint):
@@ -206,9 +228,22 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         elif math.isnan(arg):
             self.fatal("{0}NaN value detected", caller_string)
 
+    def typecheck_int(self, arg, accept_negative=True, caller=None):
+        caller_string = "{0}: ".format(caller) if caller is not None else ""
+        if not is_number(arg):
+            self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+        elif math.isnan(arg):
+            self.fatal("{0}NaN value detected", caller_string)
+        elif not is_int(arg):
+            self.fatal("{0}Expecting integer, got: {1!r}", caller_string, arg)
+        elif not accept_negative and arg < 0:
+            self.fatal("{0}Expecting positive integer, got: {1!r}", caller_string, arg)
+
     def check_vars_domain(self, lbs, ubs, names):
-        if lbs and ubs:
-            names = names or generate_constant(None, max(len(lbs), len(ubs)))
+        l_ubs = len(ubs)
+        l_lbs = len(lbs)
+        if l_lbs and l_ubs:
+            names = names or generate_constant(None, max(l_lbs, l_ubs))
             for lb, ub, varname in izip(lbs, ubs, names):
                 self.check_var_domain(lb, ub, varname)
 
@@ -334,7 +369,7 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_var(self, obj):
         pass  # pragma: no cover
 
-    def typecheck_var_seq(self, seq):
+    def typecheck_var_seq(self, seq, vtype=None):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
@@ -344,6 +379,9 @@ class DummyTypeChecker(IDocplexTypeChecker):
         pass  # pragma: no cover
 
     def typecheck_constraint(self, obj):
+        pass  # pragma: no cover
+
+    def typecheck_ct_to_add(self, ct, mdl, header):
         pass  # pragma: no cover
 
     def typecheck_linear_constraint(self, obj):
@@ -357,6 +395,9 @@ class DummyTypeChecker(IDocplexTypeChecker):
         pass  # pragma: no cover
 
     def typecheck_num(self, arg, caller=None):
+        pass  # pragma: no cover
+
+    def typecheck_int(self, arg, accept_negative=True, caller=None):
         pass  # pragma: no cover
 
     def check_vars_domain(self, lbs, ubs, names):

@@ -141,8 +141,12 @@ Oper_abs                         = CpoOperation("abs", "abs", None, -1, ( CpoSig
 Oper_abstraction                 = CpoOperation("abstraction", "abstraction", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray, Type_IntExprArray, Type_IntArray, Type_Int)),) )
 Oper_all_diff                    = CpoOperation("alldiff", "all_diff", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray,)),) )
 Oper_all_min_distance            = CpoOperation("allMinDistance", "all_min_distance", None, -1, ( CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_Int)),) )
+# Oper_allowed_assignments         = CpoOperation("allowedAssignments", "allowed_assignments", None, -1, ( CpoSignature(Type_BoolExpr, (Type_IntExpr, Type_IntArray)),
+#                                                                                                          CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet))) )  # Signature added to accept arrays of couples
+# Signature added to allow array of couples that may appear as integer array
 Oper_allowed_assignments         = CpoOperation("allowedAssignments", "allowed_assignments", None, -1, ( CpoSignature(Type_BoolExpr, (Type_IntExpr, Type_IntArray)),
-                                                                                                         CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet))) )
+                                                                                                         CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet)),
+                                                                                                         CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_IntArray))) )  # Signature added to accept arrays of couples
 Oper_alternative                 = CpoOperation("alternative", "alternative", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVarArray, CpoParam(Type_IntExpr, dval=0))),) )
 Oper_always_constant             = CpoOperation("alwaysConstant", "always_constant", None, -1, ( CpoSignature(Type_Constraint, (Type_StateFunction, Type_IntervalVar, CpoParam(Type_BoolInt, dval=0), CpoParam(Type_BoolInt, dval=0))),
                                                                                                  CpoSignature(Type_Constraint, (Type_StateFunction, Type_TimeInt, Type_TimeInt, CpoParam(Type_BoolInt, dval=0), CpoParam(Type_BoolInt, dval=0)))) )
@@ -211,8 +215,12 @@ Oper_floor                       = CpoOperation("floor", "floor", None, -1, ( Cp
 Oper_forbid_end                  = CpoOperation("forbidEnd", "forbid_end", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_StepFunction)),) )
 Oper_forbid_extent               = CpoOperation("forbidExtent", "forbid_extent", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_StepFunction)),) )
 Oper_forbid_start                = CpoOperation("forbidStart", "forbid_start", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_StepFunction)),) )
+# Oper_forbidden_assignments       = CpoOperation("forbiddenAssignments", "forbidden_assignments", None, -1, ( CpoSignature(Type_BoolExpr, (Type_IntExpr, Type_IntArray)),
+#                                                                                                              CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet))) )  # Signature added to accept arrays of couples
+# Signature added to allow array of couples that may appear as integer array
 Oper_forbidden_assignments       = CpoOperation("forbiddenAssignments", "forbidden_assignments", None, -1, ( CpoSignature(Type_BoolExpr, (Type_IntExpr, Type_IntArray)),
-                                                                                                             CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet))) )
+                                                                                                             CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_TupleSet)),
+                                                                                                             CpoSignature(Type_BoolExpr, (Type_IntExprArray, Type_IntArray))) )  # Signature added to accept arrays of couples
 Oper_fract                       = CpoOperation("fract", "fract", None, -1, ( CpoSignature(Type_FloatExpr, (Type_FloatExpr,)),) )
 Oper_greater                     = CpoOperation("greater", "greater", ">", 5, ( CpoSignature(Type_BoolExpr, (Type_IntExpr, Type_IntExpr)),
                                                                                 CpoSignature(Type_BoolExpr, (Type_FloatExpr, Type_FloatExpr))) )

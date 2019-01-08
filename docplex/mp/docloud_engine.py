@@ -15,6 +15,7 @@ from docplex.mp.internal.json_infeasibility_handler import JSONInfeasibilityHand
 from docplex.mp.internal.json_conflict_handler import JSONConflictHandler
 from docplex.mp.printer_factory import ModelPrinterFactory
 from docplex.mp.solution import SolveSolution, SolutionMSTPrinter
+from docplex.mp.anno import ModelAnnotationPrinter
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.utils import normalize_basename
@@ -38,8 +39,6 @@ import sys
 # this is the default exchange format for docloud
 _DEFAULT_EXCHANGE_FORMAT = LP_format
 
-# default attachment name for PRMs
-prm_name = "file.prm"
 
 # default attachment name to trigger conflict refiner
 feasibility_name = "file.feasibility"
@@ -232,6 +231,9 @@ class DOcloudEngine(IndexerEngine):
         if progress_listener_list:
             self._model.warning("Progress listeners are not supported on DOcplexcloud.")
 
+    def register_callback(self, cb):
+        self._model._warning('Callbacks are not available on DOcplexcloud')
+
 
     @staticmethod
     def _docloud_cplex_version():
@@ -327,6 +329,7 @@ class DOcloudEngine(IndexerEngine):
         model_data = self.serialize_model(mdl)
         docloud_parameters = mdl.parameters
         prm_data = self._serialize_parameters(docloud_parameters, write_level=1, relax_mode=relax_mode)
+        prm_name = self._make_attachment_name(job_name , '.prm')
         feasopt_data = self._serialize_relaxables(relaxable_groups)
 
         # --- dump if need be
@@ -499,20 +502,26 @@ class DOcloudEngine(IndexerEngine):
 
         return result
 
+    def _make_attachment_name(self, job_name, extension):
+        return job_name + extension
+
+
     # noinspection PyProtectedMember
     def solve(self, mdl, parameters=None):
         # Before submitting the job, we will build the list of attachments
+        # parameters are CPLEX parameters
         attachments = []
 
         # make sure model is the first attachment: that will be the name of the job on the console
-        job_name = "python_%s" % mdl.name
+        job_name = normalize_basename("python_%s" % mdl.name)
         model_data = self.serialize_model(mdl)
-        model_name = normalize_basename(job_name) + self._exchange_format.extension
-        attachments.append({'name': model_name, 'data': model_data})
+        model_data_name = self._make_attachment_name(job_name, self._exchange_format.extension)
+        attachments.append({'name': model_data_name, 'data': model_data})
 
         # prm
         docloud_parameters = parameters if parameters is not None else mdl.parameters
         prm_data = self._serialize_parameters(docloud_parameters)
+        prm_name = self._make_attachment_name(job_name , '.prm')
         attachments.append({'name': prm_name, 'data': prm_data})
 
         # warmstart_data
@@ -520,8 +529,14 @@ class DOcloudEngine(IndexerEngine):
         mdl_mipstarts = mdl.mip_starts
         if mdl_mipstarts:
             warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts).encode('utf-8')
-            warmstart_name = normalize_basename(job_name) + ".mst"
+            warmstart_name = self._make_attachment_name(job_name, ".mst")
             attachments.append({'name': warmstart_name, 'data': warmstart_data})
+
+        # benders annotation
+        if mdl.has_benders_annotations():
+            anno_data = ModelAnnotationPrinter.print_to_string(mdl).encode('utf-8')
+            anno_name = self._make_attachment_name(job_name, '.ann')
+            attachments.append({'name': anno_name, 'data': anno_data})
 
         # info_to_monitor = {'jobid'}
         # if mdl.progress_listeners:

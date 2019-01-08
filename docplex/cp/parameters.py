@@ -15,12 +15,14 @@ For the parameters that require special values, those values are given as consta
 
 Changing the value of a parameter can be done in multiple ways.
 For example, the `TimeLimit` can be set to 60s :
+
    * `params.TimeLimit = 60`
    * `params.set_TimeLimit(60)`
    * `params['TimeLimit'] = 60`
    * `params.set_attribute('TimeLimit', 60)`
 
 Retrieving the value of a parameter can be done in the same way using:
+
    * `v = params.TimeLimit`
    * `v = params.get_TimeLimit()`
    * `v = params['TimeLimit']`
@@ -1068,8 +1070,25 @@ class CpoParameters(Context):
     Workers = property(get_Workers, set_Workers)
 
 
-# List of all available parameter names
-ALL_PARAMETER_NAMES = ("AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit", "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit", "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit", "CountDifferentInferenceLevel", "CountInferenceLevel", "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing", "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch", "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod", "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel", "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed", "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel", "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations", "WarningLevel", "Workers",)
+# Set of all public parameter names
+PUBLIC_PARAMETER_NAMES = \
+    {"AllDiffInferenceLevel", "AllMinDistanceInferenceLevel", "AutomaticReplay", "BranchLimit", "ChoicePointLimit",
+     "ConflictRefinerBranchLimit", "ConflictRefinerFailLimit", "ConflictRefinerIterationLimit",
+     "ConflictRefinerOnVariables", "ConflictRefinerTimeLimit","CountDifferentInferenceLevel", "CountInferenceLevel",
+     "CumulFunctionInferenceLevel", "DefaultInferenceLevel", "DistributeInferenceLevel", "DynamicProbing",
+     "DynamicProbingStrength", "ElementInferenceLevel", "FailLimit", "FailureDirectedSearch",
+     "FailureDirectedSearchEmphasis", "FailureDirectedSearchMaxMemory", "IntervalSequenceInferenceLevel", "LogPeriod",
+     "LogSearchTags", "LogVerbosity", "ModelAnonymizer", "MultiPointNumberOfSearchPoints", "NoOverlapInferenceLevel",
+     "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed",
+     "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel",
+     "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations",
+     "WarningLevel", "Workers",}
+
+# Set of all private but accepted parameter names
+PRIVATE_PARAMETER_NAMES = {"ObjectiveLimit",}
+
+# Set of all authorized parameter names
+ALL_PARAMETER_NAMES = PUBLIC_PARAMETER_NAMES | PRIVATE_PARAMETER_NAMES
 
 
 def _check_value_enum(val, accepted):

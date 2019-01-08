@@ -8,6 +8,7 @@
 from __future__ import print_function
 
 import os
+import sys
 import warnings
 from collections import OrderedDict
 from itertools import product
@@ -21,11 +22,11 @@ from docplex.mp.constants import SolveAttribute, ObjectiveSense
 from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstraint, \
     IndicatorConstraint, QuadraticConstraint, PwlConstraint
 from docplex.mp.context import Context, is_key_ignored, is_url_ignored, is_auto_publishing_solve_details, \
-    is_auto_publishing_json_solution, has_credentials, check_credentials
+    is_auto_publishing_json_solution, has_credentials
 from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
-from docplex.mp.error_handler import DefaultErrorHandler
+from docplex.mp.error_handler import DefaultErrorHandler, docplex_add_trivial_infeasible_ct
 from docplex.mp.format import LP_format, SAV_format
 from docplex.mp.mfactory import ModelFactory
 from docplex.mp.model_stats import ModelStatistics
@@ -36,8 +37,12 @@ from docplex.mp.tck import get_typechecker, StaticTypeChecker
 from docplex.mp.utils import DOcplexException
 from docplex.mp.utils import is_indexable, is_iterable, is_int, is_string, \
     make_output_path2, generate_constant, _AutomaticSymbolGenerator, _IndexScope, _to_list, _ToleranceScheme
+from docplex.mp.utils import apply_thread_limitations
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType, SemiContinuousVarType, SemiIntegerVarType
 from docplex.util.environment import get_environment
+from docplex.mp.xcounter import FastOrderedDict, ExprCounter
+
+from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
 
 try:
     from docplex.worker.solvehook import get_solve_hook
@@ -256,7 +261,7 @@ class Model(object):
             elif arg_name in frozenset({"info_level", "output_level"}):
                 self.output_level = arg_val
             elif arg_name in {"agent", "solver_agent"}:
-                self.__solver_agent = arg_val
+                self.context.solver.agent = arg_val
             elif arg_name == "log_output":
                 self.context.solver.log_output = arg_val
             elif arg_name == "warn_trivial":
@@ -271,8 +276,13 @@ class Model(object):
                 self._print_full_obj = bool(arg_val)
             elif arg_name == 'deploy':
                 self._deploy = bool(arg_val)
+            elif arg_name == 'clean_before_solve':
+                self.set_clean_before_solve(arg_val)
+            elif arg_name in frozenset({'url', 'key'}):
+                # these two are known, no need to rant
+                pass
             else:
-                self.warning("argument: {0:s}:{1!s} - is not recognized (ignored)", arg_name, arg_val)
+                self.warning("keyword argument: {0:s}={1!s} - is not recognized (ignored)", arg_name, arg_val)
 
     def _get_kwargs(self):
         kwargs_map = {'float_precision': self.float_precision,
@@ -285,7 +295,8 @@ class Model(object):
                       'keep_all_exprs': self._keep_all_exprs,
                       'checker': self._checker_key,
                       'full_obj': self._print_full_obj,
-                      'deploy': self._deploy}
+                      'deploy': self._deploy,
+                      'clean_before_solve': self._clean_before_solve}
         return kwargs_map
 
     _default_varname_pattern = "_x"
@@ -315,8 +326,7 @@ class Model(object):
             name = Model._name_generator.new_symbol()
         self._name = name
 
-        self.__solver_agent = None  # default
-        self.__error_handler = DefaultErrorHandler(output_level='warning')
+        self._error_handler = DefaultErrorHandler(output_level='warning')
 
         # type instances
         self._binary_vartype = BinaryVarType()
@@ -332,6 +342,7 @@ class Model(object):
         self.__allcts = []
         self.__cts_by_name = None
         self.__allpwlfuncs = []
+        self._benders_annotations = {}
 
         self._allsos = []
 
@@ -347,6 +358,9 @@ class Model(object):
 
         # by default, deploy model is off
         self._deploy = False
+
+        # clean engine before solve (mip starts)
+        self._clean_before_solve = False  # default is False: faster
 
         # expression ordering
         self._keep_ordering = False
@@ -396,6 +410,8 @@ class Model(object):
         # update from kwargs, before the actual inits.
         self._parse_kwargs(kwargs)
 
+        self._set_term_dict_type(self._keep_ordering)
+
         self._checker = get_typechecker(arg=self._checker_key, logger=self.error_handler)
 
         # -- scopes
@@ -413,17 +429,18 @@ class Model(object):
         self._unique_counter = -1
 
         # init engine
-        engine = self._make_new_engine(self.solver_agent, self.context)
+        engine = self._make_new_engine_from_agent(self.solver_agent, self.context)
         self.__engine = engine
 
         self_keep_ordering = self.keep_ordering
-        self._lfactory = ModelFactory(self, engine, ordered=self_keep_ordering)
+        self_term_dict_type = self._term_dict_type
+        self._lfactory = ModelFactory(self, engine, ordered=self_keep_ordering, term_dict_type=self_term_dict_type)
         from docplex.mp.quadfact import QuadFactory
-        self._qfactory = QuadFactory(self, engine, ordered=self_keep_ordering)
+        self._qfactory = QuadFactory(self, engine, ordered=self_keep_ordering, term_dict_type=self_term_dict_type)
         # after parse kwargs
-        self._aggregator = ModelAggregator(self._lfactory, self._qfactory, ordered=self_keep_ordering)
+        self._aggregator = ModelAggregator(self._lfactory, self._qfactory, ordered=self_keep_ordering, counter_type=self_term_dict_type)
 
-        self.__solution = None
+        self._solution = None
         self._solve_details = None
 
         # stats
@@ -433,10 +450,16 @@ class Model(object):
         self._quadexpr_clone_counter = 0
 
         # all the following must be placed after an engine has been set.
-        self.__objective_expr = None
+        self._objective_expr = None
 
         self.set_objective(sense=self._lfactory.default_objective_sense(),
                            expr=self._new_default_objective_expr())
+
+    def _set_term_dict_type(self, ordered):
+        if not ordered or Environment.env_is_python36:
+            self._term_dict_type = dict
+        else:
+            self._term_dict_type = FastOrderedDict
 
     def _sync_params(self, params):
         # INTERNAL: execute only once
@@ -507,12 +530,23 @@ class Model(object):
     def _set_keep_ordering(self, ordered):  # pragma: no cover
         # INTERNAL
         self._keep_ordering = bool(ordered)
-        self._lfactory._set_ordering(ordered)
-        self._aggregator.set_ordering(ordered)
+        self._set_term_dict_type(self._keep_ordering)
+        new_term_dict_type = self._term_dict_type
+        self._lfactory._set_ordering(ordered, new_term_dict_type)
+        self._aggregator.set_ordering(ordered, new_term_dict_type)
 
     keep_ordering = property(_get_keep_ordering)
 
     def get_deploy(self):
+        """ This property is used to get or set the deployment flag of the model.
+
+         The deployment boolean flag indicates whether names are used or not.
+         When set to True, all names are ignored. This could lead to performance 
+         improvements when building large models.
+         
+         By default, this flag is set to False.
+
+         """
         return self._deploy
 
     def set_deploy(self, deployed):
@@ -548,6 +582,15 @@ class Model(object):
         self._float_meta_format = '{%%d:.%df}' % nb_digits
 
     float_precision = property(get_float_precision, set_float_precision)
+
+
+    def get_clean_before_solve(self):
+        return self._clean_before_solve
+
+    def set_clean_before_solve(self, clean_flag):
+        self._clean_before_solve = bool(clean_flag)
+
+    clean_before_solve = property(get_clean_before_solve, set_clean_before_solve)
 
     # generate a new , unique counter, in the scope of this model
     def _new_unique_counter(self):
@@ -588,22 +631,22 @@ class Model(object):
 
     @property
     def solver_agent(self):
-        return self.__solver_agent
+        return self.context.solver.agent
 
     @property
     def error_handler(self):
-        return self.__error_handler
+        return self._error_handler
 
     @property
     def solution(self):
         """ This property returns the current solution of the model or None if the model has not yet been solved
         or if the last solve has failed.
         """
-        return self.__solution
+        return self._solution
 
     def _get_solution(self):
         # INTERNAL
-        return self.__solution
+        return self._solution
 
     def new_solution(self, var_value_dict=None, name=None):
         return self._lfactory.new_solution(var_value_dict, name)
@@ -629,25 +672,25 @@ class Model(object):
         self._mipstarts.remove(mipstart)
 
     def fatal(self, msg, *args):
-        self.__error_handler.fatal(msg, args)
+        self._error_handler.fatal(msg, args)
 
     def error(self, msg, *args):
-        self.__error_handler.error(msg, args)
+        self._error_handler.error(msg, args)
 
     def warning(self, msg, *args):
-        self.__error_handler.warning(msg, args)
+        self._error_handler.warning(msg, args)
 
     def info(self, msg, *args):
-        self.__error_handler.info(msg, args)
+        self._error_handler.info(msg, args)
 
     def trace(self, msg, *args):
         self.error_handler.trace(msg, args)
 
     def get_output_level(self):
-        return self.__error_handler.get_output_level()
+        return self._error_handler.get_output_level()
 
     def set_output_level(self, new_output_level):
-        self.__error_handler.set_output_level(new_output_level)
+        self._error_handler.set_output_level(new_output_level)
 
     def set_quiet(self):
         self.error_handler.set_quiet()
@@ -675,22 +718,26 @@ class Model(object):
         """
         self._clear_internal()
 
-    def _clear_internal(self):
+    def _clear_internal(self, terminate=False):
         self.__allvars = []
         self.__allvarctns = []
         self.__vars_by_name = {}
         self.__allcts = []
         self.__cts_by_name = None
         self.__allpwlfuncs = []
+        self._benders_annotations = {}
         self._allkpis = []
         self.clear_kpis()
         self._last_solve_status = self._unknown_status
-        self.__solution = None
+        self._solution = None
         self._mipstarts = []
         self._clear_scopes()
         self._allsos = []
         self._allpwl = []
         self._pwl_counter = {}
+        if not terminate:
+            self.set_objective(sense=self._lfactory.default_objective_sense(),
+                               expr=self._new_default_objective_expr())
 
     def _clear_scopes(self):
         for a_scope in self._scopes:
@@ -705,7 +752,7 @@ class Model(object):
         self._lfactory._checker = new_checker
         self._qfactory._checker = new_checker
 
-    def _make_new_engine(self, solver_agent, context):
+    def _make_new_engine_from_agent(self, solver_agent, context):
         new_engine = self._engine_factory.new_engine(solver_agent, self.environment, model=self, context=context)
         new_engine.notify_trace_output(self.context.solver.log_output_as_stream)
         return new_engine
@@ -714,7 +761,7 @@ class Model(object):
         self.__engine = e2
         self._lfactory.update_engine(e2)
 
-    def _clear_engine(self, restart):
+    def _clear_engine(self):
         # INTERNAL
         old_engine = self.__engine
         if old_engine:
@@ -723,9 +770,19 @@ class Model(object):
             # from Ryan
             del old_engine
             self.__engine = None
-        if restart:
-            new_engine = self._make_new_engine(self.solver_agent, self.context)
-            self._set_engine(new_engine)
+
+
+    def set_new_engine_from_agent(self, new_agent):
+        self_context = self.context
+        # set new agent
+        if new_agent is None:
+            new_agent = self_context.solver.agent
+        elif is_string(new_agent):
+            self_context.solver.agent = new_agent
+        else:
+            self.fatal('unexpected value for agent: {0!r}, expecting string or None', new_agent)
+        new_engine = self._make_new_engine_from_agent(new_agent, self_context)
+        self._set_engine(new_engine)
 
     def get_engine(self):
         # INTERNAL for testing
@@ -784,7 +841,7 @@ class Model(object):
                     if mobj_name in name_dir:
                         old_name_value = name_dir[mobj_name]
                         # Duplicate constraint name: foo
-                        self.fatal("Duplicate {0} name: {1} already used for {2!s}", descr, mobj_name, old_name_value)
+                        self.warning("Duplicate {0} name: {1} already used for {2!r}", descr, mobj_name, old_name_value)
 
                 name_dir[mobj_name] = mobj
 
@@ -806,7 +863,7 @@ class Model(object):
                     if var_name in varname_dict:
                         old_name_value = varname_dict[var_name]
                         # Duplicate constraint name: foo
-                        self.fatal("Duplicate variable name: {0} already used for {1!s}", var_name, old_name_value)
+                        self.warning("Duplicate variable name: {0} already used for {1!s}", var_name, old_name_value)
                     varname_dict[var_name] = var
         else:
             for var, var_index in izip(allvars, indices):
@@ -852,7 +909,7 @@ class Model(object):
                     ct_name_map[ct_name] = ct
         else:
             for ct, ct_index in izip(cts, indices):
-                ct.set_index(ct_index)
+                ct._index = ct_index
 
         self._linct_scope.notify_obj_indices(cts, indices)
         # extend container faster than append()
@@ -1031,9 +1088,19 @@ class Model(object):
         """
         return self.__vars_by_name.get(name, None)
 
-    # @staticmethod
-    # def _build_name_dict(mobj_seq):
-    # return {mobj.name: mobj for mobj in mobj_seq if mobj.name is not None}
+    def find_matching_vars(self, pattern, match_case=False):
+        key_pattern = pattern if match_case else pattern.lower()
+        matches = []
+        for dv in self.iter_variables():
+            dvname = dv.name
+            if dvname:
+                if match_case:
+                    if key_pattern in dvname:
+                        matches.append(dv)
+                else:
+                    if key_pattern in dvname.lower():
+                        matches.append(dv)
+        return matches
 
     # index management
     def _build_index_dict(self, mobj_it, raise_on_invalid_index=False):
@@ -1937,6 +2004,46 @@ class Model(object):
 
         return self._lfactory.new_max_expr(*max_args)
 
+
+    def logical_and(self, *args):
+        """ Builds an expression equal to the logical AND value of its arguments.
+
+        This method accepts a non-empty variable number of binary variables.
+
+        Args:
+            args: A variable list of binary variables, that is, decision variables with type BinaryVarType.
+            
+        Note:
+            If passed an empty number of arguments, this method returns an expression equal to 1.
+            
+        Returns:
+            An expression, equal to 1 if and only if all argument variables are equal to 1,
+            else equal to 0.
+
+        """
+        bvars = self._checker.typecheck_var_seq(args, vtype=self.binary_vartype)
+        return self._lfactory.new_logical_and_expr(bvars)
+
+    def logical_or(self, *args):
+        """ Builds an expression equal to the logical OR value of its arguments.
+
+        This method accepts a non-empty variable number of binary variables.
+
+        Args:
+            args: A variable list of binary variables, that is, decision variables with type BinaryVarType.
+
+        Note:
+            If passed an empty number of arguments, this method a zero expression.
+
+        Returns:
+            An expression, equal to 1 if and only if at least one of its
+             argument variables is equal to 1, else equal to 0.
+
+        """
+        bvars = self._checker.typecheck_var_seq(args, vtype=self.binary_vartype)
+        return self._lfactory.new_logical_or_expr(bvars)
+
+
     def _to_linear_expr(self, e, force_clone=False, context=None):
         # INTERNAL
         return self._lfactory._to_linear_expr(e, force_clone=force_clone, context=context)
@@ -2078,7 +2185,7 @@ class Model(object):
         # INTERNAL
         eng = self.__engine
         if isinstance(ct, LinearConstraint):
-            return eng.create_binary_linear_constraint(ct)
+            return eng.create_linear_constraint(ct)
         elif isinstance(ct, RangeConstraint):
             return eng.create_range_constraint(ct)
         elif isinstance(ct, IndicatorConstraint):
@@ -2117,7 +2224,7 @@ class Model(object):
             arg = None
         elif ctname:
             arg = ctname
-        elif ct.has_user_name():
+        elif ct.has_name():
             arg = ct.name
         else:
             arg = str(ct)
@@ -2131,11 +2238,13 @@ class Model(object):
                 self.info("Adding trivial feasible {2}: {0!s}, rank: {1}", arg, ct_rank, ct_typename)
             else:
                 self.error("Adding trivial infeasible {2}: {0!s}, rank: {1}", arg, ct_rank, ct_typename)
+                docplex_add_trivial_infeasible_ct(ct=arg)
         else:
             if is_feasible:
                 self.info("Adding trivial feasible {1}, rank: {0}", ct_rank, ct_typename)
             else:
                 self.error("Adding trivial infeasible {1}, rank: {0}", ct_rank, ct_typename)
+                docplex_add_trivial_infeasible_ct(ct=None)
 
     def _prepare_constraint(self, ct, ctname, check_for_trivial_ct, arg_checker=None):
         # INTERNAL
@@ -2147,16 +2256,14 @@ class Model(object):
 
         elif ct is False:
             # happens with sum([]) and constant e.g. sum([]) == 2
-            #ct = self._lfactory.new_trivial_infeasible_ct()
             self._notify_trivial_constraint(ct=None, ctname=ctname, is_feasible=False)
+            msg = "Adding a trivially infeasible constraint"
             if ctname:
-                self.fatal("Adding a trivially infeasible constraint with name: {0}", ctname)
-            else:
-                # analogous to 0 == 1, model is sure to fail
-                self.fatal("Adding trivially infeasible constraint")
+                msg += ' with name: {0}'.format(ctname)
+            # analogous to 0 == 1, model is sure to fail
+            self.fatal(msg)
         else:
-            checker.typecheck_constraint(ct)
-            checker.typecheck_in_model(model=self, mobj=ct)
+            checker.typecheck_ct_to_add(ct, self, 'add_constraint')
             # -- watch for trivial cts e.g. linexpr(0) <= linexpr(1)
             if check_for_trivial_ct and ct.is_trivial():
                 if ct._is_trivially_feasible():
@@ -2282,6 +2389,9 @@ class Model(object):
             self._remove_constraint_internal(ct)
 
     def clear_constraints(self):
+        """
+        This method removes all constraints from the model.
+        """
         self.__engine.remove_constraints(cts=None)  # special case to denote all
         # clear containers
         self.__allcts = []
@@ -2290,13 +2400,14 @@ class Model(object):
         for ctscope in self._ctscopes:
             ctscope.reset()
 
-    def remove_constraints(self, *args):
-        if 0 == len(args):
-            self.clear_constraints()
-        else:
-            doomed = args
-            for d in doomed:
-                self._checker.typecheck_constraint(d)
+    def remove_constraints(self, cts=None):
+        """
+        This method removes a collection of constraints from the model.
+
+        :param cts: a sequence of constraints (linear, range, quadratic, indicators)
+        """
+        if cts is not None:
+            doomed = self._checker.typecheck_constraint_seq(cts)
             self.__engine.remove_constraints(doomed)
             self._remove_constraints_internal(doomed)
 
@@ -2369,18 +2480,19 @@ class Model(object):
             The newly created indicator constraint.
         """
         self._checker.typecheck_var(binary_var)
-        self._checker.typecheck_constraint(linear_ct)
+        self._checker.typecheck_linear_constraint(linear_ct)
         self._checker.typecheck_zero_or_one(active_value)
         self._checker.typecheck_in_model(self, binary_var, header="binary variable")
         self._checker.typecheck_in_model(self, linear_ct, header="linear_constraint")
-        iname = None if self._deploy else name
-        return self._add_indicator(binary_var, linear_ct, active_value, iname)
+
+        return self._add_indicator(binary_var, linear_ct, active_value, name)
 
     _indicator_trivial_feasible_idx = -2
     _indicator_trivial_infeasible_idx = -4
 
     def _add_indicator(self, binary_var, linear_ct, active_value=1, name=None):
         # INTERNAL
+        iname = None if self._deploy else name
         indicator = self._lfactory.new_indicator_constraint(binary_var, linear_ct, active_value=active_value)
         if self._checker.check_trivial_constraints() and linear_ct.is_trivial():
             is_feasible = linear_ct._is_trivially_feasible()
@@ -2394,7 +2506,7 @@ class Model(object):
                 indicator.invalidate()
                 return self._indicator_trivial_infeasible_idx
         else:
-            return self._add_constraint_internal(indicator, name)
+            return self._add_constraint_internal(indicator, iname)
 
     def range_constraint(self, lb, expr, ub, rng_name=None):
         """ Creates a new range constraint but does not add it to the model.
@@ -2471,23 +2583,12 @@ class Model(object):
 
     def round_objective_if_discrete(self, raw_obj):
         # INTERNAL
-        if self.__objective_expr.is_discrete():
+        if self._objective_expr.is_discrete():
             return self.round_nearest(raw_obj)
         else:
             return raw_obj
 
-    @property
-    def objective_expr(self):
-        """ This property returns the current expression used as the model objective.
-        """
-        return self.__objective_expr
 
-    @property
-    def objective_sense(self):
-        """ This property returns the direction of the optimization as an instance of
-        :class:`docplex.mp.basic.ObjectiveSense`, either Minimize or Maximize.
-        """
-        return self.__objective_sense
 
     def minimize(self, expr):
         """ Sets an expression as the expression to be minimized.
@@ -2522,7 +2623,7 @@ class Model(object):
         Returns:
            Boolean: True if the model is a minimization model.
         """
-        return self.__objective_sense is ObjectiveSense.Minimize
+        return self._objective_sense is ObjectiveSense.Minimize
 
     def is_maximize(self):
         """ Checks whether the model is a maximization model.
@@ -2534,7 +2635,7 @@ class Model(object):
         Returns:
             Boolean: True if the model is a maximization model.
         """
-        return self.__objective_sense is ObjectiveSense.Maximize
+        return self._objective_sense is ObjectiveSense.Maximize
 
     def objective_coef(self, dvar):
         """ Returns the objective coefficient of a variable.
@@ -2552,7 +2653,7 @@ class Model(object):
         return self._objective_coef(dvar)
 
     def _objective_coef(self, dvar):
-        return self.__objective_expr.unchecked_get_coef(dvar)
+        return self._objective_expr.unchecked_get_coef(dvar)
 
     def remove_objective(self):
         """ Clears the current objective.
@@ -2575,12 +2676,12 @@ class Model(object):
             Boolean: True, if the model has a non-constant objective expression.
 
         """
-        return not self.__objective_expr.is_constant()
+        return not self._objective_expr.is_constant()
 
 
     def has_objective(self):
         # INTERNAL
-        return not self.__objective_expr.is_zero()
+        return not self._objective_expr.is_zero()
 
     def set_objective(self, sense, expr):
         """ Sets a new objective.
@@ -2595,109 +2696,74 @@ class Model(object):
             When using a number, the search will not optimize but only look for a feasible solution.
 
         """
+        self.set_objective_sense(sense)
+        self.set_objective_expr(expr)
+
+    def set_objective_sense(self, sense):
         actual_sense = self._resolve_sense(sense)
-        current_objective_expr = self.__objective_expr
-        if expr is None:
+        self._objective_sense = actual_sense
+        eng = self.__engine
+        if eng:
+            # when ending the model, the engine is None here
+            eng.set_objective_sense(actual_sense)
+
+    def get_objective_sense(self):
+        """ This property is used to get or set the direction of the optimization as an instance of
+        :class:`docplex.mp.basic.ObjectiveSense`, either Minimize or Maximize.
+        
+        This property also accepts strings as arguments: 'min' for minimize and 'max' for maximize.
+        
+        """
+        return self._objective_sense
+
+    objective_sense = property(get_objective_sense, set_objective_sense)
+
+    def set_objective_expr(self, new_objexpr):
+        if new_objexpr is None:
             expr = self._new_default_objective_expr()
         else:
-            expr = self._lfactory._to_expr(expr)
+            expr = self._lfactory._to_expr(new_objexpr)
+            #expr.keep()
             expr.notify_used(self)
 
         eng = self.__engine
-        eng.set_objective_sense(actual_sense)
-        eng.set_objective_expr(new_objexpr=expr, old_objexpr=current_objective_expr)
-        if current_objective_expr is not None:
-            current_objective_expr.notify_unsubscribed(subscriber=self)
+        current_objective_expr = self._objective_expr
+        if eng:
+            # when ending the model, the engine is None here
+            eng.set_objective_expr(new_objexpr=expr, old_objexpr=current_objective_expr)
+            if current_objective_expr is not None:
+                current_objective_expr.notify_unsubscribed(subscriber=self)
+        self._objective_expr = expr
 
-        self.__objective_sense = actual_sense
-        self.__objective_expr = expr
+    def get_objective_expr(self):
+        """ This property is used to get or set the current expression used as the model objective.
+        """
+        return self._objective_expr
+
+    objective_expr = property(get_objective_expr, set_objective_expr)
 
     def notify_expr_modified(self, expr, event):
         # INTERNAL
-        objexpr = self.__objective_expr
+        objexpr = self._objective_expr
         if event and expr is objexpr or expr is objexpr.linear_part:
             # old and new are the same
             self.__engine.update_objective(expr=expr, event=event)
 
     def notify_expr_replaced(self, old_expr, new_expr):
-        if old_expr is self.__objective_expr:
+        if old_expr is self._objective_expr:
             self.__engine.set_objective_expr(new_objexpr=new_expr, old_objexpr=old_expr)
             new_expr.grab_subscribers(old_expr)
 
     def _new_default_objective_expr(self):
         # INTERNAL
-        return self._lfactory.linear_expr(constant=0, name=None)
+        return self._lfactory.linear_expr(arg=None, constant=0, safe=True)
 
-    def set_objective_sense(self, sense):
-        actual_sense = self._resolve_sense(sense)
-        self.__engine.set_objective_sense(actual_sense)
 
     def _can_solve(self):
         return self.__engine.can_solve()
 
     def _make_end_infodict(self):
         return self.solution.as_dict(keep_zeros=False) if self.solution is not None else dict()
-
-    def _get_key_in_kwargs(self, context, kwargs_dict):
-        """Returns the overloaded value of api_key in the specified dict.
-
-        If a 'key'  is found, it is returned. If 'key' is not found, this
-        looks up 'api_key' (compatibility mode with versions < 1.0)
-        """
-        key = kwargs_dict.get('key')
-        if not key:
-            key = kwargs_dict.get('api_key')
-        if key:
-            try:
-                ignored_keys = context.solver.docloud.ignored_keys
-                # if string, allow comma separated form
-                if isinstance(ignored_keys, six.string_types):
-                    values = ignored_keys.split(",")
-                    if key in values:
-                        return None
-                elif key in ignored_keys:
-                    return None
-            except AttributeError:
-                # no ignored_keys, just pass
-                pass
-        return key
-
-    def _get_url_in_kwargs(self, context, kwargs_dict):
-        """Returns the overloaded value of url in the specified dict.
-        """
-        url = kwargs_dict.get('url')
-        if url:
-            try:
-                ignored_urls = context.solver.docloud.ignored_urls
-                # if string, allow comma separated form
-                if isinstance(ignored_urls, six.string_types):
-                    values = ignored_urls.split(",")
-                    if url in values:
-                        return None
-                elif url in ignored_urls:
-                    return None
-            except AttributeError:
-                # no ignored_urls, just pass
-                pass
-        return url
-
-    def _must_use_docloud(self, __context, **kwargs):
-        # returns True if context + kwargs require an execution on cloud
-        # this happens in the following cases:
-        # (i)  kwargs contains a "docloud_context" key (compat??)
-        # (ii) both an explicit url and api_key appear in kwargs
-        # (iv) the context's "solver.agent" is "docloud"
-        # (v)  kwargs override agent to be "docloud"
-        docloud_agent_name = "docloud"  # this might change
-        have_docloud_context = kwargs.get('docloud_context') is not None
-        have_api_key = self._get_key_in_kwargs(__context, kwargs)
-        have_url = self._get_url_in_kwargs(__context, kwargs)
-        context_agent_is_docloud = __context.solver.get('agent') == docloud_agent_name
-        kwargs_agent_is_docloud = kwargs.get('agent') == docloud_agent_name
-        return have_docloud_context \
-               or (have_api_key and have_url) \
-               or context_agent_is_docloud \
-               or kwargs_agent_is_docloud
 
     def prepare_actual_context(self, **kwargs):
         # prepares the actual context that will be used for a solve
@@ -2709,13 +2775,8 @@ class Model(object):
         arg_context = kwargs.get('context') or self.context
         if not isinstance(arg_context, Context):
             self.fatal('Expecting instance of docplex.mp.Context, got: {0!r}', arg_context)
-        context = arg_context.clone()
-
-        # if kwargs.get('context') is not None:
-        #     context = deepcopy(kwargs['context'])
-        # else:
-        #     # we are sure kwargs is not empty
-        #     context = deepcopy(self.context)
+        cloned = False
+        context = arg_context
 
         # update the context with provided kwargs
         for argname, argval in six.iteritems(kwargs):
@@ -2724,7 +2785,12 @@ class Model(object):
                 pass
             elif argname == "key" and is_key_ignored(context, argval) and context.solver.docloud.key:
                 pass
+            elif argname == 'clean_before_solve':
+                pass
             elif argname != "context" and argval is not None:
+                if not cloned:
+                    context = context.clone()
+                    cloned = True
                 context.update_key_value(argname, argval)
 
         return context
@@ -2804,23 +2870,21 @@ class Model(object):
         try:
             self.set_log_output(context.solver.log_output)
 
-            forced_docloud = self._must_use_docloud(context, **kwargs)
+            forced_docloud = context_must_use_docloud(context, **kwargs)
+            have_credentials = context_has_docloud_credentials(context, do_warn=True)
 
-            have_credentials = False
-            if context.solver.docloud:
-                have_credentials, error_message = check_credentials(context.solver.docloud)
-                if error_message is not None:
-                    warnings.warn(error_message, stacklevel=2)
             if forced_docloud:
                 if have_credentials:
                     return self._solve_cloud(context)
                 else:
                     self.fatal("DOcplexcloud context has no valid credentials: {0!s}",
                                context.solver.docloud)
+
             # from now on docloud_context is None
             elif self.environment.has_cplex:
                 # if CPLEX is installed go for it
-                return self._solve_local(context)
+                force_clean_before_solve = kwargs.get('clean_before_solve')
+                return self._solve_local(context, force_clean_before_solve)
             elif have_credentials:
                 # no context passed as argument, no Cplex installed, try model's own context
                 return self._solve_cloud(context)
@@ -2847,10 +2911,10 @@ class Model(object):
 
     def _notify_solve_hit_limit(self, solve_details):
         # INTERNAL
-        if solve_details.has_hit_limit():
+        if solve_details and solve_details.has_hit_limit():
             self.info("solve: {0}".format(solve_details.status))
 
-    def _solve_local(self, context):
+    def _solve_local(self, context, force_clean_before_solve=None):
         """ Starts a solve operation on the local machine.
 
         Note:
@@ -2866,23 +2930,7 @@ class Model(object):
             A Solution object if the solve operation succeeded, None otherwise.
 
         """
-        parameters = context.cplex_parameters
-
-        # threads limitation
-        if getattr(context.solver, 'max_threads', None) is not None:
-            if parameters.threads.get() == 0:
-                max_threads = context.solver.max_threads
-            else:
-                max_threads = min(context.solver.max_threads,
-                                  parameters.threads.get())
-            # we don't want to duplicate parameters unnecessary
-            if max_threads != parameters.threads.get():
-                parameters = parameters.copy()
-                parameters.threads = max_threads
-                out_stream = context.solver.log_output_as_stream
-                if out_stream:  # pragma: no cover
-                    out_stream.write(
-                        "WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
+        parameters = apply_thread_limitations(context.cplex_parameters, context.solver)
 
         self.notify_start_solve()
 
@@ -2920,8 +2968,12 @@ class Model(object):
         else:
             saved_params = {}
 
+        saved_clean_before_solve = self.clean_before_solve if force_clean_before_solve is not None else None
+
         new_solution = None
         try:
+            if force_clean_before_solve is not None:
+                self.clean_before_solve = force_clean_before_solve
             used_parameters = parameters or self.parameters
             assert used_parameters is not None
             self._apply_parameters_to_engine(used_parameters)
@@ -2938,6 +2990,10 @@ class Model(object):
         except DOcplexException as docpx_e:  # pragma: no cover
             self._set_solution(None)
             raise docpx_e
+
+        except Exception as e:
+            self._set_solution(None)
+            raise e
 
         finally:
             solve_details = self_engine.get_solve_details()
@@ -2967,6 +3023,9 @@ class Model(object):
                 for p, v in six.iteritems(saved_params):
                     self_engine.set_parameter(p, v)
 
+            if saved_clean_before_solve is not None:
+                self.clean_before_solve = saved_clean_before_solve
+
         return new_solution
 
     def get_solve_status(self):
@@ -2979,13 +3038,15 @@ class Model(object):
         """
         return self._last_solve_status
 
+    def _new_docloud_engine(self, ctx):
+        return self._engine_factory.new_docloud_engine(model=self,
+                                                       docloud_context=ctx.solver.docloud,
+                                                       log_output=ctx.solver.log_output_as_stream)
+
     def _solve_cloud(self, context):
-        docloud_context = context.solver.docloud
         parameters = context.cplex_parameters
         # see if we can reuse the local docloud engine if any?
-        docloud_engine = self._engine_factory.new_docloud_engine(model=self,
-                                                                 docloud_context=docloud_context,
-                                                                 log_output=context.solver.log_output_as_stream)
+        docloud_engine = self._new_docloud_engine(context)
 
         self.notify_start_solve()
         self._fire_start_solve_listeners()
@@ -3001,7 +3062,7 @@ class Model(object):
         self._notify_solve_hit_limit(solve_details)
         self._solve_details = solve_details
         self._fire_end_solve_listeners(new_solution is not None, reported_obj)
-        # return new_solution in all cases: either None or a solution instance
+        # return solution from cloud engine: either None or a solution instance
         return new_solution
 
     def solve_cloud(self, context=None):
@@ -3104,9 +3165,9 @@ class Model(object):
             The current solution of the model is the first solution in the tuple.
         """
         if tolerances is None:
-            schemes = generate_constant(_ToleranceScheme(absolute=1e-6, relative=1e-4), count_max=None)
+            schemes = generate_constant(_ToleranceScheme(), count_max=None)
 
-        elif is_indexable(tolerances):
+        elif is_indexable(tolerances) and not isinstance(tolerances, tuple):
             schemes = []
             for t in tolerances:
                 try:
@@ -3119,11 +3180,16 @@ class Model(object):
                 sch = _ToleranceScheme(*tolerances)
                 schemes = generate_constant(sch, count_max=None)
             except TypeError:
-                self.fatal('tolerances expects None, a 2-tuple of numbers, or a sequence of 2-tuples')
+                try:
+                    tolerances.compute_tolerance(0)
+                    # recognized a callable object
+                    schemes = generate_constant(tolerances, count_max=None)
+                except AttributeError:
+                    self.fatal('tolerances expects None, a tuple of (absolute, relative) tolerances, or a sequence of 2-tuples, got: {0!r}', tolerances)
 
         dump_pass_files = kwargs.get('dump_lps', False)
-        old_objective_expr = self.__objective_expr
-        old_objective_sense = self.__objective_sense
+        old_objective_expr = self._objective_expr
+        old_objective_sense = self._objective_sense
         if not goals:
             self.error("solve_lexicographic requires a non-empty list of goals, got: {0!r}".format(goals))
             return None
@@ -3138,13 +3204,8 @@ class Model(object):
         # keep extra constraints, in order to remove them at the end.
         extra_cts = []
         for gi, g in enumerate(goals):
-            try:
-                g0, g1 = g
-                goal_expr = self._lfactory._to_linear_expr(g0)
-                goal_name = g1 or goal_expr.name
-            except TypeError:
-                goal_expr = self._lfactory._to_expr(g)
-                goal_name = g.name
+            goal_expr = self._lfactory._to_expr(g)
+            goal_name = g.name
 
             actual_goals.append((goal_name or "pass%d" % (gi + 1), goal_expr))
 
@@ -3212,7 +3273,7 @@ class Model(object):
 
     def _has_solution(self):
         # INTERNAL
-        return self.__solution is not None
+        return self._solution is not None
 
     def _set_solution(self, new_solution):
         """
@@ -3221,7 +3282,7 @@ class Model(object):
         :param new_solution:
         :return:
         """
-        self.__solution = new_solution
+        self._solution = new_solution
 
     def check_has_solution(self):
         # see if we can refine messages here...
@@ -3490,6 +3551,19 @@ class Model(object):
         self.parameters.export_prm_to_path(path=prm_path)
         return prm_path
 
+    def export_annotations(self, path=None, basename=None):
+        from docplex.mp.anno import ModelAnnotationPrinter
+
+        self._checker.typecheck_string(path, accept_none=True, accept_empty=False)
+        self._checker.typecheck_string(basename, accept_none=True, accept_empty=False)
+
+        # combination of path/directory and basename resolution are done in resolve_path
+        anno_path = self._resolve_path(path, basename, extension='.ann')
+        ap = ModelAnnotationPrinter()
+        ap.print_to_stream(self, anno_path)
+
+        return anno_path
+
     # advanced values
     def _get_engine_attribute(self, arg, attr_name):
         """
@@ -3570,7 +3644,7 @@ class Model(object):
 
     def _has_username_with_spaces(self):
         for v in self.iter_variables():
-            if v.has_user_name() and v.name.find(" ") >= 0:
+            if v.has_user_name() and ' ' in v.name:
                 return True
         else:
             return False
@@ -3614,10 +3688,11 @@ class Model(object):
         """
         if self._has_solution():
             used_prec = 0 if self.objective_expr.is_discrete() else self.get_float_precision()
-            print("* model solved with objective = {0:.{prec}f}".format(self._objective_value(), prec=used_prec))
+            print("* model {0} solved with objective = {1:.{prec}f}".format(self.name,
+                                                                            self._objective_value(), prec=used_prec))
             self.report_kpis()
         else:
-            self.info("Model has not been solved successfully, no reporting done.")
+            self.info("Model {0} has not been solved successfully, no reporting done.".format(self.name))
 
     def report_kpis(self, selected_kpis=None, kpi_header_format='*  KPI: {1:<{0}} = '):
         """  Prints the values of the KPIs.
@@ -3631,7 +3706,21 @@ class Model(object):
             max_kpi_name_len = 0
         for kpi in printed_kpis:
             kpi_value = kpi.compute()
-            print(kpi_format.format(max_kpi_name_len, kpi.name, kpi_value))
+            if type(kpi_format) != type(kpi.name):
+                # infamous mix of str and unicode. Should happen only
+                # in py2. Let's convert things
+                if isinstance(kpi_format, str):
+                    kpi_format = kpi_format.decode('utf-8')
+                else:
+                    kpi_format = kpi_format.encode('utf-8')
+            output = kpi_format.format(max_kpi_name_len, kpi.name, kpi_value)
+            try:
+                print(output)
+            except UnicodeEncodeError:
+                encoding = sys.stdout.encoding if sys.stdout.encoding else 'ascii'
+                print(output.encode(encoding,
+                                    errors='backslashreplace'))
+
 
     def kpis_as_dict(self, s=None, selected_kpis=None):
         computed_kpis = selected_kpis if is_iterable(selected_kpis) else self.iter_kpis()
@@ -3777,6 +3866,7 @@ class Model(object):
             kpi = self.kpi_by_name(kpi_arg)
             if kpi:
                 self._allkpis.remove(kpi)
+                kpi.notify_removed()
         else:
             for k, kp  in enumerate(self._allkpis):
                 if kp is kpi_arg:
@@ -3785,7 +3875,9 @@ class Model(object):
             else:
                 kx = -1
             if kx >= 0:
-                self._allkpis.pop(kx)
+                removed_kpi = self._allkpis.pop(kx)
+                removed_kpi.notify_removed()
+
             else:
                 self.warning('Model.remove_kpi() cannot interpret this either as a string or as a KPI: {0!r}', kpi_arg)
 
@@ -3943,8 +4035,8 @@ class Model(object):
         after you call this member function.
 
         """
-        self.clear()
-        self._clear_engine(restart=False)
+        self._clear_internal(terminate=True)
+        self._clear_engine()
 
     @property
     def parameters(self):
@@ -4038,9 +4130,12 @@ class Model(object):
         # INTERNAL
         self._lfactory.resync_whole_model()
 
-    def refresh_engine(self):
+    def refresh_engine(self, new_agent=None):
         # INTERNAL
-        self._clear_engine(restart=True)
+        self._clear_engine()
+        # attach a new engine
+        self.set_new_engine_from_agent(new_agent)
+        # resync model to engine.
         self._resync()
 
     def run_feasopt(self, relaxables, relax_mode):
@@ -4297,5 +4392,48 @@ class Model(object):
         """
         return len(self._allpwl)
 
+    def _ensure_benders_annotations(self):
+        if self._benders_annotations is None:
+            self._benders_annotations = {}
+        return self._benders_annotations
 
+    def set_benders_annotation(self, obj, group):
+        if group is None:
+            if self._benders_annotations is not None:
+                del self._benders_annotations[obj]
+        else:
+            self._checker.typecheck_int(group, accept_negative=False, caller='Model.set_benders_annotation')
+            self._ensure_benders_annotations()[obj] = group
 
+    def remove_benders_annotation(self, obj):
+        del self._ensure_benders_annotations()[obj]
+
+    def get_benders_annotation(self, obj):
+        self_benders = self._benders_annotations
+        return self_benders.get(obj) if self_benders is not None else None
+
+    def iter_benders_annotations(self):
+        self_benders = self._benders_annotations
+        return six.iteritems(self_benders) if self_benders is not None else iter([])
+
+    def clear_benders_annotations(self):
+        self._benders_annotations = {}
+
+    def get_annotations_by_scope(self):
+        from collections import defaultdict
+        annotated_by_scope = defaultdict(list)
+        for obj, group in self.iter_benders_annotations():
+            annotated_by_scope[obj.cplex_scope()].append((obj, group))
+        return annotated_by_scope
+
+    def has_benders_annotations(self):
+        return len(self._benders_annotations) > 0
+
+    def register_callback(self, cb):
+        return self.__engine.register_callback(cb)
+
+    def resolve(self):
+        # INTERNAL
+        self._objective_expr.resolve()
+        for c in self.iter_constraints():
+            c.resolve()

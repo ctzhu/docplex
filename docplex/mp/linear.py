@@ -9,9 +9,9 @@ from __future__ import print_function
 
 from six import iteritems
 
-from docplex.mp.constants import ComparisonType, UpdateEvent
+from docplex.mp.constants import ComparisonType, UpdateEvent, CplexScope
 from docplex.mp.compat23 import unitext
-from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _SubscriptionMixin
+from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _SubscriptionMixin, _BendersAnnotatedMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
@@ -25,7 +25,7 @@ class DOCplexQuadraticArithException(Exception):
 # from docplex.mp.xcounter import ExprCounter
 
 
-class Var(ModelingObject, LinearOperand):
+class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     """Var()
 
     This class models decision variables.
@@ -52,22 +52,22 @@ class Var(ModelingObject, LinearOperand):
         else:
             self._ub = vartype.compute_ub(ub)
 
+    def cplex_scope(self):
+        return CplexScope.VAR_SCOPE
+
     # noinspection PyUnusedLocal
     def copy(self, new_model, var_mapping):
         return var_mapping[self]
 
     # linear operand api
 
-    def is_variable(self):
-        return True
+    def as_variable(self):
+        return self
 
     def iter_terms(self):
         yield self, 1
 
     iter_sorted_terms = iter_terms
-
-    def iter_variables(self):
-        yield self
 
     def number_of_terms(self):
         return 1
@@ -93,9 +93,7 @@ class Var(ModelingObject, LinearOperand):
 
     def to_linear_expr(self):
         # INTERNAL
-        expr = LinearExpr(model=self._model, e=self, safe=True)
-        expr._transient = True
-        return expr
+        return LinearExpr(model=self._model, e=self, safe=True, transient=True)
         # return MonomialExpr(self._get_model(), self, coeff=1)
 
     def set_name(self, new_name):
@@ -105,7 +103,8 @@ class Var(ModelingObject, LinearOperand):
 
     name = property(ModelingObjectBase.get_name, set_name)
 
-    def get_lb(self):
+    @property
+    def lb(self):
         """ This property is used to get or set the lower bound of the variable.
 
         Possible values for the lower bound depend on the variable type. Binary variables
@@ -114,15 +113,17 @@ class Var(ModelingObject, LinearOperand):
         """
         return self._lb
 
-    def _set_lb(self, lb):
-        self._model.set_var_lb(self, lb)
+    @lb.setter
+    def lb(self, new_lb):
+        self.set_lb(new_lb)
+
+    def _get_lb(self):
+        return self._lb
 
     def set_lb(self, lb):
         if lb != self._lb:
-            self._set_lb(lb)
+            self._model.set_var_lb(self, lb)
             return self._lb
-
-    lb = property(get_lb, _set_lb)
 
     def _internal_set_lb(self, lb):
         # Internal, used only by the model
@@ -132,7 +133,8 @@ class Var(ModelingObject, LinearOperand):
         # INTERNAL
         self._ub = ub
 
-    def get_ub(self):
+    @property
+    def ub(self):
         """ This property is used to get or set the upper bound of the variable.
 
         Possible values for the upper bound depend on the variable type. Binary variables
@@ -143,15 +145,17 @@ class Var(ModelingObject, LinearOperand):
         """
         return self._ub
 
-    def _set_ub(self, ub):
-        self._model.set_var_ub(self, ub)
+    @ub.setter
+    def ub(self, new_ub):
+        self.set_ub(new_ub)
 
     def set_ub(self, ub):
         if ub != self._ub:
-            self._set_ub(ub)
+            self._model.set_var_ub(self, ub)
             return self._ub
 
-    ub = property(get_ub, set_ub)
+    def _get_ub(self):
+        return self._ub
 
     def has_free_lb(self):
         return self.get_linear_factory().is_free_lb(self._lb)
@@ -250,15 +254,13 @@ class Var(ModelingObject, LinearOperand):
         ctn = self.get_container()
         return ctn.index if ctn else -1
 
+    def get_key(self):
+        self_container = self.get_container()
+        return self_container.get_var_key(self) if self_container else None
+
     def __ne__(self, other):
         # INTERNAL: For now, not supported
         self.model.unsupported_neq_error(self, other)
-
-    # def __gt__(self, e):
-    #     self.model.unsupported_relational_operator_error(self, ">", e)
-    #
-    # def __lt__(self, e):
-    #     self.model.unsupported_relational_operator_error(self, "<", e)
 
     def __mul__(self, e):
         return self.times(e)
@@ -284,21 +286,19 @@ class Var(ModelingObject, LinearOperand):
 
     def plus(self, e):
         if isinstance(e, Var):
-            expr = self._make_linear_expr(e=self, safe=True)
+            expr = self._make_linear_expr()
             expr._add_term(e)
             return expr
 
         elif is_number(e):
-            return self._make_linear_expr(e=self, constant=e, safe=False)
+            return self._make_linear_expr(constant=e)
         elif e.is_quad_expr():
             return e.plus(self)
         else:
             return self.to_linear_expr().add(e)
 
-    def _make_linear_expr(self, e, constant=0, safe=False):
-        expr = LinearExpr(model=self._model, e=e, constant=constant, safe=safe)
-        expr._transient = True
-        return expr
+    def _make_linear_expr(self, constant=0, safe=True):
+        return LinearExpr(self._model, self, constant, None, safe, True)
 
     def __radd__(self, e):
         return self.plus(e)
@@ -312,7 +312,7 @@ class Var(ModelingObject, LinearOperand):
 
         elif is_number(e):
             # v -k -> expression(v,-1) -k
-            return self._make_linear_expr(e=self, constant=-e, safe=True)
+            return self._make_linear_expr(constant=-e)
 
         elif isinstance(e, Expr) and e.is_quad_expr():
             return e.rminus(self)
@@ -451,7 +451,7 @@ class Var(ModelingObject, LinearOperand):
             repr_ub = ''
         else:
             repr_ub = ',ub={0:g}'.format(self_ub)
-        if self.has_user_name():
+        if self.has_name():
             repr_name = ",name='{0}'".format(self.name)
         else:
             repr_name = ''
@@ -469,6 +469,22 @@ class Var(ModelingObject, LinearOperand):
             The reduced cost of the variable (a float value).
         """
         return self._model.reduced_costs(self)
+
+    @property
+    def benders_annotation(self):
+        """
+        This property is used to get or set the Benders annotation of a variable.
+        The value of the annotation must be a positive integer
+
+        """
+        return self.get_benders_annotation()
+
+    @benders_annotation.setter
+    def benders_annotation(self, new_anno):
+        self.set_benders_annotation(new_anno)
+
+
+
 
 
 # noinspection PyAbstractClass
@@ -513,7 +529,7 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         self._model = model  # faster than to call recursively init methods...
         self._name = None
         self._dvar = dvar
-        self._subscribers = set()
+        self._subscribers = []
         # check perf on that
         if safe:
             self._coef = coeff
@@ -537,9 +553,9 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         # for compatibility
         return 0
 
-    def is_variable(self):
+    def as_variable(self):
         # INTERNAL
-        return 1 == self._coef
+        return self._dvar if 1 == self._coef else None
 
     def clone(self):
         return MonomialExpr(self.model, self._dvar, self._coef, safe=True)
@@ -548,8 +564,6 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         copy_var = var_mapping[self._dvar]
         return MonomialExpr(target_model, dvar=copy_var, coeff=self._coef, safe=True)
 
-    def iter_variables(self):
-        yield self._dvar
 
     def iter_terms(self):
         yield self._dvar, self._coef
@@ -562,7 +576,7 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
     def contains_var(self, dvar):
         return self._dvar is dvar
 
-    def is_normal_form(self):
+    def is_normalized(self):
         # INTERNAL
         return self._coef != 0  # pragma: no cover
 
@@ -730,16 +744,15 @@ class MonomialExpr( _SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(other, LinearExpr):
             expr = other
             if expr.constant == 0 and expr.number_of_variables() == 1:
-                other_first_var = next(other.iter_variables())
-                return self.var is other_first_var and self.coef == other[other_first_var]
+                (v, k) = next(other.iter_terms())
+                return self.var is v and self.coef == k
         else:
             return False
 
     # conversion
     def to_linear_expr(self):
         #terms = self._model._lfactory.term_dict_type([(self._dvar, self._coef)])
-        e = LinearExpr(self._model, e=(self._dvar, self._coef), safe=True)
-        e._transient = True
+        e = LinearExpr(self._model, e=(self._dvar, self._coef), safe=True, transient=True)
         return e
 
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.print_name()):
@@ -767,7 +780,11 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     """
 
     def _new_terms_dict(self, model, *args, **kwargs):
-        return model._lfactory.term_dict_type(*args, **kwargs)
+        return model._term_dict_type(*args, **kwargs)
+
+    def _new_empty_terms_dict(self, model):
+        return model._term_dict_type()
+
 
     def to_linear_expr(self):
         return self
@@ -802,23 +819,24 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     __slots__ = ('_constant', '__terms', '_transient', '_subscribers')
 
-    def __init__(self, model, e=None, constant=0, name=None, safe=False):
+    #@profile
+    def __init__(self, model, e=None, constant=0, name=None, safe=False, transient=False):
         ModelingObjectBase.__init__(self, model, name)
         # a global counter for performance measurement
-        model._linexpr_instance_counter += 1
+        #model._linexpr_instance_counter += 1
         # "calling LinearExpr ctor, k=%d" % LinearExpr.InstanceCounter)
         if not safe and constant:
             model.typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
-        self._transient = False
-        self._subscribers = set()
+        self._transient = transient
+        self._subscribers = []
 
 
         if isinstance(e, dict):
             if safe:
                 self.__terms = e
             else:
-                self_terms = self._new_terms_dict(model)
+                self_terms = model._term_dict_type()
                 for (v, k) in iteritems(e):
                     model.typecheck_var(v)
                     model.typecheck_num(k, 'LinearExpr')
@@ -827,7 +845,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                 self.__terms = self_terms
             return
         else:
-            self.__terms = self._new_terms_dict(model)
+            self.__terms = model._term_dict_type()
 
         if e is None:
             pass
@@ -842,23 +860,12 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             self._constant = e.constant
             self.__terms = self._new_terms_dict(model, e._get_terms_dict())  # make a copy
 
+        elif is_number(e):
+            self._constant += e
+
         elif isinstance(e, tuple):
             v, k = e
             self.__terms[v] = k
-
-        # elif is_iterable(e, accept_string=False):
-        #     # this is supposed to be a sequence of variables.
-        #     checker = None
-        #     self_terms = self.__terms
-        #     for v in e:
-        #         if not safe:
-        #             if checker is None:
-        #                 checker = model._checker
-        #             checker.typecheck_var(v)
-        #         self_terms.update_from_item_value(v, 1)
-
-        elif is_number(e):
-            self._constant += e
 
         else:
             self.fatal("Cannot convert this to docplex.mp.LinearExpr, {0!r}", e)
@@ -904,7 +911,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def copy(self, target_model, var_mapping):
         # INTERNAL
-
         copied_terms = self._new_terms_dict(target_model)
         for v, k in self.iter_sorted_terms():
             copied_terms[var_mapping[v]] = k
@@ -963,12 +969,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             Boolean: True if the expression consists of only a constant term.
         """
-        return not(self.__terms)
-        # for dv, k in self.iter_terms():
-        #     if k:
-        #         return False
-        # else:
-        #     return True
+        return not self.__terms
+
 
     def _has_nonzero_var_term(self):
         for dv, k in self.iter_terms():
@@ -978,10 +980,13 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             return False
 
 
-    def is_variable(self):
+    def as_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
-        terms = self.__terms
-        return 0 == self.constant and 1 == len(terms) and 1 == next(itervalues(terms))
+        if 0 == self.constant and 1 == len(self.__terms):
+            for v, k in self.iter_terms():
+                if k == 1:
+                    return v
+        return None
 
     def is_normalized(self):
         # INTERNAL
@@ -992,13 +997,10 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def normalize(self):
         # modifies self
-        doomed = []
-        for dv, k in self.iter_terms():
-            if not k:
-                doomed.append(dv)
-        self_terms = self.__terms
+        doomed = [dv for dv, k in self.iter_terms() if not k]
+        lterms = self.__terms
         for d in doomed:
-            del self_terms[d]
+            del lterms[d]
 
     def normalized(self):
         if self.is_normalized():
@@ -1085,27 +1087,34 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         self.set_coefficient(dvar, 0)
 
-    def get_constant(self):
+    @property
+    def constant(self):
         """
         This property is used to get or set the constant term of the expression.
         """
         return self._constant
 
-    def set_constant(self, numval):
-        if numval != self._constant:
+    @constant.setter
+    def constant(self, new_constant):
+        self._set_constant(new_constant)
+
+    def get_constant(self):
+        return self._constant
+
+    def _set_constant(self, new_constant):
+        if new_constant != self._constant:
             #self._check_mutable()
-            self._constant = numval
+            self._constant = new_constant
             self.notify_modified(event=UpdateEvent.ExprConstant)
 
-    constant = property(get_constant, set_constant)
 
-    def iter_variables(self):
-        """  Iterates over all variables mentioned in the linear expression.
-
-        Returns:
-            An iterator object.
-        """
-        return iter(self.__terms.keys())
+    # def iter_variables(self):
+    #     """  Iterates over all variables mentioned in the linear expression.
+    #
+    #     Returns:
+    #         An iterator object.
+    #     """
+    #     # return iter(self.__terms.keys())
 
     def contains_var(self, dvar):
         """ Checks whether a decision variable is part of an expression.
@@ -1126,8 +1135,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                 return False
             if self.number_of_variables() != other.number_of_variables():
                 return False
-            for dvar in self.iter_variables():
-                if self[dvar] != other[dvar]:
+            for dv, k in self.iter_terms():
+                if k != other[dv]:
                     return False
             else:
                 return True
@@ -1573,7 +1582,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def __init__(self, model):
         ModelingObjectBase.__init__(self, model)
-        self._subscribers = set()
+        self._subscribers = []
 
     def clone(self):
         return self  # this is not cloned.
@@ -1589,9 +1598,6 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def number_of_terms(self):
         return 0
-
-    def iter_variables(self):
-        return iter_emptyset()
 
     def iter_terms(self):
         return iter_emptyset()

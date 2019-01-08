@@ -372,6 +372,10 @@ def generate_constant(the_constant, count_max):
 def iter_emptyset():
     return iter([])
 
+def iter_one(obj):
+    yield obj
+
+
 
 def resolve_pattern(pattern, args):
     """
@@ -763,30 +767,25 @@ class _IndexScope(_AutomaticSymbolGenerator):
             obj.set_index(ix)
 
 
-class CplexParameterHandler(object):
-    # INTERNAL: util function to handle Cplex parameters appropriately
+def apply_thread_limitations(parameters, solver_context):
+    # --- limit threads if needed
+    if getattr(solver_context, 'max_threads', None) is not None:
+        if parameters.threads.get() == 0:
+            max_threads = solver_context.max_threads
+        else:
+            max_threads = min(solver_context.max_threads, parameters.threads.get())
+        # we don't want to duplicate parameters unnecessary
+        if max_threads != parameters.threads.get():
+            new_parameters = parameters.copy()
+            new_parameters.threads = max_threads
+            out_stream = solver_context.log_output_as_stream
+            if out_stream:
+                out_stream.write(
+                    "WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
+            # --- here we copy the initial parameters ---
+            return new_parameters
 
-    def __init__(self, parameters):
-        self._parameters = parameters
-
-    def get_updated_parameters(self, solver):
-        # --- limit threads if needed
-        if getattr(solver, 'max_threads', None) is not None:
-            if self._parameters.threads.get() == 0:
-                max_threads = solver.max_threads
-            else:
-                max_threads = min(solver.max_threads,
-                                  self._parameters.threads.get())
-            # we don't want to duplicate parameters unnecessary
-            if max_threads != self._parameters.threads.get():
-                self._parameters = self._parameters.copy()
-                self._parameters.threads = max_threads
-                out_stream = solver.log_output_as_stream
-                if out_stream:
-                    out_stream.write(
-                        "WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
-                    # ---
-        return self._parameters
+    return parameters
 
 class _ToleranceScheme(object):
     """
@@ -796,6 +795,7 @@ class _ToleranceScheme(object):
     def __init__(self, absolute=1e-6, relative=1e-4):
         assert absolute >= 0
         assert relative >= 0
+        assert relative <= 1
         self._absolute_tolerance = absolute
         self._relative_tolerance = relative
 
@@ -808,3 +808,28 @@ class _ToleranceScheme(object):
 
     def __str__(self):
         return self.to_string()  # pragma: no cover
+
+
+class OutputStreamAdapter:
+    # With this class, we kind of automatically handle binary/non binary output streams
+    # it automatically perform encoding of strings when needed,
+    # and if the stream is a String stream, strings are just written without conversion
+    def __init__(self, stream, encoding='utf-8'):
+        self.stream = stream
+        self.stream_is_binary = False
+        if hasattr(stream, 'mode') and 'b' in stream.mode:
+            self.stream_is_binary = True
+        from io import TextIOBase
+        if not isinstance(stream, TextIOBase):
+            self.stream_is_binary = True
+
+        self.encoding = encoding
+
+    def write(self, s):
+        # s is supposed to be a string
+        output_s = s
+        if self.stream_is_binary:
+            output_s = s.encode(self.encoding)
+        self.stream.write(output_s)
+
+

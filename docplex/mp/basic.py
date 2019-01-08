@@ -29,10 +29,18 @@ class ModelingObjectBase(object):
         self._name = name
         self._model = model
 
-    def get_name(self):
+    @property
+    def name(self):
         """ This property is used to get or set the name of the modeling object.
 
         """
+        return self._name
+
+    @name.setter
+    def name(self, new_name):
+        self.set_name(new_name)
+
+    def get_name(self):
         return self._name
 
     def set_name(self, name):
@@ -49,8 +57,6 @@ class ModelingObjectBase(object):
     def check_name(self, new_name):
         # INTERNAL: basic method for checking names.
         pass  # pragma: no cover
-
-    name = property(get_name, set_name)
 
     def has_name(self):
         """ Checks whether the object has a name.
@@ -164,8 +170,8 @@ class ModelingObject(ModelingObjectBase):
         if origin is not None:
             self._origin = origin
 
-    # def origin(self):
-    #     return self._origin
+    def origin(self):
+        return self._origin
 
     def __hash__(self):
         return id(self)
@@ -183,14 +189,13 @@ class ModelingObject(ModelingObjectBase):
     def has_valid_index(self):
         return self._index >= 0
 
-    def _get_index_or_raise(self):
-        ''' Returns the index if valid, otherwise raises an exception.'''
+    @property
+    def safe_index(self):
         if not self.has_valid_index():
             self.fatal("Modeling object {0!s} has invalid index: {1:d}", self, self._index)  # pragma: no cover
         return self._index
 
     index = property(get_index, set_index)
-    safe_index = property(_get_index_or_raise)
 
     def get_container(self):
         # INTERNAL
@@ -336,9 +341,19 @@ class Priority(Enum):
     This enumerated class defines the priorities: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH, MANDATORY.
     """
 
-    # priority values are not sequential integers
-    VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH = range(100, 6 * 100, 100)
-    MANDATORY = 999999999
+    def __new__(cls, value, print_name):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = value
+        obj._print_name = print_name
+        return obj
+
+    VERY_LOW = 100, 'Very Low'
+    LOW      = 200, 'Low'
+    MEDIUM   = 300, 'Medium'
+    HIGH     = 400, 'High'
+    VERY_HIGH = 500, 'Very High'
+    MANDATORY = 999999999, 'Mandatory'
 
     @staticmethod
     def default_priority():
@@ -347,24 +362,15 @@ class Priority(Enum):
     def __repr__(self):
         return 'Priority<{}>'.format(self.name)
 
-    @staticmethod
-    def all_sorted():
-        # INTERNAL
-        sorted_properties = [Priority.VERY_LOW, Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.VERY_HIGH]
-        return sorted_properties
-
     def print_name(self):
-        priority_names = {Priority.MANDATORY: 'Mandatory',
-                          Priority.HIGH: 'High',
-                          Priority.VERY_HIGH: "Very High",
-                          Priority.MEDIUM: 'Medium',
-                          Priority.LOW: 'Low',
-                          Priority.VERY_LOW: 'Very Low'}
-        return priority_names.get(self, "Unexpected Priority")
+        return self._print_name
 
-    def get_geometric_preference_factor(self, base=10.0):
-        # INTERNAL: returns a CPLEX preference factor as a poer of "base"
-        # MEDIUM priority has always a preference factor of 1
+    def cplex_preference(self):
+        return self._get_geometric_preference_factor(base=10.0)
+
+    def _get_geometric_preference_factor(self, base):
+        # INTERNAL: returns a CPLEX preference factor as a power of "base"
+        # MEDIUM priority is the balance point with a preference of 1.
         assert is_number(base)
         medium_index = Priority.MEDIUM.value / 100
         if self.is_mandatory():
@@ -391,17 +397,8 @@ class Priority(Enum):
     def is_mandatory(self):
         return self == Priority.MANDATORY
 
-    @staticmethod
-    def _name_to_prio_mapping():
-        return {'mandatory': Priority.MANDATORY,
-                'high': Priority.HIGH,
-                'very_high': Priority.VERY_HIGH,
-                'medium': Priority.MEDIUM,
-                'low': Priority.LOW,
-                'very_low': Priority.VERY_LOW}
-
-    @staticmethod
-    def _parse(arg, logger, accept_none=True, do_raise=True):
+    @classmethod
+    def parse(cls, arg, logger, accept_none=True, do_raise=True):
         ''' Converts its argument to a ``Priority`` object.
 
         Returns `default_priority` if the text is not a string, empty, or does not match.
@@ -421,18 +418,21 @@ class Priority(Enum):
         Returns:
             A Priority enumerated object.
         '''
-        if isinstance(arg, Priority):
+        if isinstance(arg, cls):
             return arg
         elif is_string(arg):
             key = arg.lower()
-            mapped = Priority._name_to_prio_mapping().get(key)
-            if mapped is None:
+            # noinspection PyTypeChecker
+            for p in cls:
+                if key == p.name.lower() or key == str(p.value):
+                    return p
+            else:
                 if do_raise:
                     logger.fatal('String does not match priority type: {}', arg)
                 else:
                     logger.error('String does not match priority type: {}', arg)
                     return None
-            return mapped
+                return None
         elif accept_none and arg is None:
             return None
         else:
@@ -449,9 +449,13 @@ class _SubscriptionMixin(object):
     # This class is absolutley not meant to be directly instantiated
     # but used as a mixin
 
+    @classmethod
+    def _new_empty_subscribers(cls):
+        return []
+
     def notify_used(self, user):
         # INTERNAL
-        self._subscribers.add(user)
+        self._subscribers.append(user)
 
     def notify_unsubscribed(self, subscriber):
         try:
@@ -461,10 +465,14 @@ class _SubscriptionMixin(object):
             pass
 
     def clear_subscribers(self):
-        self._subscribers = set()
+        self._subscribers = []
 
     def is_in_use(self):
-        return len(self._subscribers) > 0
+        return bool(self._subscribers)
+
+    def is_used_by(self, obj):
+        # lists are not optimal here, but we favor insertion: append is faster than set.add
+        return obj in self._subscribers
 
     def notify_modified(self, event):
         for s in self._subscribers:
@@ -481,6 +489,16 @@ class _SubscriptionMixin(object):
         # grab subscribers from another expression
         # typically when an expression is replaced by another.
         for s in other.iter_subscribers():
-            self._subscribers.add(s)
+            self._subscribers.append(s)
         # delete all subscriptions on old
         other.clear_subscribers()
+
+
+class _BendersAnnotatedMixin(object):
+    __slots__ = ()
+
+    def set_benders_annotation(self, group):
+        self._model.set_benders_annotation(self, group)
+
+    def get_benders_annotation(self):
+        return self._model.get_benders_annotation(self)

@@ -13,12 +13,11 @@ from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
     IndicatorConstraint, PwlConstraint
-from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr
+from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range
 from docplex.mp.utils import *
 from docplex.mp.kpi import KPI
-from docplex.mp.xcounter import FastOrderedDict, ExprCounter
 from docplex.mp.solution import SolveSolution
 
 
@@ -103,7 +102,7 @@ class ModelFactory(_AbstractModelFactory):
     def is_free_ub(self, var_ub):
         return var_ub >= self.infinity
 
-    def __init__(self, model, engine, ordered):
+    def __init__(self, model, engine, ordered, term_dict_type):
         _AbstractModelFactory.__init__(self, model)
 
         self._var_container_counter = 0
@@ -111,15 +110,18 @@ class ModelFactory(_AbstractModelFactory):
         self._engine = engine
         self.infinity = engine.get_infinity()
         self.one_expr = None
-        self._set_ordering(ordered)
+        self.ordered = ordered
+        self.term_dict_type = term_dict_type
+
+    def set_ordering(self, ordered, dict_type):
+        self.ordered = ordered
+        self.term_dict_type = dict_type
 
     def new_zero_expr(self):
         return ZeroExpr(self._model)
 
-    def _set_ordering(self, ordered):
-        # INTERNAL
-        self.ordered = ordered
-        self.term_dict_type = FastOrderedDict if ordered else ExprCounter
+    def new_one_expr(self):
+        return LinearExpr(self._model, e=None, constant=1, safe=True)
 
     def _get_cached_one_expr(self):
         if self.one_expr is None:
@@ -139,14 +141,26 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_var(self, vartype, lb=None, ub=None, varname=None):
         self_model = self._model
-        actual_name = varname  # or self_model._create_automatic_varname()
         self._checker.check_var_domain(lb, ub, varname)
         rlb = vartype.resolve_lb(lb)
         rub = vartype.resolve_ub(ub)
-        var = Var(self_model, vartype, actual_name, rlb, rub)  # not bool(varname))
-        idx = self._engine.create_one_variable(vartype, float(var.get_lb()), float(var.get_ub()), actual_name)
+        var = Var(self_model, vartype, varname, rlb, rub)
+
+        idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
         self_model._register_one_var(var, idx, varname)
         return var
+
+    def new_constraint_status_var(self, ct):
+        # INTERNAL
+        model = self._model
+        binary_vartype = model.binary_vartype
+        varname = '_Bool{{{0!s}}}'.format(ct)  if not model.deploy else None
+        svar = Var(model, binary_vartype, lb=0, ub=1, _safe_lb=True, _safe_ub=1, name=varname)
+        svar.notify_origin(ct)  # generated
+
+        idx = self._engine.create_one_variable(binary_vartype, 0, 1, varname)
+        model._register_one_var(svar, idx, varname)
+        return svar
 
     # --- sequences
     def make_key_seq(self, keys, name):
@@ -213,7 +227,7 @@ class ModelFactory(_AbstractModelFactory):
                 else:
                     return [float(var_bound)] * size
 
-        elif isinstance(var_bound, list):
+        elif is_ordered_sequence(var_bound):
             nb_bounds = len(var_bound)
             if nb_bounds < size:
                 # see how we can use defaults for those missing bounds
@@ -223,12 +237,13 @@ class ModelFactory(_AbstractModelFactory):
                     if not is_number(b_value):
                         self.fatal("Variable bounds list expects numbers, got: {0!r} (pos: #{1})",
                                    b_value, b)
+                float_bounds = [float(bv) for bv in var_bound]
                 if nb_bounds > size:
                     self.warning(
                         "Variable bounds list is too large, required: %d, got: %d." % (size, nb_bounds))
-                    return var_bound[:size]
+                    return float_bounds[:size]
                 else:
-                    return var_bound
+                    return float_bounds
 
         elif is_iterator(var_bound):
             # unfold the iterator, as CPLEX needs a list
@@ -298,8 +313,7 @@ class ModelFactory(_AbstractModelFactory):
 
         all_names = self._expand_names(key_seq, name, arity, key_format)
 
-        if xlbs and xubs:
-            self._checker.check_vars_domain(xlbs, xubs, all_names)
+        self._checker.check_vars_domain(xlbs, xubs, all_names)
         safe_lbs = not xlbs
         safe_ubs = not xubs
 
@@ -384,9 +398,7 @@ class ModelFactory(_AbstractModelFactory):
             return self.constant_expr(cst=e, safe_number=True)
         else:
             try:
-                return e.to_linear_expr()
-            # except DOCplexQuadraticArithException:
-            #     return e
+                return e.to_expr()
             except AttributeError:
                 self.fatal("cannot convert to expression: {0!r}", e)
 
@@ -394,12 +406,12 @@ class ModelFactory(_AbstractModelFactory):
         cmp_op = ComparisonType.parse(op)
         return self._new_binary_constraint(lhs, cmp_op, rhs, name)
 
-    def _new_binary_constraint(self, lhs, cmp_op, rhs, name=None):
+    def _new_binary_constraint(self, lhs, ctsense, rhs, name=None):
         # noinspection PyPep8
         left_expr  = self._to_linear_operand(lhs, context="LinearConstraint.left_expr")
         right_expr = self._to_linear_operand(rhs, context="LinearConstraint.right_expr")
         self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
-        ct = LinearConstraint(self._model, left_expr, cmp_op, right_expr, name)
+        ct = LinearConstraint(self._model, left_expr, ctsense, right_expr, name)
         return ct
 
     def new_le_constraint(self, e, rhs, ctname=None):
@@ -446,16 +458,18 @@ class ModelFactory(_AbstractModelFactory):
         new_operand = self._to_linear_operand(e=new_expr, force_clone=False)
         exprs = [lct._left_expr, lct._right_expr]
         exprs[pos] = new_operand
+        # -- event
         if old_expr.is_constant() and new_operand.is_constant():
             event = UpdateEvent.LinearConstraintRhs
         else:
             event = UpdateEvent.LinearConstraintGlobal
+        # ---
         self._engine.update_linear_constraint(lct, event, *exprs)
         lct.set_expr_from_pos(pos, new_operand)
         if update_subscribers:
             # -- update  subscribers
             old_expr.notify_unsubscribed(lct)
-            new_operand.notify_used(self)
+            new_operand.notify_used(lct)
 
     def set_linear_constraint_right_expr(self, ct, new_rexpr):
         self.set_linear_constraint_expr_from_pos(ct, pos=1, new_expr=new_rexpr)
@@ -463,7 +477,7 @@ class ModelFactory(_AbstractModelFactory):
     def set_linear_constraint_left_expr(self, ct, new_lexpr):
         self.set_linear_constraint_expr_from_pos(ct, pos=0, new_expr=new_lexpr)
 
-    def set_linear_constraint_type(self, ct, arg_newsense):
+    def set_linear_constraint_sense(self, ct, arg_newsense):
         new_sense = ComparisonType.parse(arg_newsense)
         if new_sense != ct.sense:
             self._engine.update_linear_constraint(ct, UpdateEvent.LinearConstraintType, new_sense)
@@ -493,6 +507,25 @@ class ModelFactory(_AbstractModelFactory):
         old_expr.notify_unsubscribed(rngct)
 
     # ---------------------
+    def new_logical_and_expr(self, bvars):
+        # assume bvars is a sequence of binary vars
+        nb_args = len(bvars)
+        if not nb_args:
+            return self.new_one_expr()
+        elif 1 == nb_args:
+            return bvars[0]
+        else:
+            return LogicalAndExpr(self._model, bvars)
+
+    def new_logical_or_expr(self, bvars):
+        # assume bvars is a sequence of binary vars
+        nb_args = len(bvars)
+        if not nb_args:
+            return self.new_zero_expr()
+        elif 1 == nb_args:
+            return bvars[0]
+        else:
+            return LogicalOrExpr(self._model, bvars)
 
     def new_max_expr(self, *args):
         nb_args = len(args)
@@ -501,7 +534,7 @@ class ModelFactory(_AbstractModelFactory):
         elif 1 == nb_args:
             return args[0]
         else:
-            return MaximumExpr(self._model, args)
+            return MaximumExpr(self._model, [self._to_linear_operand(a) for a in args])
 
     def new_min_expr(self, *args):
         nb_args = len(args)
@@ -510,14 +543,14 @@ class ModelFactory(_AbstractModelFactory):
         elif 1 == nb_args:
             return args[0]
         else:
-            return MinimumExpr(self._model, args)
+            return MinimumExpr(self._model, [self._to_linear_operand(a) for a in args])
 
     def new_abs_expr(self, e):
         if is_number(e):
             return abs(e)
         else:
             self_model = self._model
-            return AbsExpr(self_model, self._to_linear_expr(e))
+            return AbsExpr(self_model, self._to_linear_operand(e))
 
     def resync_whole_model(self):
         self_model = self._model
@@ -533,7 +566,7 @@ class ModelFactory(_AbstractModelFactory):
 
         for ct in self_model.iter_constraints():
             if isinstance(ct, LinearConstraint):
-                self_engine.create_binary_linear_constraint(ct)
+                self_engine.create_linear_constraint(ct)
             elif isinstance(ct, RangeConstraint):
                 self_engine.create_range_constraint(ct)
             elif isinstance(ct, IndicatorConstraint):
@@ -643,20 +676,22 @@ class ModelFactory(_AbstractModelFactory):
     def new_solution(self, var_value_dict=None, name=None):
         return SolveSolution(model=self._model, var_value_map=var_value_dict, name=name)
 
-
     def _new_var_container(self, vartype, key_list, lb, ub, name):
         # INTERNAL
         ctn = _VariableContainer(vartype, key_list, lb, ub, name)
         old_varctn_counter = self._var_container_counter
         ctn._index = old_varctn_counter
+        ctn._index_offset = self._model.number_of_variables #  nb of variables before ctn
         self._var_container_counter = old_varctn_counter + 1
 
         self._model._add_var_container(ctn)
         return ctn
 
 class _VariableContainer(object):
+
     def __init__(self, vartype, key_seq, lb, ub, name):
         self._index = 0
+        self._index_offset = 0
         self._vartype = vartype
         self._keys = key_seq
         self._lb = lb
@@ -714,6 +749,37 @@ class _VariableContainer(object):
                 return raw_name[:pos - 1]
             else:
                 return raw_name
+
+
+    def get_var_key(self, dvar):
+        dvar_index = dvar.get_index()
+        relative_index = dvar_index - self._index_offset
+        if 1 == self.nb_dimensions:
+            try:
+                return self._keys[relative_index]
+            except IndexError:
+                return None
+        else:
+            # return a tuple
+            self_shape = self.shape()
+            size = len(self_shape)
+            cur = relative_index
+            indices = []
+            for l in reversed(self_shape):
+                ix = cur % l
+                indices.append(int(ix))
+                cur = cur // l  # integer division
+
+            assert len(indices) == size
+            indices = list(reversed(indices))
+            self_keys = self._keys
+            try:
+                kt = tuple( self_keys[d][indices[d]] for d in range(size))
+            except IndexError:
+                kt = None
+            return kt
+
+
 
     def size(self, dim_index):
         return len(self._keys[dim_index]) if dim_index < self.nb_dimensions else 0

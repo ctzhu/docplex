@@ -375,20 +375,11 @@ class SemiIntegerVarType(VarType):
         """ Checks if this is a discrete type.
 
         Returns:
-            Boolean: False because this type is not a discrete type.
+            Boolean: True because this type is an integer type.
         """
         return True
 
     def accept_value(self, numeric_value):
-        # """ Checks if the value is within the minus infinity to positive infinity range.
-        #
-        # Args:
-        #     numeric_value: The candidate value.
-        #
-        # Returns:
-        #     Boolean: True if the candidate value is a valid floating-point number
-        #     with respect to the model's infinity.
-        # """
         if 0 == numeric_value:
             return True
         return numeric_value >= 0 and (is_int(numeric_value) or numeric_value == int(numeric_value))

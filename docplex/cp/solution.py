@@ -22,6 +22,9 @@ and the following ones to represent results:
  * :class:`CpoSolveResult`: result of a model solve, including a solution to the model (if any)
    plus other technical information (solve details, log, etc)
  * :class:`CpoRefineConflictResult`: result of an invocation of the conflict refiner.
+ * :class:`CpoSolverInfos`: miscellaneous information coming from the solver.
+ * :class:`CpoProcessInfos`: miscellaneous information about the processing and solving of the model by the Python API.
+
 
 The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc) can be used in multiple ways:
 
@@ -37,8 +40,6 @@ The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc
 Detailed description
 --------------------
 """
-
-import json
 
 from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX
 import docplex.cp.utils as utils
@@ -67,11 +68,11 @@ SOLVE_STATUS_JOB_ABORTED = "JobAborted"
 # Solve status: Job failed
 SOLVE_STATUS_JOB_FAILED = "JobFailed"
 
-# List of all possible search statuses
+# List of all possible solve statuses
 ALL_SOLVE_STATUSES = (SOLVE_STATUS_UNKNOWN,
                       SOLVE_STATUS_INFEASIBLE, SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL,
                       SOLVE_STATUS_JOB_ABORTED, SOLVE_STATUS_JOB_FAILED)
-""" List of all possible search statuses """
+""" List of all possible solve statuses """
 
 # Fail status: Unknown
 FAIL_STATUS_UNKNOWN = "Unknown"
@@ -106,12 +107,6 @@ ALL_FAIL_STATUSES = (FAIL_STATUS_UNKNOWN,
                      FAIL_STATUS_ABORT, FAIL_STATUS_EXCEPTION, FAIL_STATUS_EXIT, FAIL_STATUS_LABEL,
                      FAIL_STATUS_TIME_LIMIT, FAIL_STATUS_SEARCH_COMPLETED)
 """ List of all possible fail statuses """
-
-# Name of some useful CPO solver information attributes
-INFO_NUMBER_OF_CONSTRAINTS        = 'NumberOfConstraints'
-INFO_NUMBER_OF_INTEGER_VARIABLES  = 'NumberOfIntegerVariables'
-INFO_NUMBER_OF_INTERVAL_VARIABLES = 'NumberOfIntervalVariables'
-INFO_NUMBER_OF_SEQUENCE_VARIABLES = 'NumberOfSequenceVariables'
 
 
 ###############################################################################
@@ -232,24 +227,24 @@ class CpoIntervalVarSolution(CpoVarSolution):
         #
         # Args:
         #     name:     Name of the variable.
-        #     presence: Presence indicator (true for present, false for absent, None for undetermined). Default is None.
+        #     presence: Presence indicator (True for present, False for absent, None for undetermined). Default is None.
         #     start:    Value of start, or tuple representing the start range. Default is None.
         #     end:      Value of end, or tuple representing the end range. Default is None.
         #     size:     Value of size, or tuple representing the size range. Default is None.
         # """
         super(CpoIntervalVarSolution, self).__init__(name)
         self.presence = presence
-        self.start = start
-        self.end   = end
-        self.size  = size
-        self.length = None
+        self.start    = start
+        self.end      = end
+        self.size     = size
+        self.length   = None
 
 
     def is_present(self):
         """ Check if the interval is present.
 
         Returns:
-            True if interval is present.
+            True if interval is present, False otherwise.
         """
         return self.presence is True
 
@@ -258,16 +253,18 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Check if the interval is absent.
 
         Returns:
-            True if interval is absent.
+            True if interval is absent, False otherwise.
         """
         return self.presence is False
 
 
     def is_optional(self):
         """ Check if the interval is optional.
+        Calling this function returns always False for a complete solution where
+        Valid only for a partial solution, meaning that the status of the variable is not yet fixed.
 
         Returns:
-            True if interval is optional.
+            True if interval is optional (undetermined), False otherwise.
         """
         return self.presence is None
 
@@ -276,7 +273,8 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval start.
 
         Returns:
-            Interval start value, or domain (tuple (min, max)) if not fully instantiated
+            Interval start value, or domain (tuple (min, max)) if not fully instantiated.
+            None if interval is absent.
         """
         return self.start
 
@@ -285,7 +283,8 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval end.
 
         Returns:
-            Interval end value, or domain (tuple (min, max)) if not fully instantiated
+            Interval end value, or domain (tuple (min, max)) if not fully instantiated.
+            None if interval is absent.
         """
         return self.end
 
@@ -294,7 +293,8 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval size.
 
         Returns:
-            Interval size value, or domain (tuple (min, max)) if not fully instantiated
+            Interval size value, or domain (tuple (min, max)) if not fully instantiated.
+            None if interval is absent.
         """
         return self.size
 
@@ -303,10 +303,11 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """ Gets the interval length.
 
         Returns:
-            Interval length value, or domain (tuple (min, max)) if not fully instantiated
+            Interval length value, or domain (tuple (min, max)) if not fully instantiated.
+            None if interval is absent.
         """
         if self.length is None:
-            return self.end - self.start
+            return None if self.end is None else self.end - self.start
         return self.length
 
 
@@ -446,23 +447,14 @@ class CpoModelSolution(object):
     that can be passed to the model to optimize its solve
     (see :meth:`docplex.cp.model.CpoModel.set_starting_point` for details).
     """
-    __slots__ = ('vars',          # Map of variable solutions
-                 'objvalues',     # Objective values
-                )
+    __slots__ = ('var_solutions',     # Map of variable solutions
+                 'objective_values',  # Objective values
+                 )
 
     def __init__(self):
         super(CpoModelSolution, self).__init__()
-        self.vars = {}
-        self.objvalues = None
-
-
-    def _set_objective_values(self, ovals):
-        """ Set the numeric values of all objectives.
-
-        Args:
-            ovals: Array of objective values
-        """
-        self.objvalues = ovals
+        self.var_solutions = {}
+        self.objective_values = None
 
 
     def get_objective_values(self):
@@ -473,7 +465,7 @@ class CpoModelSolution(object):
         Returns:
             Array of objective values, None if none.
         """
-        return self.objvalues
+        return self.objective_values
 
 
     def add_var_solution(self, vsol):
@@ -483,7 +475,7 @@ class CpoModelSolution(object):
             vsol: Variable solution (object of a class extending :class:`CpoVarSolution`)
         """
         assert isinstance(vsol, CpoVarSolution)
-        self.vars[vsol.get_name()] = vsol
+        self.var_solutions[vsol.get_name()] = vsol
 
 
     def add_integer_var_solution(self, name, value):
@@ -526,7 +518,7 @@ class CpoModelSolution(object):
         """
         if isinstance(name, CpoExpr):
             name = name.name
-        return self.vars.get(name)
+        return self.var_solutions.get(name)
         # if value is None:
         #     raise CpoException("Variable '{}' does not exists in this solution".format(name))
         # return value
@@ -538,7 +530,7 @@ class CpoModelSolution(object):
         Returns:
             List of all variable solutions (class extending :class:`CpoVarSolution`).
         """
-        return list(self.vars.values())
+        return list(self.var_solutions.values())
 
 
     def get_value(self, name):
@@ -569,14 +561,10 @@ class CpoModelSolution(object):
         Args:
             jsol: JSON document representing solution, or string containing its JSON representation.
         """
-        # Parse json string if needed
-        if not isinstance(jsol, dict):
-            jsol = json.loads(jsol, parse_constant=True)
-
         # Add objectives
         ovals = jsol.get('objectives', None)
         if ovals:
-            self._set_objective_values([tuple(v) if isinstance(v, list) else v for v in ovals])
+            self.objective_values = [tuple(v) if isinstance(v, list) else v for v in ovals]
 
         # Add integer variables
         vars = jsol.get('intVars', ())
@@ -657,7 +645,7 @@ class CpoModelSolution(object):
             out.write("Objective values: " + str(ovals))
             out.write('\n')
         # Print all variables in name order
-        lvars = sorted(self.vars.keys())
+        lvars = sorted(self.var_solutions.keys())
         for v in lvars:
             out.write(str(self.get_var_solution(v)))
             out.write('\n')
@@ -680,6 +668,7 @@ class CpoRunResult(object):
     def __init__(self):
         super(CpoRunResult, self).__init__()
         self.solverLog = None                      # Solver log
+        self.process_infos = CpoProcessInfos()     # Process information
 
 
     def _set_solver_log(self, log):
@@ -689,6 +678,7 @@ class CpoRunResult(object):
             log (str): Log of the solver
         """
         self.solverLog = log
+        self.process_infos[CpoProcessInfos.LOG_DATA_SIZE] = len(log)
 
 
     def get_solver_log(self):
@@ -725,8 +715,10 @@ class CpoSolveResult(CpoRunResult):
         self.fail_status = FAIL_STATUS_UNKNOWN     # Fail status, with values in FAIL_STATUS_*
         self.solveTime = 0                         # Solve time
         self.parameters = None                     # Solving parameters
-        self.infos = None                          # Solving information attributes map
         self.solution = CpoModelSolution()         # Solution
+        self.solver_infos = CpoSolverInfos()       # Solving information
+
+        self.process_infos[CpoProcessInfos.MODEL_BUILD_TIME] = model.get_modeling_duration()
 
 
     def _set_solve_status(self, ssts):
@@ -840,24 +832,22 @@ class CpoSolveResult(CpoRunResult):
         return self.parameters.get(name, default)
 
 
-    def _add_infos(self, infos):
-        """ Add solving information to existing ones.
-
-        Args:
-            infos: Dictionary of information attributes to append
-        """
-        if self.infos is None:
-            self.infos = {}
-        self.infos.update(infos)
-
-
     def get_infos(self):
-        """ Gets the complete dictionary of information attributes.
+        """ Gets the complete dictionary of solver information attributes.
 
         Returns:
             Dictionary of information attributes, None if undefined.
         """
-        return self.infos
+        return self.solver_infos
+
+
+    def get_solver_infos(self):
+        """ Gets the set of informations provided by the solver concerning to the solving of the model.
+
+        Returns:
+            Object of class :class:`CpoSolverInfos` that contains information on solve.
+        """
+        return self.solver_infos
 
 
     def get_info(self, name, default=None):
@@ -869,9 +859,16 @@ class CpoSolveResult(CpoRunResult):
         Returns:
             Information attribute value, None if not found.
         """
-        if self.infos is None:
-            return default
-        return self.infos.get(name, default)
+        return self.solver_infos.get(name, default)
+
+
+    def get_process_infos(self):
+        """ Gets the set of informations provided by the Python API converning the solving of the model.
+
+        Returns:
+            Object of class :class:`CpoProcessInfos` that contains general information on model processing.
+        """
+        return self.process_infos
 
 
     def _set_model_attributes(self, nbintvars=0, nbitvvars=0, nbseqvars=0, nbctrs=0):
@@ -885,10 +882,10 @@ class CpoSolveResult(CpoRunResult):
             nbseqvars: Number of sequence variables
             nbctrs:    Number of constraints
         """
-        self._add_infos({INFO_NUMBER_OF_INTEGER_VARIABLES: nbintvars,
-                         INFO_NUMBER_OF_INTERVAL_VARIABLES: nbitvvars,
-                         INFO_NUMBER_OF_SEQUENCE_VARIABLES: nbseqvars,
-                         INFO_NUMBER_OF_CONSTRAINTS: nbctrs})
+        self.solver_infos[CpoSolverInfos.NUMBER_OF_INTEGER_VARIABLES] = nbintvars
+        self.solver_infos[CpoSolverInfos.NUMBER_OF_INTERVAL_VARIABLES] = nbitvvars
+        self.solver_infos[CpoSolverInfos.NUMBER_OF_SEQUENCE_VARIABLES] = nbseqvars
+        self.solver_infos[CpoSolverInfos.NUMBER_OF_CONSTRAINTS] = nbctrs
 
 
     def _set_solve_time(self, time):
@@ -907,42 +904,6 @@ class CpoSolveResult(CpoRunResult):
             (float) Solve time in seconds.
         """
         return self.solveTime
-
-
-    def get_number_of_integer_vars(self):
-        """ Gets the number of integer variables in the model.
-
-        Returns:
-            Number of integer variables.
-        """
-        return self.get_info(INFO_NUMBER_OF_INTEGER_VARIABLES, 0)
-
-
-    def get_number_of_interval_vars(self):
-        """ Gets the number of interval variables in the model.
-
-        Returns:
-            Number of interval variables.
-        """
-        return self.get_info(INFO_NUMBER_OF_INTERVAL_VARIABLES, 0)
-
-
-    def get_number_of_sequence_vars(self):
-        """ Gets the number of sequence variables in the model.
-
-        Returns:
-            Number of sequence variables.
-        """
-        return self.get_info(INFO_NUMBER_OF_SEQUENCE_VARIABLES, 0)
-
-
-    def get_number_of_constraints(self):
-        """ Gets the number of constraints in the model.
-
-        Returns:
-            Number of constraints.
-        """
-        return self.get_info(INFO_NUMBER_OF_CONSTRAINTS, 0)
 
 
     def get_var_solution(self, name):
@@ -987,10 +948,6 @@ class CpoSolveResult(CpoRunResult):
         Args:
             jsol:   JSON document representing solution, or string containing its JSON representation.
         """
-        # Parse json string if needed
-        if not isinstance(jsol, dict):
-            jsol = json.loads(jsol, parse_constant=True)
-
         # Add solver status
         status = jsol.get('solutionStatus', ())
         self.solve_status = status.get('solveStatus', self.solve_status)
@@ -1009,7 +966,7 @@ class CpoSolveResult(CpoRunResult):
         # Add information attributes
         cpinf = jsol.get('cpInfo', None)
         if cpinf is not None:
-            self._add_infos(cpinf)
+            self.solver_infos.update(cpinf)
 
         # Add solution
         self.solution._add_json_solution(jsol)
@@ -1054,11 +1011,12 @@ class CpoSolveResult(CpoRunResult):
             out: Target output
         """
         # Print model attributes
+        sinfos = self.get_solver_infos()
         out.write("-------------------------------------------------------------------------------\n")
-        out.write("Model constraints: " + str(self.get_number_of_constraints()))
-        out.write(", variables: integer: " + str(self.get_number_of_integer_vars()))
-        out.write(", interval: " + str(self.get_number_of_interval_vars()))
-        out.write(", sequence: " + str(self.get_number_of_sequence_vars()))
+        out.write("Model constraints: " + str(sinfos.get_number_of_constraints()))
+        out.write(", variables: integer: " + str(sinfos.get_number_of_integer_vars()))
+        out.write(", interval: " + str(sinfos.get_number_of_interval_vars()))
+        out.write(", sequence: " + str(sinfos.get_number_of_sequence_vars()))
         out.write('\n')
         # Print search status
         #out.write("Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
@@ -1202,10 +1160,6 @@ class CpoRefineConflictResult(CpoRunResult):
         Args:
             jsol:   JSON document representing result, or string containing its JSON representation.
         """
-        # Parse json string if needed
-        if not isinstance(jsol, dict):
-            jsol = json.loads(jsol, parse_constant=True)
-
         # Get conflict data
         conflict = jsol.get('conflict')
         if conflict is None:
@@ -1315,6 +1269,141 @@ class CpoRefineConflictResult(CpoRunResult):
         return utils.equals(self, other)
 
 
+class CpoSolverInfos(InfoDict):
+    """ Dictionary of various solver informations.
+
+    This class groups various information returned by the solver at the end of the solve.
+    It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
+    the methods such as :meth:`~docplex.cp.utils.InfoDict.print_infos` that allows to easily print
+    the full content of the information structure.
+    """
+
+    # Total number of constraints
+    NUMBER_OF_CONSTRAINTS        = 'NumberOfConstraints'
+
+    # Total number of integer variables
+    NUMBER_OF_INTEGER_VARIABLES  = 'NumberOfIntegerVariables'
+
+    # Total number of interval variables
+    NUMBER_OF_INTERVAL_VARIABLES = 'NumberOfIntervalVariables'
+
+    # Total number of sequence variables
+    NUMBER_OF_SEQUENCE_VARIABLES = 'NumberOfSequenceVariables'
+
+    # Total solve time
+    SOLVE_TIME = 'SolveTime'
+
+    def __init__(self):
+        super(InfoDict, self).__init__()
+
+    def get_number_of_integer_vars(self):
+        """ Gets the number of integer variables in the model.
+
+        Returns:
+            Number of integer variables.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_INTEGER_VARIABLES, 0)
+
+
+    def get_number_of_interval_vars(self):
+        """ Gets the number of interval variables in the model.
+
+        Returns:
+            Number of interval variables.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_INTERVAL_VARIABLES, 0)
+
+
+    def get_number_of_sequence_vars(self):
+        """ Gets the number of sequence variables in the model.
+
+        Returns:
+            Number of sequence variables.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_SEQUENCE_VARIABLES, 0)
+
+
+    def get_number_of_constraints(self):
+        """ Gets the number of constraints in the model.
+
+        Returns:
+            Number of constraints.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_CONSTRAINTS, 0)
+
+
+    def get_solve_time(self):
+        """ Gets the total solve time.
+
+        Returns:
+            Total solve time in seconds, -1 if unknown
+        """
+        return self.get(CpoSolverInfos.SOLVE_TIME, -1)
+
+
+
+class CpoProcessInfos(InfoDict):
+    """ Dictionary of various process informations.
+
+    This class groups various information related to the processing of the model by the Python API.
+    It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
+    the methods such as :meth:`~docplex.cp.utils.InfoDict.print_infos` that allows to easily print
+    the full content of the information structure.
+    """
+
+    # Model build time (time between model creatiuon and last addition of an expression)
+    MODEL_BUILD_TIME = "ModelBuildTime"
+
+    # Attribute name for time needed to transform model into CPO format
+    MODEL_COMPILE_TIME = "ModelCompileTime"
+
+    # Attribute name for time needed to encode model string in UTF8
+    MODEL_ENCODE_TIME = "ModelEncodeTime"
+
+    # Attribute name for time needed to dump model in file and/or on log
+    MODEL_DUMP_TIME = "ModelDumpTime"
+
+    # Attribute name for the size of the generated CPO model
+    MODEL_DATA_SIZE = "ModelDataSize"
+
+    # Time needed to send model to the solver
+    MODEL_SEND_TIME = "ModelSendTime"
+
+    # Name of the agent used to solve the model
+    SOLVER_AGENT = "SolverAgent"
+
+    # Attribute name for total solve time (including model send and response receive)
+    SOLVE_TOTAL_TIME = "TotalSolveTime"
+
+    # Attribute name for time needed to retrieve result
+    RESULT_RECEIVE_TIME = "ResultReceiveTime"
+
+    # Attribute name for size of the result string
+    RESULT_DATA_SIZE = "ResultDataSize"
+
+    # Attribute name for time needed to decode result string from UTF-8
+    RESULT_DECODE_TIME = "ResultDecodeTime"
+
+    # Attribute name for time needed to parse JSON result
+    RESULT_PARSE_TIME = "ResultParseTime"
+
+    # Attribute name for size of the log data
+    LOG_DATA_SIZE = "LogDataSize"
+
+
+    def __init__(self):
+        super(InfoDict, self).__init__()
+
+
+    def get_model_build_time(self):
+        """ Get the time spent to build the model.
+
+        Modeilng time is computed as the time spent between model creation and last addition of a model expression.
+
+        Returns:
+            Total modeling time in seconds.
+        """
+        return self.get(CpoProcessInfos.MODEL_BUILD_TIME)
 
 
 ###############################################################################

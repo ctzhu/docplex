@@ -9,31 +9,10 @@
 Tokenizer for reading CPO file format
 """
 
-from docplex.cp.utils import CpoException, to_internal_string, is_string
-
-
-###############################################################################
-## Constants
-###############################################################################
-
-# Operator characters
-_OPERATOR_CHARS = "+-*/<>=^%!&.|"
-
-# Punctuation characters
-_PUNCTUATION_CHARS = ",;[](){}#"
-
-# Token types
-TOKEN_EMPTY       = 0
-TOKEN_INTEGER     = 1
-TOKEN_FLOAT       = 2
-TOKEN_PUNCTUATION = 3
-TOKEN_OPERATOR    = 4
-TOKEN_SYMBOL      = 5
-TOKEN_STRING      = 6
-
+from docplex.cp.utils import to_internal_string, is_string
 
 ###############################################################################
-## Public classes
+## Utility classes
 ###############################################################################
 
 class CpoToken(object):
@@ -51,25 +30,7 @@ class CpoToken(object):
         super(CpoToken, self).__init__()
         self.type = type
         self.value = value
-        
-    def is_type(self, type):
-        """ Check if a token has a given type
-        Args:
-            type: Expected type
-        Returns:
-            True if type is as expected, False otherwise
-        """
-        return (self.type == type)
-        
-    def is_value(self, value):
-        """ Check if a token has a given value
-        Args:
-            value: Expected value
-        Returns:
-            True if value is as expected, false otherwise
-        """
-        return (self.value == value)
-        
+
     def get_string(self):
         """ Get the string corresponding to the value, interpreting escape sequences if necessary
         Returns:
@@ -78,7 +39,7 @@ class CpoToken(object):
         if (self.type != TOKEN_STRING):
             return(self.value)
         return(to_internal_string(self.value))
-        
+
     def __str__(self):
         """ Build a string representing this token
         Returns:
@@ -94,12 +55,72 @@ class CpoToken(object):
         return isinstance(other, CpoToken) and (other.type == self.type) and (other.value == self.value)
 
 
+###############################################################################
+## Constants
+###############################################################################
+
+# Token types
+TOKEN_NONE        = 0
+TOKEN_INTEGER     = 1
+TOKEN_FLOAT       = 2
+TOKEN_PUNCTUATION = 3
+TOKEN_OPERATOR    = 4
+TOKEN_SYMBOL      = 5
+TOKEN_STRING      = 6
+
+# Reserved operators and corresponding token
+_OPERATOR_TOKENS = \
+    {'+':  TOKEN_OPERATOR, '-':  TOKEN_OPERATOR, '*': TOKEN_OPERATOR, '/': TOKEN_OPERATOR,
+     '%':  TOKEN_OPERATOR, '^':  TOKEN_OPERATOR, '!': TOKEN_OPERATOR,
+     '&&': TOKEN_OPERATOR, '||': TOKEN_OPERATOR,
+     '==': TOKEN_OPERATOR, '!=': TOKEN_OPERATOR,
+     '<':  TOKEN_OPERATOR, '>':  TOKEN_OPERATOR, '<=': TOKEN_OPERATOR, '>=': TOKEN_OPERATOR,
+     '=': TOKEN_OPERATOR,  '=>': TOKEN_OPERATOR, '..': TOKEN_OPERATOR,
+
+     ',': TOKEN_PUNCTUATION, ';': TOKEN_PUNCTUATION, '#': TOKEN_PUNCTUATION,
+     '[': TOKEN_PUNCTUATION, ']': TOKEN_PUNCTUATION,
+     '(': TOKEN_PUNCTUATION, ')': TOKEN_PUNCTUATION,
+     '{': TOKEN_PUNCTUATION, '}': TOKEN_PUNCTUATION,
+    }
+
 # Null token
-TOKEN_NONE = CpoToken(TOKEN_EMPTY, "")
+TOKEN_EOF = CpoToken(TOKEN_NONE, "EOF")
 
-# Token for '/'
-_TOKEN_SLASK = CpoToken(TOKEN_OPERATOR, '/')
+# Build tree of reserved operators. Each node is a tuple (token, children)
+_OP_TREE = {}
+for tok in _OPERATOR_TOKENS:
+    cd = _OP_TREE
+    tlen = len(tok)
+    for i in range(tlen - 1):
+        c = tok[i]
+        ccd = cd.get(c)
+        if ccd is None:
+            cd[c] = ccd = (None, {})
+        cd = ccd[1]
+    c = tok[tlen - 1]
+    ccd = cd.get(c)
+    if ccd is None:
+        cd[c] = (CpoToken(_OPERATOR_TOKENS[tok], tok), {})
+    else:
+        cd[c] = (CpoToken(_OPERATOR_TOKENS[tok], tok), ccd[1])
 
+# Miscellaneous directly used tokens
+TOKEN_COMMA        = _OP_TREE[','][0]
+TOKEN_SEMICOLON    = _OP_TREE[';'][0]
+TOKEN_EQUAL        = _OP_TREE['='][0]
+TOKEN_BRACE_OPEN   = _OP_TREE['{'][0]
+TOKEN_BRACE_CLOSE  = _OP_TREE['}'][0]
+TOKEN_HOOK_OPEN    = _OP_TREE['['][0]
+TOKEN_HOOK_CLOSE   = _OP_TREE[']'][0]
+TOKEN_PARENT_OPEN  = _OP_TREE['('][0]
+TOKEN_PARENT_CLOSE = _OP_TREE[')'][0]
+TOKEN_HASH         = _OP_TREE['#'][0]
+TOKEN_SLASH        = _OP_TREE['/'][0]
+
+
+###############################################################################
+## Public classes
+###############################################################################
 
 class CpoTokenizer(object):
     """ Tokenizer for CPO file format """
@@ -107,8 +128,8 @@ class CpoTokenizer(object):
                  'input',        # Input stream
                  'token',        # Current token (list of characters)
                  'line',         # Current input line
-                 'rindex',       # Current read index in the line
-                 'lineNumber',   # Current line number
+                 'read_index',   # Current read index in the line
+                 'line_number',  # Current line number
                  )
 
     def __init__(self, name, input):
@@ -124,8 +145,8 @@ class CpoTokenizer(object):
         else:
             self.input = input 
             self.line = ""
-        self.rindex = 0
-        self.lineNumber = 1
+        self.read_index = 0
+        self.line_number = 1
         self.token = []
 
     def next_token(self):
@@ -141,7 +162,7 @@ class CpoTokenizer(object):
             while (c is not None) and (c <= ' '):
                 c = self._next_char()
             if c is None:
-                return TOKEN_NONE    
+                return TOKEN_EOF
             
             # Check start comment
             if c == '/':
@@ -158,24 +179,24 @@ class CpoTokenizer(object):
                         c = self._next_char()
                 else:
                     self._back_char()
-                    return _TOKEN_SLASK
+                    return TOKEN_SLASH
             else:
                 break
             
         # Reset current token
         self._reset_token()
-        if c == '"':
-            c = ''
-            # Read character sequence
-            while (c is not None) and (c != '"'):
+
+        # Check symbol
+        if ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or (c == '_'):
+            # Read symbol
+            c = self._next_char()
+            while c and (((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')):
                 c = self._next_char()
-                if c == '\\':
-                    self._next_char()
-                    c = ''
-            if c is None:
-                raise CpoException(self.build_error_string("String not ended before end of stream"))
-            return CpoToken(TOKEN_STRING, self._get_token())
-        
+            self._back_char()
+            s = self._get_token()
+            return CpoToken(TOKEN_OPERATOR if s == 'div' else TOKEN_SYMBOL, s)
+
+        # Check number
         elif (c >= '0') and (c <= '9'):
             # Read number
             typ = TOKEN_INTEGER
@@ -192,45 +213,53 @@ class CpoTokenizer(object):
                     c = self._next_char()
                 if (c == 'e') or (c == 'E'):
                     c = self._next_char()
-                    if (c == '-') or (c == '+'): 
+                    if (c == '-') or (c == '+'):
                         c = self._next_char()
                     while (c >= '0') and (c <= '9'):
                         c = self._next_char()
             self._back_char()
             return CpoToken(typ, self._get_token())
-        
-        elif ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or (c == '_'):
-            # Read symbol
-            c = self._next_char()
-            while c and (((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')):
-                c = self._next_char()
-            self._back_char()
-            s = self._get_token()
-            return CpoToken(TOKEN_OPERATOR if s == 'div' else TOKEN_SYMBOL, s)
-        
-        elif c in _PUNCTUATION_CHARS:
-            return CpoToken(TOKEN_PUNCTUATION, c)
 
-        elif c in _OPERATOR_CHARS:
-            c2 = self._next_char()
-            # Accept next char as operator if possible
-            if not(c2 in _OPERATOR_CHARS) or (c2 == '-'):
-                self._back_char()
-            return CpoToken(TOKEN_OPERATOR, self._get_token())
-        
+        # Check string
+        elif c == '"':
+            c = ''
+            # Read character sequence
+            while (c is not None) and (c != '"'):
+                c = self._next_char()
+                if c == '\\':
+                    self._next_char()
+                    c = ''
+            if c is None:
+                raise SyntaxError(self.build_error_string("String not ended before end of stream"))
+            return CpoToken(TOKEN_STRING, self._get_token())
+
+        # Operators
         else:
-            raise CpoException(self.build_error_string("Unknown token starting by '" + c + "'"))
-            
+            ccd = _OP_TREE.get(c)
+            if ccd is None:
+                raise SyntaxError(self.build_error_string("Unknown token starting by '{}'".format(c)))
+            lccd = ccd
+            while ccd:
+                lccd = ccd
+                c = self._next_char()
+                if not c:
+                    break
+                ccd = ccd[1].get(c)
+            self._back_char()
+            if not lccd[0]:
+                raise SyntaxError(self.build_error_string("Unknown token '{}'".format(self._get_token())))
+            return lccd[0]
+
     def get_line_reminder(self):
         """ Get reminder of the line
         Returns:
             Line remainder content, without ending \n
         """
-        start = self.rindex
+        start = self.read_index
         c = self._next_char()
         while (c is not None) and (c != '\n'):
             c = self._next_char()
-        return(self.line[start:self.rindex])
+        return(self.line[start:self.read_index])
         
     def get_up_to(self, echar):
         """ Get string from current character to a given one (excluded)
@@ -269,18 +298,18 @@ class CpoTokenizer(object):
         
         # Check end of line
         slen = len(line)
-        if self.rindex >= slen:
+        if self.read_index >= slen:
             # Read next line and check end of file
             line = "" if self.input is None else self.input.readline()
             if line == "":
                 self.line = None
                 return None
             self.line = line
-            self.rindex = 0
-        c = line[self.rindex]
-        self.rindex += 1
+            self.read_index = 0
+        c = line[self.read_index]
+        self.read_index += 1
         if c == '\n':
-            self.lineNumber += 1
+            self.line_number += 1
         # Push last character in token
         self.token.append(c)
         return c
@@ -289,10 +318,10 @@ class CpoTokenizer(object):
         """ Push back one character
         """
         if self.line is not None:
-            self.rindex -= 1
+            self.read_index -= 1
             self.token.pop()
         
     def build_error_string(self, msg):
         """ Build error string for exception
         """
-        return "Error in '" + self.name + "' at line " + str(self.lineNumber) + " index " + str(self.rindex) + ": " + msg
+        return "Error in '" + self.name + "' at line " + str(self.line_number) + " index " + str(self.read_index) + ": " + msg

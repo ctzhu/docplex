@@ -51,9 +51,9 @@ class _IAdvancedExpr(Expr, LinearOperand):
 
     def _new_generated_free_continuous_var(self, name=None):
         # INTERNAL
-        self_model = self.model
+        self_model = self._model
         inf = self_model.infinity
-        return self._new_generated_continuous_var(lb=-inf, ub=+inf, name=name)
+        return self._new_generated_continuous_var(lb=-inf, ub=inf, name=name)
 
     def _new_generated_continuous_var(self, lb=None, ub=None, name=None):
         # INTERNAL
@@ -78,19 +78,35 @@ class _IAdvancedExpr(Expr, LinearOperand):
         return sos1
 
     def _new_generated_indicator(self, binary_var, linear_ct, active_value=1, name=None):
-        ind = self.model.add_indicator(binary_var, linear_ct, active_value, name)
+        ind = self.model._add_indicator(binary_var, linear_ct, active_value, name)
         ind.notify_origin(self)
         return ind
 
     def _post_generated_ct(self, ct):
         # posts a constraint and marks it as generated.
-        ct = self.model.add_constraint(ct)
+        ct = self._model._post_constraint(ct, ctname=None)
         ct.notify_origin(self)
         return ct
+
+    def _post_generated_cts_args(self, *args):
+        # takes a variable list of args
+        cts = args
+        return self._post_generated_cts(cts)
+
+    def _post_generated_cts(self, cts):
+        # takes a sequence of constraints
+        # posts a constraint and marks it as generated.
+        self._model._lfactory._post_constraint_block(cts)
+        for c in cts:
+            c.notify_origin(self)
+        return cts
 
     def _get_resolved_f_var(self):
         self._ensure_resolved_f_var()
         return self._f_var
+
+    def resolve(self):
+        self._ensure_resolved_f_var()
 
     def _ensure_resolved_f_var(self):
         if self._f_var is None:
@@ -104,7 +120,7 @@ class _IAdvancedExpr(Expr, LinearOperand):
 
     def _create_functional_var(self):
         # add a unique counter suffix cf. RTC
-        unique_counter = self.model._new_unique_counter()
+        unique_counter = self._model._new_unique_counter()
         if unique_counter == 0:
             # the first time, we use the the raw name, else we suffix #<unique>
             fname = self.to_string()
@@ -174,12 +190,11 @@ class _IAdvancedExpr(Expr, LinearOperand):
         # INTERNAL
         # allocates a new variables if only the argument expr is not a variable
         # and returns it
-        arg_var = None
         try:
-            if arg_expr.is_variable():
-                arg_var = next(arg_expr.iter_variables())
-        except AttributeError:  # pragma: no cover
-            arg_var = None  # pragma: no cover
+
+            arg_var = arg_expr.as_variable()
+        except AttributeError:
+            arg_var = None
 
         if arg_var is None:
             arg_var = self._new_generated_free_continuous_var()
@@ -215,7 +230,7 @@ class AbsExpr(FunctionalExpr):
 
     def __init__(self, model, argument_expr):
         FunctionalExpr.__init__(self, model, argument_expr)
-        self._ensure_resolved_f_var()
+        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "abs"
@@ -226,16 +241,24 @@ class AbsExpr(FunctionalExpr):
     # noinspection PyArgumentEqualDefault,PyArgumentEqualDefault
     def _resolve(self):
         self_f_var = self._f_var
-        abs_index = self.model._new_unique_counter()
-        # 1 create two vars
-        self.positive_var = self._new_generated_continuous_var(lb=0, name=get_name_if_debug("_abs_pp_%d" % abs_index))
-        self.negative_var = self._new_generated_continuous_var(lb=0, name=get_name_if_debug("_abs_np_%d" % abs_index))
+        m = self.model
+        abs_index = m._new_unique_counter()
+        abs_names = ["_abs_pp_%d" % abs_index, "_abs_np_%d" % abs_index] if use_debug_names else [None, None]
+        # 1. allocate two variables in one pass.
+        positive_var = self._new_generated_continuous_var(lb=0, name=abs_names[0])
+        negative_var = self._new_generated_continuous_var(lb=0, name=abs_names[1])
+
         # F(x) = p + n
-        self._post_generated_ct(self_f_var == self.positive_var + self.negative_var)
+        ct1 = (self_f_var == positive_var + negative_var)
         # sos
-        self.sos = self.new_generated_sos1(dvars=[self.positive_var, self.negative_var])
+        self.sos = self.new_generated_sos1(dvars=[positive_var, negative_var])
         # # x = p-n
-        self._post_generated_ct(self._argument_expr == self.positive_var - self.negative_var)
+        ct2 = (self._argument_expr == positive_var - negative_var)
+
+        self._post_generated_cts_args(ct1, ct2)
+        # store
+        self.positive_var = positive_var
+        self.negative_var = negative_var
 
     def eval(self, numarg):
         return abs(numarg)
@@ -255,9 +278,9 @@ class _SequenceExpr(_IAdvancedExpr):
     def __init__(self, model, exprs, name=None):
         _IAdvancedExpr.__init__(self, model, name)
         if is_iterable(exprs) or is_iterator(exprs):
-            self._exprs = [model._to_linear_expr(e) for e in exprs]
+            self._exprs = exprs
         else:
-            self._exprs = [model._to_linear_expr(exprs)]
+            self._exprs = [model._lfactory._to_linear_operand(exprs)]
         # allocate xvars iff necessary
         self._xvars = [self._allocate_arg_var_if_necessary(e) for e in self._exprs]
 
@@ -287,6 +310,9 @@ class _SequenceExpr(_IAdvancedExpr):
     def iter_variables(self):
         return self._generate_variables()
 
+    def contains_var(self, dvar):
+        return dvar is self._f_var
+
     def _get_solution_value(self, s=None):
         fvar = self._f_var
         if self._is_resolved() and (not s or fvar in s):
@@ -302,6 +328,10 @@ class _SequenceExpr(_IAdvancedExpr):
         copied_exprs = [expr.copy(target_model, var_mapping) for expr in self._exprs]
         return self.__class__(target_model, copied_exprs, self.name)
 
+    def clone(self):
+        # generic clone
+        return self.__class__(self.model, self._exprs, self.name)
+
 
 class MinimumExpr(_SequenceExpr):
     """ An expression that represents the minimum of a sequence of expressions.
@@ -313,10 +343,7 @@ class MinimumExpr(_SequenceExpr):
 
     def __init__(self, model, exprs, name=None):
         _SequenceExpr.__init__(self, model, exprs, name)
-        self._ensure_resolved_f_var()
-
-    def clone(self):
-        return MinimumExpr(self.model, self._exprs, self.name)
+        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "min"
@@ -334,16 +361,19 @@ class MinimumExpr(_SequenceExpr):
         elif 1 == nb_args:
             self._post_generated_ct(self_min_var == self._xvars[0])
         else:
+            cts = []
             for xv in self_x_vars:
-                self._post_generated_ct(self_min_var <= xv)
+                cts.append(self_min_var <= xv)
             # allocate N _generated_ binaries
             z_vars = self._new_generated_binary_varlist(keys=nb_args)
             # sos?
-            self._post_generated_ct(self.model.sum(z_vars) == 1)
+            cts.append(self.model.sum(z_vars) == 1)
+            self._post_generated_cts(cts)
             # indicators
             for i in range(nb_args):
                 z = z_vars[i]
                 x = self_x_vars[i]
+                # need a block generation of indicators
                 self._new_generated_indicator(binary_var=z, linear_ct=(self_min_var >= x))
 
     def compute_solution_value(self, s):
@@ -360,13 +390,10 @@ class MaximumExpr(_SequenceExpr):
 
     def __init__(self, model, exprs, name=None):
         _SequenceExpr.__init__(self, model, exprs, name)
-        self._ensure_resolved_f_var()
+        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "max"
-
-    def clone(self):
-        return MaximumExpr(self.model, self._exprs, self.name)
 
     def __repr__(self):
         str_args = self._get_args_string()
@@ -395,6 +422,82 @@ class MaximumExpr(_SequenceExpr):
 
     def compute_solution_value(self, s):
         return max(expr._get_solution_value(s) for expr in self._exprs)
+
+
+class _LogicalSequenceExpr(_SequenceExpr):
+
+    def _create_functional_var(self):
+        # the resulting variable is a binary variable...
+        unique_counter = self._model._new_unique_counter()
+        if unique_counter == 0:
+            # the first time, we use the the raw name, else we suffix #<unique>
+            fname = self.to_string()
+        else:
+            fname = "%s#%d" % (self.to_string(), unique_counter)
+        return self._new_generated_binary_var(name=fname)
+
+    def __init__(self, model, exprs, name=None):
+        _IAdvancedExpr.__init__(self, model, name)
+        assert is_iterable(exprs) or is_iterator(exprs)
+        self._exprs = exprs
+        # never allocate vars: arguments --are-- binary variables.
+        self._xvars = exprs
+        #self._ensure_resolved_f_var()
+
+    def is_discrete(self):
+        return True
+
+    precision = 1e-5
+
+
+class LogicalAndExpr(_LogicalSequenceExpr):
+
+    def _get_function_symbol(self):
+        return "and"
+
+    def __repr__(self):
+        str_args = self._get_args_string()
+        return "docplex.mp.LogicalAndExpr({0!s})".format(str_args)
+
+    def compute_solution_value(self, s):
+        # return 1/0 not True/False
+        threshold = 1 - self.precision
+        return 1 if all(ex._get_solution_value(s) >= threshold for ex in self._exprs) else 0
+
+    def _resolve(self):
+        self_and_var = self._f_var
+        self_x_vars = self._xvars
+
+        if self_x_vars:
+            cts = [(self_and_var <= xv) for xv in self_x_vars]
+            m = self._model
+            cts.append(len(self_x_vars) * self_and_var >= m._aggregator._sum_with_seq(self._xvars))
+            self._post_generated_cts(cts)
+
+
+class LogicalOrExpr(_LogicalSequenceExpr):
+
+    def _get_function_symbol(self):
+        return "or"
+
+    def __repr__(self):
+        str_args = self._get_args_string()
+        return "docplex.mp.LogicalOrExpr({0!s})".format(str_args)
+
+    def compute_solution_value(self, s):
+        # return 1/0 not True/False
+        threshold = 1 - self.precision
+        return 1 if any(ex._get_solution_value(s) >= threshold for ex in self._exprs) else 0
+
+    def _resolve(self):
+        self_or_var = self._f_var
+        self_x_vars = self._xvars
+
+        if self_x_vars:
+            cts = [(xv <= self_or_var) for xv in self_x_vars]
+            m = self._model
+            cts.append(self_or_var <= m._aggregator._sum_with_seq(self._xvars))
+            self._post_generated_cts(cts)
 
 
 class PwlExpr(FunctionalExpr):

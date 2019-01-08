@@ -7,9 +7,9 @@
 
 """
 This module contains the functions that allows to construct all operations
-and constraints that can be used in a CPO model.
+and constraints that can be used in a *CP Optimizer* model.
 
-There is one Python function per CPO operation or constraint.
+There is one Python function per *CP Optimizer* operation or constraint.
 As many operations have multiple combinations of parameters,
 the functions of this module are generally declared with a variable number
 of arguments.
@@ -260,7 +260,7 @@ Detailed description
 """
 
 from docplex.cp.catalog import *
-from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr
+from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset
 from docplex.cp.utils import is_array, is_int
 import collections
 
@@ -712,7 +712,7 @@ def logical_and(e1, e2):
         A boolean expression representing (e1 and e2).
     """
     return CpoFunctionCall(Oper_logical_and, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
-                                                       _convert_arg(e2, "e2", Type_BoolExpr)))
+                                                             _convert_arg(e2, "e2", Type_BoolExpr)))
 
 
 def logical_or(e1, e2):
@@ -732,7 +732,7 @@ def logical_or(e1, e2):
         A boolean expression representing (e1 or e2).
     """
     return CpoFunctionCall(Oper_logical_or, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
-                                                      _convert_arg(e2, "e2", Type_BoolExpr)))
+                                                            _convert_arg(e2, "e2", Type_BoolExpr)))
 
 
 def logical_not(e):
@@ -915,9 +915,9 @@ def abstraction(y, x, values, abstractValue):
         Constraint expression
     """
     return CpoFunctionCall(Oper_abstraction, Type_Constraint, (_convert_arg(y, "y", Type_IntExprArray),
-                                                         _convert_arg(x, "x", Type_IntExprArray),
-                                                         _convert_arg(values, "values", Type_IntArray),
-                                                         _convert_arg(abstractValue, "abstractValue", Type_Int), ))
+                                                               _convert_arg(x, "x", Type_IntExprArray),
+                                                               _convert_arg(values, "values", Type_IntArray),
+                                                               _convert_arg(abstractValue, "abstractValue", Type_Int), ))
 
 
 def bool_abstraction(y, x, values):
@@ -944,9 +944,9 @@ def bool_abstraction(y, x, values):
         Constraint expression
     """
     return CpoFunctionCall(Oper_bool_abstraction, Type_Constraint, (_convert_arg(x, "x", Type_IntExprArray),
-                                                              _convert_arg(y, "y", Type_IntExprArray),
-                                                               _convert_arg(values, "values", Type_IntArray)
-                                                              ))
+                                                                    _convert_arg(y, "y", Type_IntExprArray),
+                                                                    _convert_arg(values, "values", Type_IntArray)
+                                                                    ))
 
 
 def count(exprs, v):
@@ -1077,12 +1077,12 @@ def sequence(min, max, width, vars, values, cards):
         Constraint expression
     """
     return CpoFunctionCall(Oper_sequence, Type_Constraint, (_convert_arg(min, "min", Type_Int),
-                                                      _convert_arg(max, "max", Type_Int),
-                                                      _convert_arg(width, "width", Type_Int),
-                                                      _convert_arg(vars, "vars", Type_IntExprArray),
-                                                      _convert_arg(values, "values", Type_IntArray),
-                                                      _convert_arg(cards, "cards", Type_IntExprArray),
-                                                      ))
+                                                            _convert_arg(max, "max", Type_Int),
+                                                            _convert_arg(width, "width", Type_Int),
+                                                            _convert_arg(vars, "vars", Type_IntExprArray),
+                                                            _convert_arg(values, "values", Type_IntArray),
+                                                            _convert_arg(cards, "cards", Type_IntExprArray),
+                                                            ))
 
 
 def constant(v):
@@ -1151,8 +1151,8 @@ def member(element, array):
         A boolean expression denoting the presence of the value in the array.
     """
     return CpoFunctionCall(Oper_member, Type_BoolExpr, (_convert_arg(element, "element", Type_IntExpr),
-                                                  _convert_arg(array, "array", Type_IntArray),
-                                                  ))
+                                                        _convert_arg(array, "array", Type_IntArray),
+                                                        ))
 
 
 def in_range(x, lb, ub):
@@ -1172,8 +1172,8 @@ def in_range(x, lb, ub):
         An expression of type boolean expression
     """
     return CpoFunctionCall(Oper_range, Type_BoolExpr, (_convert_arg(x, "x", Type_FloatExpr),
-                                                 _convert_arg(lb, "lb", Type_Float),
-                                                 _convert_arg(ub, "ub", Type_Float)))
+                                                       _convert_arg(lb, "lb", Type_Float),
+                                                       _convert_arg(ub, "ub", Type_Float)))
 
 
 def range(*args):
@@ -1216,7 +1216,7 @@ def all_min_distance(exprs, distance):
         A new boolean expression
     """
     return CpoFunctionCall(Oper_all_min_distance, Type_BoolExpr, (_convert_arg(exprs, "exprs", Type_IntExprArray),
-                                                            _convert_arg(distance, "distance", Type_Int)))
+                                                                  _convert_arg(distance, "distance", Type_Int)))
 
 
 def if_then(e1, e2):
@@ -1229,7 +1229,7 @@ def if_then(e1, e2):
         A boolean expression stating that e1 => e2
     """
     return CpoFunctionCall(Oper_if_then, Type_BoolExpr, (_convert_arg(e1, "e1", Type_BoolExpr),
-                                                   _convert_arg(e2, "e2", Type_BoolExpr)))
+                                                         _convert_arg(e2, "e2", Type_BoolExpr)))
 
 
 def inverse(f, invf):
@@ -1238,6 +1238,7 @@ def inverse(f, invf):
     This function creates an inverse constraint such that if the length of
     the arrays *f* and *invf* is *n*, then this function returns a
     constraint that ensures that:
+
      * for all *i* in the interval *[0, n-1]*, *invf[f[i* == i*
      * for all *j* in the interval *[0, n-1]*, *f[invf[j* == j*
 
@@ -1248,7 +1249,7 @@ def inverse(f, invf):
         Constraint expression
     """
     return CpoFunctionCall(Oper_inverse, Type_Constraint, (_convert_arg(f, "f", Type_IntExprArray),
-                                                     _convert_arg(invf, "invf", Type_IntExprArray)))
+                                                           _convert_arg(invf, "invf", Type_IntExprArray)))
 
 
 def distribute(counts, exprs, values=None):
@@ -1275,10 +1276,10 @@ def distribute(counts, exprs, values=None):
     """
     if values is None:
         return CpoFunctionCall(Oper_distribute, Type_Constraint, (_convert_arg(counts, "counts", Type_IntExprArray),
-                                                            _convert_arg(exprs, "exprs", Type_IntExprArray)))
+                                                                  _convert_arg(exprs, "exprs", Type_IntExprArray)))
     return CpoFunctionCall(Oper_distribute, Type_Constraint, (_convert_arg(counts, "counts", Type_IntExprArray),
-                                                        _convert_arg(values, "values", Type_IntArray),
-                                                       _convert_arg(exprs, "exprs", Type_IntExprArray)))
+                                                              _convert_arg(values, "values", Type_IntArray),
+                                                              _convert_arg(exprs, "exprs", Type_IntExprArray)))
 def allowed_assignments(exprs, values):
     """ Explicitly defines possible assignments on one or more integer expressions.
 
@@ -1302,12 +1303,10 @@ def allowed_assignments(exprs, values):
         A boolean expression
     """
     exprs = build_cpo_expr(exprs)
-    values = build_cpo_expr(values)
     if exprs.is_kind_of(Type_IntExpr):
-        assert values.is_kind_of(Type_IntArray), "Second argument should an array of integers"
-    else:
-        assert exprs.is_kind_of(Type_IntExprArray) and values.is_kind_of(Type_TupleSet), "Arguments should be array of integer expressions and tuple set"
-    return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, values))
+        return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, _convert_arg(values, values, Type_IntArray)))
+    assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
+    return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
 
 
 def forbidden_assignments(exprs, values):
@@ -1333,12 +1332,10 @@ def forbidden_assignments(exprs, values):
         A boolean expression
     """
     exprs = build_cpo_expr(exprs)
-    values = build_cpo_expr(values)
     if exprs.is_kind_of(Type_IntExpr):
-        assert values.is_kind_of(Type_IntArray), "Second argument should an array of integers"
-    else:
-        assert exprs.is_kind_of(Type_IntExprArray) and values.is_kind_of(Type_TupleSet), "Arguments should be array of integer expressions and tuple set"
-    return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, values))
+        return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, _convert_arg(values, values, Type_IntArray)))
+    assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
+    return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
 
 
 def lexicographic(x, y):
@@ -1359,7 +1356,7 @@ def lexicographic(x, y):
         Constraint expression
     """
     return CpoFunctionCall(Oper_lexicographic, Type_Constraint, (_convert_arg(x, "x", Type_IntExprArray),
-                                                           _convert_arg(y, "y", Type_IntExprArray)))
+                                                                 _convert_arg(y, "y", Type_IntExprArray)))
 
 
 def standard_deviation(x, meanLB, meanUB):
@@ -1379,8 +1376,8 @@ def standard_deviation(x, meanLB, meanUB):
         A float expression
     """
     return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),
-                                                               _convert_arg(meanLB, "meanLB", Type_Float),
-                                                               _convert_arg(meanUB, "meanUB", Type_Float),))
+                                                                     _convert_arg(meanLB, "meanLB", Type_Float),
+                                                                     _convert_arg(meanUB, "meanUB", Type_Float),))
 
 
 def strong(x):
@@ -1825,7 +1822,7 @@ def span(interval, array):
         Constraint expression
     """
     return CpoFunctionCall(Oper_span, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                  _convert_arg(array, "array", Type_IntervalVarArray)))
+                                                        _convert_arg(array, "array", Type_IntervalVarArray)))
 
 
 def alternative(interval, array, cardinality=None):
@@ -1852,10 +1849,10 @@ def alternative(interval, array, cardinality=None):
     """
     if cardinality is None:
        return CpoFunctionCall(Oper_alternative, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                            _convert_arg(array, "array", Type_IntervalVarArray)))
+                                                                  _convert_arg(array, "array", Type_IntervalVarArray)))
     return CpoFunctionCall(Oper_alternative, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                         _convert_arg(array, "array", Type_IntervalVarArray),
-                                                         _convert_arg(cardinality, "cardinality", Type_IntExpr)))
+                                                               _convert_arg(array, "array", Type_IntervalVarArray),
+                                                               _convert_arg(cardinality, "cardinality", Type_IntExpr)))
 
 
 def synchronize(interval, array):
@@ -1873,7 +1870,7 @@ def synchronize(interval, array):
         Constraint expression
     """
     return CpoFunctionCall(Oper_synchronize, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                         _convert_arg(array, "array", Type_IntervalVarArray)))
+                                                               _convert_arg(array, "array", Type_IntervalVarArray)))
 
 
 def isomorphism(array1, array2, map=None, absentValue=None):
@@ -1906,8 +1903,8 @@ def isomorphism(array1, array2, map=None, absentValue=None):
             return CpoFunctionCall(Oper_isomorphism, Type_Constraint, (array1, array2))
         return CpoFunctionCall(Oper_isomorphism, Type_Constraint, (array1, array2, _convert_arg(map, "map", Type_IntExprArray)))
     return CpoFunctionCall(Oper_isomorphism, Type_Constraint, (array1, array2,
-                                                         _convert_arg(map, "map", Type_IntExprArray),
-                                                         _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                               _convert_arg(map, "map", Type_IntExprArray),
+                                                               _convert_arg(absentValue, "absentValue", Type_Int)))
 
 
 def forbid_start(interval, function):
@@ -1928,7 +1925,7 @@ def forbid_start(interval, function):
         Constraint expression
     """
     return CpoFunctionCall(Oper_forbid_start, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                          _convert_arg(function, "function", Type_StepFunction)))
+                                                                _convert_arg(function, "function", Type_StepFunction)))
 
 def forbid_end(interval, function):
     """ Forbids an interval variable to end during specified regions.
@@ -1952,7 +1949,7 @@ def forbid_end(interval, function):
         Constraint expression
     """
     return CpoFunctionCall(Oper_forbid_end, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                        _convert_arg(function, "function", Type_StepFunction)))
+                                                              _convert_arg(function, "function", Type_StepFunction)))
 
 
 def forbid_extent(interval, function):
@@ -1973,7 +1970,7 @@ def forbid_extent(interval, function):
         Constraint expression
     """
     return CpoFunctionCall(Oper_forbid_extent, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                           _convert_arg(function, "function", Type_StepFunction)))
+                                                                 _convert_arg(function, "function", Type_StepFunction)))
 
 
 
@@ -1995,7 +1992,7 @@ def first(sequence, interval):
         Constraint expression
     """
     return CpoFunctionCall(Oper_first, Type_Constraint, (_convert_arg(sequence, "sequence", Type_SequenceVar),
-                                                   _convert_arg(interval, "interval", Type_IntervalVar)))
+                                                         _convert_arg(interval, "interval", Type_IntervalVar)))
 
 
 def last(sequence, interval):
@@ -2011,7 +2008,7 @@ def last(sequence, interval):
         Constraint expression
     """
     return CpoFunctionCall(Oper_last, Type_Constraint, (_convert_arg(sequence, "sequence", Type_SequenceVar),
-                                                  _convert_arg(interval, "interval", Type_IntervalVar)))
+                                                        _convert_arg(interval, "interval", Type_IntervalVar)))
 
 
 def before(sequence, interval1, interval2):
@@ -2029,8 +2026,8 @@ def before(sequence, interval1, interval2):
         Constraint expression
     """
     return CpoFunctionCall(Oper_before, Type_Constraint, (_convert_arg(sequence, "sequence", Type_SequenceVar),
-                                                    _convert_arg(interval1, "interval1", Type_IntervalVar),
-                                                    _convert_arg(interval2, "interval2", Type_IntervalVar)))
+                                                          _convert_arg(interval1, "interval1", Type_IntervalVar),
+                                                          _convert_arg(interval2, "interval2", Type_IntervalVar)))
 
 
 def previous(sequence, interval1, interval2):
@@ -2048,8 +2045,8 @@ def previous(sequence, interval1, interval2):
         Constraint expression
     """
     return CpoFunctionCall(Oper_previous, Type_Constraint, (_convert_arg(sequence, "sequence", Type_SequenceVar),
-                                                      _convert_arg(interval1, "interval1", Type_IntervalVar),
-                                                      _convert_arg(interval2, "interval2", Type_IntervalVar)))
+                                                            _convert_arg(interval1, "interval1", Type_IntervalVar),
+                                                            _convert_arg(interval2, "interval2", Type_IntervalVar)))
 
 
 def _sequence_operation(oper, sequence, interval, value, islast, absentValue):
@@ -2078,8 +2075,8 @@ def _sequence_operation(oper, sequence, interval, value, islast, absentValue):
             return CpoFunctionCall(oper, Type_IntExpr, (sequence, interval))
         return CpoFunctionCall(oper, Type_IntExpr, (sequence, interval, _convert_arg(value, vname, Type_Int)))
     return CpoFunctionCall(oper, Type_IntExpr, (sequence, interval,
-                                          _convert_arg(value, vname, Type_Int),
-                                          _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                _convert_arg(value, vname, Type_Int),
+                                                _convert_arg(absentValue, "absentValue", Type_Int)))
 
 
 def start_of_next(sequence, interval, lastValue=None, absentValue=None):
@@ -2308,10 +2305,10 @@ def no_overlap(sequence, distanceMatrix=None, isDirect=None):
         if distanceMatrix is None:
             return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,))
         return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,
-                                                            _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix)))
+                                                                  _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix)))
     return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence,
-                                                        _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix),
-                                                        _convert_arg(isDirect, "isDirect", Type_BoolInt)))
+                                                              _convert_arg(distanceMatrix, "distanceMatrix", Type_TransitionMatrix),
+                                                              _convert_arg(isDirect, "isDirect", Type_BoolInt)))
 
 
 def overlap_length(interval, interval2, absentValue=None):
@@ -2346,14 +2343,14 @@ def overlap_length(interval, interval2, absentValue=None):
         if absentValue is None:
             return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2))
         return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2,
-                                                             _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                                   _convert_arg(absentValue, "absentValue", Type_Int)))
 
     # Interval2 is an interval variable
     interval2 = _convert_arg(interval2, "interval2", Type_IntervalVar)
     if absentValue is None:
         return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2))
     return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2,
-                                                         _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                               _convert_arg(absentValue, "absentValue", Type_Int)))
 
 
 def start_eval(interval, function, absentValue=None):
@@ -2470,8 +2467,8 @@ def same_sequence(seq1, seq2, array1=None, array2=None):
         return CpoFunctionCall(Oper_same_sequence, Type_Constraint, (seq1, seq2))
 
     return CpoFunctionCall(Oper_same_sequence, Type_Constraint, (seq1, seq2,
-                                                           _convert_arg(array1, "array1", Type_IntervalVarArray),
-                                                           _convert_arg(array2, "array2", Type_IntervalVarArray)))
+                                                                 _convert_arg(array1, "array1", Type_IntervalVarArray),
+                                                                 _convert_arg(array2, "array2", Type_IntervalVarArray)))
 
 
 def same_common_subsequence(seq1, seq2, array1=None, array2=None):
@@ -2505,8 +2502,8 @@ def same_common_subsequence(seq1, seq2, array1=None, array2=None):
         return CpoFunctionCall(Oper_same_common_subsequence, Type_Constraint, (seq1, seq2))
 
     return CpoFunctionCall(Oper_same_common_subsequence, Type_Constraint, (seq1, seq2,
-                                                                     _convert_arg(array1, "array1", Type_IntervalVarArray),
-                                                                     _convert_arg(array2, "array2", Type_IntervalVarArray)))
+                                                                           _convert_arg(array1, "array1", Type_IntervalVarArray),
+                                                                           _convert_arg(array2, "array2", Type_IntervalVarArray)))
 
 
 #==============================================================================
@@ -2542,25 +2539,25 @@ def pulse(interval, height, _x=None):
         msg = "Deprecated calling form, consult documentation for details"
         if is_int(interval):
             return CpoFunctionCall(Oper_pulse, Type_CumulAtom, (_convert_arg(interval, "interval", Type_TimeInt, msg),
-                                                          _convert_arg(height, "height", Type_TimeInt, msg),
-                                                          _convert_arg(_x, "_x", Type_PositiveInt, msg)))
+                                                                _convert_arg(height, "height", Type_TimeInt, msg),
+                                                                _convert_arg(_x, "_x", Type_PositiveInt, msg)))
         return CpoFunctionCall(Oper_pulse, Type_CumulAtom, (_convert_arg(interval, "interval", Type_IntervalVar, msg),
-                                                      _convert_arg(height, "height", Type_PositiveInt, msg),
-                                                      _convert_arg(_x, "_x", Type_PositiveInt, msg)))
+                                                            _convert_arg(height, "height", Type_PositiveInt, msg),
+                                                            _convert_arg(_x, "_x", Type_PositiveInt, msg)))
 
     # Case of fixed interval
     if _is_int_couple(interval):
         return CpoFunctionCall(Oper_pulse, Type_CumulAtom, (_convert_arg(interval[0], "interval[0]", Type_TimeInt),
-                                                      _convert_arg(interval[1], "interval[1]", Type_TimeInt),
-                                                      _convert_arg(height, "height", Type_PositiveInt)))
+                                                            _convert_arg(interval[1], "interval[1]", Type_TimeInt),
+                                                            _convert_arg(height, "height", Type_PositiveInt)))
 
     # Case of interval variable
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     if _is_int_couple(height):
         return CpoFunctionCall(Oper_pulse, Type_CumulAtom, (interval,
-                                                      _convert_arg(height[0], "height[0]", Type_PositiveInt),
-                                                      _convert_arg(height[1], "height[1]", Type_PositiveInt)))
+                                                            _convert_arg(height[0], "height[0]", Type_PositiveInt),
+                                                            _convert_arg(height[1], "height[1]", Type_PositiveInt)))
     height = _convert_arg(height, "height", Type_PositiveInt, "Argument 'height' should be an integer or a range expressed as a tuple of integers")
     return CpoFunctionCall(Oper_pulse, Type_CumulAtom, (interval, height))
 
@@ -2583,7 +2580,7 @@ def step_at(t, h):
         A cumul atom expression
     """
     return CpoFunctionCall(Oper_step_at, Type_CumulAtom, (_convert_arg(t, "t", Type_TimeInt),
-                                                    _convert_arg(h, "h", Type_PositiveInt)))
+                                                          _convert_arg(h, "h", Type_PositiveInt)))
 
 
 def step_at_start(interval, height):
@@ -2609,8 +2606,8 @@ def step_at_start(interval, height):
     interval = _convert_arg(interval, "interval", Type_IntervalVar)
     if _is_int_couple(height):
         return CpoFunctionCall(Oper_step_at_start, Type_CumulAtom, (interval,
-                                                              _convert_arg(height[0], "height[0]", Type_PositiveInt),
-                                                              _convert_arg(height[1], "height[1]", Type_PositiveInt)))
+                                                                    _convert_arg(height[0], "height[0]", Type_PositiveInt),
+                                                                    _convert_arg(height[1], "height[1]", Type_PositiveInt)))
 
     height = _convert_arg(height, "height", Type_PositiveInt, "Argument 'height' should be an integer or a range expressed as a tuple of integers")
     return CpoFunctionCall(Oper_step_at_start, Type_CumulAtom, (interval,height))
@@ -2639,8 +2636,8 @@ def step_at_end(interval, height):
     interval = _convert_arg(interval, "interval", Type_IntervalVar)
     if _is_int_couple(height):
         return CpoFunctionCall(Oper_step_at_end, Type_CumulAtom, (interval,
-                                                              _convert_arg(height[0], "height[0]", Type_PositiveInt),
-                                                              _convert_arg(height[1], "height[1]", Type_PositiveInt)))
+                                                                  _convert_arg(height[0], "height[0]", Type_PositiveInt),
+                                                                  _convert_arg(height[1], "height[1]", Type_PositiveInt)))
 
     height = _convert_arg(height, "height", Type_PositiveInt, "Argument 'height' should be an integer or a range expressed as a tuple of integers")
     return CpoFunctionCall(Oper_step_at_end, Type_CumulAtom, (interval,height))
@@ -2664,10 +2661,10 @@ def height_at_start(interval, function, absentValue=None):
     """
     if absentValue is None:
         return CpoFunctionCall(Oper_height_at_start, Type_IntExpr, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                              _convert_arg(function, "function", Type_CumulExpr)))
+                                                                    _convert_arg(function, "function", Type_CumulExpr)))
     return CpoFunctionCall(Oper_height_at_start, Type_IntExpr, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                          _convert_arg(function, "function", Type_CumulExpr),
-                                                          _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                                _convert_arg(function, "function", Type_CumulExpr),
+                                                                _convert_arg(absentValue, "absentValue", Type_Int)))
 
 
 def height_at_end(interval, function, absentValue=None):
@@ -2688,10 +2685,10 @@ def height_at_end(interval, function, absentValue=None):
     """
     if absentValue is None:
         return CpoFunctionCall(Oper_height_at_end, Type_IntExpr, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                            _convert_arg(function, "function", Type_CumulExpr)))
+                                                                  _convert_arg(function, "function", Type_CumulExpr)))
     return CpoFunctionCall(Oper_height_at_end, Type_IntExpr, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                        _convert_arg(function, "function", Type_CumulExpr),
-                                                        _convert_arg(absentValue, "absentValue", Type_Int)))
+                                                              _convert_arg(function, "function", Type_CumulExpr),
+                                                              _convert_arg(absentValue, "absentValue", Type_Int)))
 
 
 def always_in(function, interval, min, max, _x=None):
@@ -2725,18 +2722,18 @@ def always_in(function, interval, min, max, _x=None):
     if _x is not None:
         msg = "Deprecated calling form, consult documentation for details"
         return CpoFunctionCall(Oper_always_in, Type_Constraint, (function,
-                                                           _convert_arg(interval, "interval", Type_TimeInt, msg),
-                                                           _convert_arg(min, "min", Type_TimeInt, msg),
-                                                           _convert_arg(max, "max", Type_PositiveInt, msg),
-                                                           _convert_arg(_x, "_x", Type_PositiveInt, msg)))
+                                                                 _convert_arg(interval, "interval", Type_TimeInt, msg),
+                                                                 _convert_arg(min, "min", Type_TimeInt, msg),
+                                                                 _convert_arg(max, "max", Type_PositiveInt, msg),
+                                                                 _convert_arg(_x, "_x", Type_PositiveInt, msg)))
 
     min = _convert_arg(min, "min", Type_PositiveInt)
     max = _convert_arg(max, "max", Type_PositiveInt)
     if _is_int_couple(interval):
         return CpoFunctionCall(Oper_always_in, Type_Constraint, (function,
-                                                           _convert_arg(interval[0], "interval[0]", Type_TimeInt),
-                                                           _convert_arg(interval[1], "interval[1]", Type_TimeInt),
-                                                           min, max))
+                                                                 _convert_arg(interval[0], "interval[0]", Type_TimeInt),
+                                                                 _convert_arg(interval[1], "interval[1]", Type_TimeInt),
+                                                                 min, max))
 
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
@@ -2757,8 +2754,8 @@ def cumul_range(function, min, max):
         Constraint expression
     """
     return CpoFunctionCall(Oper_cumul_range, Type_Constraint, (_convert_arg(function, "function", Type_CumulExpr),
-                                                         _convert_arg(min, "min", Type_IntExpr),
-                                                         _convert_arg(max, "max", Type_IntExpr)))
+                                                               _convert_arg(min, "min", Type_IntExpr),
+                                                               _convert_arg(max, "max", Type_IntExpr)))
 
 
 
@@ -2785,8 +2782,8 @@ def always_no_state(function, interval):
     function = _convert_arg(function, "function", Type_StateFunction)
     if _is_int_couple(interval):
         return CpoFunctionCall(Oper_always_no_state, Type_Constraint, (function,
-                                                                 _convert_arg(interval[0], "interval[0]", Type_TimeInt),
-                                                                 _convert_arg(interval[1], "interval[1]", Type_TimeInt)))
+                                                                       _convert_arg(interval[0], "interval[0]", Type_TimeInt),
+                                                                       _convert_arg(interval[1], "interval[1]", Type_TimeInt)))
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     return CpoFunctionCall(Oper_always_no_state, Type_Constraint, (function, interval))
@@ -2828,16 +2825,16 @@ def always_constant(function, interval, isStartAligned=None, isEndAligned=None):
         if isStartAligned is None:
             return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, start, end))
         return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, start, end,
-                                                                 _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                 _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                       _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
+                                                                       _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
 
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     if isStartAligned is None:
         return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, interval))
     return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, interval,
-                                                             _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                             _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                   _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
+                                                                   _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
 
 
 def always_equal(function, interval, value, isStartAligned=None, isEndAligned=None):
@@ -2878,16 +2875,16 @@ def always_equal(function, interval, value, isStartAligned=None, isEndAligned=No
         if isStartAligned is None:
             return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, start, end, value))
         return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, start, end, value,
-                                                                 _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                 _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                    _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
+                                                                    _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
 
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     if isStartAligned is None:
         return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, interval, value))
     return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, interval, value,
-                                                             _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                             _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
+                                                                _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
 
 
 #==============================================================================
@@ -3028,7 +3025,7 @@ def explicit_var_eval(vars, vals, defaultEval=None):
     if defaultEval is None:
         return CpoFunctionCall(Oper_explicit_var_eval, Type_IntVarEval, (vars, vals))
     return CpoFunctionCall(Oper_explicit_var_eval, Type_IntVarEval, (vars, vals,
-                                                               _convert_arg(defaultEval, "defaultEval", Type_Float)))
+                                                                     _convert_arg(defaultEval, "defaultEval", Type_Float)))
 
 #--- Value evaluators ---------------------------------------------------------
 
@@ -3111,7 +3108,7 @@ def explicit_value_eval(vals, evals, defaultEval=None):
     if defaultEval is None:
         return CpoFunctionCall(Oper_explicit_value_eval, Type_IntValueEval, (vals, evals))
     return CpoFunctionCall(Oper_explicit_value_eval, Type_IntValueEval, (vals, evals,
-                                                                   _convert_arg(defaultEval, "defaultEval", Type_Float)))
+                                                                         _convert_arg(defaultEval, "defaultEval", Type_Float)))
 
 
 #--- Variable selectors -------------------------------------------------------
@@ -3162,11 +3159,11 @@ def select_smallest(evaluator, minNumber=None, tolerance=None):
         if tolerance is None:
             return CpoFunctionCall(Oper_select_smallest, rtype, (evaluator,))
         return CpoFunctionCall(Oper_select_smallest, rtype, (evaluator,
-                                                       _convert_arg(tolerance, "tolerance", Type_Float)))
+                                                             _convert_arg(tolerance, "tolerance", Type_Float)))
 
     assert tolerance is None, "Arguments 'minNumber' and 'tolerance' can not be set together"
     return CpoFunctionCall(Oper_select_smallest, rtype, (_convert_arg(minNumber, "minNumber", Type_Float),
-                                                   evaluator))
+                                                         evaluator))
 
 
 
@@ -3217,11 +3214,11 @@ def select_largest(evaluator, minNumber=None, tolerance=None):
         if tolerance is None:
             return CpoFunctionCall(Oper_select_largest, rtype, (evaluator,))
         return CpoFunctionCall(Oper_select_largest, rtype, (evaluator,
-                                                      _convert_arg(tolerance, "tolerance", Type_Float)))
+                                                            _convert_arg(tolerance, "tolerance", Type_Float)))
 
     assert tolerance is None, "Arguments 'minNumber' and 'tolerance' can not be set together"
     return CpoFunctionCall(Oper_select_largest, rtype, (_convert_arg(minNumber, "minNumber", Type_Float),
-                                                  evaluator))
+                                                        evaluator))
 
 
 def select_random_var():
@@ -3273,6 +3270,7 @@ def search_phase(vars=None, varchooser=None, valuechooser=None):
     The embedded search will then choose an instantiation strategy automatically.
     For instance, assuming that x and y are arrays of integer variables, the following code:
     ::
+
         mdl.set_search_phases([search_phase(x), search_phase(y)])
 
     indicates to CP search that variables from the array x must be instantiated before those from the array y.
@@ -3294,7 +3292,7 @@ def search_phase(vars=None, varchooser=None, valuechooser=None):
         assert (varchooser is not None) and (valuechooser is not None), \
             "If no array of variable is given, then variable and value choosers must be given"
         return CpoFunctionCall(Oper_search_phase, Type_SearchPhase, (_convert_arg(varchooser, "varchooser", Type_IntVarChooser),
-                                                               _convert_arg(valuechooser, "valuechooser", Type_IntValueChooser)))
+                                                                     _convert_arg(valuechooser, "valuechooser", Type_IntValueChooser)))
 
     vars = build_cpo_expr(vars)
     if vars.is_kind_of(Type_IntVarArray):
@@ -3303,8 +3301,8 @@ def search_phase(vars=None, varchooser=None, valuechooser=None):
             return CpoFunctionCall(Oper_search_phase, Type_SearchPhase, (vars,))
         assert valuechooser is not None, "Variable and value chooser should be defined together"
         return CpoFunctionCall(Oper_search_phase, Type_SearchPhase, (vars,
-                                                               _convert_arg(varchooser, "varchooser", Type_IntVarChooser),
-                                                               _convert_arg(valuechooser, "valuechooser", Type_IntValueChooser)))
+                                                                     _convert_arg(varchooser, "varchooser", Type_IntVarChooser),
+                                                                     _convert_arg(valuechooser, "valuechooser", Type_IntValueChooser)))
 
     assert vars.is_kind_of(Type_IntervalVarArray) or vars.is_kind_of(Type_SequenceVarArray), \
         "Argument 'vars' should be an array of integer, interval or sequence variables"

@@ -8,8 +8,9 @@ from __future__ import print_function
 
 import json
 import math
-import six
 import sys
+
+import six
 
 try:
     from itertools import zip_longest as izip_longest
@@ -17,39 +18,15 @@ except ImportError:
     from itertools import izip_longest
 
 from six import iteritems, iterkeys
-from docloud.status import JobSolveStatus
 
-from docplex.mp.compat23 import StringIO, izip
+from docplex.mp.compat23 import StringIO
 from docplex.mp.constants import SolveAttribute
-from docplex.mp.utils import is_iterable, is_number, is_string, str_holo
+from docplex.mp.utils import is_iterable, is_number, is_string, str_holo, OutputStreamAdapter
 from docplex.mp.utils import make_output_path2, DOcplexException
 from docplex.mp.linear import Var
 from docplex.mp.error_handler import docplex_fatal
 
 from collections import defaultdict
-
-
-class OutputStreamAdapter:
-    # With this class, we kind of automatically handle binary/non binary output streams
-    # it automatically perform encoding of strings when needed,
-    # and if the stream is a String stream, strings are just written without conversion
-    def __init__(self, stream, encoding='utf-8'):
-        self.stream = stream
-        self.stream_is_binary = False
-        if hasattr(stream, 'mode') and 'b' in stream.mode:
-            self.stream_is_binary = True
-        from io import TextIOBase
-        if not isinstance(stream, TextIOBase):
-            self.stream_is_binary = True
-
-        self.encoding = encoding
-
-    def write(self, s):
-        # s is supposed to be a string
-        output_s = s
-        if self.stream_is_binary:
-            output_s = s.encode(self.encoding)
-        self.stream.write(output_s)
 
 
 # noinspection PyAttributeOutsideInit
@@ -100,7 +77,7 @@ class SolveSolution(object):
         self.__var_value_map = {}
         self._attribute_map = defaultdict(dict)
         self.__round_discrete = rounding
-        self._solve_status = JobSolveStatus.UNKNOWN
+        self._solve_status = None
         self._keep_zeros = keep_zeros
 
         if var_value_map is not None:
@@ -134,7 +111,7 @@ class SolveSolution(object):
         self.__var_value_map = {}
         self.__objective__ = self.NO_OBJECTIVE_VALUE
         self._attribute_map = {}
-        self._solve_status = JobSolveStatus.UNKNOWN
+        self._solve_status = None
 
     def is_empty(self):
         """
@@ -389,7 +366,7 @@ class SolveSolution(object):
         the method assumes 0 and does not raise an exception.
 
         Returns:
-            A sequence of float values.
+            list: A list of float values, in the same order as the variable sequence.
 
         """
 
@@ -492,10 +469,24 @@ class SolveSolution(object):
                 var_value = self.get_value(dvar)
                 if print_zeros or var_value != 0:
                     print_counter += 1
-                    print(value_fmt.format(varname=str(dvar),
-                                           value=var_value,
-                                           prec=dvar.float_precision,
-                                           counter=print_counter))
+                    varname = dvar.to_string()
+                    if type(value_fmt) != type(varname):
+                        # infamous mix of str and unicode. Should happen only
+                        # in py2. Let's convert things
+                        if isinstance(value_fmt, str):
+                            value_fmt = value_fmt.decode('utf-8')
+                        else:
+                            value_fmt = value_fmt.encode('utf-8')
+                    output = value_fmt.format(varname=varname,
+                                               value=var_value,
+                                               prec=dvar.float_precision,
+                                               counter=print_counter)
+                    try:
+                        print(output)
+                    except UnicodeEncodeError:
+                        encoding = sys.stdout.encoding if sys.stdout.encoding else 'ascii'
+                        print(output.encode(encoding,
+                                            errors='backslashreplace'))
 
     def to_string(self, print_zeros=True):
         oss = StringIO()
@@ -591,6 +582,7 @@ class SolveSolution(object):
             self.print_mst_to_stream(mst_path)
 
     def get_printer(self, key):
+        # INTERNAL
         printers = {'json': SolutionJSONPrinter,
                     'xml': SolutionMSTPrinter
                     }
@@ -672,13 +664,34 @@ class SolveSolution(object):
         var_value_dict = {}
         # INTERNAL: return a dictionary of variable_name: variable_value
         for dvar, dval in self.iter_var_values():
-            if dvar.has_user_name() and (keep_zeros or dval != 0):
-                var_value_dict[dvar.name] = dval
+            dvar_name = dvar.get_name()
+            if dvar_name and (keep_zeros or dval):
+                var_value_dict[dvar_name] = dval
         return var_value_dict
+
+    def kpi_value_by_name(self, name, match_case=False):
+        ''' Returns the solution value of a KPI from its name.
+
+        Args:
+            name (string): The string to be matched.
+
+            match_case (boolean): If True, looks for a case-exact match, else ignores case. Default is False.
+
+        Returns:
+            The value of the KPI, evaluated in the solution.
+
+        Note:
+            This method raises an error when the string does not match any KPI in the model.
+
+        See Also:
+            :func: `docplex.mp.model.kpi_by_name`
+        '''
+        kpi = self.model.kpi_by_name(name, try_match=True, match_case=False)
+        return kpi._get_solution_value(self)
 
 
 class SolutionMSTPrinter(object):
-    # header containsthe final newline
+    # header contains the final newline
     mst_header = """<?xml version = "1.0" standalone="yes"?>
 <?xml-stylesheet href="https://www.ilog.com/products/cplex/xmlv1.0/solution.xsl" type="text/xsl"?>
 
@@ -730,7 +743,6 @@ class SolutionMSTPrinter(object):
         if sol.has_objective():
             osa.write("   objectiveValue=\"{0:g}\"\n".format(sol.objective_value))
         osa.write("  />\n")
-
 
         # prepare reduced costs 
         """ For mst, we don't want this !

@@ -59,11 +59,13 @@ class _AbstractModelMixin(object):
         """
         self.clear()
         # if the superclass does not call the parent class, make sure...
-        self._clear_internal()
-        self._clear_engine(restart=True)
+        Model.clear(self)
+        # starts a new engine (same agent)
+        self.refresh_engine()
 
     def refresh_model(self, do_setup=True):
         ''' Clears all model elements plus sets a new engine.'''
+        # DEPRECATED
         self.restart()
         if do_setup:
             self.ensure_setup()

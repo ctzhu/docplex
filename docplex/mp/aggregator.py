@@ -9,7 +9,7 @@
 from six import itervalues
 from docplex.mp.compat23 import izip
 
-from docplex.mp.xcounter import FastOrderedCounter, ExprCounter
+from docplex.mp.xcounter import update_dict_from_item_value
 
 from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_series, \
     is_numpy_ndarray, is_pandas_dataframe, is_numpy_matrix
@@ -21,13 +21,14 @@ from docplex.mp.quad import QuadExpr, VarPair
 class ModelAggregator(object):
     # what type to use for merging dicts
 
-    def __init__(self, linear_factory, quad_factory, ordered=True):
+    def __init__(self, linear_factory, quad_factory, ordered, counter_type):
         self._linear_factory = linear_factory
         self._checker = linear_factory._checker
         self._quad_factory = quad_factory
         self._model = linear_factory._model
-        self.set_ordering(ordered)
         self._generate_transients = True
+        self._ordered = ordered
+        self.counter_type = counter_type
 
     def new_zero_expr(self):
         return ZeroExpr(model=self._model)
@@ -46,9 +47,6 @@ class ModelAggregator(object):
         else:
             return self.new_zero_expr()
 
-    def set_ordering(self, ordered):
-        self._ordered = ordered
-        self.counter_type = FastOrderedCounter if ordered else ExprCounter
 
     def scal_prod(self, terms, coefs=1.0):
         # Testing anumpy array for its logical value will not work:
@@ -84,27 +82,33 @@ class ModelAggregator(object):
 
             safe_coef = number_validation_fn(coef) if number_validation_fn else coef
             if isinstance(item, Var):
-                lcc.update_from_item_value(item, safe_coef)
+                update_dict_from_item_value(lcc, item, safe_coef)
 
             elif isinstance(item, AbstractLinearExpr):
                 total_num += safe_coef * item.get_constant()
                 for lv, lk in item.iter_terms():
-                    lcc.update_from_item_value(lv, lk * safe_coef)
+                    update_dict_from_item_value(lcc, lv, lk * safe_coef)
 
             elif isinstance(item, QuadExpr):
                 if qcc is None:
                     qcc = self.counter_type()
                 for qv, qk in item.iter_quads():
-                    qcc.update_from_item_value(qv, qk * safe_coef)
+                    update_dict_from_item_value(qcc, qv, qk * safe_coef)
                 qlin = item.get_linear_part()
                 for v, k in qlin.iter_terms():
-                    lcc.update_from_item_value(v, k * safe_coef)
+                    update_dict_from_item_value(lcc, v, k * safe_coef)
 
                 total_num += safe_coef * qlin.constant
 
-            # --- all is lost ---
+            # --- try conversion ---
             else:
-                self._model.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
+                try:
+                    e = item.to_linear_expr()
+                    total_num += e.get_constant()
+                    for dv, k, in e.iter_terms():
+                        update_dict_from_item_value(lcc, dv, k * safe_coef)
+                except AttributeError:
+                    self._model.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
 
         return self._to_expr(qcc, lcc, total_num)
 
@@ -136,32 +140,34 @@ class ModelAggregator(object):
         number_validation_fn = checker.get_number_validation_fn()
         for item in args:
             if isinstance(item, Var):
-                lcc.update_from_item_value(item)
+                update_dict_from_item_value(lcc, item, 1)
             elif isinstance(item, MonomialExpr):
-                lcc.update_from_item_value(item._dvar, item._coef)
+                update_dict_from_item_value(lcc, item._dvar, item._coef)
             elif isinstance(item, LinearExpr):
-                lcc.update(item._get_terms_dict())
-                sum_of_nums += item.constant
+                for lv, lk in item.iter_terms():
+                    update_dict_from_item_value(lcc, lv, lk)
+                sum_of_nums += item.get_constant()
             elif isinstance(item, _IAdvancedExpr):
-                lcc.update_from_item_value(item.functional_var)
+                update_dict_from_item_value(lcc, item.functional_var, 1)
             elif isinstance(item, ZeroExpr):
                 pass
             elif is_number(item):
                 sum_of_nums += number_validation_fn(item) if number_validation_fn else item
             elif isinstance(item, QuadExpr):
-                for v, k in item.linear_part.iter_terms():
-                    lcc.update_from_item_value(v, k)
+                for lv, lk in item.linear_part.iter_terms():
+                    update_dict_from_item_value(lcc, lv, lk)
                 if qcc is None:
                     qcc = self.counter_type()
                 for qvp, qk in item.iter_quads():
-                    qcc.update_from_item_value(qvp, qk)
-                sum_of_nums += item.constant
+                    update_dict_from_item_value(qcc, qvp, qk)
+                sum_of_nums += item.get_constant()
 
             else:
                 try:
-                    le = item.to_linear_expr()
-                    lcc.update(le._get_terms_dict())
-                    sum_of_nums += le.constant
+                    expr = item.to_linear_expr()
+                    sum_of_nums += expr.get_constant()
+                    for dv, k in expr.iter_terms():
+                        update_dict_from_item_value(lcc, dv, k)
                 except AttributeError:
                     self._model.fatal("Model.sum() expects numbers/variables/expressions, got: {0!s}", item)
 
@@ -173,7 +179,7 @@ class ModelAggregator(object):
 
     def _varlist_to_terms(self, var_list):
         # INTERNAL: converts a sum of vars to a dict, sorting if needed.
-        linear_term_dict_type = self._linear_factory.term_dict_type
+        linear_term_dict_type = self._model._term_dict_type
         if len(var_list) == len(set(var_list)):
             varsum_terms = linear_term_dict_type()
             linear_terms_setitem = linear_term_dict_type.__setitem__
@@ -183,7 +189,7 @@ class ModelAggregator(object):
             # there are repeated variables.
             varsum_terms = linear_term_dict_type()
             for v in var_list:
-                varsum_terms.update_from_item_value(v, 1)
+                update_dict_from_item_value(varsum_terms, v, 1)
         return varsum_terms
 
     def _sum_with_seq(self, sum_args):
@@ -207,12 +213,12 @@ class ModelAggregator(object):
 
         for item in args:
             if isinstance(item, Var):
-                qcc.update_from_item_value(VarPair(item, item), 1)
+                update_dict_from_item_value(qcc, VarPair(item, item), 1)
             elif isinstance(item, MonomialExpr):
                 mcoef = item._coef
                 # noinspection PyPep8
                 mvar = item._dvar
-                qcc.update_from_item_value(VarPair(mvar, mvar), mcoef ** 2)
+                update_dict_from_item_value(qcc, VarPair(mvar, mvar), mcoef ** 2)
 
             elif isinstance(item, LinearExpr):
                 cst = item.get_constant()
@@ -220,17 +226,17 @@ class ModelAggregator(object):
                 for lv1, lk1 in item.iter_terms():
                     for lv2, lk2 in item.iter_terms():
                         if lv1 is lv2:
-                            qcc.update_from_item_value(VarPair(lv1, lv1), lk1 * lk1)
+                            update_dict_from_item_value(qcc, VarPair(lv1, lv1), lk1 * lk1)
                         elif lv1._index < lv2._index:
-                            qcc.update_from_item_value(VarPair(lv1, lv2), 2 * lk1 * lk2)
+                            update_dict_from_item_value(qcc, VarPair(lv1, lv2), 2 * lk1 * lk2)
                         else:
                             pass
 
                     if cst:
-                        lcc.update_from_item_value(lv1, 2 * cst * lk1)
+                        update_dict_from_item_value(lcc, lv1, 2 * cst * lk1)
             elif isinstance(item, _IAdvancedExpr):
                 fvar = item.functional_var
-                qcc.update_from_item_value(VarPair(fvar), 1)
+                update_dict_from_item_value(qcc, VarPair(fvar), 1)
 
             elif isinstance(item, ZeroExpr):
                 pass
@@ -265,7 +271,7 @@ class ModelAggregator(object):
     # --- matrix constraint
     @staticmethod
     def generate_df_rows(df):
-        for index, row in df.iterrows():
+        for row in df.itertuples(index=False):
             yield row
 
     @staticmethod
@@ -282,19 +288,21 @@ class ModelAggregator(object):
             row = sp_coef_mat.row[e]
             col = sp_coef_mat.col[e]
             exprs[row]._add_term(svars[col], coef)
-        cts = [lfactory._new_binary_constraint(exprs[r], cmp_op=op, rhs=srhs[r]) for r in range_cts]
+        cts = [lfactory._new_binary_constraint(exprs[r], ctsense=op, rhs=srhs[r]) for r in range_cts]
         return cts
 
-    def _matrix_constraints(self, coef_mat, svars, srhs, op):
-
+    def _generate_rows(self, coef_mat):
         if is_pandas_dataframe(coef_mat):
             row_gen = self.generate_df_rows(coef_mat)
         elif is_numpy_matrix(coef_mat):
             row_gen = self.generate_np_matrix_rows(coef_mat)
         else:
             row_gen = iter(coef_mat)
+        return row_gen
 
-        cts = [self._linear_factory._new_binary_constraint(lhs=self._scal_prod(svars, row), cmp_op=op, rhs=rhs)
-               for row, rhs in izip(row_gen, srhs)]
+    def _matrix_constraints(self, coef_mat, svars, srhs, op):
+        row_gen = self._generate_rows(coef_mat)
 
-        return cts
+        return [self._linear_factory._new_binary_constraint(lhs=self._scal_prod(svars, row), ctsense=op, rhs=rhs)
+                for row, rhs in izip(row_gen, srhs)]
+

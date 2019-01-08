@@ -14,8 +14,7 @@ In particular, it defines the following classes:
  * :class:`CpoExpr`: the root class of each model expression node,
  * :class:`CpoIntVar`: representation of an integer variable,
  * :class:`CpoIntervalVar`: representation of an interval variable,
- * :class:`CpoSequenceVar`: representation of an interval variable,
- * :class:`CpoSequenceVar`: representation of an interval variable,
+ * :class:`CpoSequenceVar`: representation of a sequence variable,
  * :class:`CpoTransitionMatrix`: representation of a transition matrix,
  * :class:`CpoTupleSet`: representation of a tuple set,
  * :class:`CpoStateFunction`: representation of a state function.
@@ -24,12 +23,19 @@ None of these classes should be created explicitly.
 There are various factory functions to do so, such as:
 
  * :meth:`integer_var`, :meth:`integer_var_list`, :meth:`integer_var_dict` to create integer variable(s),
- * :meth:`interval_var`, :meth:`interval_var_list` to create an interval variable(s),
+ * :meth:`binary_var`, :meth:`binary_var_list`, :meth:`binary_var_dict` to create integer variable(s) with value in [0..1],
+ * :meth:`interval_var`, :meth:`interval_var_list`, :meth:`interval_var_dict` to create interval variable(s),
  * :meth:`sequence_var` to create a sequence variable,
- * etc.
+ * :meth:`transition_matrix` to create a transition matrix,
+ * :meth:`tuple_set` to create a tuple set,
+ * :meth:`state_function` to create a state function.
 
-Moreover, some automatic conversions are also provided.
-For example, a list of tuples of integers is automatically converted into a tuple set.
+Moreover, some automatic conversions are also provided to generate CP Optimizer objects from Python objects.
+For example:
+
+ * an integer is converted into CP constant,
+ * an iterator of objects is converted in CP array of objects of the corresponding type,
+ * a tuple of tuples is converted into tuple set.
 
 
 Detailed description
@@ -247,15 +253,15 @@ class CpoExpr(object):
         """
         return (type(self) == type(other)) and (self.type == other.type) and (self.name == other.name)
 
-    def _incr_ref_count(self):
-        """ Increase reference count on this expression and create a name if more than one
-        """
-        # Increment reference count
-        self.reference_count += 1
-        if (self.reference_count > 1) and not(self.type.is_constant_atom):
-            # Add expression id if none
-            if self.name is None:
-                self.name = self._generate_name()
+    # def _incr_ref_count(self):
+    #     """ Increase reference count on this expression and create a name if more than one
+    #     """
+    #     # Increment reference count
+    #     self.reference_count += 1
+    #     # if (self.reference_count > 1) and not(self.type.is_constant_atom):
+    #     #     # Add expression id if none
+    #     #     if self.name is None:
+    #     #         self.name = self._generate_name()
 
 
     def __str__(self):
@@ -482,7 +488,7 @@ class CpoValue(CpoExpr):
         super(CpoValue, self).__init__(type, None)
         if type.is_array_of_expr:
             for e in value:
-                e._incr_ref_count()
+                e.reference_count += 1
             self.children = value
         self.value = value
 
@@ -508,33 +514,6 @@ class CpoValue(CpoExpr):
         return _is_equal_values(self.value, other.value)
 
 
-class CpoIntExprList(list):
-    """ List of integer CPO expressions.
-
-    This extension of a standard Python list overwrites __getitem__ to call :func:`docplex.cp.modeler.element`
-    constraint if the index is a CPO integer expression.
-
-    This object is returned by the constructor method :meth:`integer_var_list` in this module.
-    """
-
-    def __init__(self):
-        super(CpoIntExprList, self).__init__()
-
-    def __getitem__(self, nx):
-        """ Overloading of operator '[]' to create a CPO element() expression if index is a CPO integer expression.
-
-        Args:
-            nx: Element index
-        Returns:
-            If the index is a CPO integer expression, returns a CPO element() expression.
-            Otherwise, returns the element corresponding to the index.
-        """
-        if isinstance(nx, CpoExpr) and nx.is_kind_of(Type_IntExpr):
-            arr = build_cpo_expr(self)
-            return CpoFunctionCall(Oper_element, Type_IntExpr, (arr, nx))
-        return super(CpoIntExprList, self).__getitem__(nx)
-
-
 class CpoFunctionCall(CpoExpr):
     """ This class represent all model expression nodes that call a predefined modeler function.
 
@@ -557,9 +536,8 @@ class CpoFunctionCall(CpoExpr):
 
         # Check no toplevel constraints
         for e in oprnds:
-            if e.is_type(Type_Constraint):
-                raise CpoException("A constraint can not be operand of an expression.")
-            e._incr_ref_count()
+            assert not e.is_type(Type_Constraint), "A constraint can not be operand of an expression."
+            e.reference_count += 1
         self.children = oprnds
 
     def _equals(self, other):
@@ -697,7 +675,7 @@ class CpoIntervalVar(CpoVariable):
         self.granularity = granularity
         self.intensity = intensity
         if intensity is not None:
-            intensity._incr_ref_count()
+            intensity.reference_count += 1
             self.children = (intensity,)
 
     def set_start(self, intv):
@@ -875,7 +853,7 @@ class CpoIntervalVar(CpoVariable):
         if intensity is None:
             self.children = ()
         else:
-            intensity._incr_ref_count()
+            intensity.reference_count += 1
             self.children = (intensity,)
 
     def get_intensity(self):
@@ -967,7 +945,7 @@ class CpoSequenceVar(CpoVariable):
             assert len(types) == len(vars), "The array of types should have the same length than the array of variables."
         # Store attributes
         super(CpoSequenceVar, self).__init__(Type_SequenceVar, name)
-        self.children = vars
+        self.children = tuple(vars)
         self.types = types
 
     def get_interval_variables(self):
@@ -1191,17 +1169,21 @@ class CpoTupleSet(CpoExpr):
                  'tupleset',  # List of tuples
                  )
     
-    def __init__(self, size=-1, name=None):
+    def __init__(self, size=-1, name=None, tset=None):
         """ Constructor
 
         Args:
-            size (optional): Tuple size; default value is -1 for automatic size.
+            size (optional): Tuple size, default value is -1 for automatic size.
             name (optional): Name of the tuple set. Default is None.
+            tset (optional): Initial set value
         """
         assert is_int(size), "Argument 'size' should be an int"
         super(CpoTupleSet, self).__init__(Type_TupleSet, name)
         self.size = size
         self.tupleset = []
+        if tset:
+            self.size = size = len(tset[0])
+            assert (all(len(t) == size for t in tset)), "All tuples in 'tset' should have the same length"
          
     def get_size(self):
         """ Returns the size of one tuple in this set.
@@ -1306,7 +1288,7 @@ class CpoStateFunction(CpoVariable):
             self.children = ()
         else:
             assert isinstance(trmtx, CpoTransitionMatrix), "Argument 'trmtx' should be a CpoTransitionMatrix"
-            trmtx._incr_ref_count()
+            trmtx.reference_count += 1
             self.children = (trmtx,)
 
     def get_transition_matrix(self):
@@ -1400,7 +1382,7 @@ def integer_var_list(size, min=None, max=None, name=None, domain=None):
     if name is None:
         name = CpoIntVar._generate_name() + "_"
     dom = _build_int_var_domain(min, max, domain)
-    res = CpoIntExprList()
+    res = []
     for i in range(size):
         res.append(CpoIntVar(dom, name + str(i)))
     return res
@@ -1708,9 +1690,16 @@ def state_function(trmtx=None, name=None):
 #  - reduce CPO file length as common expressions are easily identified.
 _CACHE_CONTEXT = context.model.cache
 _CPO_VALUES_FROM_PYTHON = ObjectCache(_CACHE_CONTEXT.size)
+_CACHE_ACTIVE = _CACHE_CONTEXT.active
 
 # Lock to protect the map
 _CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
+
+def _convert_to_tuple_if_possible(val):
+    try:
+        return tuple(val)
+    except TypeError:
+        return val
 
 def build_cpo_expr(val):
     """ Builds an expression from a given Python value.
@@ -1725,38 +1714,88 @@ def build_cpo_expr(val):
         CpoException if conversion is not possible.
     """
     # Check if already a CPO expression
-    if isinstance(val, CpoExpr):
+    vtyp = type(val)
+    if issubclass(vtyp, CpoExpr):
         return val
 
     #  Check atoms (not cached)
-    ctyp = _PYTHON_TO_CPO_TYPE.get(type(val))
+    ctyp = _PYTHON_TO_CPO_TYPE.get(vtyp)
     if ctyp:
         return CpoValue(val, ctyp)
 
-    # Check none
-    if val is None:
-        return None
+    # Check numpy Array Scalars (special case when called from overloaded operator)
+    if vtyp is NUMPY_NDARRAY and not val.shape:
+        return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type))
+
+    # Value is any type of array. Force it as a tuple
+    try:
+        val = tuple(val)
+    except TypeError:
+       raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
 
     # Check if already in the cache
-    cactive = _CACHE_CONTEXT.active
-    if cactive:
+    if _CACHE_ACTIVE:
         _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-        cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+        try:
+            cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+        except TypeError:
+            # Convert to tuple every member of the tuple
+            val = tuple(_convert_to_tuple_if_possible(x) for x in val)
+            try:
+                cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+            except TypeError:
+                raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
+        if cpval is None:
+            cpval = _create_cpo_array_expr(val)
+            _CPO_VALUES_FROM_PYTHON.set(val, cpval)
         _CPO_VALUES_FROM_PYTHON_LOCK.release()
-        if cpval is not None:
-            return cpval
+    else:
+        cpval = _create_cpo_array_expr(val)
 
-    # Build new expression
-    cpval = _create_cpo_expr(val)
-    if cactive:
-        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
-        _CPO_VALUES_FROM_PYTHON.set(val, cpval)
-        _CPO_VALUES_FROM_PYTHON_LOCK.release()
     return cpval
 
 
-def _create_cpo_expr(val):
-    """ Create a new CP expression from a given Python value
+def build_cpo_tupleset(val):
+    """ Builds a TupleSet expression from a given Python value.
+
+    This method uses a cache to return the same CpoExpr for the same constant.
+
+    Args:
+        val: Value to convert (possibly already an expression).
+    Returns:
+        Corresponding expression.
+    Raises:
+        CpoException if conversion is not possible.
+    """
+    # Check if already a TupleSet expression
+    if isinstance(val, CpoTupleSet):
+        return val
+
+    # Create result set
+    try:
+        val = tuple(tuple(x) for x in val)
+    except TypeError:
+       raise CpoException("Impossible to build a CPO tuple set with value '" + to_string(val) + "'")
+
+    # Check if already in the cache
+    if _CACHE_ACTIVE:
+        _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
+        try:
+            cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+        except TypeError:
+            raise CpoException("Impossible to build a CPO tuple set with value '" + to_string(val) + "'")
+        if cpval is None:
+            cpval = CpoTupleSet(tset=val)
+            _CPO_VALUES_FROM_PYTHON.set(val, cpval)
+        _CPO_VALUES_FROM_PYTHON_LOCK.release()
+    else:
+        cpval = CpoTupleSet(tset=val)
+
+    return cpval
+
+
+def _create_cpo_array_expr(val):
+    """ Create a new CP expression from a given array Python value
 
     Args:
         val: Origin value, supposedly NOT already CPO
@@ -1765,24 +1804,14 @@ def _create_cpo_expr(val):
     Raises:
         CpoException if it is not possible.
     """
-    #  Check atom types
-    ctyp = _PYTHON_TO_CPO_TYPE.get(type(val))
-    if ctyp:
-        return CpoValue(val, ctyp)
-
-    # Expand iterators
-    if isinstance(val, collections.Iterator):
+    # Value is any type of array. Force it as a tuple
+    try:
         val = tuple(val)
-        raw_value = False
-    # Expand panda series
-    elif is_panda_series(val):
-        val = tuple(val.tolist())
-        raw_value = False
-    else:
-        raw_value = True
+    except TypeError:
+       raise CpoException("Impossible to build a CPO expression with value '" + to_string(val) + "'")
 
     # Determine type
-    typ = _get_cpo_type(val)
+    typ = _get_cpo_array_type(val)
     if typ is None:
         raise CpoException("Impossible to build a CPO expression with python value '" + to_string(val) + "'")
 
@@ -1796,12 +1825,77 @@ def _create_cpo_expr(val):
         res.add_set(val)
         return res
 
-    # Duplicate arrays
-    if raw_value and typ.is_array:
-        val = tuple(val)
-
     # Default
     return CpoValue(val, typ)
+
+
+def _create_cpo_expr(val):
+    """ Create a new CP expression from a given Python value
+
+    Args:
+        val: Origin value, supposedly NOT already CPO
+    Returns:
+        New expression
+    Raises:
+        CpoException if it is not possible.
+    """
+    #  Check atom types
+    vtyp = type(val)
+    ctyp = _PYTHON_TO_CPO_TYPE.get(vtyp)
+    if ctyp:
+        return CpoValue(val, ctyp)
+
+    # Check numpy Array Scalars (special case when called from overloaded operator)
+    if vtyp is NUMPY_NDARRAY and not val.shape:
+        return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type))
+
+    # Value is any type of array.
+    return _create_cpo_array_expr(val)
+
+
+def _get_cpo_array_type(val):
+    """ Determine the CPO type of a given Python array value
+    Args:
+        val: Python value
+    Returns:
+        Corresponding CPO Type, None if none
+    """
+    # Check empty Array
+    if len(val) == 0:
+        return Type_IntArray
+
+    # Get the most common type for all array elements
+    cet = None
+    for v in val:
+        # Determine type of element
+        nt = _get_cpo_type(v)
+        if nt is None:
+            return None
+        # Combine with global type
+        ncet = nt if cet is None else cet.get_common_type(nt)
+        if ncet is None:
+            # Check special case of couple of int mixed with ints
+            if cet is Type_Int:
+                if (nt is Type_IntArray) and is_interval_tuple(v):
+                    ncet = Type_Int
+                else:
+                    return None
+            elif cet is Type_IntArray:
+                if nt is Type_Int:
+                    ncet = Type_Int
+                else:
+                    return None
+            else:
+               return None
+        cet = ncet
+
+    # Determine array type for result element type
+    if cet is Type_IntArray:
+        if all(is_interval_tuple(v) for v in val):
+            return Type_IntArray
+        else:
+            return Type_TupleSet
+    return cet.parent_array_type
 
 
 def _get_cpo_type(val):
@@ -1820,38 +1914,15 @@ def _get_cpo_type(val):
     if isinstance(val, CpoExpr):
         return val.type
 
-    # Check numpy Array Scalars (special case when called from overloaded)
-    if IS_NUMPY_AVAILABLE and type(val) is numpy.ndarray and not val.shape:
+    # Check numpy Array Scalars (special case when called from overloaded operator)
+    if type(val) is NUMPY_NDARRAY and not val.shape:
         return _PYTHON_TO_CPO_TYPE.get(val.dtype.type)
 
-    # Check arrays
-    if not is_array(val):
-        return None
+    # Check array
+    if is_array(val):
+        return _get_cpo_array_type(val)
 
-    # Check empty Array
-    if len(val) == 0:
-        return Type_IntArray
-
-    # Get the most common type to all array elements
-    gt = None
-    for v in val:
-        # Determine type of element
-        if is_interval_tuple(v):
-            # Special case for intervals
-            nt = Type_Int
-        else:
-            nt = _get_cpo_type(v)
-            if nt is None:
-                return None
-        # Combine with global type
-        gt = nt if gt is None else gt.get_common_type(nt)
-        if gt is None:
-            return None
-
-    # Determine array type for result element type
-    if gt == Type_IntArray:
-        return Type_TupleSet
-    return gt.parent_array_type
+    return None
 
 
 def _get_cpo_type_str(val):
@@ -2025,9 +2096,9 @@ def _check_and_expand_interval_tuples(name, arr):
         else:
             assert is_interval_tuple(v), "Argument '{}' (type {}) should be a list of integers or intervals".format(name, type(arr))
             if not res:
-                res = arr[:i]
+                res = list(arr[:i])
             res.extend(range(v[0], v[1] + 1))
-    return res if res else arr
+    return tuple(res if res else arr)
 
 
 def _get_matching_signature(oper, args):

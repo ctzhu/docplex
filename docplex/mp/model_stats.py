@@ -74,7 +74,7 @@ class ModelStatistics(object):
         stats._number_of_semicontinuous_variables = vartype_count[SemiContinuousVarType]
         stats._number_of_semiinteger_variables = vartype_count[SemiIntegerVarType]
 
-        linct_count = Counter(ct.type for ct in mdl.iter_binary_constraints())
+        linct_count = Counter(ct.sense for ct in mdl.iter_binary_constraints())
         stats._number_of_le_constraints = linct_count[ComparisonType.LE]
         stats._number_of_eq_constraints = linct_count[ComparisonType.EQ]
         stats._number_of_ge_constraints = linct_count[ComparisonType.GE]

@@ -75,6 +75,7 @@ class ModelPrinter(object):
             if None is passed, uses standard output.
             else assume a stream is passed and try it
         """
+        mdl.resolve()
         if out is None:
             # prints on standard output
             self.print_model_to_stream(sys.stdout, mdl)
@@ -176,8 +177,6 @@ class TextModelPrinter(ModelPrinter):
     def _set_hide_user_names(self, hide):
         self._hide_user_names = hide
 
-    forget_user_names = property(_get_hide_user_names, _set_hide_user_names)
-
     def encrypt_user_names(self):
         """
         Actually used to decide whether to encryupt or noyt
@@ -226,7 +225,6 @@ class TextModelPrinter(ModelPrinter):
             k += 1
             if k >= try_max:
                 raise _DisambiguateError
-        return None
 
 
     def _precompute_name_dict(self, mobj_seq, local_index_map, prefix):
@@ -350,7 +348,7 @@ class TextModelPrinter(ModelPrinter):
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
         # INTERNAL
         raw_name = mobj.name
-        if hide_names or not mobj.has_user_name() or mobj.is_generated() or not raw_name:
+        if hide_names or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             return self._translate_chars(raw_name)
@@ -428,7 +426,7 @@ class TextModelPrinter(ModelPrinter):
                 # expr is empty, if we must print something, print 0
                 wrapper.write('0')
 
-    def _print_qexpr_obj(self, wrapper, num_printer, var_name_map, quad_expr, force_initial_plus):
+    def _print_qexpr_obj(self, wrapper, num_printer, var_name_map, quad_expr, force_initial_plus, use_double=True):
         # writes a quadratic expression
         # in the form [ 2a_ij a_i.a_j ] / 2
         # Note that all coefficients must be doubled due to the tQXQ formulation
@@ -436,7 +434,7 @@ class TextModelPrinter(ModelPrinter):
         if force_initial_plus:
             wrapper.write('+')
 
-        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_sorted_quads(), use_double=True)
+        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_sorted_quads(), use_double=use_double)
 
     def _print_qexpr_iter(self, wrapper, num_printer, var_name_map, iter_quads, use_double=False):
         q = 0

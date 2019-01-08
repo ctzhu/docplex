@@ -4,10 +4,8 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-
 # gendoc: ignore
 from collections import Counter, OrderedDict
-from six import iteritems
 
 
 class ExprCounter(Counter):
@@ -55,17 +53,12 @@ class ExprCounter(Counter):
         if value:
             if item in self:
                 new_value = _dict_get(self, item, 0) + value
-                if 0 == new_value:
+                if not new_value:
                     del self[item]
                 else:
                     _dict_setitem(self, item, new_value)
             else:
                 _dict_setitem(self, item, value)
-
-    def copy(self):
-        """ returns a copy of the ordered dict.
-        """
-        return ExprCounter(self)
 
 
 class FastOrderedDict(dict):
@@ -101,7 +94,6 @@ class FastOrderedDict(dict):
                 else:
                     keys = init_val
                     self._update_from_key_values([(k, 1) for k in keys])
-
 
     def __delitem__(self, key):
         self.remove(key)
@@ -152,8 +144,6 @@ class FastOrderedDict(dict):
         if key not in self:
             self._key_seq.append(key)
         dict_setitem(self, key, val)
-
-
 
     __str__ = __repr__
 
@@ -208,6 +198,7 @@ class FastOrderedDict(dict):
     def itervalues(self):
         """ Returns an iterator over values, properly ordered
         """
+
         def generate_values(od):
             iter_keys = od.iterkeys()
             while True:
@@ -303,99 +294,15 @@ class FastOrderedDict(dict):
                 fastdict_set(self, item, value)
 
 
-class FastOrderedCounter(FastOrderedDict):
-    """
-    A subclass of Counter which does not require a dictionary to be updated
-    Can be updated from an item (assumed to be a key)
-    or from a key and a value
-    """
-    __slots__ = ()
-
-    def __init__(self, e=None):
-        dict.__init__(self)
-        self._key_seq = []
-        if e is None:
-            pass
-
-        elif isinstance(e, FastOrderedDict):
-            self._key_seq = e.keys()
-            dict.update(e)
-
-        elif isinstance(e, list):
-            try:
-                for item, value in e:
-                    self.update_from_item_value(item, value)
-            except (ValueError, TypeError):
-                for item in e:
-                    self.update_from_item_value(item)
-        else:
-            raise TypeError
-
-    def update_from_sequence(self, items):
-        """  Updates with a sequence.
-
-        :param items:
-        :return:
-        """
-        for item in items:
-            self.update_from_item_value(item)
-
-    def update_from_item_value(self, item, value=1,
-                               _dict_get=dict.get, dict_set=dict.__setitem__,
-                               fastdict_set=FastOrderedDict.__setitem__):
-        """
-        This differs from standard Counter when a dict instance is required.
-        :param item: the key to be updated
-        :param value: the associated value
-        :return:
-        """
-        if value:
-            old_value = _dict_get(self, item, 0)
-            if old_value:
-                new_value = old_value + value
-                if 0 != new_value:
-                    dict_set(self, item, new_value)
-                else:
-                    del self[item]
+def update_dict_from_item_value(ddict, item, value=1, normalize=False):
+    if value:
+        if item in ddict:
+            new_value = ddict.get(item, 0) + value
+            if not normalize or new_value:
+                ddict[item] = new_value
             else:
-                # we are sure item is not already present, it must be added to the sequence...
-                fastdict_set(self, item, value)
-
-    def update_from_scaled_dict(self, other_dict, factor, _dict_get=dict.get):
-        """
-        Updates counter from a dict instance, but with an inflation factor.
-        Does nothing if factor is 0
-        """
-        if 0 == factor:
-            # nothin to do
-            pass
-        elif 1 == factor:
-            # standard update
-            self.update(other_dict)
+                del ddict[item]
         else:
-            # update by scaled value
-            for item, value in iteritems(other_dict):
-                if value:
-                    self[item] = _dict_get(self, item, 0) + value * factor
+            ddict[item] = value
 
-    def update(self, iterable=None):
-        if iterable is not None:
-            if isinstance(iterable, (FastOrderedDict, OrderedDict)):
-                # accept only ordered types/
-                if self:
-                    for elem, count in iterable.iteritems():
-                        self.update_from_item_value(elem, count)
-                else:
-                    # fast path when counter is empty
-                    dict.update(self, iterable)
-                    self._key_seq = iterable.keys()
-            elif isinstance(iterable, dict):
-                raise TypeError("only ordered dict types allowed.")
-            else:
-                # a plain collection
-                self_get = self.get
-                for elem in iterable:
-                    self[elem] = self_get(elem, 0) + 1
 
-    def __repr__(self):
-        return 'docplex.mp.xdict.FastOreredCounter()'

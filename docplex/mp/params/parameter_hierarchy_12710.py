@@ -330,6 +330,7 @@ def _group_read_make(pgroup):
 # generating code for group: Sifting
 def _group_sifting_params(pgroup):
     return dict(algorithm=IntParameter(pgroup, "algorithm", "CPX_PARAM_SIFTALG", 1077, "algorithm used to solve sifting subproblems", default_value=0, min_value=0.0, max_value=4.0),
+                simplex=BoolParameter(pgroup, "simplex", "CPX_PARAM_SIFTSIM", 1158, "allow sifting to be called from simplex", default_value=1),
                 display=IntParameter(pgroup, "display", "CPX_PARAM_SIFTDISPLAY", 1076, "level of the sifting iteration display", default_value=1, min_value=0.0, max_value=2.0),
                 iterations=IntParameter(pgroup, "iterations", "CPX_PARAM_SIFTITLIM", 1078, "sifting iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000)
                 )
@@ -420,7 +421,7 @@ def _group_cpxparam_params(pgroup):
                 optimalitytarget=IntParameter(pgroup, "optimalitytarget", "CPX_PARAM_OPTIMALITYTARGET", 1131, "type of solution CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=3.0),
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201607291, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201610271, min_value=0.0, max_value=2100000000),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
                 timelimit=NumParameter(pgroup, "timelimit", "CPX_PARAM_TILIM", 1039, "time limit in seconds", default_value=1e+75, min_value=0.0, max_value=1e+75),
@@ -445,6 +446,6 @@ def _group_cpxparam_subgroups():
                 tune=_group_tune_make)
 
 
-def make_root_params_12700():
-    return RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.7.0.0")
+def make_root_params_12710():
+    return RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.7.1.0")
 #  --- end of generated code ---

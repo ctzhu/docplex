@@ -8,11 +8,13 @@ from six import iteritems
 from collections import defaultdict, namedtuple
 from docplex.mp.constants import RelaxationMode
 
-from docplex.mp.utils import is_function, CplexParameterHandler
+from docplex.mp.utils import is_function, apply_thread_limitations
 from docplex.mp.basic import Priority
 from docplex.mp.constr import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.sdetails import SolveDetails
+
+from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
 
 
 def _match_priority_name(prio, s, sep='_'):
@@ -150,10 +152,10 @@ class MatchNamePrioritizer(AbstractPrioritizer):
         AbstractPrioritizer.__init__(self, override)
         assert isinstance(priority_for_unnamed, Priority)
         assert isinstance(priority_for_non_matches, Priority)
-        self.priorities = Priority.all_sorted()
+
         self.priority_for_unnamed_cts = priority_for_unnamed
         self.priority_for_non_matching_cts = priority_for_non_matches
-        self.priority_by_symbol = {prio.name.lower(): prio for prio in self.priorities}
+        self.priority_by_symbol = {prio.name.lower(): prio for prio in Priority}
         self._is_case_sensitive = bool(case_sensitive)
 
     def get_priority(self, ct):
@@ -296,7 +298,7 @@ class Relaxer(object):
             print("Cannot deduce a prioritizer from: {0!r} - expecting \"name\"|\"default\"| dict", prioritizer)
             raise TypeError
 
-        self._ordered_priorities = Priority.all_sorted()
+        # self._ordered_priorities = Priority.all_sorted()
         self._cumulative = kwargs.get('cumulative', True)
         self._listeners = []
 
@@ -369,7 +371,6 @@ class Relaxer(object):
         # """
         self._listeners = []
 
-
     _param_data = {}
 
     def relax(self, mdl, relax_mode=None, **kwargs):
@@ -396,11 +397,14 @@ class Relaxer(object):
         # 1. build a dir {priority : cts}
         priority_map = defaultdict(list)
         nb_prioritized_cts = 0
+        mdl_priorities = set()
         for ct in mdl.iter_constraints():
             prio = self._prioritizer.get_priority(ct)
             if not prio.is_mandatory():
                 priority_map[prio].append(ct)
                 nb_prioritized_cts += 1
+                mdl_priorities.add(prio)
+        sorted_priorities = sorted(list(mdl_priorities), key=lambda p: p.value)
 
         if 0 == nb_prioritized_cts:
             mdl.error("Relaxation algorithm found no relaxable constraints - exiting")
@@ -410,8 +414,15 @@ class Relaxer(object):
         all_groups = []
         all_relaxable_cts = []
         is_cumulative = self._cumulative
-
-        engine = mdl.get_engine()
+        # -- relaxation mode
+        if relax_mode is None:
+            used_relax_mode = self._default_mode
+        else:
+            used_relax_mode = RelaxationMode.parse(relax_mode)
+        if not mdl.is_optimized():
+            used_relax_mode = RelaxationMode.get_no_optimization_mode(used_relax_mode)
+        # print("-- using relaxation mode: {0!s}".format(relax_mode))
+        # ---
 
         # save this for restore later
         saved_context_log_output = mdl.context.solver.log_output
@@ -419,36 +430,41 @@ class Relaxer(object):
         saved_context = mdl.context
 
         # take into account local argument overrides
-        context = mdl.prepare_actual_context(**kwargs)
-        if relax_mode is None:
-            used_relax_mode = self._default_mode
-        else:
-            used_relax_mode = RelaxationMode.parse(relax_mode)
-        if not mdl.is_optimized():
-            used_relax_mode = RelaxationMode.get_no_optimization_mode(used_relax_mode)
-        #print("-- using relaxation mode: {0!s}".format(relax_mode))
+        relax_context = mdl.prepare_actual_context(**kwargs)
+
+        forced_docloud = context_must_use_docloud(relax_context, **kwargs)
+        have_credentials = context_has_docloud_credentials(relax_context, do_warn=True)
+        transient_engine = False
+        relax_engine = mdl.get_engine()
+
+        if forced_docloud:
+            if have_credentials:
+                # create new docloud engine on the fly
+                relax_engine = mdl._new_docloud_engine(relax_context)
+                transient_engine = True
+            else:
+                mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
+                          relax_context.solver.docloud)
 
         try:
             # mdl.context has been saved in saved_context above
-            mdl.context = context
+            mdl.context = relax_context
             mdl.set_log_output(mdl.context.solver.log_output)
 
             # engine parameters, if needed to
-            parameters_handler = CplexParameterHandler(context.cplex_parameters)
-            parameters = parameters_handler.get_updated_parameters(context.solver)
+            parameters = apply_thread_limitations(relax_context.cplex_parameters, relax_context.solver)
+
             mdl._apply_parameters_to_engine(parameters)
 
-
-
             relaxed_sol = None
-            for prio in self._ordered_priorities:
+            for prio in sorted_priorities:
                 if prio in priority_map:
                     cts = priority_map[prio]
                     if not cts:
                         # this should not happen...
                         continue  # pragma: no cover
 
-                    pref = prio.get_geometric_preference_factor()
+                    pref = prio.cplex_preference()
                     # build a new group
                     relax_group = _TRelaxableGroup(pref, cts)
 
@@ -473,9 +489,9 @@ class Relaxer(object):
                     # ---
 
                     try:
-                        relaxed_sol = engine.solve_relaxed(mdl, prio.name, all_groups, used_relax_mode)
+                        relaxed_sol = relax_engine.solve_relaxed(mdl, prio.name, all_groups, used_relax_mode)
                     finally:
-                        self._last_relaxation_details = engine.get_solve_details()
+                        self._last_relaxation_details = relax_engine.get_solve_details()
                     # ---
 
                     if relaxed_sol is not None:
@@ -499,7 +515,7 @@ class Relaxer(object):
                         for l in self._listeners:
                             l.notify_failed_relaxation(prio, all_relaxable_cts)
 
-            mdl.notify_solve_relaxed(relaxed_sol, engine.get_solve_details())
+            mdl.notify_solve_relaxed(relaxed_sol, relax_engine.get_solve_details())
 
         finally:
             # --- restore context, log_output if set.
@@ -508,6 +524,8 @@ class Relaxer(object):
             if saved_context_log_output != mdl.context.solver.log_output:
                 mdl.context.solver.log_output = saved_context_log_output
             mdl.context = saved_context
+            if transient_engine:
+                del relax_engine
 
         return relaxed_sol
 
@@ -587,4 +605,3 @@ class Relaxer(object):
         '''
         self._check_successful_relaxation()
         return ct in self._relaxations
-

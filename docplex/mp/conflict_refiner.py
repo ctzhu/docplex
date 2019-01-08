@@ -7,6 +7,7 @@
 from collections import namedtuple, Iterable
 from docplex.mp.constants import ComparisonType
 from docplex.mp.context import check_credentials
+from docplex.mp.cloudutils import context_must_use_docloud
 import warnings
 
 
@@ -31,7 +32,7 @@ class VarUbConstraintWrapper(object):
         return self._var
 
     def get_ub(self):
-        return self._var.get_ub()
+        return self._var._get_ub()
 
     def get_index(self):
         return self._var.get_index()
@@ -67,7 +68,7 @@ class VarLbConstraintWrapper(object):
         return self._var
 
     def get_lb(self):
-        return self._var.get_lb()
+        return self._var._get_lb()
 
     def get_index(self):
         return self._var.get_index()
@@ -204,7 +205,7 @@ class ConflictRefiner(object):
         try:
             mdl.set_log_output(context.solver.log_output)
 
-            forced_docloud = mdl._must_use_docloud(context, **kwargs)
+            forced_docloud = context_must_use_docloud(context, **kwargs)
 
             have_credentials = False
             if context.solver.docloud:

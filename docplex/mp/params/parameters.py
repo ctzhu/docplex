@@ -8,7 +8,7 @@ from __future__ import print_function
 
 from six import iteritems
 
-from docplex.mp.utils import is_int, is_number
+from docplex.mp.utils import is_int, is_number, is_string
 from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import docplex_fatal
 
@@ -21,8 +21,6 @@ class ParameterGroup(object):
         with a full hierarchy of parameters with groups as nodes.
 
     """
-
-    #__slots__ = ('_name', '_parent', '_params', '_subgroups')
 
     def __init__(self, name, parent_group=None):
         self._name = name
@@ -48,7 +46,7 @@ class ParameterGroup(object):
         """
         from copy import deepcopy
         return deepcopy(self)
-    
+
     def copy(self):
         return self.clone()
 
@@ -128,7 +126,7 @@ class ParameterGroup(object):
             group = group.parent_group
         return group
 
-    def qualified_name(self, sep=".", upto_root=True):
+    def qualified_name(self, sep=".", include_root=True):
         """ Computes a string with all the parents of the parameters.
 
         Example:
@@ -143,10 +141,10 @@ class ParameterGroup(object):
         self_parent = self._parent
         if not self_parent:
             return self.name
-        if not upto_root and self_parent.is_root():
+        if not include_root and self_parent.is_root():
             return self.name
         else:
-            return "".join([self._parent.qualified_name(sep=sep, upto_root=upto_root), sep, self.name])
+            return "".join([self._parent.qualified_name(sep=sep, include_root=include_root), sep, self.name])
 
     def prettyprint(self, indent=0):
         tab = indent * 4 * " "
@@ -292,6 +290,10 @@ class Parameter(object):
     """
     __slots__ = ('_parent', '_short_name', '_cpx_name', '_id', '_description', '_default_value', '_current_value')
 
+    # This global flag controls checking new values.
+    # If set to False, assigned values are not checked for min/max ranges
+    skip_range_check = False
+
     # noinspection PyProtectedMember
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value):
         assert isinstance(group, ParameterGroup)
@@ -311,7 +313,7 @@ class Parameter(object):
         return self._short_name
 
     @property
-    def qualified_name(self, sep='.'):
+    def qualified_name(self):
         """ Returns a hierarchical name string for the parameter.
 
         The qualified name reflects the location of the parameter in the parameter hierarchy.
@@ -325,7 +327,10 @@ class Parameter(object):
         :rtype:
             string
         """
-        return "%s.%s" % (self._parent.qualified_name(sep=sep), self.short_name)
+        return self.get_qualified_name(sep='.', include_root=True)
+
+    def get_qualified_name(self, sep='.', include_root=True):
+        return "%s.%s" % (self._parent.qualified_name(sep=sep, include_root=include_root), self.short_name)
 
     @property
     def cpx_name(self):
@@ -464,12 +469,13 @@ class Parameter(object):
         """
         return self.get() == self.default_value
 
-    @staticmethod
-    def _is_in_range(arg, range_min, range_max):
-        if range_min is not None and arg < range_min:
-            return False
-        if range_max is not None and arg > range_max:
-            return False
+    @classmethod
+    def _is_in_range(cls, arg, range_min, range_max):
+        if not cls.skip_range_check:
+            if range_min is not None and arg < range_min:
+                return False
+            if range_max is not None and arg > range_max:
+                return False
         return True
 
     def to_string(self):
@@ -546,9 +552,7 @@ class StrParameter(Parameter):
 
 
 class IntParameter(Parameter):
-
     __slots__ = ('_min_value', '_max_value')
-
 
     def accept_value(self, new_value):
         ivalue = int(new_value)
@@ -562,8 +566,6 @@ class IntParameter(Parameter):
 
     def _get_max_value(self):
         return self._max_value  # pragma: no cover
-
-
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
                  max_value=None):
@@ -628,6 +630,7 @@ class NumParameter(Parameter):
     def type_name(self):
         return "num"
 
+
 # a dictionary of formats for each type.
 _param_prm_formats = {NumParameter: "%.14f",
                       IntParameter: "%d",
@@ -644,9 +647,6 @@ class RootParameterGroup(ParameterGroup):
     def __init__(self, name, cplex_version):
         ParameterGroup.__init__(self, name)
         self._cplex_version = cplex_version
-
-    def qualified_name(self, sep=".", upto_root=True):
-        return self.name
 
     @property
     def cplex_version(self):
@@ -669,7 +669,7 @@ class RootParameterGroup(ParameterGroup):
         only non-default parameters are printed.
 
         Args:
-            output: The output stream, typically a filename.
+            out: The output stream, typically a filename.
 
             overload_params: A dictionary of overloaded values for
                 certain parameters. This dictionary is of the form {param: value}
@@ -710,7 +710,6 @@ class RootParameterGroup(ParameterGroup):
         with open(path, mode='w') as out:
             self.export_prm(out, overload_params=overload_params)
 
-
     def print_info_to_stream(self, output, overload_params=None, print_defaults=False, indent_level=0):
         """ Writes parameters to an output stream.
 
@@ -729,7 +728,6 @@ class RootParameterGroup(ParameterGroup):
                 certain parameters. This dictionary is of the form {param: value}.
         """
         indent = " " * indent_level
-        #with RedirectedOutputContext(output):
         param_generator = self.generate_params()
         for param in param_generator:
             if overload_params and param in overload_params:
@@ -740,9 +738,9 @@ class RootParameterGroup(ParameterGroup):
                 param_value = None
             if param_value is not None:
                 output.write("{0}{1} = {2!s}\n"
-                      .format(indent,
-                              param.qualified_name,
-                              _param_prm_formats[type(param)] % param_value))
+                             .format(indent,
+                                     param.qualified_name,
+                                     _param_prm_formats[type(param)] % param_value))
 
     def export_prm_to_string(self, overload_params=None):
         """  Exports non-default parameters in PRM format to a string.
@@ -805,8 +803,8 @@ class RootParameterGroup(ParameterGroup):
     def __repr__(self):
         return "docplex.mp.params.RootParameterGroup(%s)" % self.cplex_version
 
-        # def qualified_name(self, sep='.'):
-        # return "parameters"
+    def qualified_name(self, sep='.', include_root=True):
+        return 'parameters' if include_root else ''
 
     def as_dict(self):
         # INTERNAL: returns a dictionary of qualified name -> parameter
@@ -821,19 +819,16 @@ class RootParameterGroup(ParameterGroup):
             for nd in sg._generate_and_filter_params(predicate=None):
                 yield nd
 
-    def update(self, other_params):
-        if not isinstance(other_params, RootParameterGroup):
-            docplex_fatal("Parameter.update expects  RootParameterGroup, got: {0!s}", other_params)
-        elif self._cplex_version != other_params.cplex_version:
-            docplex_fatal("Parameter.update expects same CPLEX version, self: {0}, other: {1}",
-                          format(self.cplex_version, other_params.cplex_version))
+    def find_parameter(self, key):
+        if is_int(key):
+            pred = lambda p: p.cpx_id == key
+        elif is_string(key):
+            # eliminate initial '.'
+            pred = lambda p: p.get_qualified_name(include_root=False).endswith(key)
         else:
-            self_qdict = self.as_dict()
-            nb_updates = 0
-            for other_param in other_params:
-                self_param = self_qdict[other_param.qualified_name]
-                other_current = other_param.get()
-                if self_param.get() != other_current:
-                    self_param.set(other_current)
-                    nb_updates += 1
-            return nb_updates
+            docplex_fatal('Parameters.find() accepts either integer code or path-like name, got: {0!r}'.format(key))
+        for p in self:
+            if pred(p):
+                return p
+        else:
+            return None

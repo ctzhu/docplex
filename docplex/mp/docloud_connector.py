@@ -10,6 +10,14 @@
 import json
 import os
 
+try:
+    # python 2
+    from urlparse import urlparse
+except ImportError:
+    # python 3
+    from urllib.parse import urlparse
+
+
 from datetime import datetime
 from six import iteritems, string_types
 from requests.exceptions import ConnectionError
@@ -129,6 +137,11 @@ class DOcloudConnector(object):
         if not info_to_monitor:
             info_to_monitor = {}
 
+        # check that url is valid
+        parts = urlparse(self.docloud_context.url)
+        if not parts.scheme:
+            raise DOcloudConnectorException("Malformed URL: '%s': No schema supplied." % self.docloud_context.url)
+
         proxies = self.docloud_context.proxies
         try:
             client = JobClient(self.docloud_context.url,
@@ -157,7 +170,8 @@ class DOcloudConnector(object):
                 att_names = [a['name'] for a in attachments]
 
                 # create job
-                jobid = client.create_job(attachments=att_names)
+                jobid = client.create_job(attachments=att_names,
+                                          parameters=self.docloud_context.job_parameters)
                 self.log("job creation submitted, id is: {0!s}".format(jobid))
                 if info_callback and 'jobid' in info_to_monitor:
                     info_callback({'jobid': jobid})

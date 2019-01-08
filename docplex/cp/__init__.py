@@ -23,8 +23,8 @@ if platform.system() not in ('Darwin', 'Linux', 'Windows', 'Microsoft'):
 
 # Check version of Python
 pv = sys.version_info
-if (pv < (2, 7)) or ((pv[0] == 3) and ((pv < (3, 4) or pv >= (3, 6)))):
-    raise Exception("DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x and 3.5.x")
+if (pv < (2, 7)) or ((pv[0] == 3) and ((pv < (3, 4) or pv >= (3, 7)))):
+    raise Exception("DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x, 3.5.x and 3.6.x")
 
 # Set version information
 __version_info__ = (dcpv.docplex_version_major, dcpv.docplex_version_minor, dcpv.docplex_version_micro)

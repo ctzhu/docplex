@@ -18,6 +18,7 @@ import threading
 import io
 import inspect
 from collections import deque
+import json
 
 try:
     from StringIO import StringIO
@@ -36,8 +37,10 @@ IS_PYTHON_2 = (sys.version_info[0] == 2)
 try:
     import numpy
     IS_NUMPY_AVAILABLE = True
+    NUMPY_NDARRAY = numpy.ndarray
 except:
     IS_NUMPY_AVAILABLE = False
+    NUMPY_NDARRAY = False
 
 # Check if panda is available
 try:
@@ -226,12 +229,26 @@ class Context(dict):
             Cloned copy of this context.
         """
         res = type(self)()
-        vars(res)['parent'] = vars(self)['parent']
+        #vars(res)['parent'] = vars(self)['parent']
         for k, v in self.items():
             if isinstance(v, Context):
                 v = v.clone()
             res.set_attribute(k, v)
         return res
+
+    def add(self, ctx):
+        """ Add another context to this one.
+
+        All attributes of given context are set in this one, replacing previous value if any.
+        If one value is another context, it is cloned before being set.
+
+        Args:
+            ctx:  Other context to add to this one.
+        """
+        for k, v in ctx.items():
+            if isinstance(v, Context):
+                v = v.clone()
+            self.set_attribute(k, v)
 
     def is_log_enabled(self, vrb):
         """ Check if log is enabled for a given verbosity
@@ -317,6 +334,8 @@ class IdAllocator(object):
                  'count',   # Allocated id count
                  'bdgts',   # Count printing base digits
                  )
+    DIGITS = "0123456789"
+    LETTERS_AND_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     def __init__(self, prefix, bdgts="0123456789"):
         """ Create a new id allocator
 
@@ -478,6 +497,71 @@ class KeyIdDict(object):
 
 
 class ObjectCache(object):
+    """ Limited size object cache.
+
+    This object allows to associate an object to a key.
+    This cache is limited in size. This means that, if the max size is reached, adding a new
+    object removes the oldest.
+    """
+    __slots__ = ('obj_dict',  # Dictionary of objects
+                 'max_size',  # Max cache size
+                 'key_list',  # Ordered list of objects keys in the cache
+                 )
+
+    def __init__(self, maxsize):
+        super(ObjectCache, self).__init__()
+        self.obj_dict = {}
+        self.max_size = maxsize
+        self.key_list = deque()
+
+    def set(self, key, value):
+        """ Set a value in the cache
+
+        Args:
+            key:   Key
+            value: Value
+        """
+        # Check if key already in cache
+        if key in self.obj_dict:
+            # Just replace the value
+            self.obj_dict[key] = value
+        else:
+            # Remove older object if max size is reached
+            if len(self.key_list) == self.max_size:
+                self.obj_dict.pop(self.key_list.popleft())
+            # Store new object
+            self.obj_dict[key] = value
+            self.key_list.append(key)
+
+    def get(self, key):
+        """ Get a value from the cache
+
+        Args:
+            key:  Key
+        Returns:
+            Value corresponding to the key, None if not found
+        """
+        return self.obj_dict.get(key)
+
+    def keys(self):
+        """ Get the list of all keys """
+        return list(self.key_list)
+
+    def values(self):
+        """ Get the list of all values """
+        return list(self.obj_dict.values())
+
+    def clear(self):
+        """ Clear all dictionary content """
+        self.obj_dict.clear()
+        self.key_list.clear()
+
+    def __len__(self):
+        """ Returns the number of elements in this dictionary """
+        return len(self.obj_dict)
+
+
+class ObjectCacheById(object):
     """ Object cache that uses object id as key.
 
     This object allows to associate an object to a key.
@@ -489,16 +573,16 @@ class ObjectCache(object):
     This cache is limited in size. This means that, if the max size is reached, adding a new
     object will remove the oldest.
     """
-    __slots__ = ('kdict',    # Dictionary of objects
-                 'max_size', # Max cache size
-                 'lkeys',    # Ordered list of objects keys in the cache
+    __slots__ = ('obj_dict',  # Dictionary of objects
+                 'max_size',  # Max cache size
+                 'key_list',  # Ordered list of objects keys in the cache
                  )
 
     def __init__(self, maxsize):
-        super(ObjectCache, self).__init__()
-        self.kdict = {}
+        super(ObjectCacheById, self).__init__()
+        self.obj_dict = {}
         self.max_size = maxsize
-        self.lkeys = deque()
+        self.key_list = deque()
 
     def set(self, key, value):
         """ Set a value in the cache
@@ -509,17 +593,17 @@ class ObjectCache(object):
         """
         kid = id(key)
         # Check if key already in cache
-        if kid in self.kdict:
+        if kid in self.obj_dict:
             # Just replace the value
-            self.kdict[kid] = (key, value)
+            self.obj_dict[kid] = value
         else:
             # Remove older object if max size is reached
-            if len(self.lkeys) == self.max_size:
-                self.kdict.pop(id(self.lkeys.popleft()))
-            # Store value in dictionary
-            self.kdict[kid] = value
+            if len(self.key_list) == self.max_size:
+                self.obj_dict.pop(id(self.key_list.popleft()))
+            # Store new object
+            self.obj_dict[kid] = value
             # Append key in deque (side effect is that key is preserved to preserve its id)
-            self.lkeys.append(key)
+            self.key_list.append(key)
 
     def get(self, key):
         """ Get a value from the cache
@@ -529,24 +613,24 @@ class ObjectCache(object):
         Returns:
             Value corresponding to the key, None if not found
         """
-        return self.kdict.get(id(key))
+        return self.obj_dict.get(id(key))
 
     def keys(self):
         """ Get the list of all keys """
-        return list(self.lkeys)
+        return list(self.key_list)
 
     def values(self):
         """ Get the list of all values """
-        return list(self.kdict.values())
+        return list(self.obj_dict.values())
 
     def clear(self):
         """ Clear all dictionary content """
-        self.kdict.clear()
-        self.lkeys.clear()
+        self.obj_dict.clear()
+        self.key_list.clear()
 
     def __len__(self):
         """ Returns the number of elements in this dictionary """
-        return len(self.kdict)
+        return len(self.obj_dict)
 
 
 class IdentityAccessor(object):
@@ -673,6 +757,60 @@ class FunctionCache(object):
     def __len__(self):
         """ Returns the number of elements in this cache """
         return len(self.values)
+
+
+class InfoDict(dict):
+    """ Dictionary of various informations.
+    """
+
+    def __init__(self):
+        super(dict, self).__init__()
+
+
+    def incr(self, key, val):
+        """ Increment the value of an attribute by a given value
+
+        If the attribute was not set, it is set to the value.
+        Args:
+            key:  Attribute key
+            val:  Value to add
+        """
+        self[key] = self.get(key, 0) + val
+
+
+    def clone(self):
+        """ Clone this information dictionary
+
+        Returns:
+            New information dictionary, cloned copy of this one.
+        """
+        res = InfoDict()
+        res.update(self)
+        return res
+
+
+    def print_infos(self, out=None, indent=""):
+        """ Print this information structure.
+
+        Attributes are sorted in alphabetical order
+
+        Args:
+            out:    Print output. stdout by default.
+            indent: Start line indentation. Default is empty
+        """
+        if out is None:
+            out = sys.stdout
+
+        # Get sorted list of keys
+        keys = sorted(list(self.keys()))
+        if keys:
+            # Print attributes
+            mxlen = max(len(k) for k in keys)
+            for k in keys:
+                out.write(indent + k + (" " * (mxlen - len(k))) + " : " + str((self.get(k))) + "\n")
+        else:
+            out.write(indent + "none\n")
+        out.flush()
 
 
 
@@ -1223,7 +1361,7 @@ def to_internal_string(strg):
             i += 1
             c = _FROM_SPECIAL_CHARS.get(strg[i], None)
             if c is None:
-                raise CpoException("Unknown special character '\\" + strg[i] + "'")
+                raise SyntaxError("Unknown special character '\\" + strg[i] + "'")
         res.append(c)
         i += 1
     return u''.join(res)
@@ -1298,6 +1436,17 @@ def search_file_in_path(f):
         if os.path.isfile(nf):
             return nf
     return None
+
+
+def parse_json_string(jstr):
+    """ Parse a JSON string
+
+    Args:
+        jstr: String containing JSON document
+    Returns:
+        Python representation of JSON document
+    """
+    return json.loads(jstr, parse_constant=True)
 
 
 #-----------------------------------------------------------------------------

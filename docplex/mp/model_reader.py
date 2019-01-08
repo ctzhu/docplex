@@ -302,7 +302,7 @@ class ModelReader(object):
                     expr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
                     op = ComparisonType.parse(sense)
                     #ct = op(expr, rhs)
-                    ct = lfactory._new_binary_constraint(lhs=expr, rhs=rhs, cmp_op=op)
+                    ct = lfactory._new_binary_constraint(lhs=expr, rhs=rhs, ctsense=op)
                     ct.name = ctname
                     deferred_cts.append(ct)
 
@@ -476,9 +476,8 @@ class ModelReader(object):
                     for idx, coef in izip(indices, coefs):
                         vp = VarPair(var1, cpx_var_index_to_docplex[idx])
                         quads[vp] = quads.get(vp, 0) + coef / 2
-            else:
-                quads = None
-            obj_expr += qfactory.new_quad(quads=quads, linexpr=None)
+
+                obj_expr += qfactory.new_quad(quads=quads, linexpr=None)
 
             obj_expr += cpx.objective.get_offset()
             is_maximize = cpx_sense == ObjSense.maximize

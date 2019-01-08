@@ -18,7 +18,7 @@ elements that compose a CPO model:
 The different model expressions and elements are created using services provided by modules:
 
  * :mod:`docplex.cp.expression` for the simple expression elements,
- * :mod:`docplex.cp.modeler` to build complex expressions and constraints using the specialized CPO functions.
+ * :mod:`docplex.cp.modeler` to build complex expressions and constraints using the specialized CP Optimizer functions.
 
 
 Detailed description
@@ -71,6 +71,7 @@ class CpoModel(object):
         self.var_list         = []       # List of model variables, in declaration order
         self.var_set          = set()    # Set of model variables
         self.expr_list        = []       # List of model root expressions as tuples (expression, location)
+        self.parameters       = None     # Solving parameters
         self.search_phases    = []       # List of search phases
         self.starting_point   = None     # Starting point
         self.nb_expr_nodes    = 0        # Number of expression nodes
@@ -91,13 +92,12 @@ class CpoModel(object):
             mod = inspect.getmodule(inspect.stack()[1][0])
             if mod is not None:
                 sfile = mod.__file__
-            else:
-                sfile = "UnknownSource.py"
         self.source_file = sfile
 
         # Store model name
         if name is None:
-            name = utils.get_file_name_only(sfile)
+            if sfile:
+                name = utils.get_file_name_only(sfile)
         self.name = name
 
         # Duplicate constructor functions to make them callable from the model
@@ -202,6 +202,26 @@ class CpoModel(object):
                     del self.map_expr[expr.name]
                 return True
         return False
+
+
+    def set_parameters(self, params):
+        """ Set the solving parameters associated to this model.
+
+        Args:
+            params: Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`,
+            or None.
+        """
+        assert isinstance(params, CpoParameters), "argument 'params' should be an object of class CpoParameters"
+        self.parameters = params
+
+
+    def get_parameters(self):
+        """ Get the solving parameters associated to this model.
+
+        Returns:
+            Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`, or None if not defined.
+        """
+        return self.parameters
 
 
     def set_search_phases(self, phases):
@@ -329,8 +349,11 @@ class CpoModel(object):
     def get_name(self):
         """ Gets the name of the model.
 
+        If the name is not explicitly defined, the name is the source file name without its extension.
+        If source file name is also undefined, name is None.
+
         Returns:
-            Name of the model (file name with no path or extension).
+            Name of the model, None if undefined.
         """
         return self.name
 
@@ -348,7 +371,7 @@ class CpoModel(object):
         """ Gets the name of the source file from which model has been created.
 
         Returns:
-            Python source file name.
+            Python source file name. None if undefined.
         """
         return self.source_file
 
@@ -387,8 +410,11 @@ class CpoModel(object):
         Args:
             out: Output stream
         """
-        out.write("Model: " + self.get_name() + "\n")
-        out.write(" - source file: {}\n".format(self.get_source_file()))
+        name = self.get_name()
+        out.write("Model: {}\n".format(name if name else "Anonymous"))
+        sfile = self.get_source_file()
+        if sfile:
+            out.write(" - source file: {}\n".format(sfile))
         nbintvar = 0
         nbintervvar = 0
         nbsequencevar = 0
@@ -692,9 +718,8 @@ class CpoModel(object):
                     self.nb_expr_nodes += 1
                     if t.is_variable:
                         self._add_variable(e)
-                    else:
-                        # Stack children expressions
-                        estack.extend(e.children)
+                    # Stack children expressions
+                    estack.extend(e.children)
 
 
     def _ensure_all_root_constraints_named(self):

@@ -339,6 +339,9 @@ class PwlFunction(ModelingObjectBase):
         def to_string(self):
             return '({0}, {1}, {2})'.format(self.preslope, self.breaksxy, self.postslope)
 
+        def repr_string(self):
+            return 'preslope={0},breaksxy={1},postslope={2}'.format(self.preslope, self.breaksxy, self.postslope)
+
     class _PwlAsSlopes:
         """
         When using this class, the piecewise linear function is specified by:
@@ -483,7 +486,7 @@ class PwlFunction(ModelingObjectBase):
                     else:
                         all_slopebreaks.append((current_slopebreakx[0], x_coord))
             # Handle case where last break is a discontinuity
-            prev_slopebreakx=current_slopebreakx
+            prev_slopebreakx = current_slopebreakx
             current_slopebreakx = next(iter_slopebreakx, None)
             if current_slopebreakx is not None:
                 # Case of a discontinuity ==> update last item in result list to a list containing 2 tuples
@@ -628,6 +631,9 @@ class PwlFunction(ModelingObjectBase):
 
     def __str__(self):
         return self.pwl_def.__str__()
+
+    def __repr__(self):
+        return 'docplex.mp.pwl.PwlFunction({0})'.format(self.pwl_def_as_breaks.repr_string())
 
     def clone(self):
         """ Creates a copy of the PWL function on the same model.
@@ -830,7 +836,7 @@ class PwlFunction(ModelingObjectBase):
         """
         return self._pwl_def_as_breaks.evaluate(x_val)
 
-    def plot(self, lx=None, rx=None, k=2, **kwargs):  # pragma: no cover
+    def plot(self, lx=None, rx=None, k=1, **kwargs):  # pragma: no cover
         """
         This method displays the piecewise linear function using the matplotlib package, if found.
 
@@ -854,7 +860,7 @@ class PwlFunction(ModelingObjectBase):
         # k times the mean interval length is used for left/right extra points
         kdx_m = k * (last_x - first_x) / float(nb_intervals) if nb_intervals > 0 else 1
 
-        if lx is None or lx >= first_x:
+        if lx is None:
             lx = first_x - kdx_m
         ly = ys[0] - self.pwl_def_as_breaks.preslope * (first_x - lx)
         xs.insert(0, lx)
@@ -868,4 +874,6 @@ class PwlFunction(ModelingObjectBase):
 
         if plt:
             plt.plot(xs, ys, **kwargs)
+            if self.name:
+                plt.title('pwl: {0}'.format(self.name))
             plt.show()

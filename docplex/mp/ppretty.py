@@ -36,9 +36,11 @@ class ModelPrettyPrinter(TextModelPrinter):
 
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
         raw_name = mobj.name
-        # ignore hide_names here
-        if not raw_name or not mobj.has_user_name():
-            return None # ignore automatic & generated objects
+        if not raw_name:
+            if isinstance(mobj, Var):
+                return self._make_prefix_name(mobj, '_x', local_index_map, offset=1)
+            else:
+                return None
         else:
             if mobj.is_generated():
                 mobj_origin = mobj.origin()
@@ -95,14 +97,30 @@ class ModelPrettyPrinter(TextModelPrinter):
     def _print_objective(self, wrapper, model):
         wrapper.write(model.objective_sense.verb())
         wrapper.flush(print_newline=True)
-        self._print_lexpr(wrapper, self._num_printer, self._var_name_map, model.objective_expr)
+        objexpr = model.objective_expr
+        objlin = objexpr.get_linear_part()
+        printed = self._print_lexpr(wrapper, self._num_printer, self._var_name_map, objlin,
+                                    allow_empty=True,
+                                    print_constant=False)
+        if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
+            self._print_qexpr_obj(wrapper, self._num_printer, self._var_name_map,
+                                  quad_expr=objexpr,
+                                  force_initial_plus=printed,
+                                  use_double=False)
+            printed = True
+        obj_offset = objexpr.get_constant()
+        if obj_offset:
+            if printed and obj_offset > 0:
+                wrapper.write(u'+')
+            wrapper.write(self._num_to_string(obj_offset))
         wrapper.write(';', separator=False)
         wrapper.flush()
 
     def _pprint_expr(self, wrapper, expr):
         q = 0
         if expr.is_quad_expr() and expr.has_quadratic_term():
-            q = self._print_qexpr_iter(wrapper, self._num_printer, self._var_name_map, expr.iter_sorted_quads(), use_double=False)
+            q = self._print_qexpr_iter(wrapper, self._num_printer, self._var_name_map, expr.iter_sorted_quads(),
+                                       use_double=False)
         self._print_expr_iter(wrapper, self._num_printer, self._var_name_map, expr.iter_terms(),
                               constant=expr.get_constant(),  # yes, print the constant
                               allow_empty=q > 0,
@@ -114,7 +132,7 @@ class ModelPrettyPrinter(TextModelPrinter):
         right_expr = ct.right_expr
         self._pprint_expr(wrapper, left_expr)
 
-        wrapper.write(self.ct_symbol_map[ct.type])
+        wrapper.write(self.ct_symbol_map[ct.sense])
 
         self._pprint_expr(wrapper, right_expr)
 
@@ -127,7 +145,6 @@ class ModelPrettyPrinter(TextModelPrinter):
         self._print_lexpr(wrapper, self._num_printer, self._var_name_map, expr, print_constant=True)
         wrapper.write("<=")
         wrapper.write(self._num_to_string(ub))
-
 
     def _print_indicator_constraint(self, wrapper, ind_ct):
         active = ind_ct.active_value
@@ -144,8 +161,6 @@ class ModelPrettyPrinter(TextModelPrinter):
     def _print_linear_constraints(self, wrapper, model):
         wrapper.begin_line()
         for ct in model.iter_binary_constraints():
-            if ct.is_generated():
-                continue  # pragma: no cover
 
             wrapper.begin_line()
             ctname = self.ct_print_name(ct)
@@ -194,7 +209,6 @@ class ModelPrettyPrinter(TextModelPrinter):
                 wrapper.set_indent(' ')
                 wrapper.flush(reset=True)
 
-
     def _print_quadratic_cts(self, wrapper, model):
         for qct in model.iter_quadratic_constraints():
 
@@ -222,7 +236,7 @@ class ModelPrettyPrinter(TextModelPrinter):
                 self._print_line_comment(out, " KPI section")
                 printed_section_header = True
 
-            kpi_expr = kpi.as_expression()
+            kpi_expr = kpi.to_expr()
             kpi_typename = 'int' if kpi_expr.is_discrete() else 'float'
             wrapper.write('dexpr {0} {1}'.format(kpi_typename, self._translate_chars(kpi.name)))
             wrapper.write('=')
@@ -234,6 +248,15 @@ class ModelPrettyPrinter(TextModelPrinter):
             wrapper.flush(reset=True)
         if printed_section_header:
             wrapper.newline()
+
+    def _print_sos(self, wrapper, model):
+        varname_map = self._var_name_map
+        for sos_varset in model.iter_sos():
+            sos_varname_joined = ', '.join(varname_map[v._index] for v in sos_varset.iter_variables())
+            wrapper.write('sos{0}: {1}'.format(sos_varset.sos_type.value, sos_varname_joined))
+        wrapper.flush()
+
+
 
     def print_model_to_stream(self, out, model):
         wrapper = _ExportWrapper(oss=out, indent_str=' ', line_width=78)
@@ -256,4 +279,5 @@ class ModelPrettyPrinter(TextModelPrinter):
         self._print_ranges(wrapper, model)
         self._print_indicators(wrapper, model)
         self._print_quadratic_cts(wrapper, model)
+        self._print_sos(wrapper, model)
         out.write("}\n")

@@ -45,6 +45,13 @@ class KPI(object):
     def compute(self, s=None):
         raise NotImplementedError   # pragma: no cover
 
+    def _get_solution_value(self, s=None):  # pragma: no cover
+        return self.compute(s)
+
+    @property
+    def solution_value(self):
+        return self._get_solution_value()
+
     def _check_name(self, name_arg):
         if not is_string(name_arg) or not name_arg:
             self.get_model().fatal("KPI.set_name() expects a non-empty string, got: {0!r}", name_arg)
@@ -87,6 +94,8 @@ class KPI(object):
         else:
             model.fatal("Cannot interpret this as a KPI: {0!r}. expecting expression, variable or function", kpi_arg)
 
+    def notify_removed(self):
+        pass
 
 class DecisionKPI(KPI):
     """ Specialized class of Key Performance Indicator, based on expressions.
@@ -104,8 +113,17 @@ class DecisionKPI(KPI):
             self.get_model().fatal('cannot interpret this as kpi: {0!r}', kpi_op)
         else:
             self._expr = kpi_op
+            self._expr.notify_used(self)  # kpi is a subscriber
             self._name = name or kpi_op.name
         self._check_name(self._name)
+
+
+    def notify_expr_modified(self, expr, event):
+        # do nothing
+        pass
+
+    def notify_removed(self):
+        self._expr.notify_unsubscribed(self)
 
     def get_name(self):
         return self._name
@@ -133,11 +151,13 @@ class DecisionKPI(KPI):
     def requires_solution(self):
         return True
 
-    def as_expression(self):
+    def to_expr(self):
         return self._expr
 
+    as_expression = to_expr
+
     def to_linear_expr(self):
-        return self._expr
+        return self._expr.to_linear_expr()
 
     def copy(self, new_model, var_map):
         expr_copy = self._expr.copy(new_model, var_map)

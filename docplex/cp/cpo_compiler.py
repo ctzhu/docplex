@@ -10,6 +10,7 @@ Compiler converting internal model representation to CPO file format.
 """
 
 from docplex.cp.expression import *
+from docplex.cp.expression import _domain_min, _domain_max
 from docplex.cp.solution import *
 from docplex.cp.utils import *
 import docplex.cp.config as config
@@ -50,6 +51,7 @@ class CpoCompiler(object):
                  'add_source_location',   # Indicator to add location traces in generated output
                  'format_version',        # Output format version
                  'is_format_12_8',        # Indicates that format version is at least 12.8
+                 'is_format_12_9',        # Indicates that format version is at least 12.9
                  'name_all_constraints',  # Indicator to fore a name on each constraint (for conflict refiner)
                  'min_length_for_alias',  # Minimum variable name length to replace it by an alias
                  'verbose_output',        # Verbose output (not short_output)
@@ -111,7 +113,8 @@ class CpoCompiler(object):
         # If not given, take default version
         if self.format_version is None and mctx is not None:
             self.format_version = mctx.version
-        self.is_format_12_8 = self.format_version and self.format_version >= '12.8'
+        self.is_format_12_8 = self.format_version and compare_natural(self.format_version, '12.8') >= 0
+        self.is_format_12_9 = self.format_version and compare_natural(self.format_version, '12.9') >= 0
 
         # Initialize source location
         if self.verbose_output:
@@ -253,7 +256,26 @@ class CpoCompiler(object):
         for lx in self.list_exprs:
             self._write_expression(out, lx)
 
-        # Write search phases 
+        # Write KPIs if any
+        kpis = model.get_kpis()
+        if kpis:
+            if self.is_format_12_9:
+                if self.verbose_output:
+                    out.write(u"\n//--- KPIs ---\n")
+                out.write(u"KPIs {\n")
+                for k, (x, l) in kpis.items():
+                    # Check CpoExpr to skip lambda expressions
+                    if isinstance(x, CpoExpr):
+                        self._write_expression(out, (x, l, 1, self._get_id_string(k), True, True))
+                out.write(u"}\n")
+            else:
+                # Check that all KPI model expressions are integer variables
+                for (x, l) in kpis.values():
+                    if isinstance(x, CpoExpr) and not isinstance(x, CpoIntVar):
+                        raise CpoException("With CPO format version {}, KPI expressions must all be integer variables"
+                                           .format(self.format_version))
+
+        # Write search phases
         if self.list_phases:
             if self.verbose_output:
                 out.write(u"\n//--- Search phases ---\n")
@@ -301,7 +323,7 @@ class CpoCompiler(object):
 
         Args:
             out:   Target output
-            xinfo: Expression info, list [expr, location, ref_count, cpo_name, is_root, is_compiled]
+            xinfo: Expression info, list (expr, location, ref_count, cpo_name, is_root, is_compiled)
         """
         # Retrieve expression elements
         expr, loc, rcnt, name, isroot, iscpld = xinfo
@@ -331,7 +353,7 @@ class CpoCompiler(object):
                     if self.is_format_12_8:
                         out.write(name + u": " + self._compile_expression(expr, True) + u";\n")
                     else:
-                        out.write(name + u" = "+ self._compile_expression(expr, True)+ u";\n" + name + u";\n")
+                        out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n" + name + u";\n")
                 else:
                     out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n")
             else:
@@ -352,9 +374,12 @@ class CpoCompiler(object):
         elif isinstance(var, CpoIntervalVarSolution):
             self._compile_interval_var_starting_point(var, cout)
         else:
-            raise CpoException("Internal error: unsupported starting point variable: " + str(var))
+            #raise CpoException("Internal error: unsupported starting point variable: " + str(var))
+            pass
+
         # Write variable starting point
-        out.write(self._get_expr_id(var) + u" = " + u''.join(cout) + u";\n")
+        if cout:
+            out.write(self._get_expr_id(var.expr) + u" = " + u''.join(cout) + u";\n")
 
 
     def _get_id_string(self, id):
@@ -390,7 +415,7 @@ class CpoCompiler(object):
         # Expression out of a model
         xname = expr.get_name()
         if xname:
-            return xname
+            return self._get_id_string(xname)
         return _ANONYMOUS
 
 
@@ -500,6 +525,17 @@ class CpoCompiler(object):
                 if prio < 0:
                     # Check first call
                     if cnx <= 0:
+                        # Check special case of sum of cumulexpr
+                        fver = self.format_version
+                        if oper is Oper_sum and e.type is Type_CumulExpr and (fver is None or compare_natural(fver, '12.8') < 0):
+                            # Replace function call by a serie of additions
+                            largs = oprnds[0].value
+                            res = largs[0]
+                            for v in largs[1:]:
+                                res = CpoFunctionCall(Oper_plus, Type_CumulExpr, (res, v))
+                            estack[-1] = [res, 0, False]
+                            continue
+
                         cout.append(oper.keyword)
                         cout.append("(")
                     if cnx >= oplen:
@@ -568,7 +604,13 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("(")
-        self._compile_var_domain(v.value, cout)
+        dom = v.value
+        dmin = _domain_min(dom)
+        dmax = _domain_max(dom)
+        cout.append(_int_var_value_string(dmin))
+        if dmin != dmax:
+            cout.append('..')
+            cout.append(_int_var_value_string(dmax))
         cout.append(")")
 
 
@@ -770,13 +812,25 @@ class CpoCompiler(object):
         Result is set in compiler attributes.
         """
         # Check null model
-        if self.model is None:
+        model = self.model
+        if model is None:
             return
 
-        # Expand expressions
+        # Create an alias list for KPIs
+        kpiexprs = []
+        kpis = model.get_kpis()
+        if kpis:
+            for k, (x, l) in kpis.items():
+                if isinstance(x, CpoExpr):
+                    if x.get_name() != k:
+                        kpiexprs.append((CpoAlias(x, k), l))
+                    elif not isinstance(x, CpoVariable):
+                        kpiexprs.append((x, l))
+
+        # Scan all expressions
         self.expr_infos = expr_infos = {}
         all_exprs = []
-        for expr, loc in itertools.chain(self.model.get_all_expressions(), self.model.get_search_phases()):
+        for expr, loc in itertools.chain(model.get_all_expressions(), kpiexprs, model.get_search_phases()):
             eid = id(expr)
             if eid in expr_infos:
                 # Expression already compiled, add it again
@@ -830,8 +884,14 @@ class CpoCompiler(object):
         id_allocators[Type_StateFunction.id] = IdAllocator('_FUN_')
         id_allocators[Type_Constraint.id] = IdAllocator('_CTR_')
 
-        # Allocate names and split variables and constants
+        # Initialize map of names
         expr_by_names = self.expr_by_names = {}
+
+        # Force to keep original name for KPIs
+        for x, l in kpiexprs:
+            expr_by_names[x.get_name()] = x
+
+        # Allocate names and split variables and constants
         for xinfo in all_exprs:
             expr = xinfo[0]
             typ = expr.type
@@ -843,13 +903,15 @@ class CpoCompiler(object):
                     xinfo[3] = expr_infos[id(expr)][3]
                 else:
                     # Check if name too long
-                    if min_length_for_alias is not None and len(xname) >= min_length_for_alias:
+                    if min_length_for_alias is not None and len(xname) >= min_length_for_alias and not xname in kpis:
                         xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                         alias_name_map[expr.get_name()] = xname
                         xinfo[3] = xname
                     else:
-                        # Check if already used
-                        if xname in expr_by_names:
+                        # Check if already used elsewhere
+                        # if xname in expr_by_names:
+                        ox = expr_by_names.get(xname)
+                        if not (ox is None or ox is expr):  # To process the case of pre-allocated names of KPIs
                             # Allocate a next instance
                             ndx = 1
                             xname += "@"

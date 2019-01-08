@@ -145,6 +145,15 @@ class CpoExpr(object):
         return self.name
 
 
+    def has_name(self):
+        """ Check if this expression has a name
+
+        Returns:
+            True if this expression has a name, False otherwise.
+        """
+        return self.name is not None
+
+
     def is_type(self, xtyp):
         """ Check if the type of this expression is a given one
 
@@ -389,6 +398,8 @@ class CpoExpr(object):
 
     def __mul__(self, other):
         """ Multiply """
+        # if other is 1: # Do not use == because it is overloaded
+        #     return self
         other = build_cpo_expr(other)
         if self.is_kind_of(Type_IntExpr):
             if other.is_kind_of(Type_IntExpr):
@@ -640,8 +651,16 @@ class CpoIntVar(CpoVariable):
     def get_domain(self):
         """ Gets the domain of the variable.
 
+        The domain of the variable can be:
+
+         * A single integer value if the variable is fixed,
+         * A list or a tuple of:
+
+             - single integer values,
+             - tuple of 2 integers representing an interval, bounds included
+
         Returns:
-            List of integers or interval tuples representing the variable domain.
+            Domain of the variable.
         """
         return self.domain
 
@@ -668,6 +687,16 @@ class CpoIntVar(CpoVariable):
             Value iterator on the domain of this variable.
         """
         return _domain_iterator(self.domain)
+
+    def domain_contains(self, value):
+        """ Check whether a given value is in the domain of the variable
+
+        Args:
+            val: Value to check
+        Returns:
+            True if the value is in the domain, False otherwise
+        """
+        return _domain_contains(self.domain, value)
 
     def is_bool_var(self):
         """ Check if the domain of this variable is reduced to boolean, 0, 1
@@ -1642,6 +1671,10 @@ def state_function(trmtx=None, name=None):
     return CpoStateFunction(trmtx, name)
 
 
+###############################################################################
+##  Public Functions
+###############################################################################
+
 def is_cpo_expr(expr, type=None):
     """ Check if an expression is a CPO model expression
 
@@ -1654,9 +1687,77 @@ def is_cpo_expr(expr, type=None):
     return isinstance(expr, CpoExpr) and (type is None or expr.type == type)
 
 
-###############################################################################
-##  Public Functions
-###############################################################################
+def _domain_min(d):
+    """ Retrieves the lower bound of a domain
+
+    Args:
+        d: Domain
+    Returns:
+        Domain lower bound
+    """
+    if is_array(d):
+        v = d[0]
+        return v[0] if isinstance(v, tuple) else v
+    return d
+
+
+def _domain_max(d):
+    """ Retrieves the upper bound of a domain
+
+    Args:
+        d: Domain
+    Returns:
+        Domain upper bound
+    """
+    if is_array(d):
+        v = d[-1]
+        return v[-1] if isinstance(v, tuple) else v
+    return d
+
+
+def _domain_iterator(d):
+    """ Iterator on the individual values of an integer variable domain.
+
+    Args:
+        d: Domain to iterate
+    Returns:
+        Domain iterator
+    """
+    if isinstance(d, (list, tuple)):
+        for x in d:
+            if isinstance(x, (list, tuple)):
+                min, max = x
+                if min == max:
+                    yield min
+                else:
+                    for v in range(min, max + 1):
+                        yield v
+            else:
+                yield x
+    else:
+        yield d
+
+
+def _domain_contains(d, val):
+    """ Check whether a domain contains a given value
+
+    Args:
+        d:   Domain
+        val: Value to check
+    Returns:
+        True if value is in the domain, False otherwise
+    """
+    if isinstance(d, (list, tuple)):
+        for x in d:
+            if isinstance(x, (list, tuple)):
+                min, max = x
+                if min <= val <= max:
+                    return True
+            elif x == val:
+                return True
+        return False
+    return d == val
+
 
 # Cache of CPO expressions corresponding to Python values
 # This cache is used to retrieve the CPO expression that corresponds to a Python expression
@@ -2138,8 +2239,11 @@ def _build_int_var_domain(min, max, domain):
 
     # Domain given extensively
     assert (min is None) and (max is None), "If domain is given extensively in 'domain', 'min' and/or 'max' should not be given"
-    assert is_array(domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
-    assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
+    if is_array(domain):
+        #assert is_array(domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
+        assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
+    else:
+        assert is_int(domain), "Argument 'domain' should be an integer, or a list of integers and/or intervals (tuples of 2 integers)"
     return domain
 
 
@@ -2333,52 +2437,6 @@ def _is_equal_values(v1, v2):
     return v1 == v2
 
 
-def _domain_min(d):
-    """ Retrieves the lower bound of a domain
-
-    Args:
-        d: Domain
-    Returns:
-        Domain lower bound
-    """
-    v = d[0]
-    return v[0] if isinstance(v, tuple) else v
-
-
-def _domain_max(d):
-    """ Retrieves the upper bound of a domain
-
-    Args:
-        d: Domain
-    Returns:
-        Domain upper bound
-    """
-    v = d[-1]
-    return v[-1] if isinstance(v, tuple) else v
-
-
-def _domain_iterator(d):
-    """ Iterator on the individual values of an integer variable domain.
-
-    Args:
-        d: Domain to iterate
-    Returns:
-        Domain iterator
-    """
-    if isinstance(d, (list, tuple)):
-        for x in d:
-            if isinstance(x, (list, tuple)):
-                min = x[0]
-                max = x[1]
-                if min == max:
-                    yield min
-                else:
-                    for v in range(min, max + 1):
-                        yield v
-            else:
-                yield x
-    else:
-        yield d
 
 
 def _reset_cache():

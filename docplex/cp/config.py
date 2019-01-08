@@ -26,11 +26,13 @@ this order to overwrite default values.
 
 This module also defines two global variables:
 
- * *DOCLOUD_CONTEXT*, that contains the configuration necessary to solve a model on DOcloud.
-   This context is the context by default, referenced by the global variable 'context'.
  * *LOCAL_CONTEXT*, that contains the configuration appropriate to solve a model with a local
    installation of the CPO solver.
    This configuration is available for solver with version number greater or equal to 12.7.0.
+
+   This context is the context by default, referenced by the global variable 'context'.
+
+ * *DOCLOUD_CONTEXT*, that contains the configuration necessary to solve a model on DOcloud.
 
 The method :meth:`set_default` allows to set the default configuration to one that is predefined,
 or another that has been totally customized.
@@ -63,7 +65,7 @@ General parameters
     If any error is raised by the solver during the solve, this information is provided in the
     error description, which allows for easier debugging.
 
-*context.model.length_for_alias = 15*
+*context.model.length_for_alias = None*
 
     This parameter allows to associate a shorter alias to variables whose name is longer than the given length.
     In the CPO representation of the model, variable is declared with its original name and an alias is created
@@ -71,7 +73,7 @@ General parameters
 
     In the returned solution, variable can be still retrieved with their original names.
 
-    By default, the value is 15. A value of None would indicate to always keep original variable names.
+    By default, the value is None, which indicates to always keep original variable names.
 
 *context.model.name_all_constraints = False*
 
@@ -131,7 +133,7 @@ Configuration of the model solving
     This parameter indicates to add the solver log content to the solution object.
     By default, this parameter is True but it can be set to False if the log is very big or of no interest.
 
-*context.solver.agent = 'docloud'*
+*context.solver.agent = 'local'*
 
     This parameter specifies the name of the solver agent that is used to solve the model.
     The value of this parameter is the name of a child context of `context.solver`, which contains necessary attributes
@@ -139,16 +141,26 @@ Configuration of the model solving
 
     There are two different agents described in the default configuration file:
 
-       * `docloud`, the default agent, for solving a CPO model using the DOcplexcloud service.
-       * `local`, the agent allowing to solve models locally using the CP Optimizer Interactive coming with
+       * `local`, the default agent, allowing to solve models locally using the CP Optimizer Interactive coming with
          versions of COS greater or equal to 12.7.0.
+       * `docloud`, the agent for solving a CPO model using the DOcplexcloud service.
 
-    If the CP Optimizer Interactive program *cpoptimizer(.exe)* is detected in the system path, the default solver
-    agent is automatically set to *local* instead of *docloud*.
+    If the CP Optimizer Interactive program *cpoptimizer(.exe)* is **NOT** detected in the system path,
+    the default solver agent is automatically set to *docloud* instead of *local*.
 
 *context.solver.log_prefix = "[Solver] "*
 
     Prefix that is added to every message that is logged by the solver component.
+
+
+Configuration of the `local` solving agent
+------------------------------------------
+
+*context.solver.local.execfile*
+
+    Name or full path of the CP Optimizer Interactive executable file.
+    By default, it is set to *cpoptimizer(.exe)*, which supposes that the program is visible from the system path.
+
 
 Configuration of the `docloud` solving agent
 --------------------------------------------
@@ -189,15 +201,6 @@ Configuration of the `docloud` solving agent
 
     This parameter describes how the Python client polls the result of the solve on *DOcplexcloud*.
     Polling delay is inside an interval [min, max], starting by min, growing to max with the given increment.
-
-
-Configuration of the `local` solving agent
-------------------------------------------
-
-*context.solver.local.execfile*
-
-    Name or full path of the CP Optimizer Interactive executable file.
-    By default, it is set to *cpoptimizer(.exe)*, which supposes that the program is visible from the system path.
 
 
 Configuration for best performances
@@ -272,8 +275,8 @@ context.model.length_for_alias = 15
 # Automatically add a name to every top-level constraint
 context.model.name_all_constraints = False
 
-# Model format generation version (12.8 to be set when deployed on docloud)
-context.model.version = '12.7.0.0'
+# Model format generation version
+context.model.version = '12.8.0.0'
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
@@ -334,8 +337,8 @@ context.solver.solve_with_start_next = False
 # Log prefix
 context.solver.log_prefix = "[Solver] "
 
-# Name of the agent to be used for solving. Value is name of one of this context child context (i.e. 'docloud').
-context.solver.agent = 'docloud'
+# Name of the agent to be used for solving. Value is name of one of this context child context (i.e. 'local' or 'docloud').
+context.solver.agent = 'local'
 
 # Auto-publish parameters
 context.solver.auto_publish = Context()
@@ -351,11 +354,43 @@ context.solver.auto_publish.kpis_output = "kpis.csv"
 
 
 #-----------------------------------------------------------------------------
+# Local solving agent context
+
+context.solver.local = Context()
+
+# Python class implementing the agent
+context.solver.local.class_name = "docplex.cp.solver.solver_local.CpoSolverLocal"
+
+# Name or path of the CP Optimizer Interactive program
+context.solver.local.execfile = CPO_EXEC_INTERACTIVE
+
+# Parameters of the exec file (mandatory, do not change)
+context.solver.local.parameters = ['-angel']
+
+# Agent log prefix
+context.solver.local.log_prefix = "[Local] "
+
+# Search exec file in the path
+python_home = os.path.dirname(os.path.abspath(sys.executable))
+if IS_WINDOWS:
+    pext = [os.path.join(python_home, "Scripts")]
+    appdata = os.environ.get('APPDATA')
+    if appdata is not None:
+        pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
+else:
+    pext = ["~/.local/bin", os.path.join(python_home, "bin")]
+# Set exec file with full path if found in the path
+cpfile = search_file_in_path(context.solver.local.execfile, pext)
+if cpfile:
+    context.solver.local.execfile = cpfile
+
+
+#-----------------------------------------------------------------------------
 # DoCloud solving agent context
 
 context.solver.docloud = Context()
 
-# Agent class name
+# Python class implementing the agent
 context.solver.docloud.class_name = "docplex.cp.solver.solver_docloud.CpoSolverDocloud"
 
 # Url of the DOCloud service
@@ -393,40 +428,21 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 
 
 #-----------------------------------------------------------------------------
-# Local solving agent context
+# Create
 
-context.solver.local = Context(class_name = "docplex.cp.solver.solver_local.CpoSolverLocal",
-                               execfile   = CPO_EXEC_INTERACTIVE,
-                               parameters = ['-angel'],
-                               log_prefix = "[Local] ")
+# Create 2 contexts for local and docloud
+LOCAL_CONTEXT = context
+DOCLOUD_CONTEXT = context.clone()
 
-# Split local and docloud contexts
-DOCLOUD_CONTEXT = context
-LOCAL_CONTEXT = context.clone()
-
-# Remove all possible default settins for local parameters
-LOCAL_CONTEXT.params = CpoParameters()
-
-# Set local context
-LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
+# Set local context specific attributes
 LOCAL_CONTEXT.solver.agent = 'local'
-LOCAL_CONTEXT.solver.max_threads = None
+LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
 LOCAL_CONTEXT.model.length_for_alias = None
 
-# Search exec file in the path
-python_home = os.path.dirname(os.path.abspath(sys.executable))
-if IS_WINDOWS:
-    pext = [os.path.join(python_home, "Scripts")]
-    appdata = os.environ.get('APPDATA')
-    if appdata is not None:
-        pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
-else:
-    pext = ["~/.local/bin", os.path.join(python_home, "bin")]
-cpfile = search_file_in_path(LOCAL_CONTEXT.solver.local.execfile, pext)
-# Select local context if exec file is visible in the path
-if cpfile:
-    LOCAL_CONTEXT.solver.local.execfile = cpfile
-    context = LOCAL_CONTEXT
+# Set DOcloud context specific attributes
+DOCLOUD_CONTEXT.solver.agent = 'local'
+DOCLOUD_CONTEXT.solver.trace_log = False
+DOCLOUD_CONTEXT.model.length_for_alias = 15
 
 
 #-----------------------------------------------------------------------------

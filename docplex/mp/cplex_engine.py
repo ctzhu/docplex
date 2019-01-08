@@ -224,23 +224,20 @@ class _CplexOverwriteParametersCtx(object):
 
 
 class SilencedCplexContext(object):
-    def __init__(self, cplex_instance):
+    def __init__(self, cplex_instance, error_handler=None):
         self.cplex = cplex_instance
-        self.saved_stream = None
+        self.saved_streams = None
+        self.error_handler = error_handler
 
     def __enter__(self):
-        log = self.cplex._env._get_log_stream()
-        if log is not None:
-            self.saved_stream = log
-            CplexEngine._cpx_set_all_streams(self.cplex, None)
-        else:
-            self.saved_stream = None
+        self.saved_streams = CplexEngine.cpx_get_all_streams(self.cplex)
+        CplexEngine._cpx_set_all_streams(self.cplex, None)
         return self.cplex
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.saved_stream:
-            CplexEngine._cpx_set_all_streams(self.cplex, self.saved_stream)
-            self.saved_stream = None
+        CplexEngine.cpx_set_all_streams(self.cplex,
+                                        self.saved_streams,
+                                        self.error_handler)
 
 
 class IndexScope(object):  # pragma: no cover
@@ -410,6 +407,26 @@ class CplexEngine(DummyEngine):
         cpx.set_results_stream(ofs)
         cpx.set_error_stream(ofs)
         cpx.set_warning_stream(ofs)
+
+    @classmethod
+    def cpx_get_all_streams(cls, cpx):
+        # returns an array of streams in the order: log, result, error, warning
+        streams = [cpx._env._get_log_stream(),
+                   cpx._env._get_results_stream(),
+                   cpx._env._get_error_stream(),
+                   cpx._env._get_warning_stream()]
+        return [x._file if hasattr(x, '_file') else None for x in streams]
+
+    @classmethod
+    def cpx_set_all_streams(cls, cpx, streams, error_handler):
+        if len(streams) != 4:
+            error_handler.fatal("Wrong number of streams, should be 4: {0!s}", len(streams))
+        else:
+            cpx.set_log_stream(streams[0])
+            cpx.set_results_stream(streams[1])
+            cpx.set_error_stream(streams[2])
+            cpx.set_warning_stream(streams[3])
+
 
     def set_streams(self, out):
         self_log_output = self._saved_log_output
@@ -1895,7 +1912,7 @@ class CplexEngine(DummyEngine):
         qm_dict = {}
 
         if self._solve_count:
-            with SilencedCplexContext(self._cplex) as silent_cplex:
+            with SilencedCplexContext(self._cplex, self.error_handler) as silent_cplex:
                 cpxs = silent_cplex.solution
                 for qm in QualityMetric:
                     qmcode = qm.code

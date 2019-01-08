@@ -603,7 +603,9 @@ class SolveSolution(object):
                     try:
                         print(output)
                     except UnicodeEncodeError:
-                        encoding = sys.stdout.encoding if sys.stdout.encoding else 'ascii'
+                        encoding = 'ascii'
+                        if hasattr(sys.stdout, 'encoding') and sys.stdout.encoding:
+                            encoding = sys.stdout.encoding
                         print(output.encode(encoding,
                                             errors='backslashreplace'))
 
@@ -1009,8 +1011,9 @@ class SolutionJSONEncoder(JSONEncoder):
         n = []
         model = solution.model
         duals = []
-        if not model._solves_as_mip():
-            duals = model.dual_values(model.iter_quadratic_constraints())
+        # RTC#37375
+        # if not model._solves_as_mip():
+        #     duals = model.dual_values(model.iter_quadratic_constraints())
         slacks = []
         was_solved = True
         try:

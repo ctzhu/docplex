@@ -44,7 +44,9 @@ Detailed description
 import docplex.cp.utils as utils
 from docplex.cp.utils import *
 from docplex.cp.expression import CpoVariable, CpoIntVar, CpoIntervalVar, CpoSequenceVar, CpoStateFunction, \
-    INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY, _domain_iterator, compare_expressions
+    INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY, \
+    _domain_iterator, _domain_min, _domain_max, _domain_contains, \
+    compare_expressions
 from docplex.cp.parameters import CpoParameters
 import types
 from collections import OrderedDict
@@ -246,14 +248,6 @@ class CpoIntVarSolution(CpoVarSolution):
         super(CpoIntVarSolution, self).__init__(expr)
         self.value = _check_arg_domain(value, 'value')
 
-    def domain_iterator(self):
-        """ Iterator on the individual values of an integer variable domain.
-
-        Returns:
-            Value iterator on the domain of this variable.
-        """
-        return _domain_iterator(self.value)
-
     def get_value(self):
         """ Gets the value of the variable.
 
@@ -262,9 +256,43 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return self.value
 
+    def get_domain_min(self):
+        """ Gets the domain lower bound.
+
+        Returns:
+            Domain lower bound.
+        """
+        return _domain_min(self.value)
+
+    def get_domain_max(self):
+        """ Gets the domain upper bound.
+
+        Returns:
+            Domain upper bound.
+        """
+        return _domain_max(self.value)
+
+    def domain_iterator(self):
+        """ Iterator on the individual values of an integer variable domain.
+
+        Returns:
+            Value iterator on the domain of this variable.
+        """
+        return _domain_iterator(self.value)
+
+    def domain_contains(self, value):
+        """ Check whether a given value is in the domain of the variable
+
+        Args:
+            val: Value to check
+        Returns:
+            True if the value is in the domain, False otherwise
+        """
+        return _domain_contains(self.value, value)
+
     def __str__(self):
         """ Convert this expression into a string """
-        return self.get_name() + ": " + str(self.get_value())
+        return str(self.get_name()) + ": " + str(self.get_value())
         
 
 class CpoIntervalVarSolution(CpoVarSolution):
@@ -399,7 +427,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
 
     def __str__(self):
         """ Convert this expression into a string """
-        res = [self.get_name(), ': ']
+        res = [str(self.get_name()), ': ']
         if self.is_absent():
             res.append("absent")
         else:
@@ -451,7 +479,7 @@ class CpoSequenceVarSolution(CpoVarSolution):
 
     def __str__(self):
         """ Convert this expression into a string """
-        return self.get_name() + ": (" + ", ".join([v.get_name() for v in self.lvars]) + ")"
+        return str(self.get_name()) + ": (" + ", ".join([str(v.get_name()) for v in self.lvars]) + ")"
 
      
 class CpoStateFunctionSolution(CpoVarSolution):
@@ -495,7 +523,7 @@ class CpoStateFunctionSolution(CpoVarSolution):
 
     def __str__(self):
         """ Convert this expression into a string """
-        return self.get_name() + ": (" + ", ".join([str(s) for s in self.steps]) + ")"
+        return str(self.get_name()) + ": (" + ", ".join([str(s) for s in self.steps]) + ")"
         
      
 class CpoModelSolution(object):
@@ -670,12 +698,14 @@ class CpoModelSolution(object):
 
 
     def get_value(self, expr):
-        """ Gets the value of a variable.
+        """ Gets the value of a variable or a KPI.
 
         This method first find the variable with :meth:`get_var_solution` and, if exists,
         returns the result of a call to the method get_value() on this variable.
 
         The result depends on the type of the variable. For details, please consult documentation of methods:
+
+        The expression can also be the name of a KPI.
 
          * :meth:`CpoIntVarSolution.get_value`
          * :meth:`CpoIntervalVarSolution.get_value`
@@ -683,15 +713,17 @@ class CpoModelSolution(object):
          * :meth:`CpoStateFunctionSolution.get_value`
 
         Args:
-            expr: Variable expression
+            expr: Variable expression, variable name  or KPI name.
         Returns:
             Variable value, None if variable is not found.
         """
         var = self.get_var_solution(expr)
-        return None if var is None else var.get_value()
+        if var is not None:
+            return var.get_value()
+        return self.get_kpi_value(expr)
 
 
-    def add_kpi(self, name, value):
+    def add_kpi_value(self, name, value):
         """ Add a KPI value to this solution
 
         Args:
@@ -702,7 +734,7 @@ class CpoModelSolution(object):
 
 
     def get_kpis(self):
-        """ Get the solution kpis
+        """ Get the solution KPIs.
 
         Returns:
             Ordered dictionary containing value of the KPIs that have been defined in the model.
@@ -710,6 +742,17 @@ class CpoModelSolution(object):
             Keys are sorted in the order the KPIs have been defined.
         """
         return self.kpi_values
+
+
+    def get_kpi_value(self, name):
+        """ Get the value of a KPI
+
+        Args:
+            name: Name of the KPI
+        Returns:
+            Value of the KPI, None if not in the solution
+        """
+        return self.kpi_values.get(name)
 
 
     def is_empty(self):
@@ -744,7 +787,7 @@ class CpoModelSolution(object):
         gvals = jsol.get('gaps')
         if gvals:
             self.objective_gaps = tuple([_get_num_value(x) for x in gvals])
-        elif ovals and bvals:
+        elif ovals and bvals and not any(is_array(v) for v in ovals):
             # Gaps not given but bounds present. Recompute gaps
             gvals = []
             rt = prms.RelativeOptimalityTolerance
@@ -758,6 +801,8 @@ class CpoModelSolution(object):
                     gap = POSITIVE_INFINITY
                 gvals.append(gap)
             self.objective_gaps = tuple(gvals)
+        else:
+            self.objective_gaps = None
 
         # Add integer variables
         vars = jsol.get('intVars', ())
@@ -798,25 +843,16 @@ class CpoModelSolution(object):
             self.add_var_solution(CpoStateFunctionSolution(fun, lpts))
 
         # Set kpis
+        kpi_values = jsol.get('KPIs', ())
         kpis = model.get_kpis()
-        for name, expr in kpis.items():
-            self.add_kpi(name, self._eval_kpi(expr))
-
-
-    def _eval_kpi(self, expr):
-        """ Evaluate a KPI expression
-
-        Args:
-            expr: KPI expression
-        Returns
-            Value of the KPI
-        """
-        # Check if expression is a lambda
-        if isinstance(expr, types.FunctionType):
-            return expr(self)
-
-        # Expression is a variable
-        return self.get_value(expr)
+        for name, (expr, loc) in kpis.items():
+            if isinstance(expr, types.FunctionType):
+                value = expr(self)
+            elif name in kpi_values:
+                value = kpi_values[name]
+            else:
+                value = self.get_value(expr)
+            self.add_kpi_value(name, value)
 
 
     def __getitem__(self, expr):
@@ -873,24 +909,30 @@ class CpoModelSolution(object):
         if out is None:
             out = sys.stdout
 
-        # Print objective value
+        # Print objective value, bounds and gaps
         ovals = self.get_objective_values()
         if ovals:
-            out.write(u"Objective values: {}\n".format(ovals))
-        # Print objective bounds
+            out.write(u"Objective values: {}".format(ovals))
         bvals = self.get_objective_bounds()
         if bvals:
-            out.write(u"          bounds: {}\n".format(bvals))
-        # Print objective gaps
+            out.write(u", bounds: {}".format(bvals))
         gvals = self.get_objective_gaps()
         if gvals:
-            out.write(u"          gaps: {}\n".format(gvals))
+            out.write(u", gaps: {}".format(gvals))
+        out.write(u"\n")
+
         # Print all variables in natural name order
         lvars = [v for v in self.get_all_var_solutions() if v.get_name()]
         lvars = sorted(lvars, key=functools.cmp_to_key(lambda v1, v2: compare_expressions(v1.expr, v2.expr)))
         for v in lvars:
             out.write(str(v))
             out.write(u'\n')
+
+        # Print all KPIs in declaration order
+        kpis = self.get_kpis()
+        for k in kpis.keys():
+            out.write(u'{}: {}\n'.format(k, kpis[k]))
+
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -1154,7 +1196,7 @@ class CpoSolveResult(CpoRunResult):
         all returned gap values are positive infinity.
 
         Returns:
-            Array of all objective gap values, None if none.
+            Array of all objective gap values, None if not defined.
         """
         return self.solution.objective_gaps
 
@@ -1383,8 +1425,8 @@ class CpoSolveResult(CpoRunResult):
         out.write(u'\n')
 
         # Print search/solve status
-        #out.write(u"Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
-        out.write(u"Solve status: " + str(self.get_solve_status()) + "\n")
+        out.write(u"Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
+        #out.write(u"Solve status: " + str(self.get_solve_status()) + "\n")
         s = self.get_search_status()
         if s:
             out.write(u"Search status: " + str(s))
@@ -1393,7 +1435,7 @@ class CpoSolveResult(CpoRunResult):
                 out.write(u", stop cause: " + str(s))
             out.write(u"\n")
 
-            # Print solve time
+        # Print solve time
         out.write(u"Solve time: " + str(round(self.get_solve_time(), 2)) + " sec\n")
         out.write(u"-------------------------------------------------------------------------------\n")
 
@@ -1926,6 +1968,8 @@ def _is_below_tolerance(val, bnd, rt, at):
     Returns:
         True if value is below the tolerance, false otherwise
     """
+    if not is_number(val) or not is_number(bnd):
+        return False
     if val in (POSITIVE_INFINITY, NEGATIVE_INFINITY) or bnd in (POSITIVE_INFINITY, NEGATIVE_INFINITY):
         return False
     if val == bnd:

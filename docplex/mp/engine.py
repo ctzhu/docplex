@@ -36,7 +36,7 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         ''' Redefine this method for the real solve.
             Returns a solution object or None.
         '''
@@ -188,6 +188,10 @@ class IEngine(ISolver):
     def set_objective_expr(self, new_objexpr, old_objexpr):
         raise NotImplementedError  # pragma: no cover
 
+    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
+                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        raise NotImplementedError  # pragma: no cover
+
     def end(self):
         raise NotImplementedError  # pragma: no cover
 
@@ -296,6 +300,10 @@ class DummyEngine(IEngine):
     def set_objective_expr(self, new_objexpr, old_objexpr):
         pass  # pragma: no cover
 
+    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
+                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        pass  # pragma: no cover
+
     def end(self):
         """ terminate the engine
         """
@@ -316,7 +324,7 @@ class DummyEngine(IEngine):
     def can_solve(self):
         return False  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         return None  # pragma: no cover
 
     def get_solve_status(self):
@@ -448,6 +456,10 @@ class IndexerEngine(DummyEngine):
     def set_objective_expr(self, new_objexpr, old_objexpr):
         pass
 
+    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
+                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        pass
+
     def set_parameter(self, parameter, value):
         """ Changes the parameter value in the engine.
 
@@ -487,7 +499,7 @@ class NoSolveEngine(IndexerEngine):
     def can_solve(self):
         return False
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         """
         This solver cannot solve. never ever.
         """
@@ -541,7 +553,7 @@ class ZeroSolveEngine(IndexerEngine):
     def get_var_zero_solution(self, dvar):
         return max(0, dvar.lb)
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)
@@ -584,7 +596,7 @@ class FakeFailEngine(IndexerEngine):
     def get_name(self):
         return "no_solution_solve"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         # solve fails equivalent to returning None
         return None  # pragma: no cover
 
@@ -616,7 +628,7 @@ class TerminatedEngine(IndexerEngine):
     def name(self):
         return "exception"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         # solve fails equivalent to returning None
         self.terminate()
         return None  # pragma: no cover
@@ -653,7 +665,7 @@ class RaiseErrorEngine(IndexerEngine):
     def get_name(self):
         return "raise"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
         # solve fails equivalent to returning None
         self._simulate_error()
         return None  # pragma: no cover

@@ -50,7 +50,13 @@ class CpoType(object):
         self.is_constant_atom  = isatm
         self.higher_types = (self,) + htyps
         self.element_type = eltyp
-        self.base_type    = bastyp if bastyp else self
+        if bastyp is None:
+            self.base_type = self
+        else:
+            self.base_type = bastyp
+            self.is_variable = bastyp.is_variable
+            self.is_constant = bastyp.is_constant
+            self.is_constant_atom = bastyp.is_constant_atom
         # Process array case
         if eltyp is not None:
             eltyp.parent_array_type = self

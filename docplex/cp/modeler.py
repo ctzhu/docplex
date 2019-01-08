@@ -262,7 +262,7 @@ Detailed description
 """
 
 from docplex.cp.catalog import *
-from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset, \
+from docplex.cp.expression import CpoExpr, CpoFunctionCall, CpoValue, build_cpo_expr, build_cpo_tupleset, \
                                   build_cpo_transition_matrix, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY
 import docplex.cp.expression as expression
 from docplex.cp.utils import *
@@ -280,13 +280,16 @@ def _expand(arg):
        return [_expand(x) for x in arg]
     return arg
 
+
 def _is_cpo_expr(x):
     """ Check if x is a CPO expression, or an array of CPO expressions """
     return isinstance(x, CpoExpr) or (isinstance(x, (list, tuple)) and builtin_all(isinstance(v, CpoExpr) for v in x))
 
+
 def _is_int_couple(x):
     """ Check if x is a tuple or list of 2 integers """
     return is_array(x) and (len(x) == 2) and is_int(x[0]) and is_int(x[1])
+
 
 def _is_cpo_array(val):
     """ Check if argument could be mapped into CPO array """
@@ -332,13 +335,14 @@ TYPE_NAMES = {Type_Bool:                  "boolean",
               Type_SearchPhase:           "search phase",
               Type_SegmentedFunction:     "segmented function",
               Type_SequenceVar:           "sequence variable",
-              Type_SequenceVarArray:      "array of sequence variableq",
+              Type_SequenceVarArray:      "array of sequence variables",
               Type_StateFunction:         "state function",
               Type_StepFunction:          "step function",
               Type_TimeInt:               "integer representing a time",
               Type_TransitionMatrix:      "transition matrix",
               Type_TupleSet:              "tuple set",
              }
+
 
 def _convert_arg(val, name, type, errmsg=None):
     """ Convert a Python value in CPO and check its value
@@ -353,13 +357,16 @@ def _convert_arg(val, name, type, errmsg=None):
     return val
 
 
-def _get_generation_version():
-    """ Get the CPO format version used for model generation
-    Returns:
-        CPO format version
+def _convert_arg_bool_int(val, name):
+    """ Convert a Python value in CPO bool int
+    Args:
+        val:  Value to convert
+        name: Argument name
     """
-    cpver = config.context.model.version
-    return "12.7" if cpver is None else cpver
+    if isinstance(val, CpoExpr):
+        assert val.is_kind_of(Type_BoolInt), "Argument '{}' should be a {}".format(name, TYPE_NAMES[Type_BoolInt])
+        return val
+    return CpoValue(1 if val else 0, Type_BoolInt)
 
 
 #==============================================================================
@@ -592,19 +599,12 @@ def sum_of(x):
 
     # Array of Cumul expr
     assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
-
-    # Check generation version
-    if _get_generation_version() >= "12.8":
-        return CpoFunctionCall(Oper_sum, Type_CumulExpr, (arr,))
-
-    # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
-    values = arr.children
-    if not values:
-        return 0
-    res = values[0]
-    for v in values[1:]:
-        res = res + v
-    return res
+    alen = len(arr.value)
+    if alen == 1:
+        return arr.value[0]
+    if alen == 2:
+        return arr.value[0] + arr.value[1]
+    return CpoFunctionCall(Oper_sum, Type_CumulExpr, (arr,))
 
 
 def sum(arr, *args):
@@ -1562,9 +1562,8 @@ def standard_deviation(x, meanLB=NEGATIVE_INFINITY, meanUB=POSITIVE_INFINITY):
         A float expression
     """
     # Check optional bounds
-    if (meanLB is NEGATIVE_INFINITY) and (meanUB is POSITIVE_INFINITY) and (_get_generation_version() > "12.8"):
-        return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),))
-
+    # if (meanLB is NEGATIVE_INFINITY) and (meanUB is POSITIVE_INFINITY) and (_get_generation_version() > "12.8"):
+    #     return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),))
     return CpoFunctionCall(Oper_standard_deviation, Type_FloatExpr, (_convert_arg(x, "x", Type_IntExprArray),
                                                                      _convert_arg(meanLB, "meanLB", Type_Float),
                                                                      _convert_arg(meanUB, "meanUB", Type_Float),))
@@ -2539,19 +2538,23 @@ def type_of_prev(sequence, interval, firstValue=None, absentValue=None):
 def no_overlap(sequence, distance_matrix=None, is_direct=None):
     """ Constrains a set of interval variables not to overlap each others.
 
-    This function returns a constraint over a set of interval variables {*a1*, ..., *an*} that states that all the present
-    intervals in the set are pairwise non-overlapping. It means that whenever both interval variables *ai* and *aj*, i!=j
-    are present, *ai* is constrained to end before the start of *aj* or *aj* is constrained to end before the start of *ai*.
+    This function returns a constraint over a set of interval variables {*a1*, ..., *an*} that states that
+    all the present intervals in the set are pairwise non-overlapping.
+    It means that whenever both interval variables *ai* and *aj*, i!=j are present, *ai* is constrained to end
+    before the start of *aj* or *aj* is constrained to end before the start of *ai*.
 
-    If the no-overlap constraint has been built on an interval sequence variable *sequence*, it means that the no-overlap
-    constraint works on the set of interval variables {*a1*, ..., *an*} of the sequence and that the order of interval
-    variables of the sequence will describe the order of the non-overlapping intervals. That is, if *ai* and *aj*, i!=j are
-    both present and if *ai* appears before *aj* in the sequence value, then *ai* is constrained to end before the start of
-    *aj*. If a transition matrix *distance_matrix* is specified and if *tpi* and *tpj* respectively denote the types of
-    interval variables *ai* and *aj* in the *sequence*, it means that a minimal distance *distance_matrix[tpi,tpj]* is to be
-    maintained between the end of *ai* and the start of *aj*. If Boolean flag *is_direct* is true, the transition distance
-    holds between an interval and its immediate b in the sequence otherwise, if *is_direct* is false (default), the
-    transition distance holds between an interval and all its bs in the sequence.
+    If the no-overlap constraint has been built on an interval sequence variable *sequence*, it means that
+    the no-overlap constraint works on the set of interval variables {*a1*, ..., *an*} of the sequence and that
+    the order of interval variables of the sequence will describe the order of the non-overlapping intervals.
+    That is, if *ai* and *aj*, i!=j are both present and if *ai* appears before *aj* in the sequence value,
+    then *ai* is constrained to end before the start of *aj*.
+    If a transition matrix *distance_matrix* is specified and if *tpi* and *tpj* respectively denote the types of
+    interval variables *ai* and *aj* in the *sequence*, it means that a minimal distance
+    *distance_matrix[tpi,tpj]* is to be maintained between the end of *ai* and the start of *aj*.
+    If boolean flag *is_direct* is True, the transition distance holds between an interval and its immediate successor
+    in the sequence.
+    If *is_direct* is False (default), the transition distance holds between an interval and all its successors
+     in the sequence.
 
     If the first argument is an array of interval variables, the two others are ignored.
 
@@ -2582,7 +2585,7 @@ def no_overlap(sequence, distance_matrix=None, is_direct=None):
     distance_matrix = build_cpo_transition_matrix(distance_matrix)
     if is_direct is None:
         return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix))
-    return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix, _convert_arg(is_direct, "is_direct", Type_BoolInt)))
+    return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix, _convert_arg_bool_int(is_direct, "is_direct")))
     
 
 
@@ -3102,16 +3105,16 @@ def always_constant(function, interval, isStartAligned=None, isEndAligned=None):
         if isStartAligned is None:
             return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, start, end))
         return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, start, end,
-                                                                       _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                       _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                       _convert_arg_bool_int(isStartAligned, "isStartAligned"),
+                                                                       _convert_arg_bool_int(isEndAligned, "isEndAligned")))
 
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     if isStartAligned is None:
         return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, interval))
     return CpoFunctionCall(Oper_always_constant, Type_Constraint, (function, interval,
-                                                                   _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                   _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                   _convert_arg_bool_int(isStartAligned, "isStartAligned"),
+                                                                   _convert_arg_bool_int(isEndAligned, "isEndAligned")))
 
 
 def always_equal(function, interval, value, isStartAligned=None, isEndAligned=None):
@@ -3152,16 +3155,16 @@ def always_equal(function, interval, value, isStartAligned=None, isEndAligned=No
         if isStartAligned is None:
             return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, start, end, value))
         return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, start, end, value,
-                                                                    _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                    _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                    _convert_arg_bool_int(isStartAligned, "isStartAligned"),
+                                                                    _convert_arg_bool_int(isEndAligned, "isEndAligned")))
 
     interval = _convert_arg(interval, "interval", Type_IntervalVar,
                             "Argument 'interval' should be an interval variable or a fixed interval expressed as a tuple of integers")
     if isStartAligned is None:
         return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, interval, value))
     return CpoFunctionCall(Oper_always_equal, Type_Constraint, (function, interval, value,
-                                                                _convert_arg(isStartAligned, "isStartAligned", Type_BoolInt),
-                                                                _convert_arg(isEndAligned, "isEndAligned", Type_BoolInt)))
+                                                                _convert_arg_bool_int(isStartAligned, "isStartAligned"),
+                                                                _convert_arg_bool_int(isEndAligned, "isEndAligned")))
 
 
 #==============================================================================

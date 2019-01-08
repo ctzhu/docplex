@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.7.113
+Version: 2.8.125
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,8 +244,26 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
+        Changed in 2.8.125:
+        ```````````````````
+        * Solving with solver agent 'docloud' is deprecated. Models are now preferably
+          solved with local solver or the python source can be submitted to DOcplexcloud
+          solve service. See https://ibm.biz/BdYhhK
+        
+        * In ``docplex.mp``:
+           * solve_lexicographic is being deprecated. In a future version, a new api will be available to support multi-objectives.
+        
+        * In ``docplex.cp``:
+           * Fix problem with boolean indicators in no_overlap(), always_constant() and always_equal().
+           * Allow model solution to be used directly as a starting point (ignores what is not integer or interval var).
+           * Add new examples with KPIs.
+           * Add methods domain_min(), domain_max(), domain_iterator() and domain_contains() on both CpoIntVar and CpoIntVarSolution.
+           * Default solver agent is now 'local' instead of 'docloud'. All examples modified consequently.
+        
+        
         Changed in 2.7.113:
         ```````````````````
+        
         * In ``docplex.mp``:
            * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the
              product of the quadratic expression and the constant value.

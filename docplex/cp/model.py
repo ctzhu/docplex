@@ -89,13 +89,9 @@ from collections import OrderedDict
 ##  Constants
 ###############################################################################
 
-# List of all modeler public functions
-_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler, ('maximize', 'minimize'))
-#_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler)
+# Marker of this file to remove it from source location
+_THIS_FILE_MARKER = "docplex" + os.path.sep + "cp" + os.path.sep + "model."
 
-
-# Marker of a this file belonging to docplex.cp
-THIS_FILE_MARKER = "docplex" + os.path.sep + "cp" + os.path.sep + "model."
 
 ###############################################################################
 ##  Public classes
@@ -103,11 +99,11 @@ THIS_FILE_MARKER = "docplex" + os.path.sep + "cp" + os.path.sep + "model."
 
 # Model statistics
 class CpoModelStatistics(object):
-    """ This class represents model statistics informations.
+    """ This class represents model statistics information.
     """
 
     def __init__(self, model):
-        """ Initialize statisrtics
+        """ Initialize statistics
 
         Args:
             model: Source model
@@ -184,12 +180,13 @@ class CpoModel(object):
     """ This class is the Python container of a CPO model.
     """
 
-    def __init__(self, name=None, sfile=None):
+    def __init__(self, name=None, sfile=None, version=None):
         """ Constructor.
 
         Args:
-            name:  Model name, None for automatic (source file name).
-            sfile: Source file, None for automatic.
+            name:    (Optional) Model name (source file name).
+            sfile:   (Optional) Source file.
+            version: (Optional) Format version
         """
         ctx = config.get_default()
         super(CpoModel, self).__init__()
@@ -201,8 +198,8 @@ class CpoModel(object):
         self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name.
         self.listeners        = []            # Solver listeners
 
-        # Set version of the CPO format (default)
-        self.format_version   = None
+        # Set version of the CPO format (None = not given)
+        self.format_version   = version
 
         # Indicate to set source location in the model information
         self.source_loc       = ctx.get_by_path("model.add_source_location", True)
@@ -236,8 +233,8 @@ class CpoModel(object):
         self.tuple_set         = expression.tuple_set
         self.state_function    = expression.state_function
 
-        # Copy all modeler functions in the model object
-        for f in _MODELER_PUBLIC_FUNCTIONS:
+        # Copy all modeler public functions in the model object
+        for f in list_module_public_functions(modeler, ('maximize', 'minimize')):
             setattr(self, f.__name__, f)
 
         # Special case for builtin functions
@@ -261,22 +258,29 @@ class CpoModel(object):
 
 
     def add(self, expr):
-        """ Adds a CPO expression to the model.
+        """ Adds an expression to the model.
 
-        This method adds a CPO expression to the model.
-        The order in which expressions are added to the model is preserved when it is submitted for solving.
+        This method adds one or more CPO expression to the model.
+        A CPO expression is an object of class :class:`~docplex.cp.expression.CpoExpr` or derived, obtained by:
 
-        The expression *expr* to add to the model can be:
+         * calling one of the factory method available in module :mod:`docplex.cp.expression`,
+         * calling one of the modeling function available in module :mod:`docplex.cp.modeler`,
+         * using an overloaded operator with at least one argument that is a :class:`~docplex.cp.expression.CpoExpr` or derived.
+
+        The argument *expr* can be:
 
          * a constraint,
          * a boolean expression, possibly constant,
          * an objective,
          * a search phase,
          * a variable (but variables that appear in expressions are automatically added to the model),
-         * a list of expressions to add.
+         * an iterable of expressions to add.
+
+        The order of the expressions that are added to the model is preserved when it is submitted for solving.
 
         Args:
-            expr: CPO expression (constraint, boolean, objective, etc) to add to the model.
+            expr: CPO expression (constraint, boolean, objective, etc) to add to the model,
+                  or iterable of expressions to add to the model.
         Raises:
             CpoException in case of error.
         """
@@ -294,14 +298,11 @@ class CpoModel(object):
                 for x in expr:
                     self.add(x)
             except:
-                raise CpoException("Argument 'expr' should be a CpoExpr or a list of CpoExpr")
+                raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
             return
 
         # Determine calling location
-        if self.source_loc:
-            loc = self._get_calling_location()
-        else:
-            loc = None
+        loc = self._get_calling_location() if self.source_loc else None
 
         # Check type of expression
         etyp = expr.type
@@ -319,7 +320,7 @@ class CpoModel(object):
             # Not really useful, just to force variable to be in the model
             self.expr_list.append((expr, loc))
         else:
-            raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase.")
+            raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase, not an object of type {}.".format(type(expr)))
 
         # Update last add time
         self.last_add_time = time.time()
@@ -508,13 +509,21 @@ class CpoModel(object):
 
         A starting point specifies a (possibly partial) solution that could be used by CP Optimizer
         to start the search.
+        This starting point is represented by an object of class :class:`~docplex.cp.solution.CpoModelSolution`,
+        with the following restrictions:
+
+         * Only integer and interval variables are taken into account.
+           If present, all other elements are simply ignored.
+         * In integer variable, if the domain is not fixed to a single value, only a single range of values is allowed.
+           If the variable domain is sparse, the range domain_min..domain_max is used.
 
         Starting point is available for CPO solver release greater or equal to 12.7.0.
 
         Args:
             stpoint: Starting point, object of class :class:`~docplex.cp.solution.CpoModelSolution`
         """
-        assert (stpoint is None) or isinstance(stpoint, CpoModelSolution), "Argument 'stpoint' should be None or an object of class CpoModelSolution"
+        assert (stpoint is None) or isinstance(stpoint, CpoModelSolution), \
+            "Argument 'stpoint' should be None or an object of class CpoModelSolution"
         self.starting_point = stpoint
 
 
@@ -528,56 +537,108 @@ class CpoModel(object):
 
 
     def add_kpi(self, expr, name=None):
-        # """ Add a Key Performance Indicator to the model.
-        #
-        # A KPI is an expression whose value is considered as representative of the global solution.
-        #
-        # The KPI expression can be:
-        #
-        #  * an integer model variable,
-        #  * a Python lambda expression that computes the value of the KPI from the solve result given as parameter.
-        #
-        # Example of lambda expression used as KPI:
-        # ::
-        #
-        #     mdl = CpoModel()
-        #     a = integer_var(0, 3)
-        #     b = integer_var(0, 3)
-        #     mdl.add(a < b)
-        #     mdl.add_kpi(lambda res: (res[a] + res[b]) / 2, "Average")
-        #
-        # If the model is solved in a cloud context, these KPIs are associated to the objective value in the
-        # solve details that are sent periodically to the client.
-        #
-        # Args:
-        #     expr:             Model variable to be used as KPI(s).
-        #     name (optional):  Name used to publish this KPI. If absent anf if expression is a variable,
-        #                       the variable name is used.
-        # """
-        assert isinstance(expr, (CpoVariable, types.FunctionType)), "Argument 'expr' should be a model variable or a lambda expression"
+        """ Add a Key Performance Indicator to the model.
+
+        A Key Performance Indicators (KPI) is an expression whose value is considered as representative of the
+        model solution and its quality.
+
+        The KPI expression can be:
+
+         * an integer variable,
+         * a Python lambda expression that computes the value of the KPI from the solve result given as parameter.
+
+        Example of lambda expression used as KPI:
+        ::
+
+            mdl = CpoModel()
+            a = integer_var(0, 3)
+            b = integer_var(0, 3)
+            mdl.add(a < b)
+            mdl.add_kpi(lambda res: (res[a] + res[b]) / 2, "Average")
+
+        If the model is solved in a cloud context, these KPIs are associated to the objective value in the
+        solve details that are sent periodically to the client.
+
+        Args:
+            expr:             Model variable to be used as KPI(s).
+            name (optional):  Name used to publish this KPI.
+                              If absent the expression name is used.
+                              If the expression has no name, an exception is raised.
+        """
+        ver = self.get_usable_format_version()
+        iskexpr = ver is not None and compare_natural(ver, '12.8.9') > 0
+
+        if isinstance(expr, CpoExpr):
+            if iskexpr:
+                assert expr.type != Type_Constraint, "KPI expression can not be a top-level constraint"
+            else:
+                assert expr.type == Type_IntVar, "KPI expression can only be an integer variable."
+        else:
+            assert isinstance(expr, types.FunctionType), "Argument 'expr' should be a model expression or a lambda expression"
         if name is None:
-            if isinstance(expr, CpoVariable):
+            if isinstance(expr, CpoExpr):
                 name = expr.get_name()
-        assert name, "A KPI name is mandatory"
+        assert name, "A KPI name is mandatory, either as expression name, or as a name given explicitly"
         assert not name in self.kpis, "Name '{}' is already used for another KPI.".format(name)
-        self.kpis[name] = expr
+
+        # Get expression location
+        loc = self._get_calling_location() if self.source_loc else None
+
+        self.kpis[name] = (expr, loc)
+
+
+    def remove_kpi(self, kpi):
+        """ Remove a Key Performance Indicator from the model.
+
+        Args:
+            kpi:  KPI expression, or KPI name
+        """
+        # Check if name given
+        if kpi in self.kpis:
+            del self.kpis[kpi]
+        else:
+            # Consider expression has been given
+            for k, xl in self.kpis.items():
+                if xl[0] is kpi:
+                    del self.kpis[k]
+                    break
+
+
+    def remove_all_kpis(self):
+        """ Remove all KPIs from this model.
+        """
+        self.kpis.clear()
 
 
     def get_kpis(self):
-        # """ Returns the dictionary of this model KPIs.
-        #
-        # Returns:
-        #     Ordered dictionary of KPIs. Key is publish name, value is kpi expression.
-        #     Keys are sorted in the order the KPIs have been defined.
-        # """
+        """ Returns the dictionary of this model KPIs.
+
+        Returns:
+            Ordered dictionary of KPIs.
+            Key is publish name, value is kpi as a tuple (expr, loc) where loc is a tuple (source_file, line).
+            Keys are sorted in the order the KPIs have been defined.
+        """
         return self.kpis
+
+
+    def _get_kpi_expressions(self):
+        """ Returns the list of model expressions used in the kpis
+
+        This method returns all the KPI expressions that are model expressions (lambda expressions are ignored).
+        Name of the KPI is absent.
+
+        Returns:
+            List of model expressions used as KPIs.
+            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line).
+        """
+        return [xl for xl in self.kpis.values() if isinstance(xl[0], CpoExpr)]
 
 
     def get_all_expressions(self):
         """ Gets the list of all model expressions
 
         Returns:
-            List of model expressions
+            List of model expressions.
             Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line).
         """
         return self.expr_list
@@ -746,20 +807,34 @@ class CpoModel(object):
         Args:
             ver:  CPO format version
         """
-        self.format_version = ver
+        self.format_version = str(ver)
 
 
     def get_format_version(self):
         """ Gets the version of the CPO format.
 
-        This information is set only when parsing an existing CPO model that contains an explitly a version of the format.
-        It is not set when creating a new model.
-        It can be set explicitely using :meth:`set_format_version` if a specific CPO format is expected.
+        This information is set only when parsing an existing CPO model that contains explicitly a version of the format.
+        It is usually not set when creating a new model.
+        It can be set explicitly using :meth:`set_format_version` if a specific CPO format is expected.
 
         Returns:
             String containing the version of the CPO format. None for default.
         """
         return self.format_version
+
+
+    def get_usable_format_version(self):
+        """ Gets the version of the CPO format, using default if not defined locally
+
+        If not defined explicitly using :meth:`set_format_version`, this method returns the default value
+        set in the configuration file in context.model.version.
+
+        Returns:
+            String containing the version of the CPO format.
+        """
+        if self.format_version:
+            return self.format_version
+        return config.context.model.version
 
 
     def get_source_file(self):
@@ -1373,7 +1448,7 @@ class CpoModel(object):
         # Loop while still in the docplex.cp package
         while frm:
             fname = frm.f_code.co_filename
-            if THIS_FILE_MARKER not in fname:
+            if _THIS_FILE_MARKER not in fname:
                 return (fname, frm.f_lineno)
             frm = frm.f_back
         return None

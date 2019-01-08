@@ -395,7 +395,7 @@ class FznReader(object):
                 pass
             while self._read_constraint():
                 pass
-            self._read_objective();
+            self._read_objective()
         except Exception as e:
             if isinstance(e, FznParserException):
                 raise e

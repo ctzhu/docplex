@@ -117,7 +117,8 @@ class TextModelPrinter(ModelPrinter):
     def __init__(self, comment_start, indent=1,
                  hide_user_names=False,
                  nb_digits_for_floats=3,
-                 encoding=DEFAULT_ENCODING):
+                 encoding=DEFAULT_ENCODING,
+                 sort_variable_names=False):
         ModelPrinter.__init__(self)
         # should be elsewhere
         self.true_infinity = float('inf')
@@ -142,6 +143,8 @@ class TextModelPrinter(ModelPrinter):
         self._indent_level = indent
         self._indent_space = ' ' * indent
         self._indent_map = {1: ' '}
+        
+        self.sort_variable_names = sort_variable_names
 
         # which translate_method to use
         if six.PY2:
@@ -365,6 +368,11 @@ class TextModelPrinter(ModelPrinter):
                          accept_zero=False):
         num2string_fn = num_printer.to_string
         c = 0
+        if self.sort_variable_names:
+            def varname(x):  # use function, since auto tuple unpacking not supported in py3
+                v, _ = x
+                return var_name_map[v._index]
+            expr_iter = sorted(list(expr_iter), key=varname)
         for (v, coeff) in expr_iter:
             curr_token = ''
             if not accept_zero and not coeff:

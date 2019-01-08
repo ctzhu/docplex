@@ -57,8 +57,10 @@ class LoggerToDocloud(DocplexLogger):
             self.docloudlogger.info(msg)
         elif level == logging.WARNING:
             self.docloudlogger.warning(msg)
-        elif level == logging.ERROR:
+        elif level == logging.ERROR or level == logging.CRITICAL:
             self.docloudlogger.error(msg)
+        else:
+            raise ValueError('Supported logging levels are: DEBUG, INFO, WARNING, ERROR, CRITICAL. Provided = %s' % level)
 
 
 class LoggerToFile(DocplexLogger):

@@ -3,7 +3,35 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
+'''Configuration of Mathematical Programming engine.
 
+The :class:`~Context` is the base class to control the behaviour of solve
+engine.
+
+It is not advised to instanciate a Context in your code.
+
+Instead, you should obtain a Context by the following ways:
+
+    * create one using Context.make_default_context()
+    * use the one in your :class:`docplex.mp.model.Model`
+
+``docplex.mp`` configuration files are stored in files named:
+
+    * cplex_config.py
+    * cplex_config_<hostname>.py
+    * docloud_config.py
+
+When obtaining a Context with make_default_context(), the PYTHONPATH is
+searched for the configuration files and read.
+
+Configuration files are evaluated with a `context` object in their
+scope, and you set values from this context::
+
+    context.solver.docloud.url = 'https://your.application.url.ibm.com'
+    context.solver.docloud.key = 'This is an api_key'
+    context.cplex_parameters.emphasis.memory = 1
+    context.cplex_parameters.emphasis.mip = 2
+'''
 import os
 
 from copy import deepcopy
@@ -92,6 +120,18 @@ class open_filename_universal(object):
         return False
 
 
+class InvalidSettingsFileError(Exception):
+    '''The error raised when an error occured when reading a settings file.
+
+    *New in version 2.8*
+    '''
+    def __init__(self, mesg, filename=None, source=None, *args, **kwargs):
+        super(InvalidSettingsFileError, self).__init__(mesg)
+        self.filename = filename
+        self.source = source
+        pass
+
+
 def is_auto_publishing_solve_details(context):
     try:
         auto_publish_details = context.solver.auto_publish.solve_details
@@ -128,14 +168,12 @@ def get_auto_publish_names(context, prop_name, default_name):
 
 
 def auto_publishing_result_output_names(context):
-    '''Return the list of result output names for saving
-    '''
+    # Return the list of result output names for saving
     return get_auto_publish_names(context, 'result_output', 'solution.json')
 
 
 def auto_publising_kpis_table_names(context):
-    '''Return the list of kpi table names for saving
-    '''
+    # Return the list of kpi table names for saving
     return get_auto_publish_names(context, 'kpis_output', 'kpis.csv')
 
 
@@ -374,14 +412,6 @@ class Context(BaseContext):
                 * cplex_config_<hostname>.py
                 * docloud_config.py
 
-        Python files are evaluated with a `context` object in the current
-        scope, and you set values from this context::
-
-            context.solver.docloud.url = 'http://testing.blabla.ibm.com'
-            context.solver.docloud.key = 'This is an api_key'
-            context.cplex_parameters.emphasis.memory = 1
-            context.cplex_parameters.emphasis.mip = 2
-
         Args:
             file_list: The list of config files to read.
             kwargs: context parameters to override. See :func:`docplex.mp.context.Context.update`
@@ -551,16 +581,12 @@ class Context(BaseContext):
                 * cplex_config_<hostname>.py
                 * docloud_config.py
 
-        Python files are evaluated with a `context` object in the current
-        scope, and you set values from this context::
-
-            context.solver.docloud.url = 'http://testing.blabla.ibm.com'
-            context.solver.docloud.key = 'This is an api_key'
-            context.cplex_parameters.emphasis.memory = 1
-            context.cplex_parameters.emphasis.mip = 2
-
         Args:
             file_list: The list of config files to read.
+
+        Raises:
+            InvalidSettingsFileError: If an error occurs while reading a config
+                file. *(Since version 2.8)*
         """
         if file_list is None:
             file_list = []
@@ -600,11 +626,15 @@ class Context(BaseContext):
         #
         # Args:
         #    filename (str): The name of the file to evaluate.
-        if os.path.isfile(filename):
-            with open_universal_newline(filename, 'r') as f:
-                # This is so that there is a context in the scope of the exec 
-                context = self
-                exec(f.read())
+        try:
+            if os.path.isfile(filename):
+                with open_universal_newline(filename, 'r') as f:
+                    # This is so that there is a context in the scope of the exec 
+                    context = self
+                    exec(f.read())
+        except Exception as exc:
+            raise InvalidSettingsFileError('Error occured while reading file: %s' % filename,
+                                           filename=filename, source=exc)
         return self
 
 

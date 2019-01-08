@@ -37,7 +37,7 @@ The different methods that can be called on a CpoSolver object are:
  * :meth:`propagate` calls the propagation that communicates the domain reduction of a decision variable to
    all of the constraints that are stated over this variable.
 
-Except :meth:`solve`, these functions are only available with a local solver with release greater or equal to 12.7.0.
+Except :meth:`solve`, these functions are only available with a local solver with release greater or equal to 12.7.0.0
 When a method is not available, an exception *CpoNotSupportedException* is raised.
 
 If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
@@ -114,6 +114,7 @@ class CpoSolverAgent(object):
         self.last_json_result = None     # Last result
         self.log_data = []               # Log data (list of strings)
         self.rename_map = None           # Map of renamed variables. Key is new name, value is original name
+        self.format_version = None       # Version of the generated CPO
         self.process_infos = CpoProcessInfos()
 
         # Initialize log
@@ -254,6 +255,7 @@ class CpoSolverAgent(object):
         cplr = CpoCompiler(self.model, params=self.params, context=self.context.get_root())
         cpostr = cplr.get_as_string()
         self.expr_map = cplr.get_expr_map()
+        self.format_version = cplr.format_version
         self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
         self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
 
@@ -823,9 +825,10 @@ class CpoSolver(object):
     def _solve_with_start_next(self):
         """ Solve the model using a start/next loop instead of standard solve.
 
-        Raise:
+        Return:
             Last model solution
         """
+        # Loop on all solutions
         last_sol = None
         while True:
             # Search for next solution
@@ -835,11 +838,16 @@ class CpoSolver(object):
             if msol:
                 last_sol = msol
             else:
-                if last_sol is None:
-                    return msol
-                # Merge last valid solution with last solve infos
-                last_sol.solver_infos = msol.solver_infos
-                return last_sol
+                break
+
+        # Process end of search
+        if last_sol is None:
+            last_sol = msol
+        else:
+            # Merge last valid solution with last solve infos
+            last_sol.solver_infos = msol.solver_infos
+        self.end_search()
+        return last_sol
 
 
     def _check_status(self, ests):

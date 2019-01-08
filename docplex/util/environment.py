@@ -439,6 +439,17 @@ class Environment(object):
         '''
         return None
 
+    def get_parameters(self):
+        ''' Returns a dict containing all parameters of the program.
+
+        On DOcplexcloud, this method returns the job parameters.
+        On local solver, this method returns ``os.environ``.
+
+        Returns:
+            The job parameters
+        '''
+        return None
+
     def get_parameter(self, name):
         ''' Returns a parameter of the program.
 
@@ -647,6 +658,9 @@ class LocalEnvironment(Environment):
     def get_parameter(self, name):
         return os.environ.get(name, None)
 
+    def get_parameters(self):
+        return os.environ
+
     def set_output_attachment(self, name, filename):
         # check that name leads to a file in cwd
         attachment_abs_path = os.path.dirname(os.path.abspath(name))
@@ -728,6 +742,10 @@ class WorkerEnvironment(Environment):
 
     def get_parameter(self, name):
         return self.solve_hook.get_parameter_value(name)
+
+    def get_parameters(self, ):
+        # This is a typo in _DockerSolveHook, this should be "parameters"
+        return self.solve_hook.parameter
 
     def publish_solve_details(self, details):
         super(WorkerEnvironment, self).publish_solve_details(details)

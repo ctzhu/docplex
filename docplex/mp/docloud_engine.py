@@ -11,6 +11,8 @@ import os
 from six import iteritems
 import tempfile
 
+import warnings
+
 from docplex.mp.engine import IndexerEngine
 try:
     # import DOcloudConnector only if JobClient is available
@@ -208,6 +210,8 @@ class DOcloudEngine(IndexerEngine):
     def __init__(self, mdl, exchange_format=None, **kwargs):
         IndexerEngine.__init__(self)
 
+        warnings.warn('Solve using \'docloud\' agent is deprecated. Consider submitting your model to DOcplexcloud. See https://ibm.biz/BdYhhK', DeprecationWarning)
+
         docloud_context = kwargs.get('docloud_context')
         # --- log output can be overridden at solve time, so use te one from the context, not the model's
         actual_log_output = kwargs.get('log_output') or mdl.log_output
@@ -229,6 +233,7 @@ class DOcloudEngine(IndexerEngine):
         # noinspection PyPep8
         self.debug_dump = docloud_context.debug_dump
         self.debug_dump_dir = docloud_context.debug_dump_dir
+
 
     def _new_printer(self, ctx):
         return self._printer

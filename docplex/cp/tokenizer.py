@@ -39,7 +39,7 @@ class Token(object):
         Returns:
             Expanded string value
         """
-        return self.value if self.type != TOKEN_TYPE_STRING else to_internal_string(self.value)
+        return self.value if self.type != TOKEN_TYPE_STRING else to_internal_string(self.value[1:-1])
 
     def __str__(self):
         """ Build a string representing this token

@@ -20,14 +20,15 @@ class ModelPrettyPrinter(TextModelPrinter):
 
     indented = ' ' * 2
 
-    def __init__(self, nb_digits=6):
+    def __init__(self, nb_digits=6, sort_variable_names=False):
         # comment line is // as in OPL
         # do NOT forget about user names
         # no encoding is printed
         TextModelPrinter.__init__(self, indent=2, comment_start='//',
                                   nb_digits_for_floats=nb_digits,
                                   hide_user_names=False,
-                                  encoding=None)
+                                  encoding=None,
+                                  sort_variable_names=sort_variable_names)
 
     def get_format(self):
         from docplex.mp.format import OPL_format

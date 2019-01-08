@@ -24,7 +24,10 @@ import math
 ###############################################################################
 
 # Minimum CPO format version number
-MIN_CPO_VERSION_NUMBER = "12.6.3.0"
+MIN_CPO_VERSION_NUMBER = "12.6.0.0"
+
+# Maximum CPO format version number
+MAX_CPO_VERSION_NUMBER = "12.8.0.0"
 
 # Map of all operators. Key is operator, value is list of corresponding operation descriptors
 _ALL_OPERATORS = {}
@@ -111,7 +114,7 @@ class CpoParser(object):
         # Do not store location information (would store parser instead of real lines)
         self.model.source_loc = False
 
-        # TODO: parse and include source information
+        # TODO: parse and include source information ?
 
 
     def get_model(self):
@@ -132,7 +135,7 @@ class CpoParser(object):
             Model result of the parsing, object of class :class:`~docplex.cp.model.CpoModel`
         Raises:
             CpoParserException: Parsing exception
-            CpoVersionMismatchException: Read CPO format is under MIN_CPO_VERSION_NUMBER
+            CpoVersionMismatchException: Read CPO format is not in [MIN_CPO_VERSION_NUMBER .. MAX_CPO_VERSION_NUMBER]
         """
         # Store file name if first file
         self.source_file = cfile
@@ -587,6 +590,8 @@ class CpoParser(object):
             self._read_section_search()
         elif name == "startingPoint":
             self._read_section_starting_point()
+        elif name == "KPIs":
+            self._read_section_kpis()
         else:
             self._raise_exception("Unknown section '" + name + "'")
 
@@ -615,11 +620,14 @@ class CpoParser(object):
         while (tok is not TOKEN_EOF) and (tok.value != '}'):
             if self.token.value == "version":
                 self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-                ver = self._next_token()
-                self.model.set_format_version(ver.get_string())
-                # if ver < MIN_CPO_VERSION_NUMBER:
-                #     raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
-                #                                                .format(ver, MIN_CPO_VERSION_NUMBER))
+                ver = self._next_token().get_string()
+                self.model.set_format_version(ver)
+                if ver < MIN_CPO_VERSION_NUMBER:
+                    raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
+                                                               .format(ver, MIN_CPO_VERSION_NUMBER))
+                if ver > MAX_CPO_VERSION_NUMBER:
+                    raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
+                                                               .format(ver, MAX_CPO_VERSION_NUMBER))
                 self._check_token(self._next_token(), TOKEN_PARENT_CLOSE)
             tok = self._next_token()
 
@@ -695,6 +703,35 @@ class CpoParser(object):
 
         # Add starting point to the model
         self.model.set_starting_point(sp)
+
+
+    def _read_section_kpis(self):
+        """ Read a KPI section
+        """
+        # Check that format version is appropriate
+        fver = self.model.get_format_version()
+        if fver is not None and compare_natural(fver, '12.9') < 0:
+            raise CpoUnsupportedFormatVersionException("Section KPIs is not supported in format version {}".format(fver))
+
+        # Read statements up to end of section
+        tok = self._next_token()
+        while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
+            # Get KPI name
+            kname = self._check_token_string(tok)
+            if self._next_token() is TOKEN_SEMICOLON:
+                # Verify KPI name exists as an expression
+                expr = self.expr_dict.get(kname)
+                if expr is None:
+                    self._raise_exception("There is no expression named '{}' in this model".format(kname))
+            else:
+                # Read expression
+                self._check_token(self.token, TOKEN_ASSIGN)
+                self._next_token()
+                expr = self._read_expression()
+                self._check_token(self.token, TOKEN_SEMICOLON)
+            tok = self._next_token()
+            # Add KPI
+            self.model.add_kpi(expr, kname)
 
 
     def _check_token(self, tok, etok):

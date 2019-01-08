@@ -20,9 +20,9 @@ from docplex.mp.utils import *
 from docplex.mp.kpi import KPI
 from docplex.mp.solution import SolveSolution
 
-from itertools import product
+from itertools import product, islice
 
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict
 
 
 
@@ -402,7 +402,8 @@ class ModelFactory(_AbstractModelFactory):
         if not all_key_tuples:
             self.fatal('multidict has no keys to index the variables')
 
-        ctn = self._new_var_container(vartype, key_list=all_key_tuples, lb=lb, ub=ub, name=name)
+        # always pass a sequence of sequences
+        ctn = self._new_var_container(vartype, key_list=fixed_keys, lb=lb, ub=ub, name=name)
         cube_vars = self.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
 
         _dict_type = OrderedDict if ordered else dict
@@ -872,11 +873,11 @@ class ModelFactory(_AbstractModelFactory):
 
 
 class _VariableContainer(object):
-    def __init__(self, vartype, key_seq, lb, ub, name):
+    def __init__(self, vartype, keys_seq, lb, ub, name):
         self._index = 0
         self._index_offset = 0
         self._vartype = vartype
-        self._keys = key_seq
+        self._keyss = keys_seq
         self._lb = lb
         self._ub = ub
         self._name = name
@@ -887,15 +888,15 @@ class _VariableContainer(object):
         return self._index
 
     def copy(self, target_model):
-        copied_ctn = self.__class__(self.vartype, self._keys, self.lb, self.ub, self._name)
+        copied_ctn = self.__class__(self.vartype, self._keyss, self.lb, self.ub, self._name)
         return copied_ctn
 
     def copy_relaxed(self, target_model):
-        copied_ctn = self.__class__(target_model.continuous_vartype, self._keys, self.lb, self.ub, self._name)
+        copied_ctn = self.__class__(target_model.continuous_vartype, self._keyss, self.lb, self.ub, self._name)
         return copied_ctn
 
     def keys(self):
-        return self._keys
+        return self._keyss
 
     @property
     def vartype(self):
@@ -903,7 +904,7 @@ class _VariableContainer(object):
 
     @property
     def nb_dimensions(self):
-        return len(self._keys)
+        return len(self._keyss)
 
     @property
     def namer(self):
@@ -926,7 +927,13 @@ class _VariableContainer(object):
         :return: A string.
         """
         return self._lazy_compute_name_string()
-        
+
+    def iter_keys(self):
+        if 1 == self.nb_dimensions:
+            return iter(self._keyss[0])
+        else:
+            return product(*self._keyss)
+
     def _lazy_compute_name_string(self):
         if self._name_str is not None:
             return self._name_str
@@ -948,14 +955,14 @@ class _VariableContainer(object):
             else:
                 # try a function
                 from os.path import commonprefix
+                namefn = raw_name
                 try:
-                    if 1 == self.nb_dimensions:
-                        all_names = [raw_name(k) for ks in self._keys for k in ks]
-                    else:
-                        all_names = [raw_name(k) for k in self._keys]
+                    all_names = [namefn(k) for k in self.iter_keys()]
                     s_name = commonprefix(all_names)
+
                 except TypeError:
                     s_name = ''
+
             self._name_str = s_name
             return s_name
 
@@ -964,20 +971,20 @@ class _VariableContainer(object):
         # containers store expanded keys (as tuples).
         dvar_index = dvar.get_index()
         relative_offset = dvar_index - self._index_offset
-        try:
-            return self._keys[relative_offset]
-        except IndexError:
-            return None
-
-    def size(self, dim_index):
-        return len(self._keys[dim_index]) if dim_index < self.nb_dimensions else 0
+        if self.nb_dimensions == 1:
+            try:
+                return self._keyss[0][relative_offset]
+            except IndexError:
+                return None
+        else:
+            return next(islice(product(*self._keyss), relative_offset, None), None)
 
     def shape(self):
-        return tuple(len(k) for k in self._keys)
+        return tuple(len(k) for k in self._keyss)
 
     @property
     def dimension_string(self):
-        dim_string = "".join(["[%d]" % self.size(d) for d in range(self.nb_dimensions)])
+        dim_string = "".join(["[%d]" % s for s in self.shape()])
         return dim_string
 
     def to_string(self):

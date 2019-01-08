@@ -87,7 +87,7 @@ class CpoSolverListener(object):
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
             sres:   Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`
         """
-        self.solution_found(solver, sres)
+        pass
 
 
     def solution_found(self, solver, msol):
@@ -99,7 +99,7 @@ class CpoSolverListener(object):
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
             msol:   Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`
         """
-        pass
+        self.solution_found(solver, msol)
 
 
     def new_log_data(self, solver, data):
@@ -113,12 +113,67 @@ class CpoSolverListener(object):
 
 
 ###############################################################################
+## Solver listenet that just log events.
+###############################################################################
+
+class LogSolverListener(CpoSolverListener):
+    """ Solve listener that just log listener events.
+    """
+
+    def __init__(self, prefix=""):
+        super(LogSolverListener, self).__init__()
+        self.prefix = prefix
+
+
+    def solver_created(self, solver):
+        """ Notify the listener that the solver object has been created.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        print(str(self.prefix) + "Solver created")
+
+
+    def start_solve(self, solver):
+        """ Notify that the solve is started.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        print(str(self.prefix) + "Solve started")
+
+
+    def end_solve(self, solver):
+        """ Notify that the solve is ended.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        print(str(self.prefix) + "Solve ended")
+
+
+    def result_found(self, solver, sres):
+        """ Signal that a result has been found.
+
+        This method is called every time a result is provided by the solver. The result, in particular the last one,
+        may not contain any solution. This should be checked calling method sres.is_solution().
+
+        This method replaces deprecated method solution_found() that is confusing as result may possibly
+        not contain a solution to the model.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            sres:   Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`
+        """
+        print(str(self.prefix) + "Result found")
+
+
+###############################################################################
 ## Implementation of a solve listener that stops search when no new solution
 ## is given during a given amount of time
 ###############################################################################
 
 from threading import Condition
-
 
 class AutoStopListener(CpoSolverListener):
     """ Solver listener that aborts a search when a predefined criteria is reached.

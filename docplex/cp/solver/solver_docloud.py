@@ -15,6 +15,7 @@ from docplex.cp.solver.docloud_client import JobClient
 from docplex.cp.utils import CpoException, is_number
 import docplex.cp.solver.solver as solver
 import time
+import warnings
 
 
 ###############################################################################
@@ -43,6 +44,9 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         Raises:
             CpoException if jar file does not exists
         """
+        warnings.warn(
+            'Solve using \'docloud\' agent is deprecated. Consider submitting your model to DOcplexcloud. See https://ibm.biz/BdYhhK',
+            DeprecationWarning)
         if (context.key is None) or (' ' in context.key):
             raise CpoException("Your DOcplexcloud key has not been set")
         super(CpoSolverDocloud, self).__init__(solver, params, context)

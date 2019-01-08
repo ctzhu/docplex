@@ -82,9 +82,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         """ Create a new solver that solves locally with CP Optimizer Interactive.
 
         Args:
-            solver:   Parent solver
-            params:   Solving parameters
-            context:  Proxy solver context
+            solver:  Parent solver
+            params:  Solving parameters
+            context: Solver context
         Raises:
             CpoException if proxy executable does not exists
         """
@@ -127,6 +127,12 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Convert model into CPO format
         cpostr = self._get_cpo_model_string()
+
+        # Check solver version if any
+        sver = self.version_info.get('SolverVersion')
+        mver = self.format_version
+        if sver and mver and compare_natural(mver, sver) > 0:
+            raise LocalSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
 
         # Encode model
         stime = time.time()
@@ -505,7 +511,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
 
 ###############################################################################
-##  Public classes
+##  Public functions
 ###############################################################################
 
 from docplex.cp.model import CpoModel

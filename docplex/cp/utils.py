@@ -1312,9 +1312,8 @@ if IS_NUMPY_AVAILABLE:
         Returns:
             True if value is an array (list or tuple)
         """
-        if isinstance(val, (list, tuple)):
-            return True
-        return isinstance(val, numpy.ndarray) and val.shape
+        return isinstance(val, (list, tuple)) or \
+               (isinstance(val, numpy.ndarray) and val.shape)
 
 else:
 
@@ -1495,7 +1494,7 @@ def to_printable_string(id):
 
 
 def to_internal_string(strg):
-    """ Convert string (with enclosing quotes) into internal string (interpret escape sequences)
+    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences)
 
     Args:
         strg: String to convert
@@ -1503,8 +1502,31 @@ def to_internal_string(strg):
         Raw string corresponding to source
     """
     res = []
-    i = 1
-    slen = len(strg) - 1
+    beg = 0,
+    end = len(strg)
+    while beg < end:
+        c = strg[beg]
+        if c == '\\':
+            beg += 1
+            c = _FROM_SPECIAL_CHARS.get(strg[beg], None)
+            if c is None:
+                raise SyntaxError("Unknown special character '\\" + strg[beg] + "'")
+        res.append(c)
+        beg += 1
+    return u''.join(res)
+
+
+def to_internal_string(strg):
+    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences)
+
+    Args:
+        strg: String to convert
+    Returns:
+        Raw string corresponding to source
+    """
+    res = []
+    i = 0
+    slen = len(strg)
     while i < slen:
         c = strg[i]
         if c == '\\':

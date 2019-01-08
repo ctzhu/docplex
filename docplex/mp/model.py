@@ -3132,6 +3132,10 @@ class Model(object):
         self.set_objective(ObjectiveSense.Maximize, expr)
 
     def is_minimize(self):
+        warnings.warn("deprecated", DeprecationWarning)
+        return self.is_minimized()
+
+    def is_minimized(self):
         """ Checks whether the model is a minimization model.
 
         Note:
@@ -3144,6 +3148,10 @@ class Model(object):
         return self._objective_sense is ObjectiveSense.Minimize
 
     def is_maximize(self):
+        warnings.warn("deprecated", DeprecationWarning)
+        return self.is_maximized()
+
+    def is_maximized(self):
         """ Checks whether the model is a maximization model.
 
         Note:
@@ -3734,6 +3742,8 @@ class Model(object):
                             **kwargs):
         """ Performs a lexicographic solve from an ordered collection of goals.
 
+        WILL BE DEPRECATED: Starting with CPLEX engines 12.9, a new api will be available to support multi-objectives.
+
         :param goals: An ordered collection of linear expressions.
 
         :param senses: Either an ordered collection of senses, one sense, or
@@ -3758,6 +3768,7 @@ class Model(object):
             If successful, returns a tuple with all pass solutions, reversed else None.
             The current solution of the model is the first solution in the tuple.
         """
+        warnings.warn("Will be deprecated with CPLEX 12.9 multi-objective support", PendingDeprecationWarning)
         if tolerances is None:
             schemes = generate_constant(_ToleranceScheme(), count_max=None)
         elif is_number(tolerances):
@@ -4651,7 +4662,7 @@ class Model(object):
         return oss.getvalue()
 
 
-    def clone(self, new_name=None):
+    def clone(self, new_name=None, observed_vars = None):
         """ Makes a deep copy of the model, possibly with a new name.
         Decision variables, constraints, and objective are copied.
 
@@ -4662,7 +4673,7 @@ class Model(object):
 
         :rtype: :class:`docplex.mp.model.Model`
         """
-        return self.copy(new_name)
+        return self.copy(copy_name=new_name, observed_vars=observed_vars)
 
     def lp_relaxed_model(self, lp_relax_name=None, ignore_failures=False):
         if self._solves_as_mip():
@@ -4673,7 +4684,7 @@ class Model(object):
             return self.clone()
 
 
-    def copy(self, copy_name=None, removed_cts=None, lp_relax=False):
+    def copy(self, copy_name=None, removed_cts=None, lp_relax=False, observed_vars = None):
         def lp_relax_fail(msg, item):
             self.fatal("LP relaxation cannot handle {0}, found: {1!s}", msg, item)
 
@@ -4692,6 +4703,7 @@ class Model(object):
 
         # clone variables
         var_mapping = {}
+        ret_observed_vars = []
         continuous = self.continuous_vartype
         for v in self.iter_variables():
             if not v.is_generated():
@@ -4701,6 +4713,11 @@ class Model(object):
                 if var_ctn:
                     copied_var._container = ctn_map.get(var_ctn)
                 var_mapping[v] = copied_var
+                if observed_vars is not None:
+                    for o in observed_vars:
+                        if v is o:
+                            ret_observed_vars.append(v)
+
 
         # clone PWL functions and add them to var_mapping
         for pwl_func in self.iter_pwl_functions():
@@ -4764,6 +4781,9 @@ class Model(object):
                 if newp:
                     newp.set(p.value)
 
+
+        if observed_vars is not None:
+            return copy_model, ret_observed_vars
 
         return copy_model
 

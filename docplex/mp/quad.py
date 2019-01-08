@@ -27,7 +27,6 @@ class VarPair(object):
         if v2 is None:
             self.first = v1
             self.second = v1
-            self._cached_hash = hash(v1)
         else:
             if _compare_vars(v1, v2) <= 0:
                 self.first = v1
@@ -35,7 +34,7 @@ class VarPair(object):
             else:
                 self.first = v2
                 self.second = v1
-            self._cached_hash = self._hash_pair()
+        self._cached_hash = self._hash_pair()
 
     def is_square(self):
         return self.first is self.second
@@ -46,8 +45,8 @@ class VarPair(object):
         return isinstance(other, VarPair) and (self.first is other.first) and (self.second is other.second)
 
     def _hash_pair(self):
-        f = id(self.first)
-        s = id(self.second)
+        f = hash(self.first)
+        s = hash(self.second)
         # cantor encoding. must cast to int() for py3
         self_hash = int(((f + s) * (s + f + 1) / 2) + s)
         if self_hash == -1:

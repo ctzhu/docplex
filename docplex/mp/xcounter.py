@@ -13,10 +13,37 @@ from six import iteritems
 class ExprCounter(Counter):
     """
     A subclass of Counter which does not require a dictionary to be updated
-    Can be updated from an item (assumed to be a key)
-    or from a key and a value
+    Can be updated from a key item and a value
     SEE how to remember the order in which objects are added.
     """
+    __slots__ = ()
+
+    def __init__(self, e=None):
+        dict.__init__(self)
+        if e:
+            if isinstance(e, dict):
+                dict.update(self, e)
+
+            elif isinstance(e, list):
+                dict_setitem = dict.__setitem__
+                keys = [k[0] for k in e]
+                injective = len(keys) == len(set(keys))
+                try:
+                    if injective:
+                        for k, v in e:
+                            dict_setitem(self, k, v)
+                    else:
+                        for item, value in e:
+                            self.update_from_item_value(item, value)
+                except (ValueError, TypeError):
+                    if injective:
+                        for item in e:
+                            dict_setitem(self, item, 1)
+                    else:
+                        for item in e:
+                            self.update_from_item_value(item)
+            else:
+                raise TypeError('unexpected counter arg: {0!r}'.format(e))  # pragma: no cover
 
     def update_from_item_value(self, item, value=1, _dict_get=dict.get, _dict_setitem=dict.__setitem__):
         """
@@ -35,21 +62,17 @@ class ExprCounter(Counter):
             else:
                 _dict_setitem(self, item, value)
 
-    def normalize(self, _dict_get=dict.get):
+    def copy(self):
+        """ returns a copy of the ordered dict.
         """
-        Removes all entries with zero value
-        :return:
-    """
-        doomed_keys = [k for k in self if _dict_get(self, k) is 0]
-        for dk in doomed_keys:
-            del self[dk]
-        return self
+        return ExprCounter(self)
 
 
 class FastOrderedDict(dict):
     """ A subclass of dict that keeps key ordering.
 
     """
+    __slots__ = ('_key_seq',)
 
     def __init__(self, init_val=None):
         """
@@ -66,25 +89,19 @@ class FastOrderedDict(dict):
             self._key_seq = init_val.keys()
             dict.update(self, init_val)
         elif isinstance(init_val, dict):
-            len_initial = len(init_val)
-            # ok for dicts of size 1
-            if len_initial > 1:
-                # we lose compatibility with other ordered dict types this way
-                raise TypeError('undefined order, cannot get items from dict')
-            elif len_initial == 0:
-                pass
-            else:
-                # len is 1
-                self._update_from_key_values([(k, init_val[k]) for k in init_val])
+            self._key_seq.extend(init_val.keys())
+            for k in init_val:
+                dict.__setitem__(self, k, init_val[k])
         else:
-            # init_val is assumed to be a list of (key, value) tuples
-            key_list = [kv[0] for kv in init_val]
-            if len(set(key_list)) == len(key_list):
-                for k, v in init_val:
-                    dict.__setitem__(self, k, v)
-                self._key_seq = key_list
-            else:
-                self._update_from_key_values(init_val)
+            init_list = list(init_val)
+            if init_list:
+                if isinstance(init_list[0], tuple):
+                    # init_val is assumed to be a list of (key, value) tuples
+                    self._update_from_key_values(init_val)
+                else:
+                    keys = init_val
+                    self._update_from_key_values([(k, 1) for k in keys])
+
 
     def __delitem__(self, key):
         self.remove(key)
@@ -136,6 +153,8 @@ class FastOrderedDict(dict):
             self._key_seq.append(key)
         dict_setitem(self, key, val)
 
+
+
     __str__ = __repr__
 
     def __deepcopy__(self, memo):
@@ -174,11 +193,7 @@ class FastOrderedDict(dict):
 
         def generate_items(od):
             keyseq = od._key_seq
-            nb_keys = len(keyseq)
-            k = 0
-            while k < nb_keys:
-                key = keyseq[k]
-                k += 1
+            for key in keyseq:
                 yield (key, self[key])
 
         return generate_items(self)
@@ -220,31 +235,13 @@ class FastOrderedDict(dict):
         else:
             self._update_from_key_values(from_arg)
 
-    def update_from_item_value(self, item, value=1,
-                               _dict_get=dict.get, dict_set=dict.__setitem__,
-                               fastdict_set=__setitem__):
-        """
-        This differs from standard Counter when a dict instance is required.
-        :param item: the key to be updated
-        :param value: the associated value
-        :return:
-        """
-        if value:
-            old_value = _dict_get(self, item, 0)
-            if old_value:
-                new_value = old_value + value
-                if 0 != new_value:
-                    dict_set(self, item, new_value)
-                else:
-                    del self[item]
-            else:
-                # we are sure item is not already present, it must be added to the sequence...
-                fastdict_set(self, item, value)
-
-
     def _update_from_key_values(self, kv_seq):
-        for key, val in kv_seq:
-            self[key] = val
+        try:
+            for key, val in kv_seq:
+                self[key] = val
+        except (TypeError, ValueError):
+            for key in kv_seq:
+                self[key] = 1
 
     def _index_is(self, key):
         # returns the index of key in the seqeunce without calling ==, but "is"
@@ -274,16 +271,36 @@ class FastOrderedDict(dict):
         """
         self._key_seq.sort(*args, **kwargs)
 
-
     def __reduce__(self):
         'Return state information for pickling'
-        items = [[k, self[k]] for k in self]
-        inst_dict = vars(self).copy()
-        for k in vars(OrderedDict()):
-            inst_dict.pop(k, None)
-        if inst_dict:
-            return (self.__class__, (items,), inst_dict)
+        items = [(k, self[k]) for k in self]
+        # inst_dict = vars(self).copy()
+        # for k in vars(OrderedDict()):
+        #     inst_dict.pop(k, None)
+        # if inst_dict:
+        #     return (self.__class__, (items,), inst_dict)
         return self.__class__, (items,)
+
+    def update_from_item_value(self, item, value=1,
+                               _dict_get=dict.get, dict_set=dict.__setitem__,
+                               fastdict_set=__setitem__):
+        """
+        This differs from standard Counter when a dict instance is required.
+        :param item: the key to be updated
+        :param value: the associated value
+        :return:
+        """
+        if value:
+            old_value = _dict_get(self, item, 0)
+            if old_value:
+                new_value = old_value + value
+                if 0 != new_value:
+                    dict_set(self, item, new_value)
+                else:
+                    del self[item]
+            else:
+                # we are sure item is not already present, it must be added to the sequence...
+                fastdict_set(self, item, value)
 
 
 class FastOrderedCounter(FastOrderedDict):
@@ -292,6 +309,7 @@ class FastOrderedCounter(FastOrderedDict):
     Can be updated from an item (assumed to be a key)
     or from a key and a value
     """
+    __slots__ = ()
 
     def __init__(self, e=None):
         dict.__init__(self)
@@ -307,19 +325,11 @@ class FastOrderedCounter(FastOrderedDict):
             try:
                 for item, value in e:
                     self.update_from_item_value(item, value)
-            except ValueError:
+            except (ValueError, TypeError):
                 for item in e:
-                    self.update_from_item(item)
+                    self.update_from_item_value(item)
         else:
             raise TypeError
-
-    def update_from_item(self, item, _dict_get=FastOrderedDict.get):
-        """
-        Adds one item occurence
-        :param item:
-        :return:
-        """
-        self[item] = _dict_get(self, item, 0) + 1
 
     def update_from_sequence(self, items):
         """  Updates with a sequence.
@@ -328,9 +338,11 @@ class FastOrderedCounter(FastOrderedDict):
         :return:
         """
         for item in items:
-            self.update_from_item(item)
+            self.update_from_item_value(item)
 
-    def update_from_item_value(self, item, value=1, _dict_get=dict.get):
+    def update_from_item_value(self, item, value=1,
+                               _dict_get=dict.get, dict_set=dict.__setitem__,
+                               fastdict_set=FastOrderedDict.__setitem__):
         """
         This differs from standard Counter when a dict instance is required.
         :param item: the key to be updated
@@ -338,11 +350,16 @@ class FastOrderedCounter(FastOrderedDict):
         :return:
         """
         if value:
-            new_value = _dict_get(self, item, 0) + value
-            if 0 != new_value:
-                FastOrderedDict.__setitem__(self, item, new_value)
+            old_value = _dict_get(self, item, 0)
+            if old_value:
+                new_value = old_value + value
+                if 0 != new_value:
+                    dict_set(self, item, new_value)
+                else:
+                    del self[item]
             else:
-                del self[item]
+                # we are sure item is not already present, it must be added to the sequence...
+                fastdict_set(self, item, value)
 
     def update_from_scaled_dict(self, other_dict, factor, _dict_get=dict.get):
         """
@@ -360,7 +377,6 @@ class FastOrderedCounter(FastOrderedDict):
             for item, value in iteritems(other_dict):
                 if value:
                     self[item] = _dict_get(self, item, 0) + value * factor
-
 
     def update(self, iterable=None):
         if iterable is not None:
@@ -381,11 +397,5 @@ class FastOrderedCounter(FastOrderedDict):
                 for elem in iterable:
                     self[elem] = self_get(elem, 0) + 1
 
-    def normalize(self, _dict_get=dict.get):
-        """ Removes all entries with zero value.
-
-        """
-        doomed_keys = [k for k in self if _dict_get(self, k) is 0]
-        for dk in doomed_keys:
-            del self[dk]
-        return self
+    def __repr__(self):
+        return 'docplex.mp.xdict.FastOreredCounter()'

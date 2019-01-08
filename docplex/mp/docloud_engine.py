@@ -18,7 +18,7 @@ from docplex.mp.solution import SolveSolution, SolutionMSTPrinter
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.utils import normalize_basename
-from docplex.mp.constants import ConflictStatus
+from docplex.mp.constants import ConflictStatus, SolveAttribute
 from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrapper, VarUbConstraintWrapper
 from docplex.mp.constr import LinearConstraint, QuadraticConstraint, IndicatorConstraint
 
@@ -205,10 +205,10 @@ class DOcloudEngine(IndexerEngine):
         self._connector = DOcloudConnector(docloud_context, log_output=actual_log_output)
         self._exchange_format = exchange_format or docloud_context.exchange_format or _DEFAULT_EXCHANGE_FORMAT
 
-        self._printer = ModelPrinterFactory.new_printer(self._exchange_format, hide_user_names)
+        self._printer = ModelPrinterFactory.new_printer(self._exchange_format, hide_user_names, full_obj=True)
 
         # -- results.
-        self._var_name_encoding = None
+        self._lpname_to_var_map = {}
         self._solve_details = SolveDetails.make_dummy()
 
         # noinspection PyPep8
@@ -239,10 +239,10 @@ class DOcloudEngine(IndexerEngine):
         # for now returns a string. maybe we could ping Docloud and get a dynamic answer.
         return "12.6.3.0"
 
-    def _serialize_parameters(self, parameters, write_level=3, relax_mode=None):
+
+    def _serialize_parameters(self, parameters, write_level=None, relax_mode=None):
         # return a string in PRM format
         # overloaded params are:
-        # - WRITE_LEVEL = 3, avoid zero values
         # - THREADS = 1, if deterministic, else not mentioned.
         # the resulting string will contain all non-default parameters,
         # AND those overloaded.
@@ -251,8 +251,9 @@ class DOcloudEngine(IndexerEngine):
         if relax_mode is not None:
             overloaded_params[parameters.feasopt.mode] = relax_mode.value
 
-        # WRITE_LEVEL = 3
-        overloaded_params[parameters.output.writelevel] = write_level
+        # Do not override write level anymore
+        if write_level is not None:
+            overloaded_params[parameters.output.writelevel] = write_level
 
         if self._connector.run_deterministic:
             # overloaded_params[mdl_parameters.threads] = 1 cf RTC28458
@@ -276,7 +277,8 @@ class DOcloudEngine(IndexerEngine):
 
         printer.printModel(mdl, oss)
 
-        self._var_name_encoding = printer.get_name_to_var_map(mdl)
+        ## lp name to docplex var
+        self._lpname_to_var_map = printer.get_name_to_var_map(mdl)
 
         # DEBUG: dump request file
         if self.debug_dump:
@@ -557,23 +559,20 @@ class DOcloudEngine(IndexerEngine):
 
         return solution
 
-    def _get_var_by_cloud_name(self, mdl, cloud_name, local_encoding):
-        if local_encoding:
-            # LP format induces name changes
-            return local_encoding.get(cloud_name)
-        else:
-            return mdl.get_var_by_name(cloud_name)
+    def _var_by_cloud_index(self, cloud_index, cloud_index_name_map):
+        # 1 go to cloud name first
+        cloud_name = cloud_index_name_map.get(cloud_index)
+        return self._lpname_to_var_map.get(cloud_name) if cloud_name else None
 
     def _make_solution(self, mdl, solution_handler):
         # Store the results of solve in a solution object.
-        local_var_encoding = self._var_name_encoding
         raw_docloud_obj = solution_handler.get_objective()
         docloud_obj = mdl.round_objective_if_discrete(raw_docloud_obj)
         docloud_values_by_idx, docloud_var_rcs = solution_handler.variable_results()
         # CPLEX index to name map
         # for those variables returned by CPLEX.
         # all other are assumed to be zero
-        index_name_map = solution_handler.cplex_index_name_map()
+        cloud_index_name_map = solution_handler.cplex_index_name_map()
         # send an objective, a var-value dict and a string identifying the engine which solved.
         docloud_values_by_vars = {}
         keep_zeros = False
@@ -581,12 +580,12 @@ class DOcloudEngine(IndexerEngine):
         for cpx_idx, val in iteritems(docloud_values_by_idx):
             if val != 0 or keep_zeros:
                 # first get the name from the cloud idx
-                cloud_name = index_name_map[cpx_idx]
-                if cloud_name:
-                    dvar = self._get_var_by_cloud_name(mdl, cloud_name, local_var_encoding)
-                    if dvar:
-                        docloud_values_by_vars[dvar] = val
-                    elif cloud_name.startswith("Rgc"):
+                dvar = self._var_by_cloud_index(cloud_index=cpx_idx, cloud_index_name_map=cloud_index_name_map)
+                if dvar:
+                    docloud_values_by_vars[dvar] = val
+                else:
+                    cloud_name = cloud_index_name_map.get(cpx_idx)
+                    if cloud_name and cloud_name.startswith("Rgc"):
                         # range variables
                         pass
                     else:
@@ -596,8 +595,6 @@ class DOcloudEngine(IndexerEngine):
                         if count_nonmatching_cloud_vars:
                             mdl.info("Cannot find matching variable, cloud name is {0!s}", cloud_name)
                         count_nonmatching_cloud_vars += 1
-                else:
-                    mdl.warning("cannot find variable name from index: {0} - skipped".format(cpx_idx))
 
         sol = SolveSolution.make_engine_solution(model=mdl,
                                                  obj=docloud_obj,
@@ -607,7 +604,11 @@ class DOcloudEngine(IndexerEngine):
 
         # attributes
         docloud_ct_duals, docloud_ct_slacks = solution_handler.constraint_results()
-        sol._store_attribute_results(docloud_var_rcs, docloud_ct_duals, docloud_ct_slacks)
+        var_mapper = lambda idx: self._var_by_cloud_index(idx, cloud_index_name_map)
+        ct_mapper = lambda idx: mdl.get_constraint_by_index(idx)
+        sol.store_reduced_costs(docloud_var_rcs, mapper=var_mapper)
+        sol.store_dual_values(docloud_ct_duals, mapper=ct_mapper)
+        sol.store_slack_values(docloud_ct_slacks, mapper=ct_mapper)
         return sol
 
     def _make_relaxed_solution(self, mdl, solution_handler, infeas_handler):

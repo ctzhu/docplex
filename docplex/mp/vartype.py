@@ -4,10 +4,8 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-import math
-
-from docplex.mp.utils import is_int, is_number
-
+from docplex.mp.utils import is_int
+from docplex.mp.error_handler import docplex_fatal
 
 class VarType(object):
     """VarType()
@@ -24,7 +22,6 @@ class VarType(object):
         self._lb = lb
         self._ub = ub
         self._cpx_typecode = cplex_typecode
-
 
     def get_cplex_typecode(self):
         # INTERNAL
@@ -109,9 +106,6 @@ class VarType(object):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
         return self.accept_value(candidate_value) and (lb <= candidate_value <= ub)
 
-
-
-
     def to_string(self):
         """
         Returns:
@@ -122,14 +116,17 @@ class VarType(object):
     def __str__(self):
         return self.to_string()
 
-    def is_default_domain(self, domain_lb, domain_ub):
+    def is_default_lb(self, domain_lb):
+        return domain_lb == self._lb
+
+    def is_default_ub(self, domain_ub):
         # INTERNAL
-        # returns True if [domain_lb..domain_ub] is identical to the vartype's default domain.
-        return self._lb == domain_lb and self._ub == domain_ub
+        # use equality here: output user data whenever different from default
+        return domain_ub == self._ub
 
     def one_letter_symbol(self):
         # INTERNAL: returns B,I,C
-        raise NotImplementedError  # pragma: no cover
+        return self.get_cplex_typecode()
 
     def __eq__(self, other):
         return type(other) == type(self)
@@ -137,8 +134,8 @@ class VarType(object):
     def __ne__(self, other):
         return type(other) != type(self)
 
-    def hash_vartype(self):
-        return hash(self.one_letter_symbol())
+    def hash_vartype(self):   # pragma: no cover
+        return hash(self.get_cplex_typecode())
 
 
 class BinaryVarType(VarType):
@@ -155,6 +152,22 @@ class BinaryVarType(VarType):
     def compute_lb(self, candidate_lb):
         # INTERNAL
         return 0 if candidate_lb <= 0 else 1
+
+    def resolve_ub(self, candidate_ub):
+        if candidate_ub is None:
+            return 1
+        elif candidate_ub >= 1:
+            return 1
+        else:
+            return 0
+
+    def resolve_lb(self, candidate_ub):
+        if candidate_ub is None:
+            return 0
+        elif candidate_ub <= 0:
+            return 0
+        else:
+            return 1
 
     def compute_ub(self, candidate_ub):
         # INTERNAL
@@ -179,10 +192,7 @@ class BinaryVarType(VarType):
         # """
         return 0 == numeric_value or 1 == numeric_value
 
-    def one_letter_symbol(self):
-        return "B"
-
-    def __hash__(self):
+    def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)
 
 
@@ -199,7 +209,10 @@ class ContinuousVarType(VarType):
         self._minus_infinity = - plus_infinity
 
     def compute_ub(self, candidate_ub):
-        return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
+        if candidate_ub >= self._plus_infinity:
+            return self._plus_infinity
+        else:
+            return candidate_ub
 
     def compute_lb(self, candidate_lb):
         if 0 == candidate_lb:
@@ -207,7 +220,7 @@ class ContinuousVarType(VarType):
         elif candidate_lb <= self._minus_infinity:
             return self._minus_infinity
         else:
-            return float(candidate_lb)
+            return candidate_lb
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -229,10 +242,7 @@ class ContinuousVarType(VarType):
         # """
         return self._minus_infinity <= numeric_value <= self._plus_infinity
 
-    def one_letter_symbol(self):
-        return "C"
-
-    def __hash__(self):
+    def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)
 
 
@@ -247,14 +257,19 @@ class IntegerVarType(VarType):
     def __init__(self, plus_infinity=1e+20):
         VarType.__init__(self, short_name="int", lb=0, ub=plus_infinity, cplex_typecode='I')
         self._plus_infinity = plus_infinity
+        self._minus_infinity = -plus_infinity
 
     def compute_ub(self, candidate_ub):
-        iub = min(candidate_ub, self._plus_infinity)
-        return int(math.floor(iub))
+        if candidate_ub >= self._plus_infinity:
+            return self._plus_infinity
+        else:
+            return candidate_ub
 
     def compute_lb(self, candidate_lb):
-        ilb = max(candidate_lb, -self._plus_infinity)
-        return int(math.ceil(ilb))
+        if candidate_lb <= self._minus_infinity:
+            return self._minus_infinity
+        else:
+            return candidate_lb
 
     def is_discrete(self):
         """  Checks if this is a discrete type.
@@ -277,10 +292,7 @@ class IntegerVarType(VarType):
         # """
         return is_int(numeric_value) or numeric_value == int(numeric_value)
 
-    def one_letter_symbol(self):
-        return "I"
-
-    def __hash__(self):
+    def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)
 
 
@@ -290,6 +302,7 @@ class SemiContinuousVarType(VarType):
             This class models the :index:`semi-continuous` variable type and
             is not meant to be instantiated. 
     """
+
     def __init__(self, plus_infinity=1e+20):
         VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
         self._plus_infinity = plus_infinity
@@ -299,8 +312,13 @@ class SemiContinuousVarType(VarType):
 
     def compute_lb(self, candidate_lb):
         if candidate_lb <= 0:
-            raise ValueError('semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
+            docplex_fatal(
+                'semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
+
+    def is_default_lb(self, domain_lb):
+        # any lb is nondefault
+        return False
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -324,10 +342,60 @@ class SemiContinuousVarType(VarType):
 
     def accept_domain_value(self, candidate_value, lb, ub):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return 0 ==  candidate_value or (lb <= candidate_value <= ub)
+        return 0 == candidate_value or (lb <= candidate_value <= ub)
 
-    def one_letter_symbol(self):
-        return 'S'
+    def __hash__(self):  # pragma: no cover
+        return VarType.hash_vartype(self)
 
-    def __hash__(self):
+
+class SemiIntegerVarType(VarType):
+    """SemiIntegerVarType()
+
+            This class models the :index:`semi-integer` variable type and
+            is not meant to be instantiated.
+    """
+
+    def __init__(self, plus_infinity=1e+20):
+        VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
+        self._plus_infinity = plus_infinity
+
+    def compute_ub(self, candidate_ub):
+        return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
+
+    def compute_lb(self, candidate_lb):
+        if candidate_lb <= 0:
+            docplex_fatal('semi-integer variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
+        return candidate_lb
+
+    def is_default_lb(self, domain_lb):
+        # any lb is nondefault
+        return False
+
+    def is_discrete(self):
+        """ Checks if this is a discrete type.
+
+        Returns:
+            Boolean: False because this type is not a discrete type.
+        """
+        return True
+
+    def accept_value(self, numeric_value):
+        # """ Checks if the value is within the minus infinity to positive infinity range.
+        #
+        # Args:
+        #     numeric_value: The candidate value.
+        #
+        # Returns:
+        #     Boolean: True if the candidate value is a valid floating-point number
+        #     with respect to the model's infinity.
+        # """
+        if 0 == numeric_value:
+            return True
+        return numeric_value >= 0 and (is_int(numeric_value) or numeric_value == int(numeric_value))
+
+    def accept_domain_value(self, candidate_value, lb, ub):
+        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
+        return 0 == candidate_value or (lb <= candidate_value <= ub)
+
+    def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)

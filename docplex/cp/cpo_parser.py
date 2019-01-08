@@ -11,7 +11,7 @@ Parser converting a CPO file to internal model representation.
 
 from docplex.cp.cpo_tokenizer import *
 from docplex.cp.expression import *
-from docplex.cp.expression import _create_operation, _get_cpo_type
+from docplex.cp.expression import _create_operation
 from docplex.cp.function import *
 from docplex.cp.model import CpoModel
 from docplex.cp.catalog import *
@@ -33,9 +33,9 @@ _ALL_OPERATIONS = {}
 
 # Initialization code
 for op in ALL_OPERATIONS:
-    if (op.get_priority() >= 0):
-        _ALL_OPERATORS[op.get_keyword()] = op
-    _ALL_OPERATIONS[op.get_cpo_name()] = op
+    if op.priority >= 0:
+        _ALL_OPERATORS[op.keyword] = op
+    _ALL_OPERATIONS[op.cpo_name] = op
 _ALL_OPERATIONS['alldiff'] = Oper_all_diff
 _ALL_OPERATIONS['allDiff'] = Oper_all_diff
 
@@ -186,7 +186,7 @@ class CpoParser(object):
                 # Read expression
                 self._push_token(tok1)
                 expr = self._read_expression()
-                # print("Expression read in statement: Type: " + str(expr.get_type()) + ", val=" + str(expr))
+                # print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
                 self.model.add(expr)
                 self._check_token_value(self.token, ';')
         except Exception as e:
@@ -249,19 +249,10 @@ class CpoParser(object):
             expr = self._read_expression()
             self._push_token('')
             # Build CPO expression if needed
-            if not(isinstance(expr, CpoExpr)):
-                expr = create_cpo_expr(expr)
+            expr = build_cpo_expr(expr)
             # Add expression to model
             expr.set_name(name)
             self.model._add_named_expr(expr)
-            # in replacement of:
-            # if not expr.has_name():
-            #     expr.set_name(name)
-            #     self.model._add_named_expr(expr, name)
-            # elif expr.is_constraint_or_bool_expr() or name != expr.get_name():
-            #     self.model._add_named_expr(expr, name)
-            # else:
-            #     self.model.add(expr)
         self._check_token_value(self._next_token(), ';')
             
     def _read_int_var(self, name):
@@ -399,7 +390,7 @@ class CpoParser(object):
             tok = self.token
 
             # Reduce stack if possible
-            while (len(stack) > 1) and op.get_priority() >= stack[-2].get_priority():
+            while (len(stack) > 1) and op.priority >= stack[-2].priority:
                 oexpr = stack.pop()
                 oop = stack.pop()
                 stack[-1] = self._create_operation_expression(oop, (stack[-1], oexpr))
@@ -492,12 +483,14 @@ class CpoParser(object):
                 typ = _ARRAY_TYPES.get(tok.value)
                 if typ is None:
                     self._raise_exception("Unknown array type '" + str(tok.value) + "'")
+                # Check empty array
+                if len(expr) == 0:
+                    return CpoValue((), typ)
                 # Compute best type if array not empty
-                if len(expr) > 0:
-                    ct = _get_cpo_type(expr)
-                    if ct.is_kind_of(typ):
-                        typ = ct
-                return CpoValue(expr, typ)
+                res = build_cpo_expr(expr)
+                if not res.type.is_kind_of(typ):
+                    res.type = typ
+                return res
 
             else:
                 # Token is an expression id
@@ -771,7 +764,7 @@ class CpoParser(object):
         # except Exception as e:
         #     lastex = e
         # if lastex is None:
-        #     lastex = Exception("No valid operation found for " + str(lops[0].get_cpo_name()))
+        #     lastex = Exception("No valid operation found for " + str(lops[0].cpo_name))
         # self._raise_exception(str(lastex))
 
         #print("Op={}, largs={}".format(op, args))
@@ -787,7 +780,7 @@ class CpoParser(object):
         try:
             return _create_operation(op, args)
         except Exception:
-            lastex = Exception("No valid operation found for " + str(op.get_cpo_name()))
+            lastex = Exception("No valid operation found for " + str(op.cpo_name))
             self._raise_exception(str(lastex))
 
 

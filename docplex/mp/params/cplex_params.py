@@ -25,7 +25,7 @@ def get_params_from_cplex_version(cpx_version):
         return make_root_params_12620()
     elif cpx_version.startswith("12.6.3."):
         return make_root_params_12630()
-    elif cpx_version.startswith("12.7.0"):
+    elif cpx_version.startswith("12.7."):
         return make_root_params_12700()
     else:
         return _make_default_parameters()

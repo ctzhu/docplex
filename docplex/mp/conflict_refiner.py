@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 
 from collections import namedtuple, Iterable
-from docplex.mp.constants import CplexCtSenseToPython
+from docplex.mp.constants import ComparisonType
+from docplex.mp.context import check_credentials
 import warnings
 
 
@@ -43,7 +44,7 @@ class VarUbConstraintWrapper(object):
 
     def get_constraint(self):
         var_ub = self.get_ub()
-        op = CplexCtSenseToPython.cplex_ctsense_to_python_op('L')
+        op = ComparisonType.cplex_ctsense_to_python_op('L')
         ct = op(self.get_var(), var_ub)
         return ct
 
@@ -79,7 +80,7 @@ class VarLbConstraintWrapper(object):
 
     def get_constraint(self):
         var_lb = self.get_lb()
-        op = CplexCtSenseToPython.cplex_ctsense_to_python_op('G')
+        op = ComparisonType.cplex_ctsense_to_python_op('G')
         ct = op(self.get_var(), var_lb)
         return ct
 
@@ -207,7 +208,7 @@ class ConflictRefiner(object):
 
             have_credentials = False
             if context.solver.docloud:
-                have_credentials, error_message = context.solver.docloud.check_credentials()
+                have_credentials, error_message = check_credentials(context.solver.docloud)
                 if error_message is not None:
                     warnings.warn(error_message, stacklevel=2)
             if forced_docloud:

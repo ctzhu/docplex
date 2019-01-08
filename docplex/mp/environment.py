@@ -17,6 +17,11 @@ class Environment(object):
     """ This class detects and contains information regarding other modules of interest, such as
         whether CPLEX, `numpy`, and `matplotlib` are installed.
     """
+    _default_env = None  # The default env singleton
+
+    """ This class detects and contains information regarding other modules of interest, such as
+        whether CPLEX, `numpy`, and `matplotlib` are installed.
+    """
     def __init__(self, start_auto_configure=True):
         """
         __init__(self)
@@ -79,6 +84,10 @@ class Environment(object):
             Boolean: True if the CPLEX libraries are available.
         """
         return self._found_cplex
+
+
+    def hash_cplex_with_version_min(self, min_version):
+        return self._found_cplex and self._cplex_version >= min_version
 
     @property
     def cplex_version(self):
@@ -227,6 +236,13 @@ class Environment(object):
     def make_new_configured_env():
         # returns a fresh new environment
         return Environment(start_auto_configure=True)
+
+    @staticmethod
+    def get_default_env():
+        if not Environment._default_env:
+            Environment._default_env = Environment.make_new_configured_env()
+        return Environment._default_env
+
 
     # for pickling: recreate a fresh environment at the other end of pickle.
     def __reduce__(self):

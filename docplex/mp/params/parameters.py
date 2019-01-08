@@ -22,6 +22,8 @@ class ParameterGroup(object):
 
     """
 
+    #__slots__ = ('_name', '_parent', '_params', '_subgroups')
+
     def __init__(self, name, parent_group=None):
         self._name = name
         self._parent = parent_group
@@ -163,7 +165,7 @@ class ParameterGroup(object):
             for k in extra_dict:
                 if k in self_dict:
                     # should not happen
-                    print("!! update_self_dict: name collision with: %s" % k)  # pragma : no cover
+                    print("!! update_self_dict: name collision with: %s" % k)  # pragma: no cover
         self_dict.update(extra_dict)
 
     @staticmethod
@@ -288,6 +290,7 @@ class Parameter(object):
     This class is not meant to be instantiated but subclassed.
 
     """
+    __slots__ = ('_parent', '_short_name', '_cpx_name', '_id', '_description', '_default_value', '_current_value')
 
     # noinspection PyProtectedMember
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value):
@@ -405,6 +408,14 @@ class Parameter(object):
         else:
             return self.transform_value(raw_value)
 
+    def __call__(self, *args):
+        if not args:
+            return self._current_value
+        elif len(args) == 1:
+            self.set(args[0])
+        else:
+            docplex_fatal('Call parameter accepts either 0 or 1 argument')
+
     def set(self, new_value):
         """ Changes the value of the parameter to `new_value`.
 
@@ -497,6 +508,8 @@ _BOOLEAN_STATES = {'1': True, 'yes': True, 'true': True, 'on': True,
 
 
 class BoolParameter(Parameter):
+    __slots__ = ()
+
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value):
         Parameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value)
 
@@ -519,6 +532,8 @@ class BoolParameter(Parameter):
 
 
 class StrParameter(Parameter):
+    __slots__ = ()
+
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value):
         Parameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value)
         assert isinstance(default_value, str)
@@ -531,6 +546,10 @@ class StrParameter(Parameter):
 
 
 class IntParameter(Parameter):
+
+    __slots__ = ('_min_value', '_max_value')
+
+
     def accept_value(self, new_value):
         ivalue = int(new_value)
         return is_int(ivalue) and self._is_in_range(ivalue, self._min_value, self._max_value)
@@ -543,6 +562,8 @@ class IntParameter(Parameter):
 
     def _get_max_value(self):
         return self._max_value  # pragma: no cover
+
+
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
                  max_value=None):
@@ -564,6 +585,8 @@ class IntParameter(Parameter):
 
 
 class PositiveIntParameter(IntParameter):
+    __slots__ = ()
+
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, max_value=None):
         IntParameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=0,
                               max_value=max_value)
@@ -575,6 +598,7 @@ class PositiveIntParameter(IntParameter):
 class NumParameter(Parameter):
     """ A numeric parameter can take any floating-point value in the range of `[min,max]` values.
     """
+    __slots__ = ('_min_value', '_max_value')
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
                  max_value=None):

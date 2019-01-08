@@ -103,6 +103,7 @@ class ISolver(object):
         raise NotImplementedError  # pragma: no cover
 
 
+
 # noinspection PyAbstractClass
 class IEngine(ISolver):
     """ interface for all engine facades
@@ -127,7 +128,10 @@ class IEngine(ISolver):
     def create_one_variable(self, vartype, lb, ub, name):
         raise NotImplementedError  # pragma: no cover
 
-    def create_variables(self, keys, vartype, lb, ub, namer):
+    def create_variables(self, keys, vartype, lb, ub, name):
+        raise NotImplementedError  # pragma: no cover
+
+    def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
         raise NotImplementedError  # pragma: no cover
 
     def create_binary_linear_constraint(self, binaryct):
@@ -145,13 +149,19 @@ class IEngine(ISolver):
     def create_quadratic_constraint(self, qct):
         raise NotImplementedError  # pragma: no cover
 
+    def create_pwl_constraint(self, pwl_ct):
+        raise NotImplementedError  # pragma: no cover
+
     def remove_constraint(self, ct):
         raise NotImplementedError  # pragma: no cover
 
     def remove_constraints(self, cts):
         raise NotImplementedError  # pragma: no cover
 
-    def set_objective(self, sense, expr):
+    def set_objective_sense(self, sense):
+        raise NotImplementedError  # pragma: no cover
+
+    def set_objective_expr(self, new_objexpr, old_objexpr):
         raise NotImplementedError  # pragma: no cover
 
     def end(self):
@@ -160,10 +170,10 @@ class IEngine(ISolver):
     def notify_trace_output(self, out):
         raise NotImplementedError  # pragma: no cover
 
-    def set_var_lb(self, var_lbs):
+    def set_var_lb(self, var, lb):
         raise NotImplementedError  # pragma: no cover
 
-    def set_var_ub(self, var_ubs):
+    def set_var_ub(self, var, ub):
         raise NotImplementedError  # pragma: no cover
 
     def rename_var(self, var, new_name):
@@ -172,6 +182,17 @@ class IEngine(ISolver):
     def set_var_type(self, var, new_type):
         raise NotImplementedError  # pragam: no cover
 
+    def update_objective_epxr(self, expr, event, *args):
+        raise NotImplemented  # pragma: no cover
+
+    def update_linear_constraint(self, ct, event, *args):
+        raise NotImplementedError  # pragma: no cover
+
+    def update_quadratic_constraint(self, qct, event, *args):
+        raise NotImplementedError  # pragma: no cover
+
+    def update_indicator_constraint(self, ind, event, *args):
+        raise NotImplementedError  # pragma: no cover
 
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
@@ -182,6 +203,9 @@ class DummyEngine(IEngine):
         return -1  # pragma: no cover
 
     def create_quadratic_constraint(self, qct):
+        return -1  # pragma: no cover
+
+    def create_pwl_constraint(self, pwl_ct):
         return -1  # pragma: no cover
 
     def notify_trace_output(self, out):
@@ -199,13 +223,16 @@ class DummyEngine(IEngine):
     def create_one_variable(self, vartype, lb, ub, name):
         return -1  # pragma: no cover
 
-    def create_variables(self, keys, vartype, lb, ub, namer):
+    def create_variables(self, keys, vartype, lb, ub, name):
         return [-1] * len(keys)  # pragma: no cover
 
-    def set_var_lb(self, var_lbs):
+    def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
+        return [-1] * len(keys)
+
+    def set_var_lb(self, var, lb):
         pass
 
-    def set_var_ub(self, var_ubs):
+    def set_var_ub(self, var, ub):
         pass
 
     def rename_var(self, var, new_name):
@@ -226,7 +253,10 @@ class DummyEngine(IEngine):
     def remove_constraints(self, cts):
         pass  # pragma: no cover
 
-    def set_objective(self, sense, expr):
+    def set_objective_sense(self, sense):
+        pass  # pragma: no cover
+
+    def set_objective_expr(self, new_objexpr, old_objexpr):
         pass  # pragma: no cover
 
     def end(self):
@@ -264,6 +294,19 @@ class DummyEngine(IEngine):
     def clean_before_solve(self):
         pass  # pragma: no cover
 
+    def update_objective(self, expr, event, *args):
+        # nothing to do except for cplex
+        pass  # pragma: no cover
+
+    def update_linear_constraint(self, ct, event, *args):
+        # nothing to do except for cplex
+        pass  # pragma: no cover
+
+    def update_quadratic_constraint(self, qct, event, *args):
+        pass # pragma: no cover
+
+    def update_indicator_constraint(self, ind, event, *args):
+        pass  # pragma: no cover
 
 # noinspection PyAbstractClass,PyUnusedLocal
 class IndexerEngine(DummyEngine):
@@ -290,7 +333,12 @@ class IndexerEngine(DummyEngine):
         self._increment_vars(1)
         return old_count
 
-    def create_variables(self, keys, vartype, lb, ub, namer):
+    def create_variables(self, keys, vartype, lb, ub, name):
+        old_count = self.__var_counter
+        new_count = self._increment_vars(len(keys))
+        return list(range(old_count, new_count))
+
+    def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
         old_count = self.__var_counter
         new_count = self._increment_vars(len(keys))
         return list(range(old_count, new_count))
@@ -317,6 +365,9 @@ class IndexerEngine(DummyEngine):
     def create_quadratic_constraint(self, ind):
         return self._create_one_ct()
 
+    def create_pwl_constraint(self, pwl_ct):
+        return self._create_one_ct()
+
     def get_solve_attributes(self, attr_name, indices):
         # return empty dict
         return {}
@@ -324,10 +375,10 @@ class IndexerEngine(DummyEngine):
     def dump(self, path):
         pass
 
-    def set_objective(self, sense, expr):
+    def set_objective_sense(self, sense):
         pass
 
-    def clear_objective(self, expr):
+    def set_objective_expr(self, new_objexpr, old_objexpr):
         pass
 
     def set_parameter(self, parameter, value):

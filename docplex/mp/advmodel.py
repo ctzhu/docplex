@@ -4,23 +4,27 @@
 # (c) Copyright IBM Corp. 2016
 # --------------------------------------------------------------------------
 
+from six import iteritems
 
 from docplex.mp.model import Model
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.quad import VarPair
-from docplex.mp.utils import is_number, is_iterable, generate_constant
+from docplex.mp.utils import is_number, is_iterable, generate_constant,\
+    is_pandas_dataframe, is_pandas_series, is_numpy_matrix, is_scipy_sparse
+from docplex.mp.constants import ComparisonType
 
 from docplex.mp.compat23 import izip, fast_range
 
 
 class AdvAggregator(ModelAggregator):
-    def __init__(self, linear_factory, quad_factory):
-        ModelAggregator.__init__(self, linear_factory, quad_factory)
+
+    def __init__(self, linear_factory, quad_factory, ordered):
+        ModelAggregator.__init__(self, linear_factory, quad_factory, ordered)
 
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
         if not coefs:
-            return self.zero_expr
+            return self.new_zero_expr()
         elif not is_iterable(coefs, accept_string=False):
             checker.typecheck_num(coefs)
             return coefs * self._sum_vars_all_different(terms)
@@ -30,15 +34,19 @@ class AdvAggregator(ModelAggregator):
             lcc = lcc_type()
             lcc_setitem = lcc_type.__setitem__
             number_validation_fn = checker.get_number_validation_fn()
-            for dvar, coef in izip(terms, coefs):
-                if coef:
-                    safe_coef = number_validation_fn(coef) if number_validation_fn else coef
+            if number_validation_fn:
+                for dvar, coef in izip(terms, coefs):
+                    safe_coef = number_validation_fn(coef)
                     lcc_setitem(lcc, dvar, safe_coef)
+            else:
+                for dvar, coef in izip(terms, coefs):
+                    lcc_setitem(lcc, dvar, coef)
 
             return self._to_expr(qcc=None, lcc=lcc)
 
     def scal_prod_triple(self, left_terms, right_terms, coefs):
         used_coefs = None
+        checker = self._model._checker
 
         if is_iterable(coefs, accept_string=False):
             used_coefs = coefs
@@ -46,18 +54,20 @@ class AdvAggregator(ModelAggregator):
             if coefs:
                 used_coefs = generate_constant(coefs, count_max=None)
             else:
-                return self.zero_expr
+                return self.new_zero_expr()
         else:
             self._model.fatal("scal_prod_triple expects iterable or number as coefficients, got: {0!r}", coefs)
 
         if is_iterable(left_terms):
-            used_left = left_terms
+            used_left = checker.typecheck_var_seq(left_terms)
         else:
+            checker.typecheck_var(left_terms)
             used_left = generate_constant(left_terms, count_max=None)
 
         if is_iterable(right_terms):
-            used_right = right_terms
+            used_right = checker.typecheck_var_seq(right_terms)
         else:
+            checker.typecheck_var(right_terms)
             used_right = generate_constant(right_terms, count_max=None)
 
         if used_coefs is not coefs and used_left is not left_terms and used_right is not right_terms:
@@ -96,14 +106,17 @@ class AdvAggregator(ModelAggregator):
         dcc = self.counter_type
         qcc = dcc()
         number_validation_fn = self._checker.get_number_validation_fn()
-        for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
-            if coef:
+        if number_validation_fn:
+            for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
                 safe_coef = number_validation_fn(coef) if number_validation_fn else coef
                 qcc.update_from_item_value(item=VarPair(lterm, rterm), value=safe_coef)
+        else:
+            for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
+                qcc.update_from_item_value(item=VarPair(lterm, rterm), value=coef)
         return self._to_expr(qcc=qcc)
 
     def _sumsq_vars_all_different(self, dvars):
-        dcc = self.counter_type
+        dcc = self._quad_factory.term_dict_type
         qcc = dcc()
         qcc_setitem = dcc.__setitem__
         for t in dvars:
@@ -117,8 +130,7 @@ class AdvAggregator(ModelAggregator):
         return self._to_expr(qcc=qcc)
 
     def _sum_vars_all_different(self, dvars):
-        lcc = self.counter_type()
-
+        lcc = self._linear_factory.term_dict_type()
         setitem_fn = lcc.__setitem__
 
         for v in dvars:
@@ -149,10 +161,16 @@ class AdvModel(Model):
     This class is a specialized version of the :class:`docplex.mp.model.Model` class with useful non-standard modeling
     functions.
     """
+    _fast_settings = {'keep_ordering': False, 'checker': 'off', 'keep_all_exprs': False}
 
     def __init__(self, name=None, context=None, **kwargs):
+        for k, v in iteritems(self._fast_settings):
+            if k not in kwargs:
+                # force fast settings if not present
+                kwargs[k] = v
+
         Model.__init__(self, name=name, context=context, **kwargs)
-        self._aggregator = AdvAggregator(self._lfactory, self._qfactory)
+        self._aggregator = AdvAggregator(self._lfactory, self._qfactory, ordered=self.keep_ordering)
 
     def sum_vars(self, terms):
         return self._aggregator._sum_vars(terms)
@@ -164,7 +182,6 @@ class AdvModel(Model):
 
         This method is faster than the standard generic summation method due to the fact that it takes only
         variables and does not take expressions as arguments.
-        By default, check for no duplicates will be done. So, best performances may be obtained only when using deployment modes (no checker).
 
         :param terms: A list or an iterator on variables only, with no duplicates.
 
@@ -175,7 +192,7 @@ class AdvModel(Model):
 
         Note:
             To improve performance, the check for duplicates can be turned off by setting
-            `checker='off'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
+            `checker='none'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
             turns off checking everywhere, it should be used with extreme caution.
         """
         var_seq = self._checker.typecheck_var_seq_all_different(terms)
@@ -191,7 +208,6 @@ class AdvModel(Model):
         The variable sequence is a list or an iterator of variables.
 
         This method is faster than the standard summation of squares method due to the fact that it takes only variables and does not take expressions as arguments.
-        By default, check for no duplicates will be done. So, best performances may be obtained only when using deployment modes (no checker).
 
         :param terms: A list or an iterator on variables only, with no duplicates.
 
@@ -202,7 +218,7 @@ class AdvModel(Model):
 
         Note:
             To improve performance, the check for duplicates can be turned off by setting
-            `checker='off'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
+            `checker='none'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
             turns off checking everywhere, it should be used with extreme caution.
         """
         var_seq = self._checker.typecheck_var_seq_all_different(terms)
@@ -216,7 +232,6 @@ class AdvModel(Model):
         The coefficients can be either a list of numbers, an iterator over numbers, or a number.
 
         This method is faster than the standard generic scalar product method due to the fact that it takes only variables and does not take expressions as arguments.
-        By default, check for no duplicates will be done. So, best performances may be obtained only when using deployment modes (no checker).
 
         :param terms: A list or an iterator on variables only, with no duplicates.
         :param coefs: A list or an iterator on numbers, or a number.
@@ -228,7 +243,7 @@ class AdvModel(Model):
 
         Note:
             To improve performance, the check for duplicates can be turned off by setting
-            `checker='off'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
+            `checker='none'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
             turns off checking everywhere, it should be used with extreme caution.
         """
         self._checker.check_ordered_sequence(arg=terms,
@@ -293,7 +308,6 @@ class AdvModel(Model):
         expression in `left_terms` and the i_th expression in `right_terms`
 
         This method is faster than the standard generic scalar quadratic product method due to the fact that it takes only variables and does not take expressions as arguments.
-        By default, check for no duplicates will be done. So, best performances may be obtained only when using deployment modes (no checker).
 
         Example:
             `Model.scal_prod_vars_triple([x, y], [z, t], [2, 3])` returns the expression `2xz + 3yt`.
@@ -318,7 +332,7 @@ class AdvModel(Model):
                 used_coefs = generate_constant(coefs, count_max=None)
                 nb_non_iterables += 1
             else:
-                return self._aggregator.zero_expr
+                return self._aggregator.new_zero_expr()
         else:
             self.fatal("scal_prod_triple expects iterable or number as coefficients, got: {0!r}", coefs)
 
@@ -341,3 +355,99 @@ class AdvModel(Model):
         else:
             return self._aggregator._scal_prod_triple_vars(left_terms=used_left,
                                                            right_terms=used_right, coefs=used_coefs)
+
+    def _to_list(self, s):
+        if is_pandas_series(s):
+            return s.tolist()
+        else:
+            return list(s)
+
+    def matrix_constraints(self, coef_mat, dvars, rhs, ctsense='le'):
+        """
+        Creates a list of linear constraints
+        from a matrix of coefficients, a sequence of variables, and a sequence of numbers.
+
+        This method returns the list of constraints built from
+
+            A.X <op> B
+
+        where A is the coefficient matrix (of size (M,N)), X is the variable sequence (size N),
+        and B is the sequence of right-hand side values (of size M).
+        <op> is the comparison operator that defines the sense of the constraint. By default, this generates
+        a 'less-than-or-equal' constraint.
+
+        Example:
+            `Model.scal_prod_vars_triple([x, y], [z, t], [2, 3])` returns the expression `2xz + 3yt`.
+
+        :param coef_mat: A matrix of coefficients with M rows and N columns. This argument accepts
+            either a list of lists of numbers, a `numpy` array with size (M,N), or a `scipy` sparse matrix.
+        :param dvars: An ordered sequence of decision variables: accepts a Python list, `numpy` array,
+            or a `pandas` series. The size of the sequence must match the number of columns in the matrix.
+        :param rhs: A sequence of numbers: accepts a Python list, a `numpy` array,
+            or a `pandas` series. The size of the sequence must match the number of rows in the matrix.
+        :param ctsense: A constraint sense \; accepts either a
+            value of type `ComparisonType` or a string (e.g 'le', 'eq', 'ge').
+
+        :returns: A list of linear constraints.
+
+        Example:
+
+            If A is a matrix of coefficients with 2 rows and 3 columns:
+
+                    A = [[1, 2, 3],
+                         [4, 5, 6]],
+                    X = [x, y, z] where x, y, and z are decision variables (size 3), and
+
+                    B = [100, 200], a sequence of numbers (size 2),
+            then
+
+                `mdl.matrix_constraint(A, X, B, 'GE')` returns a list of two constraints
+                [(x + 2y+3z <= 100), (4x + 5y +6z <= 200)].
+
+        Note:
+            If the dimensions of the matrix and variables or of the matrix and number sequence do not match,
+            an error is raised.
+
+        """
+        checker = self._checker
+        if is_pandas_dataframe(coef_mat) or is_numpy_matrix(coef_mat) or is_scipy_sparse(coef_mat):
+            nb_rows, nb_cols = coef_mat.shape
+        else:
+            # a sequence of sequences
+            a_mat = list(coef_mat)
+            nb_rows = len(a_mat)
+            nb_cols = None
+            try:
+                shared_len = None
+                for r in a_mat:
+                    checker.check_ordered_sequence(r, 'matrix_constraints')
+                    r_len = len(r)
+                    if shared_len is None:
+                        shared_len = r_len
+                    elif r_len != shared_len:
+                        self.fatal('All columns should have same length found  {0} != {1}'.format(shared_len, r_len))
+                nb_cols = shared_len if shared_len is not None else 0
+            except AttributeError:
+                self.fatal('All columns should have a len()')
+
+        s_dvars = self._to_list(dvars)
+        s_rhs = self._to_list(rhs)
+        # check
+
+        checker.typecheck_var_seq(s_dvars)
+        for k in s_rhs:
+            checker.typecheck_num(k)
+
+        op = ComparisonType.parse(ctsense)
+        # ---
+        # check dimensions and whether to transpose or not.
+        # ---
+        nb_rhs = len(s_rhs)
+        nb_vars = len(s_dvars)
+        if (nb_rows, nb_cols) != (nb_rhs, nb_vars):
+            self.fatal('Dimension error, matrix is ({0},{1}), expecting ({3}, {2})'.format(nb_rows, nb_cols, nb_vars, nb_rhs))
+
+        if is_scipy_sparse(coef_mat):
+            return self._aggregator._sparse_matrix_constraints(coef_mat, s_dvars, s_rhs, op)
+        else:
+            return self._aggregator._matrix_constraints(coef_mat, s_dvars, s_rhs, op)

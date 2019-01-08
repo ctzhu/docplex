@@ -24,6 +24,7 @@ try:
 except ImportError:
     from io import StringIO
 
+
 ###############################################################################
 ## Constants
 ###############################################################################
@@ -38,9 +39,21 @@ try:
 except:
     IS_NUMPY_AVAILABLE = False
 
+# Check if panda is available
+try:
+    import pandas
+    from pandas import Series as PandaSeries
+    IS_PANDA_AVAILABLE = True
+except:
+    IS_PANDA_AVAILABLE = False
+
+# Indicator that program is running inside a notebook
+IS_IN_NOTEBOOK = 'ipykernel' in sys.modules
+
 # Constant used to indicate to set a parameter to its default value
 # Useful if default value is not static
 DEFAULT = "default"
+
 
 ###############################################################################
 ## Public classes
@@ -290,7 +303,7 @@ class Context(dict):
         # Print sub-contexts
         for (k, v) in sctxs:
             out.write(indent + str(k) + ' =\n')
-            v.print_context(out, indent + "   ")
+            v.print_context(out, indent + " : ")
         out.flush()
 
 
@@ -1075,6 +1088,31 @@ else:
         return isinstance(val, (list, tuple))
 
 
+if IS_PANDA_AVAILABLE:
+
+    def is_panda_series(val):
+        """ Check if a value is a panda serie
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is an panda serie
+        """
+        return isinstance(val, PandaSeries)
+
+else:
+
+    def is_panda_series(val):
+        """ Check if a value is a panda serie
+
+        Args:
+            val: Value to check
+        Returns:
+            False
+        """
+        return False
+
+
 def is_string(val):
     """ Check if a value is a string or a variant
 
@@ -1084,6 +1122,17 @@ def is_string(val):
         True if value is a string
     """
     return type(val) in STRING_TYPES
+
+
+def is_int_array(val):
+    """ Check that a value is an array of integers
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is an array where all elements are integers
+    """
+    return is_array(val) and (all(is_int(x) for x in val))
 
 
 def is_array_of_type(val, typ):
@@ -1232,6 +1281,23 @@ def int_to_base(val, bdgts):
     # Return
     res.reverse()
     return ''.join(res)
+
+
+def search_file_in_path(f):
+    """ Search a given file in system path
+
+    Args:
+        f:  File name
+    Returns:
+        First file found with full path, None if not found
+    """
+    if os.path.isfile(f):
+        return f
+    for d in os.getenv('PATH').split(os.pathsep):
+        nf = os.path.join(d, f)
+        if os.path.isfile(nf):
+            return nf
+    return None
 
 
 #-----------------------------------------------------------------------------

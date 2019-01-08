@@ -17,11 +17,12 @@ class ModelPrinterFactory(object):
     default_printer_type = LPModelPrinter
 
     @staticmethod
-    def new_printer(exchange_format, hide_user_names=False, do_raise=True):
+    def new_printer(exchange_format, hide_user_names=False, do_raise=True, **kwargs):
         """
         returns a new printer
         :param exchange_format:
         :param hide_user_names:
+        :param do_raise:
         :return:
         """
         printer_type = ModelPrinterFactory.__printer_ext_map.get(exchange_format)
@@ -32,7 +33,7 @@ class ModelPrinterFactory(object):
             else:
                 return None
         else:
-            printer = printer_type()
+            printer = printer_type(**kwargs)
             printer.forget_user_names = hide_user_names
             return printer
 

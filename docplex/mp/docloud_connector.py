@@ -8,6 +8,7 @@
 # gendoc: ignore
 
 import json
+import os
 
 from datetime import datetime
 from six import iteritems, string_types
@@ -21,6 +22,7 @@ from docloud.status import JobSolveStatus, JobExecutionStatus
 from docplex.mp.utils import resolve_pattern, get_logger
 from docplex.mp.utils import CyclicLoop
 
+from docplex.mp.context import has_credentials
 
 def key_as_string(key):
     """For keys, we don't want the key to appear in INFO log outputs.
@@ -58,10 +60,13 @@ class DOcloudConnector(object):
         """ Starts a connector which URL and authorization are stored in the
         specified context, along with other connection parameters
 
+        The `docloud_context` refers to the context.solver.docloud node of a
+        context.
+
         Args:
             log_output: The log output stream
         """
-        if docloud_context is None or not docloud_context.has_credentials():
+        if docloud_context is None or not has_credentials(docloud_context):
             raise DOcloudConnectorException("Please provide DOcplexcloud credentials")
 
         # store this for future usage
@@ -144,7 +149,7 @@ class DOcloudConnector(object):
             client.rest_callback = \
                 lambda m, u, *a, **kw: self._rest_callback(m, u, *a, **kw)
         client.verify = self.docloud_context.verify
-        client.timeout = self.docloud_context.timeout if self.docloud_context.timeout is not None else None
+        client.timeout = self.docloud_context.get('timeout', None)
 
         try:
             try:
@@ -166,7 +171,16 @@ class DOcloudConnector(object):
                                                  attid=a['name'],
                                                  data=a['data'])
                     self.log("Attachment: %s has been uploaded" % a['name'])
-
+                    if self.docloud_context.debug_dump_dir:
+                        target_dir = self.docloud_context.debug_dump_dir
+                        if not os.path.exists(target_dir):
+                            os.makedirs(target_dir)
+                        self.log("Dumping input attachment %s to dir %s" % (a['name'], target_dir))
+                        with open(os.path.join(target_dir, a['name']), "wb") as f:
+                            if isinstance(a['data'], bytes):
+                                f.write(a['data'])
+                            else:
+                                f.write(a['data'].encode('utf-8'))
                 # execute job
                 client.execute_job(jobid)
                 self.log("DOcplexcloud execute submitted has been started")
@@ -200,6 +214,13 @@ class DOcloudConnector(object):
                             attachment_as_string = self._as_string(client.download_job_attachment(jobid,
                                                                                                   attid=name))
                             self.results[name] = attachment_as_string
+                            if self.docloud_context.debug_dump_dir:
+                                target_dir = self.docloud_context.debug_dump_dir
+                                if not os.path.exists(target_dir):
+                                    os.makedirs(target_dir)
+                                self.log("Dumping attachment %s to dir %s" % (name, target_dir))
+                                with open(os.path.join(target_dir, name), "wb") as f:
+                                    f.write(attachment_as_string.encode('utf-8'))
                 except DOcloudNotFoundError:
                     self.log("no solution in attachment")
                 self.log("docloud results have been received")
@@ -314,11 +335,11 @@ class DOcloudConnector(object):
 
         # interval to check job status
         status_poll_interval = client.nice
-        log_poll_interval = self.docloud_context.log_poll_interval
-        if not log_poll_interval:
+        log_poll_interval = self.docloud_context.get('log_poll_interval')
+        if log_poll_interval is None:
             log_poll_interval = client.nice * 3
-        progress_poll_interval = self.docloud_context.progress_poll_interval
-        if not progress_poll_interval:
+        progress_poll_interval = self.docloud_context.get('progress_poll_interval')
+        if progress_poll_interval is None:
             progress_poll_interval = client.nice * 3
 
         # The cyclic loop

@@ -6,6 +6,7 @@
 
 from docplex.mp.linear import Var
 from docplex.mp.basic import Expr
+from docplex.mp.operand import Operand
 
 from docplex.mp.utils import is_number, is_string, is_function, str_holo
 
@@ -41,7 +42,7 @@ class KPI(object):
         """
         raise NotImplementedError   # pragma: no cover
 
-    def compute(self):
+    def compute(self, s=None):
         raise NotImplementedError   # pragma: no cover
 
     def _check_name(self, name_arg):
@@ -94,13 +95,16 @@ class DecisionKPI(KPI):
     The :func:`compute` method returns the solution value after a successful solve.
 
     """
-    def __init__(self, decision_obj, name=None):
+    def __init__(self, kpi_op, name=None):
         KPI.__init__(self)
-        if decision_obj.is_quad_expr():
-            self._dobj = decision_obj
+        if is_number(kpi_op):
+            self._expr = self.get_model().linear_expr(arg=kpi_op)
+            self._name = name
+        elif not isinstance(kpi_op, Operand):
+            self.get_model().fatal('cannot interpret this as kpi: {0!r}', kpi_op)
         else:
-            self._dobj = decision_obj.to_linear_expr()
-        self._name = name or decision_obj.name
+            self._expr = kpi_op
+            self._name = name or kpi_op.name
         self._check_name(self._name)
 
     def get_name(self):
@@ -113,9 +117,9 @@ class DecisionKPI(KPI):
     name = property(get_name, set_name)
 
     def get_model(self):
-        return self._dobj.model
+        return self._expr.model
 
-    def compute(self):
+    def compute(self, s=None):
         """ Redefinition of the abstract `compute()` method.
 
         Returns:
@@ -124,26 +128,26 @@ class DecisionKPI(KPI):
         Raises:
             Evaluating this KPI raises an exception if the underlying model has not been solved successfully.
         """
-        return self._dobj.solution_value
+        return self._expr._get_solution_value(s)
 
     def requires_solution(self):
         return True
 
     def as_expression(self):
-        return self._dobj
+        return self._expr
 
     def to_linear_expr(self):
-        return self._dobj
+        return self._expr
 
     def copy(self, new_model, var_map):
-        dobj_copy = self._dobj.copy(new_model, var_map)
-        return DecisionKPI(decision_obj=dobj_copy, name=self.name)
+        expr_copy = self._expr.copy(new_model, var_map)
+        return DecisionKPI(kpi_op=expr_copy, name=self.name)
 
     def clone(self):
-        return DecisionKPI(self._dobj, self._name)
+        return DecisionKPI(self._expr, self._name)
 
     def __repr__(self):
-        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_holo(self._dobj, maxlen=64))
+        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_holo(self._expr, maxlen=64))
 
 
 class FunctionalKPI(KPI):
@@ -168,8 +172,8 @@ class FunctionalKPI(KPI):
     def get_model(self):
         return self._model
 
-    def compute(self):
-        return self._function(self._model)
+    def compute(self, s=None):
+        return self._function(self._model, s)
 
     def requires_solution(self):
         return False

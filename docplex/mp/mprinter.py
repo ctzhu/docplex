@@ -130,6 +130,7 @@ class TextModelPrinter(ModelPrinter):
         self._linct_name_map = {}  # linear constraints
         self._ic_name_map = {}  # indicators have a seperate index space.
         self._qc_name_map = {}
+        self._pwl_name_map = {}
 
         # created on demand if model is not fully indexed
         self._local_var_indices = None
@@ -264,11 +265,13 @@ class TextModelPrinter(ModelPrinter):
         self._local_linear_ct_indices = {ct: k for k, ct in enumerate(model.iter_linear_constraints())}
         self._local_indicator_ct_indices = {ct: k for k, ct in enumerate(model.iter_indicator_constraints())}
         self._local_qct_indices = {qct: k for k, qct in enumerate(model.iter_quadratic_constraints())}
+        self._local_pwl_indices = {pwl: k for k, pwl in enumerate(model.iter_pwl_constraints())}
 
         self._var_name_map = self._precompute_name_dict(model.iter_variables(), self._local_var_indices, prefix='x')
         self._linct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_linear_ct_indices, prefix='c')
         self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_indicator_ct_indices, prefix='ic')
         self._qc_name_map = self._precompute_name_dict(model.iter_quadratic_constraints(), self._local_qct_indices, prefix='qc')
+        self._pwl_name_map = self._precompute_name_dict(model.iter_pwl_constraints(), self._local_pwl_indices, prefix='pwl')
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -277,7 +280,7 @@ class TextModelPrinter(ModelPrinter):
             # 2 rhs is lb - constant
             # 3 bounds are (0, ub-lb)
             varname = 'Rg%s' % self.ct_print_name(rng)
-            rhs = rng.rhs()
+            rhs = rng.cplex_num_rhs()
             ub = rng.ub - rng.lb
             self._rangeData[rng] = (varname, rhs, ub)
 
@@ -347,29 +350,44 @@ class TextModelPrinter(ModelPrinter):
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
         # INTERNAL
         raw_name = mobj.name
-        if hide_names or mobj.has_automatic_name() or mobj.is_generated() or not raw_name:
+        if hide_names or not mobj.has_user_name() or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             return self._translate_chars(raw_name)
 
+    @staticmethod
+    def _generate_linear_obj_coefs(model, linear_obj_expr):
+        # INTERNAL: print all variables and their coef in the linear part of the objective
+        for v in model.iter_variables():
+            yield v, linear_obj_expr.unchecked_get_coef(v)
 
-    def _print_expr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False, force_first_plus=False):
+    @staticmethod
+    def _generate_linear_obj_coefs_smart(model, linear_obj_expr, selected_variables):
+        # INTERNAL: used to print unreferenced variables in sos and pwl constraints and their coef in the linear part
+        #  of the objective, in addition to variables in the objective
+        for v in model.iter_variables():
+            if v in selected_variables:
+                yield v, linear_obj_expr.unchecked_get_coef(v)
+
+    def _print_lexpr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False, force_first_plus=False):
         # prints an expr to a stream
-        term_iter = expr.iter_terms()
+        term_iter = expr.iter_sorted_terms()
         k = expr.get_constant() if print_constant else None
-        self._print_expr_iter(wrapper, num_printer, var_name_map, term_iter, constant=k, allow_empty=allow_empty,
+        self._print_expr_iter(wrapper, num_printer, var_name_map, term_iter,
+                              constant=k, allow_empty=allow_empty,
                               force_first_plus=force_first_plus)
 
     def _print_expr_iter(self, wrapper, num_printer, var_name_map,
                          expr_iter,
                          allow_empty=False,
                          force_first_plus=False,
-                         constant=None):
+                         constant=None,
+                         accept_zero=False):
         num2string_fn = num_printer.to_string
         c = 0
         for (v, coeff) in expr_iter:
             curr_token = ''
-            if 0 == coeff:
+            if not accept_zero and not coeff:
                 continue  # pragma: no cover
 
             if coeff < 0:
@@ -418,17 +436,17 @@ class TextModelPrinter(ModelPrinter):
         if force_initial_plus:
             wrapper.write('+')
 
-        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_quads(), use_double=True)
-
+        return self._print_qexpr_iter(wrapper, num_printer, var_name_map, quad_expr.iter_sorted_quads(), use_double=True)
 
     def _print_qexpr_iter(self, wrapper, num_printer, var_name_map, iter_quads, use_double=False):
         q = 0
-        wrapper.write('[')
         varname_getter = self._var_print_name
         for qvp, qk in iter_quads:
             curr_token = ''
             if 0 == qk:
                 continue  # pragma: no cover
+            if q == 0:
+                wrapper.write('[')  # only once
             abs_qk = qk
             if qk < 0:
                 curr_token += '-'
@@ -460,8 +478,10 @@ class TextModelPrinter(ModelPrinter):
             wrapper.write(curr_token)
 
             q += 1
-        closer = ']/2' if use_double else ']'
-        wrapper.write(closer)
+
+        if q:
+            closer = ']/2' if use_double else ']'
+            wrapper.write(closer)
         return q
 
 

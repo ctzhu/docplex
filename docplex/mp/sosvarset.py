@@ -3,10 +3,10 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import ModelingObjectBase
+from docplex.mp.basic import ModelingObject
 
 
-class SOSVariableSet(ModelingObjectBase):
+class SOSVariableSet(ModelingObject):
     ''' This class models :index:`Special Ordered Sets` (SOS) of decision variables.
         An SOS has a type (SOS1, SOS2) and an ordered list of variables.
 
@@ -17,7 +17,7 @@ class SOSVariableSet(ModelingObjectBase):
     '''
 
     def __init__(self, model, variable_sequence, sos_type, name=None):
-        ModelingObjectBase.__init__(self, model, name)
+        ModelingObject.__init__(self, model, name)
         self._sos_type = sos_type
         self._variables = variable_sequence[:]  # copy sequence
 

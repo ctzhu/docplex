@@ -7,7 +7,10 @@
 # gendoc: ignore
 
 
-from docplex.mp.utils import is_int, is_number, is_iterable, is_string, is_iterator, is_ordered_sequence
+from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
+    is_ordered_sequence, is_iterator
+from docplex.mp.compat23 import izip
+from docplex.mp.error_handler import docplex_fatal
 
 from docplex.mp.basic import Priority
 from docplex.mp.vartype import VarType
@@ -17,6 +20,30 @@ from docplex.mp.progress import ProgressListener
 
 import math
 
+
+class StaticTypeChecker(object):
+
+    @staticmethod
+    def typecheck_as_power(mdl, e, power):
+        # INTERNAL: checks <power> is 0,1,2
+        if power < 0 or power > 2:
+            mdl.fatal("Cannot raise {0!s} to the power {1}. A variable's exponent must be 0, 1 or 2.", e, power)
+
+    @staticmethod
+    def cannot_be_used_as_denominator_error(mdl, denominator, numerator):
+        mdl.fatal("{1!s} / {0!s} : operation not supported, only numbers can be denominators", denominator, numerator)
+
+    @classmethod
+    def typecheck_as_denominator(cls, mdl, denominator, numerator):
+        if not is_number(denominator):
+            cls.cannot_be_used_as_denominator_error(mdl, denominator, numerator)
+        else:
+            float_e = float(denominator)
+            if 0 == float_e:
+                mdl.fatal("Zero divide on {0!s}", numerator)
+            else:
+                # ok
+                pass
 
 class IDocplexTypeChecker(object):
     def typecheck_iterable(self, arg):
@@ -32,7 +59,7 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_var_seq(self, seq):
-        raise NotImplementedError  # pragma: no cover
+        return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
         raise NotImplementedError  # pragma: no cover
@@ -46,37 +73,29 @@ class IDocplexTypeChecker(object):
     def typecheck_linear_constraint(self, obj):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_zero_or_one(self, arg):
-        raise NotImplementedError  # pragma: no cover
+    def typecheck_constraint_seq(self, cts):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
 
-    def typecheck_int(self, arg):
+    def typecheck_zero_or_one(self, arg):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_num(self, arg, caller=None):
         raise NotImplementedError  # pragma: no cover
 
+    def check_vars_domain(self, lbs, ubs, names):
+        raise NotImplementedError  # pragma: no cover
+
+    def check_var_domain(self, lbs, ubs, names):
+        raise NotImplementedError  # pragma: no cover
+
     def typecheck_string(self, arg, accept_empty=False, accept_none=False):
-        raise NotImplementedError  # pragma: no cover
-
-    def typecheck_priority(self, prio):
-        raise NotImplementedError  # pragma: no cover
-
-    def typecheck_as_power(self, e, power):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_in_model(self, model, mobj, header=''):
         raise NotImplementedError  # pragma: no cover
 
-    def cannot_be_used_as_denominator_error(self, denominator, numerator):
-        raise NotImplementedError  # pragma: no cover
-
-    def typecheck_as_denominator(self, denominator, numerator):
-        raise NotImplementedError  # pragma: no cover
-
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
-        raise NotImplementedError  # pragma: no cover
-
-    def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
         raise NotImplementedError  # pragma: no cover
 
     def get_number_validation_fn(self):
@@ -91,6 +110,9 @@ class IDocplexTypeChecker(object):
     def check_ordered_sequence(self, arg, header):
         raise NotImplementedError  # pragma: no cover
 
+    def check_trivial_constraints(self):
+        raise NotImplementedError  # pragma: no cover
+
 
 # noinspection PyAbstractClass
 class DOcplexLoggerTypeChecker(IDocplexTypeChecker):
@@ -100,14 +122,11 @@ class DOcplexLoggerTypeChecker(IDocplexTypeChecker):
     def fatal(self, msg, *args):
         self._logger.fatal(msg, args)
 
-    def error(self, msg, *args):
+    def error(self, msg, *args):  # pragma: no cover
         self._logger.error(msg, args)
 
-    def warning(self, msg, *args):
+    def warning(self, msg, *args):  # pragma: no cover
         self._logger.warning(msg, args)
-
-    def info(self, msg, *args):
-        self._logger.info(msg, args)
 
 
 class StandardTypeChecker(DOcplexLoggerTypeChecker):
@@ -136,10 +155,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
 
     def typecheck_var_seq(self, seq):
-        var_seq = list(seq)
-        for x in var_seq:
-            self.typecheck_var(x)
-        return var_seq
+        # build a list to avoid consuming an iterator
+        checked_var_list = list(seq)
+        for i, x in enumerate(checked_var_list):
+            if not isinstance(x, Var):
+                self.fatal("Expecting sequence of variables, got: {0!r} at position {1}", x, i)
+        return checked_var_list
 
     def typecheck_var_seq_all_different(self, seq):
         # return the checked sequence, so take the list
@@ -151,7 +172,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         for v in seq_as_list:
             if v in inc_set:
                 self.fatal('Variable: {0} appears twice in sequence', v)
-                break
+
             else:
                 inc_set.add(v)
         return seq_as_list
@@ -162,17 +183,21 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
     def typecheck_linear_constraint(self, obj):
         if not isinstance(obj, AbstractConstraint):
-            self.fatal("Expecting constraint, got: {0!s} with type: {1!s}", obj, type(obj))
+            self.fatal("Expecting constraint, got: {0!r}", obj)
         if not obj.is_linear():
             self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
+
+    def typecheck_constraint_seq(self, cts):
+        # build a list to avoid consuming an iterator
+        checked_cts_list = list(cts)
+        for i, ct in enumerate(checked_cts_list):
+            if not isinstance(ct, AbstractConstraint):
+                self.fatal("Expecting sequence of constraints, got: {0!r} at position {1}", ct, i)
+        return checked_cts_list
 
     def typecheck_zero_or_one(self, arg):
         if arg != 0 and arg != 1:
             self.fatal("expecting 0 or 1, got: {0!s}", arg)
-
-    def typecheck_int(self, arg):
-        if not is_int(arg):
-            self.fatal('Expecting integer, got: {0!s}', arg)
 
     def typecheck_num(self, arg, caller=None):
         caller_string = "{0}: ".format(caller) if caller is not None else ""
@@ -181,6 +206,16 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         elif math.isnan(arg):
             self.fatal("{0}NaN value detected", caller_string)
 
+    def check_vars_domain(self, lbs, ubs, names):
+        if lbs and ubs:
+            names = names or generate_constant(None, max(len(lbs), len(ubs)))
+            for lb, ub, varname in izip(lbs, ubs, names):
+                self.check_var_domain(lb, ub, varname)
+
+    def check_var_domain(self, lb, ub, varname):
+        if lb is not None and ub is not None and lb > ub:
+            self.fatal('Empty variable domain, name={0}, lb={1}, ub={2}'.format(varname, lb, ub))
+
     def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
         if is_string(arg):
             if not accept_empty and 0 == len(arg):
@@ -188,62 +223,19 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         elif not (arg is None and accept_none):
             self.fatal("{0}Expecting string, got: {1!r}", header, arg)
 
-    def typecheck_priority(self, prio):
-        if not isinstance(prio, Priority):
-            self.fatal('expecting priority, got: {0!r}'.format(prio))
-
-    def typecheck_as_power(self, e, power):
-        # INTERNAL: checks <power> is 0,1,2
-        if power < 0 or power > 2:
-            self.fatal("Cannot raise {0!s} to the power {1}. A variable's exponent must be 0, 1 or 2.", e, power)
-
     def typecheck_in_model(self, model, mobj, header=''):
         # produces message of the type: "constraint ... does not belong to model
         if mobj.model != model:
-            self.fatal("{0}{2!s} does not belong to model {1}: {2!s}".format(header, model.name, mobj))
-
-    def cannot_be_used_as_denominator_error(self, denominator, numerator):
-        self.fatal("{1!s} / {0!s} : operation not supported, only numbers can be denominators", denominator, numerator)
-
-    def typecheck_as_denominator(self, denominator, numerator):
-        if not is_number(denominator):
-            self.cannot_be_used_as_denominator_error(denominator, numerator)
-        else:
-            # float_e = float(denominator)
-            if 0 == denominator:
-                self.fatal("Zero divide on {0!s}", numerator)
+            self.fatal("{0} ({2!s}) is not in model '{1:s}'".format(header, model.name, mobj))
 
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
-        if not keys:
-            if accept_empty_seq:
-                return []
-            else:
-                self.fatal("No keys to index the variables.")
-        else:
-            if any(k is None for k in keys):
-                self.fatal("A variable key cannot be None, see: {0!s}", keys)
-
-    def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
-        if not checked_num and not is_number(e):
-            self.fatal("Not a number: {}".format(e))
-        # elif math.isnan(e):
-        #     msg = "NaN value found in expression"
-        #     try:
-        #         msg = "{0}: {1}".format(context_msg(), msg)
-        #     except TypeError:
-        #         msg = "{0}: {1}".format(context_msg, msg)
-        #     self.fatal(msg)
-        elif -infinity <= e <= infinity:
-            return e
-        elif e >= infinity:
-            return infinity
-        else:
-            return -infinity
+        if any(k is None for k in keys):
+            self.fatal("Variable keys cannot be None, got: {0!r}", keys)
 
     @staticmethod
     def static_validate_num(e, checked_num=False, infinity=1e+20):
         if not checked_num and not is_number(e):
-            docplex_fatal("Not a number: {}".format(e))
+            docplex_fatal("Expecting number, got: {0!r}".format(e))
         elif -infinity <= e <= infinity:
             return e
         elif e >= infinity:
@@ -268,7 +260,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
     def typecheck_progress_listener(self, arg):
         if not isinstance(arg, ProgressListener):
-            self.fatal('not  aprogress listener: {0!r}', arg)
+            self.fatal('Expecting ProgressListener instance, got: {0!r}', arg)
 
     def typecheck_two_in_model(self, model, mobj1, mobj2, ctx_msg):
         mobj1_model = mobj1._get_model()
@@ -279,6 +271,9 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         elif mobj1_model != model:
             self.fatal("Objects do not belong to model {0}. obj1={1!s}, obj2={2!s}"
                        .format(self, mobj1, mobj2))
+
+    def check_trivial_constraints(self):
+        return True
 
     def check_ordered_sequence(self, arg, header):
         # in some cases, we need an ordered sequence, if not the code won't crash
@@ -291,29 +286,20 @@ class NumericTypeChecker(StandardTypeChecker):
     def __init__(self, logger):
         StandardTypeChecker.__init__(self, logger)
 
-    def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
-        if not checked_num and not is_number(e):
-            self.fatal("Not a number: {}".format(e))
-        elif math.isnan(e):
-            msg = "NaN value found in expression"
-            try:
-                msg = "{0}: {1}".format(context_msg(), msg)
-            except TypeError:
-                msg = "{0}: {1}".format(context_msg, msg)
-            self.fatal(msg)
-        elif -infinity <= e <= infinity:
-            return e
-        elif e >= infinity:
-            return infinity
-        else:
-            return -infinity
-
     @staticmethod
-    def static_validate_num(e, checked_num=False, infinity=1e+20, context_msg=None):
-        if not checked_num and not is_number(e):
+    def static_validate_num(e, infinity=1e+20, context_msg=None):
+        if not is_number(e):
             docplex_fatal("Not a number: {}".format(e))
         elif math.isnan(e):
             msg = "NaN value found in expression"
+            if context_msg is not None:
+                try:
+                    msg = "{0}: {1}".format(context_msg(), msg)
+                except TypeError:
+                    msg = "{0}: {1}".format(context_msg, msg)
+            docplex_fatal(msg)
+        elif math.isinf(e):
+            msg = "Infinite value forbidden in expression"
             if context_msg is not None:
                 try:
                     msg = "{0}: {1}".format(context_msg(), msg)
@@ -363,39 +349,31 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_linear_constraint(self, obj):
         pass  # pragma: no cover
 
-    def typecheck_zero_or_one(self, arg):
-        pass  # pragma: no cover
+    def typecheck_constraint_seq(self, cts):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
 
-    def typecheck_int(self, arg):
+    def typecheck_zero_or_one(self, arg):
         pass  # pragma: no cover
 
     def typecheck_num(self, arg, caller=None):
         pass  # pragma: no cover
 
+    def check_vars_domain(self, lbs, ubs, names):
+        # do nothing on variable bounds
+        pass
+
+    def check_var_domain(self, lb, ub, varname):
+        pass
+
     def typecheck_string(self, arg, accept_empty=False, accept_none=False):
-        pass  # pragma: no cover
-
-    def typecheck_priority(self, prio):
-        pass  # pragma: no cover
-
-    def typecheck_as_power(self, e, power):
         pass  # pragma: no cover
 
     def typecheck_in_model(self, model, mobj, header=''):
         pass  # pragma: no cover
 
-    def cannot_be_used_as_denominator_error(self, denominator, numerator):
-        pass  # pragma: no cover
-
-    def typecheck_as_denominator(self, denominator, numerator):
-        pass  # pragma: no cover
-
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
         pass  # pragma: no cover
-
-    def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
-        # returns raw argument
-        return e
 
     def typecheck_progress_listener(self, arg):
         pass  # pragma: no cover
@@ -406,6 +384,9 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def check_ordered_sequence(self, arg, header):
         pass  # pragma: no cover
 
+    def check_trivial_constraints(self):
+        return False
+
     def get_number_validation_fn(self):
         return None
 
@@ -413,13 +394,27 @@ class DummyTypeChecker(IDocplexTypeChecker):
 
 _tck_map = {'default': StandardTypeChecker,
             'standard': StandardTypeChecker,
+            'std': StandardTypeChecker,
             'on': StandardTypeChecker,
             'numeric': NumericTypeChecker,
             'off': DummyTypeChecker,
             'deploy': DummyTypeChecker,
             'no_checks': DummyTypeChecker}
 
+
 def get_typechecker(arg, logger):
-    key = arg.lower() if arg else 'default'
-    checker_type = _tck_map.get(key, StandardTypeChecker)
+    if arg:
+        key = arg.lower()
+        if key in _tck_map:
+            checker_type = _tck_map[key]
+        else:
+            msg = 'Unexpected typechecker key: {0} - expecting on|off|std|default|numeric. Using default'.format(key)
+            if logger:
+                logger.warning(msg)
+            else:
+                print('*Warning: {0}'.format(msg))
+            checker_type = StandardTypeChecker
+
+    else:
+        checker_type = StandardTypeChecker
     return checker_type(logger)

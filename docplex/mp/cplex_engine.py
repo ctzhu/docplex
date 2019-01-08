@@ -9,12 +9,13 @@ import sys
 from collections import defaultdict
 
 from docplex.mp.engine import DummyEngine
-from docplex.mp.utils import is_iterable, generate_constant, DOcplexException, str_holo
+from docplex.mp.utils import DOcplexException, str_holo
 from docplex.mp.compat23 import izip
 
 from docplex.mp.vartype import ContinuousVarType
 from docplex.mp.constants import ConflictStatus
-from docplex.mp.constr import IndicatorConstraint, QuadraticConstraint, LinearConstraint
+from docplex.mp.constr import IndicatorConstraint, QuadraticConstraint, LinearConstraint, BinaryConstraint, \
+    PwlConstraint
 from docplex.mp.progress import ProgressData
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
@@ -33,13 +34,21 @@ from cplex.callbacks import MIPInfoCallback
 
 # noinspection PyProtectedMember
 import cplex._internal._constants as cpx_cst
+from cplex._internal._procedural import chgcoeflist, getrows, chgobj, chgrhs, chgqpcoef
 from cplex.exceptions import CplexError, CplexSolverError
 
-from docplex.mp.compat23 import fast_range
 
-from docplex.mp.compat23 import copyreg
+from docplex.mp.compat23 import fast_range, copyreg
+from docplex.mp.constants import UpdateEvent as upd
+
 from docplex.mp.environment import Environment
 from docplex.mp.engine import NoSolveEngine
+
+
+try:
+    from cplex._internal._pwl import PWLConstraintInterface
+except ImportError:
+    PWLConstraintInterface = None
 
 # gendoc: ignore
 
@@ -94,19 +103,15 @@ class _CplexSyncMode(Enum):
 
 class CplexIndexMode(Enum):
     # enumerated value for different ways to handle cplex indices.
-    # Query is old-way: ask Cplex by name, very slow.
     # Guess means compute guessed indices, do not query
     #   UseReturn is new API: assume "add" returns a range and use it.
-    Query, Guess, UseReturn = 1, 2, 3
+    Guess, UseReturn = 1, 2
 
-    _mode2string = {"query": Query, "guess": Guess, "return": UseReturn}
+    _mode2string = {"guess": Guess, "return": UseReturn}
 
     @staticmethod
     def parse(text, default_mode):
-        if not text:
-            return default_mode
-        else:
-            return CplexIndexMode._mode2string.get(text.lower(), default_mode)
+        return CplexIndexMode._mode2string.get(text.lower(), default_mode) if text else default_mode
 
 
 class _CplexOverwriteParametersCtx(object):
@@ -164,6 +169,17 @@ class IndexScope(object):
     def __str__(self):  # pragma: no cover
         return 'IndexScope({0}}[{1}]'.format(self._name, self._index)
 
+class _SafeCplexWrapper(cplex.Cplex):
+
+    # INTERNAL
+    # safe wrapping for pwl issue (cf RTC 31149, 31154, 31155)
+    # to be removed in 12.7.1
+    def __init__(self, *args):
+        cplex.Cplex.__init__(self, *args)
+        if PWLConstraintInterface:
+            self.pwl_constraints = PWLConstraintInterface()
+            self.pwl_constraints._setup(self)
+
 
 # noinspection PyProtectedMember
 class CplexEngine(DummyEngine):
@@ -180,13 +196,13 @@ class CplexEngine(DummyEngine):
         :return:
         """
         DummyEngine.__init__(self)
-        cpx = cplex.Cplex()
+        cpx = _SafeCplexWrapper()
 
         # resetting DATACHECK to 0 has no measurable effect
         # cpx.parameters._set(1056, 0)
 
         index_mode = None
-        if 'index_mode' in kwargs:
+        if 'index_mode' in kwargs:  # pragma: no cover
             index_mode = kwargs['index_mode']
 
         self._model = mdl
@@ -197,7 +213,7 @@ class CplexEngine(DummyEngine):
         self._var_lb_changed = {}
         self._var_ub_changed = {}
 
-        self.__cplex = cpx
+        self._cplex = cpx
 
         self._solve_count = 0
         self._last_solve_status = False
@@ -210,15 +226,17 @@ class CplexEngine(DummyEngine):
         self._lincts_scope = IndexScope(name='lincts')
         self._indcst_scope = IndexScope(name='indicators')
         self._quadcst_scope = IndexScope(name='quadcts')
+        self._pwlcst_scope = IndexScope(name='piecewises')
         self._vars_scope = IndexScope(name='vars')
 
     def _mark_as_out_of_sync(self):
         self._resync = _CplexSyncMode.OutOfSync
 
-    def _allocate_one_index(self, ret_value, scope):
+    def _allocate_one_index(self, ret_value, scope, expect_range):
         self_index_mode = self._index_mode
         if self_index_mode is CplexIndexMode.UseReturn:
-            return ret_value
+            # return value is always a range
+            return ret_value[-1] if expect_range else ret_value
         elif self_index_mode is CplexIndexMode.Guess:
             return scope.new_index()
         else:  # pragma: no cover
@@ -234,7 +252,7 @@ class CplexEngine(DummyEngine):
             raise ValueError
 
     def _set_trace_output(self, ofs):
-        cpx = self.__cplex
+        cpx = self._cplex
         cpx.set_log_stream(ofs)
         cpx.set_results_stream(ofs)
         cpx.set_error_stream(ofs)
@@ -252,20 +270,22 @@ class CplexEngine(DummyEngine):
         if not dvar_name:
             self.error_handler.fatal("cannot query index for anonymous object: {0!s}", (dvar,))
         else:
-            return self.__cplex.variables.get_indices(dvar_name)
+            return self._cplex.variables.get_indices(dvar_name)
 
     def get_ct_index(self, ct):  # pragma: no cover
         self._resync_if_needed()
         ctname = ct.name
         if not ctname:
             self.error_handler.fatal("cannot query index for anonymous constraint: {0!s}", (ct,))
-        self_cplex = self.__cplex
+        self_cplex = self._cplex
         if ct.is_linear():
             return self_cplex.linear_constraints.get_indices(ctname)
         elif isinstance(ct, IndicatorConstraint):
             return self_cplex.indicator_constraints.get_indices(ctname)
         elif isinstance(ct, QuadraticConstraint):
             return self_cplex.quadratic_constraints.get_indices(ctname)
+        elif isinstance(ct, PwlConstraint):
+            return self_cplex.pwl_constraints.get_indices(ctname)
 
         else:
             self.error_handler.fatal("unrecognized constraint to query index: {0!s}", ct)
@@ -283,12 +303,12 @@ class CplexEngine(DummyEngine):
                         self._model.error("indices differ, obj: {0!s}, docplex={1}, CPLEX={2}", ct, model_index,
                                           cpx_index)
 
-    def _sync_var_indices(self, iter_dvars):
+    def _sync_var_indices(self, iter_dvars):  # pragma: no cover
         for dvar in iter_dvars:
             # assuming dvar has a name
             model_index = dvar.get_index()
             cpx_index = self.get_var_index(dvar)
-            if model_index != cpx_index:  # pragma : nocover
+            if model_index != cpx_index:  # pragma: nocover
                 self._model.error("indices differ, obj: {0!s}, docplex={1}, CPLEX={2}", dvar, model_index,
                                   cpx_index)
 
@@ -301,10 +321,19 @@ class CplexEngine(DummyEngine):
         Returns the underlying CPLEX object
         :return:
         """
-        return self.__cplex
+        return self._cplex
 
     def get_infinity(self):
         return cplex.infinity
+
+    def _create_cpx_multitype_vartype_list(self, vartypes):
+        # vartypes is a list of model variable types
+        # if all continuous return []
+        if all(isinstance(mvt, ContinuousVarType) for mvt in vartypes):
+            return []
+        else:
+            # return a list of 'B', 'C', 'I' symbols
+            return [mvt.get_cplex_typecode() for mvt in vartypes]
 
     def _create_cpx_vartype_list(self, vartype, size):
         """ FIXME: Mega Hack here: setting an explicit continuous type
@@ -327,40 +356,37 @@ class CplexEngine(DummyEngine):
         allnames = [name] if name is not None else []
         alllbs = [lb] if lb is not None else []
         allubs = [ub] if ub is not None else []
-        ret_val = self.__cplex.variables.add(names=allnames, types=alltypes, lb=alllbs, ub=allubs)
-        return self._allocate_one_index(ret_value=ret_val, scope=self._vars_scope)
+        ret_val = self._cplex.variables.add(names=allnames, types=alltypes, lb=alllbs, ub=allubs)
+        return self._allocate_one_index(ret_value=ret_val, scope=self._vars_scope, expect_range=True)
 
     def create_variables(self, keys, vartype, lbs, ubs, names):
         self._resync_if_needed()
         nb_vars = len(keys)
-        alltypes = self._create_cpx_vartype_list(vartype, nb_vars)
-        ret_add = self.__cplex.variables.add(names=names, types=alltypes, lb=lbs, ub=ubs)
+        cpx_types = self._create_cpx_vartype_list(vartype, nb_vars)
+        if not cpx_types:
+            if not (lbs or ubs):
+                # force at least one list with correct size.
+                lbs = [0] * nb_vars
+        return self._create_cpx_variables(nb_vars, cpx_types, lbs, ubs, names)
+
+    def create_multitype_variables(self, nb_vars, vartypes, lbs, ubs, names):
+        self._resync_if_needed()
+        cpx_types = self._create_cpx_multitype_vartype_list(vartypes)
+        return self._create_cpx_variables(nb_vars, cpx_types, lbs, ubs, names)
+
+    def _create_cpx_variables(self, nb_vars, cpx_vartypes, lbs, ubs, names):
+        ret_add = self._cplex.variables.add(names=names, types=cpx_vartypes, lb=lbs, ub=ubs)
         return self._allocate_range_index(size=nb_vars, ret_value=ret_add, scope=self._vars_scope)
 
+    def _apply_var_fn(self, dvars, args, setter_fn, getter_fn=None):
+        cpxvars = self._cplex.variables
 
-    def _apply_var_fn(self, var, args, setter_fn, getter_fn=None):
-        cpxvars = self.__cplex.variables
-        is_var_iterable = is_iterable(var)
-        is_arg_iterable = is_iterable(args) and not isinstance(args, str)
-        if not is_var_iterable and is_arg_iterable:
-            self.error_handler.fatal("Single var requires a numeric argument, not iterable")
-        if is_var_iterable:
-            indices = [_v.get_index() for _v in var]
-            list_args = args if is_arg_iterable else generate_constant(args, len(indices))
-            setter_fn(cpxvars, izip(indices, list_args))
-            if getter_fn:
-                return getter_fn(cpxvars, indices)
-            else:
-                return None
+        indices = [_v.get_index() for _v in dvars]
+        setter_fn(cpxvars, izip(indices, args))
+        if getter_fn:
+            return getter_fn(cpxvars, indices)
         else:
-            # newLb assumed to be NOT iterable at this point.
-            var_idx = var.safe_index
-            applied_arg = args
-            setter_fn(cpxvars, var.safe_index, applied_arg)
-            if getter_fn:
-                return getter_fn(cpxvars, var_idx)
-            else:
-                return None
+            return None
 
     _getset_map = {"lb": (cplex._internal._subinterfaces.VariablesInterface.set_lower_bounds,
                           cplex._internal._subinterfaces.VariablesInterface.get_lower_bounds),
@@ -371,132 +397,118 @@ class CplexEngine(DummyEngine):
 
     def rename_var(self, dvar, new_name):
         var_index = dvar.get_index()
-        cpxvars = self.__cplex.variables
+        cpxvars = self._cplex.variables
         cpxvars.set_names([(var_index, new_name)])
 
     def set_var_type(self, dvar, newtype):  # pragma: no cover
         var_index = dvar.get_index()
-        cpxvars = self.__cplex.variables
+        cpxvars = self._cplex.variables
         cpx_newtype = newtype.get_cplex_typecode()
         cpxvars.set_types([(var_index, cpx_newtype)])
 
-    def set_var_lb(self, var_lbs):
+    def set_var_lb(self, dvar, lb):
         self._resync_if_needed()
         self_var_lbs = self._var_lb_changed
-        if isinstance(var_lbs, tuple):
-            dv, lb = var_lbs
-            self_var_lbs[dv] = lb
-        else:
-            for dv, lb in var_lbs:
-                self_var_lbs[dv] = lb
+        self_var_lbs[dvar] = float(lb)
 
-    def set_var_ub(self, var_ubs):
+    def set_var_ub(self, dvar, ub):
         self._resync_if_needed()
         self_var_ubs = self._var_ub_changed
-        if isinstance(var_ubs, tuple):
-            dv, ub = var_ubs
-            self_var_ubs[dv] = ub
-        else:
-            for dv, ub in var_ubs:
-                self_var_ubs[dv] = ub
+        self_var_ubs[dvar] = float(ub)  # force float here: numpy types will crash
 
     def get_solve_attribute(self, attr, index_seq):
-        ''' Returns a sequence of attributes from the engine'''
         self._check_is_solved_ok()
 
         indices = list(index_seq)
         if attr == "slacks":
-            all_attributes = self.__cplex.solution.get_linear_slacks(indices)
+            all_attributes = self._cplex.solution.get_linear_slacks(indices)
         elif attr == "duals":
-            all_attributes = self.__cplex.solution.get_dual_values(indices)
+            all_attributes = self._cplex.solution.get_dual_values(indices)
         elif attr == "reduced_costs":
-            all_attributes = self.__cplex.solution.get_reduced_costs(indices)
-        else:
+            all_attributes = self._cplex.solution.get_reduced_costs(indices)
+        else:  # pragma: no cover
             self.error_handler.error('*unexpected attribute name: {0!s}', attr)
             return {}
         assert len(indices) == len(all_attributes)
         filtered_attr_map = {indices[i]: all_attributes[i] for i in range(len(indices)) if all_attributes[i]}
         return filtered_attr_map
 
-    def _linexpr_to_cplex(self, expr):
-        ''' convert a linear expression into a list of two lists (of the same length)
-           1. a list of indices taken from previous post to CPLEX
-           2. a list of coefs
-           note the trick to iterate the expression only once:
-           build a zipped list of tuples, then unzip it and return thr list of lists.
-        '''
-        all_indices_coefs = [(dv._index, float(k)) for dv, k in expr.iter_terms()]
-        if all_indices_coefs:
-            zipped = list(zip(*all_indices_coefs))
-            return [zipped]
-        else:
-            return []
-
     # the returned list MUST be of size 2 otherwise the wrapper will crash.
     _trivial_linexpr = [[], []]
 
-    # @profile
     def _binaryct_to_cplex(self, linear_ct):
-        """
-        Builds two lists, one for indices, one for coefs, of variables
-        in lef_expr - right_expr.
-        Keep the ordering: left variables first, then those from right_expr that are not in left_expr
+        return self.make_cpx_linear_from_exprs(linear_ct._left_expr, linear_ct._right_expr)
 
-        :param linear_ct: a linear constraint of type: expr1 OP expr2
-        :return: either [] or a list of two lists indices and coefs
-        """
-        # noinspection PyPep8
-        left_expr = linear_ct.left_expr
-        right_expr = linear_ct.right_expr
-        if right_expr.is_constant():
-            all_indices_coefs = [(dv._index, float(k)) for dv, k in left_expr.iter_terms()]
+    def make_cpx_linear_from_one_expr(self, expr):
+        return self.make_cpx_linear_from_exprs(left_expr=expr, right_expr=None)
+
+    #@profile
+    def make_cpx_linear_from_exprs(self, left_expr, right_expr):
+        indices = []
+        coefs = []
+        if right_expr is None or right_expr.is_constant():
+            nb_terms = left_expr.number_of_terms()
+            if nb_terms:
+                indices = [-1] * nb_terms
+                coefs = [0] * nb_terms
+                i = 0
+                for dv, k in left_expr.iter_terms():
+                    indices[i] = dv._index
+                    coefs[i] = float(k)
+                    i += 1
 
         elif left_expr.is_constant():
-            all_indices_coefs = [(dv._index, -float(k)) for dv, k in right_expr.iter_terms()]
+            nb_terms = right_expr.number_of_terms()
+            if nb_terms:
+                indices = [-1] * nb_terms
+                coefs = [0] * nb_terms
+                i = 0
+                for dv, k in right_expr.iter_terms():
+                    indices[i] = dv._index
+                    coefs[i] = -float(k)
+                    i += 1
         else:
-            all_indices_coefs = [(dv._index, float(k)) for dv, k in linear_ct._generate_net_linear_coefs()]
+            # hard to guess array size here:
+            # we could allocate size(left) + size(right) and truncate, but??
+            for dv, k in BinaryConstraint._generate_net_linear_coefs2_unsorted(left_expr, right_expr):
+                indices.append(dv._index)
+                coefs.append(float(k))
 
         # all_indices_coefs is a list of  (index, coef) 2-tuples
-        if all_indices_coefs:
+        if indices:
             # CPLEX requires two lists: one for indices, one for coefs
             # we use zip to unzip the tuples
-            return list(izip(*all_indices_coefs))
+            return [indices, coefs]
         else:
             # the returned list MUST be of size 2 otherwise the wrapper will crash.
             return self._trivial_linexpr
+
+    @staticmethod
+    def make_cpx_ct_rhs_from_exprs(left_expr, right_expr):
+        return right_expr.get_constant() - left_expr.get_constant()
 
     def __index_problem_stop_here(self):
         #  put a breakpoint here if index problems occur
         pass  # pragma: no cover
 
-    # @profile
-    def _make_cplex_linear_ct(self, cpx_lin_expr, ctype, rhs, name):
-        """
-        INTERNAL. fundamental way to post a linear ct to CPLEX.
-        :param cpx_lin_expr:
-        :param ctype:
-        :param rhs:
-        :param name:
-        :return:
-        """
+    def _make_cplex_linear_ct(self, cpx_lin_expr, cplextype, rhs, name):
+        # INTERNAL
         cpx_rhs = [float(rhs)]  # if not a float, cplex crashes baaaadly
-        cpx_type = ctype._cplex_code
         cpxnames = [name] if name else []
 
-        linearcts = self.__cplex.linear_constraints
-        ret_add = linearcts.add(lin_expr=cpx_lin_expr, senses=cpx_type, rhs=cpx_rhs, names=cpxnames)
-        return self._allocate_one_index(ret_value=ret_add, scope=self._lincts_scope)
+        linearcts = self._cplex.linear_constraints
+        ret_add = linearcts.add(lin_expr=cpx_lin_expr, senses=cplextype, rhs=cpx_rhs, names=cpxnames)
+        return self._allocate_one_index(ret_value=ret_add, scope=self._lincts_scope, expect_range=True)
 
-    # @profile
     def create_binary_linear_constraint(self, binaryct):
         self._resync_if_needed()
         cpx_linexp1 = self._binaryct_to_cplex(binaryct)
         # wrap one more time
         cpx_linexp = [cpx_linexp1] if cpx_linexp1 else []
         # returns a number
-        num_rhs = binaryct.rhs()
+        num_rhs = binaryct.cplex_num_rhs()
         return self._make_cplex_linear_ct(cpx_lin_expr=cpx_linexp,
-                                          ctype=binaryct.type,
+                                          cplextype=binaryct.cplex_code(),
                                           rhs=num_rhs, name=binaryct.get_name())
 
     def create_block_linear_constraints(self, linct_seq):
@@ -504,12 +516,12 @@ class CplexEngine(DummyEngine):
         block_size = len(linct_seq)
         # need to force float() for numpy num types will crash CPLEX
         # noinspection PyPep8
-        cpx_rhss = [float(ct.rhs()) for ct in linct_seq]
-        cpx_senses = [ct.type._cplex_code for ct in linct_seq]
+        cpx_rhss = [float(ct.cplex_num_rhs()) for ct in linct_seq]
+        cpx_senses = [ct.cplex_code() for ct in linct_seq]
         cpx_names = [ct._get_safe_name() for ct in linct_seq]
         cpx_linexprs = [self._binaryct_to_cplex(ct) for ct in linct_seq]
 
-        cpx_linear = self.__cplex.linear_constraints
+        cpx_linear = self._cplex.linear_constraints
         ret_add = cpx_linear.add(lin_expr=cpx_linexprs, senses=cpx_senses, rhs=cpx_rhss, names=cpx_names)
 
         return self._allocate_range_index(size=block_size, ret_value=ret_add, scope=self._lincts_scope)
@@ -521,23 +533,24 @@ class CplexEngine(DummyEngine):
         :return:
         """
         self._resync_if_needed()
-        linearcts = self.__cplex.linear_constraints
+        linearcts = self._cplex.linear_constraints
         expr = range_ct.expr
-        offset = expr.constant
+
         lhs = range_ct.lb
         rhs = range_ct.ub
-        cpx_lin_expr = self._linexpr_to_cplex(expr)
+        cpx_lin_expr2 = self.make_cpx_linear_from_one_expr(expr)
 
+        cpx_lin_expr2 = [cpx_lin_expr2] if cpx_lin_expr2 else []
+        offset = expr.get_constant()
         cpx_rhs = [rhs - offset]
         cpx_range_values = [lhs - rhs]  # should be negative ???
-        cpx_type = CplexEngine.CPX_RANGE_SYMBOL
         ctname = range_ct.name
         cpxnames = [ctname] if ctname else []
-        ret_add = linearcts.add(lin_expr=cpx_lin_expr,
-                                senses=cpx_type, rhs=cpx_rhs,
+        ret_add = linearcts.add(lin_expr=cpx_lin_expr2,
+                                senses=range_ct.cplex_code(), rhs=cpx_rhs,
                                 range_values=cpx_range_values,
                                 names=cpxnames)
-        return self._allocate_one_index(ret_value=ret_add, scope=self._lincts_scope)
+        return self._allocate_one_index(ret_value=ret_add, scope=self._lincts_scope, expect_range=True)
 
     def create_indicator_constraint(self, indicator_ct):
         """
@@ -548,28 +561,29 @@ class CplexEngine(DummyEngine):
         self._resync_if_needed()
         linear_ct = indicator_ct.linear_constraint
         ct_name = indicator_ct.get_name()
-        active_value = 1 - indicator_ct._active_value
+        active_value = indicator_ct._active_value
         binary_var = indicator_ct.indicator_var
         binary_index = binary_var.get_index()
 
         # the linear ct is not posted to CPLEX,
         # but we need to convert it to linexpr
         cpx_linexpr = self._binaryct_to_cplex(linear_ct)
-        rhs = linear_ct.rhs()
+        rhs = linear_ct.cplex_num_rhs()
         cpx_name = ct_name or ''
-        cpx_sense = linear_ct.type._cplex_code
+        cpx_sense = linear_ct.cplex_code()
 
-        cpx_indicators = self.__cplex.indicator_constraints
-        cpx_complemented = active_value
+        cpx_indicators = self._cplex.indicator_constraints
+        #  BEWARE: cplex's complemented is 1 - active_value
+        cpx_complemented = 1 - active_value
         ret_add = cpx_indicators.add(cpx_linexpr, cpx_sense, rhs, binary_index, cpx_complemented, cpx_name)
-        return self._allocate_one_index(ret_value=ret_add, scope=self._indcst_scope)
+        return self._allocate_one_index(ret_value=ret_add, scope=self._indcst_scope, expect_range=False)
 
     def create_quadratic_constraint(self, qct):
         self._resync_if_needed()
         # ---
-        self_cplex = self.__cplex
-        float_rhs = float(qct.rhs())  # if not a float, cplex crashes baaaadly
-        cpx_sense = qct.type._cplex_code
+        self_cplex = self._cplex
+        float_rhs = float(qct.cplex_num_rhs())  # if not a float, cplex crashes baaaadly
+        cpx_sense = qct.cplex_code()
         # see RTC-31772, None is accepted from 12.6.3.R0 onward. use get_name() when dropping compat for 12.6.2
         qctname = qct._get_safe_name()
 
@@ -588,100 +602,320 @@ class CplexEngine(DummyEngine):
                                                            sense=cpx_sense,
                                                            rhs=float_rhs,
                                                            name=qctname)
-            return self._allocate_one_index(ret_value=ret_add, scope=self._quadcst_scope)
+            return self._allocate_one_index(ret_value=ret_add, scope=self._quadcst_scope, expect_range=False)
         else:
             # actually a linear constraint
-            return self._make_cplex_linear_ct(cpx_lin_expr=[list_linears], ctype=qct.type, rhs=float_rhs, name=qctname)
+            return self._make_cplex_linear_ct(cpx_lin_expr=[list_linears],
+                                              cplextype=qct.cplex_code(),
+                                              rhs=float_rhs, name=qctname)
+
+    def create_pwl_constraint(self, pwl_ct):
+        """
+        Post a Piecewise Linear Constraint to CPLEX
+        :param pwl_ct: the PWL constraint
+        :return:
+        """
+        self._resync_if_needed()
+        try:
+            cpx_pwl_constraints = self._cplex.pwl_constraints
+            pwl_func = pwl_ct.pwl_func
+            pwl_def = pwl_func.pwl_def_as_breaks
+            pwlctname = pwl_ct._get_safe_name()
+            x_var = pwl_ct.expr
+            f_var = pwl_ct.y
+            ret_add = cpx_pwl_constraints.add(f_var._index, x_var._index,
+                                              float(pwl_def.preslope), float(pwl_def.postslope),
+                                              [float(breakx) for breakx, _ in pwl_def.breaksxy],
+                                              [float(breaky) for _, breaky in pwl_def.breaksxy],
+                                              name=pwlctname)
+            return self._allocate_one_index(ret_value=ret_add, scope=self._pwlcst_scope, expect_range=False)
+
+        except AttributeError as e:  # pragma: no cover
+            self._model.fatal("Please update Cplex to version 12.7+ to benefit from Piecewise Linear constraints.")
 
     def remove_constraint(self, ct):
         self._resync_if_needed()
         doomed_index = ct.safe_index
         # we have a safe index
         if isinstance(ct, QuadraticConstraint):
-            self.__cplex.quadratic_constraints.delete(doomed_index)
+            self._cplex.quadratic_constraints.delete(doomed_index)
             self._quadcst_scope.notify_deleted(doomed_index)
         elif isinstance(ct, IndicatorConstraint):
-            self.__cplex.indicator_constraints.delete(doomed_index)
+            self._cplex.indicator_constraints.delete(doomed_index)
             self._indcst_scope.notify_deleted(doomed_index)
         elif isinstance(ct, LinearConstraint):
-            self.__cplex.linear_constraints.delete(doomed_index)
+            self._cplex.linear_constraints.delete(doomed_index)
             self._lincts_scope.notify_deleted(doomed_index)
-        else:
+        elif isinstance(ct, PwlConstraint):
+            self._cplex.pwl_constraints.delete(doomed_index)
+            self._pwlcst_scope.notify_deleted(doomed_index)
+        else:  # pragma: no cover
             raise TypeError
 
     def remove_constraints(self, cts):
         self._resync_if_needed()
         if cts is None:
-            self.__cplex.linear_constraints.delete()
+            self._cplex.linear_constraints.delete()
             self._lincts_scope.clear()
-            self.__cplex.quadratic_constraints.delete()
+            self._cplex.quadratic_constraints.delete()
             self._quadcst_scope.clear()
-            self.__cplex.indicator_constraints.delete()
+            self._cplex.indicator_constraints.delete()
             self._indcst_scope.clear()
         else:
             doomed_linears = [c.safe_index for c in cts if c.is_linear()]
             doomed_quadcts = [c.safe_index for c in cts if isinstance(c, QuadraticConstraint)]
             dooomed_indcts = [c.safe_index for c in cts if isinstance(c, IndicatorConstraint)]
             if doomed_linears:
-                self.__cplex.linear_constraints.delete(doomed_linears)
+                self._cplex.linear_constraints.delete(doomed_linears)
                 self._lincts_scope.notify_deleted_block(doomed_linears)
             if doomed_quadcts:
-                self.__cplex.quadratic_constraints.delete(doomed_quadcts)
+                self._cplex.quadratic_constraints.delete(doomed_quadcts)
                 self._quadcst_scope.notify_deleted_block(doomed_quadcts)
             if dooomed_indcts:
-                self.__cplex.indicator_constraints.delete(dooomed_indcts)
-                self._indcst_scope.notify_deleted(dooomed_indcts)
+                self._cplex.indicator_constraints.delete(dooomed_indcts)
+                self._indcst_scope.notify_deleted_block(dooomed_indcts)
 
-    def set_objective(self, sense, expr):
+    # update
+    def _unexpected_event(self, event, msg=''):  # pragma: no cover
+        self.error_handler.warning('{0} Unexpected event: {1} - ignored', msg, event.name)
+
+    # -- fast 'back door' api
+
+    def _fast_set_quadratic_objective(self, quad_expr):
+        cpx = self._cplex
+        cpx_e = cpx._env._e
+        cpx_lp = cpx._lp
+        for qvp, qk in quad_expr.iter_quads():
+            qv1x = qvp[0]._index
+            qv2x = qvp[1]._index
+            obj_qk = 2 * qk if qvp.is_square() else qk
+            chgqpcoef(cpx_e, cpx_lp, qv1x, qv2x, obj_qk)
+
+    def _fast_set_linear_objective(self, linexpr):
+        indices = []
+        koefs = []
+
+        for dv, k in linexpr.iter_terms():
+            indices.append(dv._index)
+            koefs.append(float(k))
+        if indices:
+            cpx = self._cplex
+            chgobj(cpx._env._e, cpx._lp, indices, koefs)
+
+    def _fast_set_linear_objective2(self, linexpr):
+        nterms = linexpr.number_of_terms()
+        if nterms:
+            indices = [-1] * nterms
+            koefs = [0] * nterms
+            i = 0
+            for dv, k in linexpr.iter_terms():
+                indices[i] = dv._index
+                koefs[i] = float(k)
+                i += 1
+
+            cpx = self._cplex
+            chgobj(cpx._env._e, cpx._lp, indices, koefs)
+
+    def _fast_update_linearct_coefs(self, ct_index, var_indices, coefs):
+        assert len(var_indices) == len(coefs)
+
+        num_coefs = len(coefs)
+        cpx = self._cplex
+        chgcoeflist(cpx._env._e, cpx._lp, [ct_index] * num_coefs, var_indices, coefs)
+
+    def _fast_get_row_vars(self, ct_index):  # pragma: no cover
+        cpx = self._cplex
+        return getrows(cpx._env._e, cpx._lp, ct_index, ct_index)[1]
+
+    def _fast_set_rhs(self, ct_index, new_rhs):
+        cpx = self._cplex
+        chgrhs(cpx._env._e, cpx._lp, (ct_index,), (new_rhs,))
+
+    def switch_linear_expr(self, index, old_expr, new_expr):
+        # INTERNAL
+        # clears all linear coefs from an old expr, then set the new coefs
+        old_indices = [dv._index for dv in old_expr.iter_variables()]
+        old_zeros = [0] * len(old_indices)
+        self._fast_update_linearct_coefs(index, old_indices, old_zeros)
+        # now set new expr coefs
+        cpxlin = self.make_cpx_linear_from_one_expr(expr=new_expr)
+        self._fast_update_linearct_coefs(index, cpxlin[0], cpxlin[1])
+
+    def _switch_linear_exprs2(self, ct_index, old_left, old_right, new_left, new_right):
+        if old_left and old_right:
+            # step 1 zap old coefs to zero (with repeats?)
+            zap_indices = [dv._index for dv in old_left.iter_variables()]
+            zap_indices += [dv._index for dv in old_right.iter_variables()]
+        else:
+            zap_indices = None  # self._fast_get_row_vars(ct_index)
+        if zap_indices:
+            self._fast_update_linearct_coefs(ct_index, zap_indices, [0] * len(zap_indices))
+        # step 2: install new coefs
+        new_ct_lin = self.make_cpx_linear_from_exprs(new_left, new_right)
+        self._fast_update_linearct_coefs(ct_index, new_ct_lin[0], new_ct_lin[1])
+
+    def update_linear_constraint(self, ct, event, *args):
+        ct_index = ct.get_index()
+        updated = False
+        if ct_index >= 0:
+            if event is upd.LinearConstraintType:
+                new_ct_cpxtype = args[0]._cplex_code
+                self._cplex.linear_constraints.set_senses(ct_index, new_ct_cpxtype)
+                updated = True
+            else:
+                if event in (upd.LinearConstraintCoef, upd.LinearConstraintGlobal):
+                    if args:
+                        self._switch_linear_exprs2(ct_index,
+                                                   old_left=ct._left_expr, old_right=ct._right_expr,
+                                                   new_left=args[0], new_right=args[1])
+                    else:
+                        self._switch_linear_exprs2(ct_index,
+                                                   old_left=None, old_right=None,
+                                                   new_left=ct._left_expr, new_right=ct._right_expr)
+                    updated = True
+                if event in (upd.LinearConstraintRhs, upd.LinearConstraintGlobal):
+                    if args:
+                        new_ct_rhs = self.make_cpx_ct_rhs_from_exprs(left_expr=args[0], right_expr=args[1])
+                    else:
+                        new_ct_rhs = ct.cplex_num_rhs()
+                    self._fast_set_rhs(ct_index, new_rhs=new_ct_rhs)
+                    updated = True
+
+            if not updated:  # pragma: no cover
+                self._unexpected_event(event, msg='update_linear-constraint')
+
+    def update_range_constraint(self, rngct, event, *args):
+        rng_index = rngct.get_index()
+        if rng_index >= 0:
+            cpx_linear = self._cplex.linear_constraints
+            if event == upd.RangeConstraintBounds:
+                new_lb, new_ub = args
+                offset = rngct.expr.get_constant()
+                cpx_rhs_value = new_ub - offset
+                cpx_range_value = new_lb - new_ub  # negatrive?
+                cpx_linear.set_rhs(rng_index, cpx_rhs_value)
+                cpx_linear.set_range_values(rng_index, cpx_range_value)
+
+            elif event == upd.RangeConstraintExpr:
+                old_expr = rngct.expr
+                new_expr = args[0]
+                if old_expr.get_constant() != new_expr.get_constant():
+                    # need to change rhs but *not* range (ub-lb)
+                    cpx_rhs_value = rngct.ub - new_expr.get_constant()
+                    # TODO: check positive??
+                    cpx_linear.set_rhs(rng_index, cpx_rhs_value)
+                # change expr linear components anyway
+                self.switch_linear_expr(rng_index, old_expr, new_expr)
+
+            else:  # pragma: no cover
+                self._unexpected_event(event, msg='update_range_constraints')
+
+    def update_quadratic_constraint(self, qct, event, *args):
+        if event and qct.index >= 0:
+            self._model.fatal('CPLEX cannot modify quadratic constraint: {0!s}', qct)
+
+    def update_indicator_constraint(self, ind, event, *args):
+        if event and ind.index >= 0:
+            self._model.fatal('CPLEX cannot modify an indicator constraint: ({0!s})', ind)
+
+    def set_objective_sense(self, sense):
         self._resync_if_needed()
-        # old objective
-        old_objective = self._model.objective_expr
-        self._clear_objective(old_objective)
-        # --
-        cpx_objective = self.__cplex.objective
         # --- set sense
         cpx_obj_sense = 1 if sense.is_minimize() else -1
-        cpx_objective.set_sense(cpx_obj_sense)
-        # --- set offset
-        cpx_objective.set_offset(expr.get_constant())
-        # --- set coefficients
-        if expr.is_quad_expr():
-            # cvq, cvv = expr.compute_separable_convexity()
-            # if cvv is not None and cvq < 0:
-            #     self._model.warning(
-            #         "Objective is separable with negative coefficients, therefore non-convex. See term(s): {0}{1!s}^2",
-            #         cvq, cvv)
+        self._cplex.objective.set_sense(cpx_obj_sense)
 
-            self._set_quadratic_objective_coefs(cpx_objective, quad_expr=expr)
-            self._set_linear_objective_coefs(cpx_objective, expr.linear_part)
+    def _clear_objective_from_cplex(self, cpxobj):
+        self._clear_linear_objective_from_cplex(cpxobj)
+        self._clear_quad_objective_from_cplex(cpxobj)
+
+    def _clear_linear_objective_from_cplex(self, cpxobj):
+        # clear linear part
+        cpx_linear = cpxobj.get_linear()
+        zap_linear = [(idx, 0) for idx, k in enumerate(cpx_linear) if k]
+        if zap_linear:
+            cpxobj.set_linear(zap_linear)
+
+    def _clear_quad_objective_from_cplex(self, cpxobj):
+        # quadratic
+        if cpxobj.get_num_quadratic_variables():
+            # need to check before calling get_quadratic() on non-qp -> crash
+            cpx_quads = cpxobj.get_quadratic()
+            if cpx_quads:
+                # reset all vars to zero
+                nb_vars = self._model.number_of_variables
+                zap_quads = [0.0] * nb_vars  # needs a 0.0 as cplex explicitly tests for double...
+                cpxobj.set_quadratic(zap_quads)
+
+    def update_objective(self, expr, event, *args):
+        cpxobj = self._cplex.objective
+        if event is upd.ExprConstant:
+            # update the constant
+            self._cplex.objective.set_offset(expr.constant)
+        elif event in frozenset([upd.LinExprCoef, upd.LinExprGlobal]):
+            self._clear_linear_objective_from_cplex(cpxobj)
+            self._set_linear_objective_coefs(cpxobj, linexpr=expr.get_linear_part())
+            if event is upd.LinExprGlobal:
+                cpxobj.set_offset(expr.constant)
+        elif event is upd.QuadExprQuadCoef:
+            # clear quad, set quad
+            self._clear_quad_objective_from_cplex(cpxobj)
+            self._set_quadratic_objective_coefs(cpxobj, expr)
+        elif event is upd.QuadExprGlobal:
+            # clear all
+            self._clear_linear_objective_from_cplex(cpxobj)
+            # set all
+            self._set_linear_objective_coefs(cpxobj, linexpr=expr.get_linear_part())
+            self._clear_quad_objective_from_cplex(cpxobj)
+            self._set_quadratic_objective_coefs(cpxobj, expr)
+            cpxobj.set_offset(expr.constant)
+
+        else:  # pragma: no cover
+            self._unexpected_event(event, msg='update_objective')
+
+    def set_objective_expr(self, new_objexpr, old_objexpr):
+        cpx_objective = self._cplex.objective
+        # old objective
+        if old_objexpr is new_objexpr:
+            # cannot use the old expression for clearing, it has been modified
+            self._clear_objective_from_cplex(cpxobj=cpx_objective)
+        elif old_objexpr is not None:
+            self._clear_objective(old_objexpr)
         else:
-            self._set_linear_objective_coefs(cpx_objective, linexpr=expr)
+            # no clearing
+            pass
+
+        # --- set offset
+        cpx_objective.set_offset(float(new_objexpr.get_constant()))
+        # --- set coefficients
+        if new_objexpr.is_quad_expr():
+            self._fast_set_quadratic_objective(quad_expr=new_objexpr)
+            self._fast_set_linear_objective(new_objexpr.linear_part)
+        else:
+            self._fast_set_linear_objective2(linexpr=new_objexpr)
 
     def _set_linear_objective_coefs(self, cpx_objective, linexpr):
         # NOTE: convert to float as numpy doubles will crash cplex....
-        index_coef_seq = [(dv._index, float(k)) for dv, k in linexpr.iter_terms()]
-        if index_coef_seq:
-            # if list is empty, cplex will crash.
-            cpx_objective.set_linear(index_coef_seq)
+        #     index_coef_seq = [(dv._index, float(k)) for dv, k in linexpr.iter_terms()]
+        #     if index_coef_seq:
+        #         # if list is empty, cplex will crash.
+        #         cpx_objective.set_linear(index_coef_seq)
+        self._fast_set_linear_objective(linexpr)
 
     def _set_quadratic_objective_coefs(self, cpx_objective, quad_expr):
-        quad_obj_triplets = [(qv1._index, qv2._index, 2 * qk if qv1 is qv2 else qk) for qv1, qv2, qk in quad_expr.iter_quad_triplets()]
+        quad_obj_triplets = [(qv1._index, qv2._index, 2 * qk if qv1 is qv2 else qk) for qv1, qv2, qk in
+                             quad_expr.iter_quad_triplets()]
         if quad_obj_triplets:
             # if list is empty, cplex will crash.
             cpx_objective.set_quadratic_coefficients(quad_obj_triplets)
 
     def _clear_objective(self, expr):
-        """
-        Do not send an empty list otherwise a crash occurs.
-        :param expr:
-        :return:
-        """
+        # INTERNAL
         self._resync_if_needed()
         if expr.is_constant():
-            pass  # do nothing
+            pass  # resetting offset will do.
         elif expr.is_quad_expr():
             # 1. reset quad part
-            cpx_objective = self.__cplex.objective
+            cpx_objective = self._cplex.objective
             # -- set quad coeff to 0 for all quad variable pairs
             quad_reset_triplets = [(qvp.first._index, qvp.second._index, 0) for qvp, qk in expr.iter_quads()]
             if quad_reset_triplets:
@@ -692,14 +926,20 @@ class CplexEngine(DummyEngine):
             self._clear_linear_objective(expr)
 
     def _clear_linear_objective(self, linexpr):
-        if not linexpr.is_constant():
-            var_zero_seq = [(var._index, 0) for var in linexpr.iter_variables()]
-            self.__cplex.objective.set_linear(var_zero_seq)
-            # set_linear() does NOT reset the objective!
-            # IndexError: tuple index out of range
+        # compute the sequence of  var indices, then an array of zeroes
+        size = linexpr.number_of_terms()
+        if size:
+            indices = [-1] * size
+            i = 0
+            for dv, _ in linexpr.iter_terms():
+                indices[i] = dv._index
+                i += 1
+            zeros = [0] * size
+            cpx = self._cplex
+            chgobj(cpx._env._e, cpx._lp, indices, zeros)
 
     @staticmethod
-    def status2string(cpx_status):
+    def status2string(cpx_status):  # pragma: no cover
         ''' Converts a CPLEX integer status value to a string'''
         return _subinterfaces.SolutionInterface.status.__getitem__(cpx_status)
 
@@ -746,7 +986,7 @@ class CplexEngine(DummyEngine):
         return True
 
     @property
-    def name(self):
+    def name(self):  # pragma: no cover
         return 'cplex'
 
     def _location(self):
@@ -763,7 +1003,7 @@ class CplexEngine(DummyEngine):
         self_var_lbs = self._var_lb_changed
         if self_var_lbs:
             lb_vars, lb_values = zip(*iteritems(self_var_lbs))
-            self._apply_var_fn(var=lb_vars, args=lb_values,
+            self._apply_var_fn(dvars=lb_vars, args=lb_values,
                                setter_fn=cplex._internal._subinterfaces.VariablesInterface.set_lower_bounds)
             if verbose:  # pragma: no cover
                 print("* synced {} var lower bounds".format(len(self._var_lb_changed)))
@@ -771,14 +1011,14 @@ class CplexEngine(DummyEngine):
         self_var_ubs = self._var_ub_changed
         if self_var_ubs:
             ub_vars, ub_values = zip(*iteritems(self_var_ubs))
-            self._apply_var_fn(var=ub_vars, args=ub_values,
+            self._apply_var_fn(dvars=ub_vars, args=ub_values,
                                setter_fn=cplex._internal._subinterfaces.VariablesInterface.set_upper_bounds)
             if verbose:  # pragma: no cover
                 print("* synced {} var upper bounds".format(len(self._var_ub_changed)))
 
     def _apply_sos(self, mdl):
         # INTERNAL
-        cpx_sos = self.__cplex.SOS
+        cpx_sos = self._cplex.SOS
         # start by deleting all SOS: du passe faisons table rase....
         cpx_sos.delete()
         for sos_set in mdl.iter_sos():
@@ -799,12 +1039,12 @@ class CplexEngine(DummyEngine):
     def clean_before_solve(self):
         # INTERNAL
         # delete all infos that were left by the previous solve
-        self.__cplex.MIP_starts.delete()
+        self._cplex.MIP_starts.delete()
 
     def solve(self, mdl, parameters=None):
         self._resync_if_needed()
 
-        cpx = self.__cplex
+        cpx = self._cplex
         # keep this line until RTC28217 is solved and closed !!! ----------------
         # see RTC 28217 item #18 for details
         cpx.get_problem_name()  # workaround from Ryan
@@ -828,7 +1068,7 @@ class CplexEngine(DummyEngine):
             mip_starts = mdl.mip_starts
             effort_level = cpx.MIP_starts.effort_level.repair
             for mp in mip_starts:
-                if not isinstance(mp, SolveSolution):
+                if not isinstance(mp, SolveSolution):  # pragma: no cover
                     mdl.fatal("mip_starts expects Solution, got: {0!r} - ignored", mp)
                 cpx_sol = self._sol_to_cpx(mdl, mp)
                 cpx.MIP_starts.add(cpx_sol, effort_level)
@@ -840,7 +1080,7 @@ class CplexEngine(DummyEngine):
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
             cpx.solve()  # returns nothing in Python
             cpx_status = cpx.solution.get_status()
-            cpx_status_string = self.__cplex.solution.get_status_string(cpx_status)
+            cpx_status_string = self._cplex.solution.get_status_string(cpx_status)
 
             solve_ok = self._is_solve_status_ok(cpx_status)
             if solve_ok:
@@ -861,6 +1101,10 @@ class CplexEngine(DummyEngine):
                 else:
                     cpx_status_string = "QP with non-convex objective"
                     self._model.error('Model has non-convex objective: {0!s}', str_holo(self._model.objective_expr, 60))
+            if 1016 == cpx_code:
+                # this is the: CPXERR_RESTRICTED_VERSION - " Promotional version. Problem size limits exceeded." case
+                cpx_status = 1016
+                cpx_status_string = "The current problem is too large for your version of CPLEX."
             solve_ok = False
 
         except cplex.exceptions.CplexError as cpx_e:  # pragma: no cover
@@ -897,7 +1141,7 @@ class CplexEngine(DummyEngine):
         return new_solution
 
     def _make_solution(self, mdl, solve_status):
-        cpx = self.__cplex
+        cpx = self._cplex
         full_obj = cpx.solution.get_objective_value()
         rounded_obj = mdl.round_objective_if_discrete(full_obj)
 
@@ -917,7 +1161,7 @@ class CplexEngine(DummyEngine):
         return solution
 
     def _run_cpx_op_with_details(self, cpx_fn, *args):
-        cpx = self.__cplex
+        cpx = self._cplex
         cpx_time_start = cpx.get_time()
         cpx_status = -1
         cpx_status_string = "*unknown*"
@@ -932,7 +1176,7 @@ class CplexEngine(DummyEngine):
             cpx_fn(*args)
             cpx_status = cpx.solution.get_status()
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
-            cpx_status_string = self.__cplex.solution.get_status_string(cpx_status)
+            cpx_status_string = self._cplex.solution.get_status_string(cpx_status)
             solve_ok = self._is_solve_status_ok(cpx_status)
             if solve_ok:
                 if cpx._is_MIP():
@@ -973,7 +1217,7 @@ class CplexEngine(DummyEngine):
         return self._last_solve_details
 
     def _make_groups(self, relaxable_groups):
-        cpx_feasopt = self.__cplex.feasopt
+        cpx_feasopt = self._cplex.feasopt
         all_groups = []
         for (pref, group_cts) in relaxable_groups:
             if pref > 0 and group_cts:
@@ -1003,11 +1247,6 @@ class CplexEngine(DummyEngine):
     ct_quadratic = cplex._internal._subinterfaces.FeasoptConstraintType.quadratic
     ct_indicator = cplex._internal._subinterfaces.FeasoptConstraintType.indicator
 
-    infeasibility_resolver_map = {ct_linear: cplex.Cplex.solution.infeasibility.linear_constraints,
-                                  ct_quadratic: cplex.Cplex.solution.infeasibility.quadratic_constraints,
-                                  ct_indicator: cplex.Cplex.solution.infeasibility.indicator_constraints
-                                  }
-
     _scope_resolver_map = {ct_linear: lambda m: m._linct_scope,
                            ct_quadratic: lambda m: m._quadct_scope,
                            ct_indicator: lambda m: m._indct_scope
@@ -1020,19 +1259,19 @@ class CplexEngine(DummyEngine):
                         }
         cpx_sol_values = cpx.solution.get_values()
         cts_by_type = defaultdict(list)
-        # split and group indices by type (cplex groups are ugly!!!)
+        # split and group indices by sense
         for g in cpx_relax_groups:
-            # gp is a list of tuples (pref, ctype, index)
+            # gp is a list of tuples (pref, ctsense, index)
             for t in g._gp:
-                ctype, ct_index = t[1][0]
-                cts_by_type[ctype].append(ct_index)
+                ct_sense, ct_index = t[1][0]
+                cts_by_type[ct_sense].append(ct_index)
 
         infeas_map = {}
-        for ctype, indices in iteritems(cts_by_type):
+        for ct_sense, indices in iteritems(cts_by_type):
             if indices:
-                resolver_fn = resolver_map[ctype]
+                resolver_fn = resolver_map[ct_sense]
                 ctype_infeas = resolver_fn(cpx_sol_values, indices)
-                mscope = model_scope_resolver[ctype](model)
+                mscope = model_scope_resolver[ct_sense](model)
                 assert mscope
                 for ct_index, ct_infeas in izip(indices, ctype_infeas):
                     ct = mscope.get_object_by_index(ct_index)
@@ -1041,22 +1280,11 @@ class CplexEngine(DummyEngine):
         return infeas_map
 
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        """ Runs feasopt with a set of relaxable cts and numerical  preferences.
-
-        Args:
-            mdl: the model being relaxed
-            relaxable_groups: a sequence of tuples (pref, cts) where
-                cts is a sequence of constraints and pref is the preference
-                for the relaxation of this group
-
-
-        Returns:
-            a solution object, or None.
-        """
+        # INTERNAL
         self._resync_if_needed()
         self._sync_var_bounds()
 
-        self_cplex = self.__cplex
+        self_cplex = self._cplex
         cpx_relax_groups = self._make_groups(relaxable_groups)
 
         feasopt_parameters = parameters or mdl.parameters
@@ -1091,6 +1319,16 @@ class CplexEngine(DummyEngine):
     #     # PCO: Daniel Junglas confirms using [] uses the last solution vector
     #     return self.__cplex.solution.infeasibility.linear_constraints([], indices)
 
+    def _sync_parameter_defaults_from_cplex(self, parameters):
+        # used when a more recent CPLEX DLL is present
+        resets = []
+        for param in parameters:
+            cpx_value = self.get_parameter(param)
+            if cpx_value != param.default_value:
+                resets.append((param, param.default_value, cpx_value))
+                param.reset_default_value(cpx_value)
+        return resets
+
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
         """ Starts conflict refiner on the model.
 
@@ -1114,7 +1352,7 @@ class CplexEngine(DummyEngine):
             # sync parameters
             mdl._sync_parameters_to_engine(parameters)
 
-            cpx = self.__cplex
+            cpx = self._cplex
 
             if groups is None or groups == []:
                 all_constraints = cpx.conflict.all_constraints()
@@ -1126,7 +1364,7 @@ class CplexEngine(DummyEngine):
 
             return self._get_conflicts_local(mdl, cpx)
 
-        except DOcplexException as docpx_e:
+        except DOcplexException as docpx_e:  # pragma: no cover
             mdl._set_solution(None)
             raise docpx_e
 
@@ -1218,9 +1456,9 @@ class CplexEngine(DummyEngine):
         self._resync_if_needed()
         try:
             if path.find('.') > 0:
-                self.__cplex.write(path)
+                self._cplex.write(path)
             else:
-                self.__cplex.write(path, filetype="lp")
+                self._cplex.write(path, filetype="lp")
 
         except CplexSolverError as cpx_se:  # pragma: no cover
             if cpx_se.args[2] == 1422:
@@ -1235,12 +1473,12 @@ class CplexEngine(DummyEngine):
     def end(self):
         """ terminate the engine, cannot find this in the doc.
         """
-        del self.__cplex
-        self.__cplex = None
+        del self._cplex
+        self._cplex = None
 
     # noinspection PyProtectedMember
     def is_mip(self):
-        cpx = self.__cplex
+        cpx = self._cplex
         _all_mip_problems = frozenset({'MIP', 'MILP', 'fixedMILP', 'MIQP', 'fixedMIQP'})
         cpx_problem_type = cpx.problem_type[cpx.get_problem_type()]
         return cpx_problem_type in _all_mip_problems
@@ -1249,31 +1487,31 @@ class CplexEngine(DummyEngine):
         if not progress_listeners:  # pragma: no cover
             self.error_handler.info("No progress listeners to connect")
         elif self.is_mip():
-            ccb = self.__cplex.register_callback(ConnectListenersCallback)
+            ccb = self._cplex.register_callback(ConnectListenersCallback)
             ccb.initialize(progress_listeners)
 
-    def sync_parameters(self, parameters):
-        # INTERNAL
-        # parameters is a root parameter group from DOcplex
-        if parameters:
-            cpx_params = self.__cplex._env.parameters
-            for param in parameters:
-                try:
-                    cpx_params.set(param.cpx_id, param.current_value)
-                except CplexError as cpxe:
-                    cpx_msg = str(cpxe)
-                    if cpx_msg.startswith("Bad parameter identifier"):
-                        self.error_handler.warning("Parameter \"{0}\" is not recognized",
-                                                   (param.qualified_name,))
-                    else:
-                        self.error_handler.error("Error setting parameter {0} to value {1}"
-                                                 .format(param.short_name, param.current_value))
+    # def sync_parameters(self, parameters):
+    #     # INTERNAL
+    #     # parameters is a root parameter group from DOcplex
+    #     if parameters:
+    #         cpx_params = self.__cplex._env.parameters
+    #         for param in parameters:
+    #             try:
+    #                 cpx_params.set(param.cpx_id, param.current_value)
+    #             except CplexError as cpxe:
+    #                 cpx_msg = str(cpxe)
+    #                 if cpx_msg.startswith("Bad parameter identifier"):
+    #                     self.error_handler.warning("Parameter \"{0}\" is not recognized",
+    #                                                (param.qualified_name,))
+    #                 else:
+    #                     self.error_handler.error("Error setting parameter {0} to value {1}"
+    #                                              .format(param.short_name, param.current_value))
 
     def set_parameter(self, parameter, value):
         # value check is up to the caller.
         # parameter is a DOcplex parameter object
         try:
-            self.__cplex._env.parameters._set(parameter.cpx_id, value)
+            self._cplex._env.parameters._set(parameter.cpx_id, value)
         except CplexError as cpx_e:
             cpx_msg = str(cpx_e)
             if cpx_msg.startswith("Bad parameter identifier"):
@@ -1284,7 +1522,7 @@ class CplexEngine(DummyEngine):
 
     def get_parameter(self, parameter):
         try:
-            return self.__cplex._env.parameters._get(parameter.cpx_id)
+            return self._cplex._env.parameters._get(parameter.cpx_id)
         except CplexError:  # pragma: no cover
             return parameter.default_value
 
@@ -1293,7 +1531,7 @@ class CplexEngine(DummyEngine):
         # In this function we try to do the exact same mappings as the IloCplex C++ and Java classes.
         # However, this is not always possible since the C++ and Java implementations are not consistent
         # and sometimes they are even in error (see RTC-21923).
-        cpx_status = self.__cplex.solution.get_status()
+        cpx_status = self._cplex.solution.get_status()
         if cpx_status in {cpx_cst.CPXMIP_ABORT_FEAS,
                           cpx_cst.CPXMIP_DETTIME_LIM_FEAS,
                           cpx_cst.CPXMIP_FAIL_FEAS,

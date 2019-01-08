@@ -7,8 +7,9 @@
 # gendoc: ignore
 from docplex.mp.mfactory import _AbstractModelFactory
 
-from docplex.mp.constants import ComparisonType
+from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.utils import is_number
+from docplex.mp.xcounter import FastOrderedDict, ExprCounter
 from docplex.mp.quad import QuadExpr, VarPair
 from docplex.mp.linear import Var, MonomialExpr, LinearExpr, ZeroExpr, AbstractLinearExpr
 from docplex.mp.constr import QuadraticConstraint
@@ -34,54 +35,63 @@ class IQuadFactory(_AbstractModelFactory):
 
 
 class QuadFactory(IQuadFactory):
-    # INTERNAL
 
-    def __init__(self, model):
+    def __init__(self, model, engine, ordered):
         _AbstractModelFactory.__init__(self, model)
         self._model = model
-        self.term_dict_type = QuadExpr.term_dict_type
-        self.zero_expr = model._get_zero_expr()
+        self._engine = engine
+        self._lfactory = model._lfactory
+        self._set_ordering(ordered)
+        self._quad_count = 0
+
+    def new_zero_expr(self):
+        return ZeroExpr(self._model)
+
+    def _set_ordering(self, ordered):
+        # INTERNAL
+        # noinspection PyAttributeOutsideInit
+        self.ordered = ordered
+        self.term_dict_type = FastOrderedDict if ordered else ExprCounter
 
     def _unexpected_product_error(self, factor1, factor2):
         # INTERNAL
         self._model.fatal("cannot multiply {0!s} by {1!s}", factor1, factor2)
 
-    def new_quad(self, quad_args=None, linexpr=None, name=None, safe=False):
-        return QuadExpr(self._model, quads=quad_args, linexpr=linexpr, name=name, safe=safe)
+    def new_quad(self, quads=None, linexpr=None, name=None, safe=False):
+        self._quad_count += 1
+        return QuadExpr(self._model, quads=quads, linexpr=linexpr, name=name, safe=safe,
+                        qterm_dict_type=self.term_dict_type)
 
     def new_linear_expr(self, e=0, cst=0):
         return self._model._linear_expr(e, cst)
 
     def new_var_square(self, var):
-        return self.new_quad(quad_args=(var, var, 1))
+        return self.new_quad(quads=(var, var, 1), safe=True)
 
     def new_var_product(self, var, other):
         # computes and returns the product var * other
         if isinstance(other, Var):
-            return self.new_quad(quad_args=(var, other, 1), safe=True)
+            return self.new_quad(quads=(var, other, 1), safe=True)
         elif isinstance(other, MonomialExpr):
             mnm_dvar = other._dvar
             mnm_coef = other.coef
-            return self.new_quad(quad_args=(var, mnm_dvar, mnm_coef), safe=True)
+            return self.new_quad(quads=(var, mnm_dvar, mnm_coef), safe=True)
         elif isinstance(other, ZeroExpr):
             return other
         elif isinstance(other, LinearExpr):
             linexpr = other
             quad_args = [(VarPair(var, dv), k) for dv, k in linexpr.iter_terms()]
             linexpr_k = linexpr.constant
-            if 0 != linexpr_k:
-                quad_linexp = linexpr_k * var
-            else:
-                quad_linexp = None
-            return self.new_quad(quad_args, quad_linexp, safe=True)
+            quad_linexpr = linexpr_k * var if linexpr_k else None
+            return self.new_quad(quad_args, quad_linexpr, safe=True)
 
         else:
             self._unexpected_product_error(var, other)
 
     def new_monomial_product(self, mnm, other):
         mnmk = mnm.coef
-        if 0 == mnmk:
-            return self.zero_expr
+        if not mnmk:  # pragma: no cover
+            return self.new_zero_expr()
         else:
             var_quad = self.new_var_product(mnm.var, other)
             var_quad._scale(mnmk)
@@ -92,7 +102,7 @@ class QuadFactory(IQuadFactory):
             return self.new_var_product(other, linexpr)
 
         elif isinstance(other, MonomialExpr):
-            return self.new_monomial_product(other, self)
+            return self.new_monomial_product(other, linexpr)
 
         elif isinstance(other, LinearExpr):
             cst1 = linexpr.constant
@@ -116,8 +126,13 @@ class QuadFactory(IQuadFactory):
             return quad
 
         else:
-            self._unexpected_product_error(linexpr, other)\
+            self._unexpected_product_error(linexpr, other)
 
+    def new_xconstraint(self, lhs, rhs, comparaison_type):
+        if self._quad_count and isinstance(rhs, QuadExpr):
+            return self._new_qconstraint(lhs, comparaison_type, rhs)
+        else:
+            return self._lfactory._new_binary_constraint(lhs, comparaison_type, rhs)
 
     def new_le_constraint(self, e, rhs, ctname=None):
         return self._new_qconstraint(e, ComparisonType.LE, rhs, name=ctname)
@@ -128,12 +143,12 @@ class QuadFactory(IQuadFactory):
     def new_ge_constraint(self, e, rhs, ctname=None):
         return self._new_qconstraint(e, ComparisonType.GE, rhs, name=ctname)
 
-    def _new_qconstraint(self, lhs, ctype, rhs, name=None):
+    def _new_qconstraint(self, lhs, ct_sense, rhs, name=None):
         # noinspection PyPep8
         left_expr  = self._to_expr(lhs, context="QuadraticConstraint.left_expr")
         right_expr = self._to_expr(rhs, context="QuadraticConstraint.right_expr")
         self._model._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
-        ct = QuadraticConstraint(self._model, left_expr, ctype, right_expr, name)
+        ct = QuadraticConstraint(self._model, left_expr, ct_sense, right_expr, name)
         left_expr.notify_used(ct)
         right_expr.notify_used(ct)
         return ct
@@ -143,9 +158,29 @@ class QuadFactory(IQuadFactory):
         if isinstance(e, (AbstractLinearExpr, QuadExpr)):
             return e
         elif is_number(e):
-            return self._model._lfactory.constant_expr(cst=e, context=context)
+            return self._lfactory.constant_expr(cst=e, context=context)
         else:
             try:
                 return e.to_linear_expr()
-            except AttributeError:
+
+            except AttributeError:  # pragma: no cover
                 self._model.fatal("cannot convert to expression: {0!r}", e)
+
+    def set_quadratic_constraint_expr_from_pos(self, qct, pos, new_expr):
+        old_expr = qct.get_expr_from_pos(pos)
+        new_operand = self._to_expr(e=new_expr)
+        exprs = [ qct._left_expr, qct._right_expr]
+        exprs[pos] = new_operand
+        self._engine.update_quadratic_constraint(qct, UpdateEvent.LinearConstraintGlobal, *exprs)
+        # discard old_expr
+        qct.set_expr_from_pos(pos, new_expr=new_operand)
+        old_expr.notify_unsubscribed(qct)
+
+    def set_quadratic_constraint_type(self, qct, arg_newsense):
+        new_sense = ComparisonType.parse(arg_newsense)
+        if new_sense != qct.sense:
+            self._engine.update_quadratic_constraint(qct, UpdateEvent.LinearConstraintType, new_sense)
+            qct._internal_set_sense(new_sense)
+
+    def update_quadratic_constraint(self, qct, expr, event):
+        self._engine.update_quadratic_constraint(qct, event, expr)

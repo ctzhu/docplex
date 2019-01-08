@@ -165,7 +165,7 @@ class MatchNamePrioritizer(AbstractPrioritizer):
                 return ct_user_priority
 
         ctname = ct.name
-        if ct.has_automatic_name() or not ctname:
+        if not ct.has_user_name():
             return self.priority_for_unnamed_cts
         else:
             ctname_to_match = ctname if self._is_case_sensitive else ctname.lower()

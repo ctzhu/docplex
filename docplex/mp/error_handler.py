@@ -94,7 +94,7 @@ class InfoLevel(Enum):
     def _name2level_map():
         return {"fatal": InfoLevel.FATAL,
                 "error": InfoLevel.ERROR,
-                "warning": InfoLevel.ERROR,
+                "warning": InfoLevel.WARNING,
                 "info": InfoLevel.INFO}
 
     def header(self):

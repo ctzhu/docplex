@@ -94,12 +94,21 @@ class JobClient(object):
         self.ctx.log(2, "Model solving requested")
 
 
+    def get_info(self):
+        """ Get the job information
+        Returns:
+            Job information as JSON document
+        """
+        rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid, [200])
+        return rsp.json()
+
+
     def get_status(self):
         """ Get the job status
         Returns:
             Job execution status string, in 'INTERRUPTED', 'FAILED', 'PROCESSED', etc
         """
-        rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/execute", [200])
+        rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid, [200])
         status = rsp.json()["executionStatus"]
         self.ctx.log(3, "Job status is ", status)
         return status
@@ -136,7 +145,7 @@ class JobClient(object):
             terminated = status in ('INTERRUPTED', 'FAILED', 'PROCESSED')
             if not terminated:
                 if (maxwait > 0) and (time.time() > etime):
-                    self._raise_exception("Timeout of " + str(maxwait) + "sec elapsed waiting for job termination.")
+                    self._raise_exception("Timeout of " + str(maxwait) + " sec elapsed before job termination.")
                 # Wait delay and increment it if possible
                 time.sleep(wdelay)
                 if wdelay < plmax:
@@ -150,15 +159,6 @@ class JobClient(object):
                     logseqid = log[-1]['seqid'] + 1
         self.ctx.log(2, "Solve terminated. Status is ", status)
         return status
-
-
-    def get_info(self):
-        """ Get the job information
-        Returns:
-            Job information as JSON document
-        """
-        rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid, [200])
-        return rsp.json()
 
 
     def get_attachment(self, aname):
@@ -223,7 +223,7 @@ class JobClient(object):
                 self.delete_job()
             except Exception:
                 pass
-        self.ctx.log(2, "Solving job " + str(self.jobid) + " terminated")
+        self.ctx.log(2, "Clean job " + str(self.jobid) + " terminated")
 
 
     def get_all_jobs(self):

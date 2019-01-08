@@ -9,7 +9,7 @@
 from docplex.mp.engine import NoSolveEngine, ZeroSolveEngine, FakeFailEngine, RaiseErrorEngine
 from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.utils import DOcplexException
-
+from docplex.mp.context import has_credentials
 
 class EngineFactory(object):
     """ A factory class that manages creation of solver instances.
@@ -67,7 +67,7 @@ class EngineFactory(object):
             # default is CPLEX if we have it
             default_engine_type = self._cplex_engine_type
 
-        elif context.solver.docloud.has_credentials():
+        elif has_credentials(context.solver.docloud):
             # default is docloud
             default_engine_type = DOcloudEngine
 
@@ -77,7 +77,7 @@ class EngineFactory(object):
             # "Credentials are required at solve time")
             default_engine_type = NoSolveEngine
 
-        if context.solver.docloud.has_credentials():
+        if has_credentials(context.solver.docloud):
             kwargs['docloud_context'] = context.solver.docloud
 
         engine_type = self._get_engine_from_agent(agent=solver_agent, default_engine=default_engine_type)

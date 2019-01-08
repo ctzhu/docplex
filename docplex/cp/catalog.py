@@ -306,8 +306,7 @@ Oper_same_common_sub_sequence    = CpoOperation("sameCommonSubSequence", "same_c
 Oper_same_common_subsequence     = CpoOperation("sameCommonSubsequence", "same_common_subsequence", None, -1, ( CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar)),
                                                                                                                 CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar, Type_IntervalVarArray, Type_IntervalVarArray))) )
 Oper_same_sequence               = CpoOperation("sameSequence", "same_sequence", None, -1, ( CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar)),
-                                                                                             CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar, Type_IntervalVarArray, Type_IntervalVarArray)),
-                                                                                             CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar, Type_BoolInt))) )
+                                                                                             CpoSignature(Type_Constraint, (Type_SequenceVar, Type_SequenceVar, Type_IntervalVarArray, Type_IntervalVarArray))) )
 Oper_scal_prod                   = CpoOperation("scalProd", "scal_prod", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntArray, Type_IntExprArray)),
                                                                                      CpoSignature(Type_IntExpr, (Type_IntExprArray, Type_IntArray)),
                                                                                      CpoSignature(Type_IntExpr, (Type_IntExprArray, Type_IntExprArray)),

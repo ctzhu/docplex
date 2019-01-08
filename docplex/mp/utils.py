@@ -14,7 +14,7 @@ import threading
 import time
 import sys
 
-from six import PY2 as six_py2
+from six import PY2 as SIX_PY2
 from six import itervalues
 
 from docplex.mp.compat23 import Queue
@@ -23,6 +23,7 @@ from docplex.mp.compat23 import izip
 __int_types = {int}
 __float_types = {float}
 __numpy_ndslot_type = None
+__numpy_matrix_type = None
 __pandas_series_type = None
 __pandas_dataframe_type = None
 
@@ -36,8 +37,8 @@ except NameError:  # pragma: no cover
 
 try:
     import numpy
-    _numpy_is_available = True
 
+    _numpy_is_available = True
 
     __int_types.add(numpy.bool_)
     __int_types.add(numpy.bool)
@@ -61,9 +62,10 @@ try:
     __float_types.add(numpy.float32)
     __float_types.add(numpy.float64)
 
+    from numpy import ndarray, matrix
 
-    from numpy import ndarray
     __numpy_ndslot_type = ndarray
+    __numpy_matrix_type = matrix
 except ImportError:  # pragma: no cover
     _numpy_is_available = False  # pragma: no cover
     numpy_is_numeric = None
@@ -79,6 +81,8 @@ except ImportError:
     __pandas_dataframe_type = None
 
 __int_types = frozenset(__int_types)
+
+
 def is_int(s):
     type_of_s = type(s)
     return type_of_s in __int_types or (_numpy_is_available and numpy_is_integer(type(s)))
@@ -90,15 +94,16 @@ if _numpy_is_available:
     def numpy_is_numeric(t):
         # returns True if the specified type is numeric
         try:
-            flag =  numpy.issubdtype(t, numpy.number)
+            flag = numpy.issubdtype(t, numpy.number)
             global __all_python_num_types
-            if flag is True:
+            if flag:
                 tmp = set(__all_python_num_types)
                 tmp.add(type(t))
                 __all_python_num_types = frozenset(tmp)
             return flag
         except TypeError:
             return False
+
 
     def numpy_is_integer(t):
         # returns True if the specified type is integer
@@ -118,25 +123,48 @@ if _numpy_is_available:
         except TypeError:
             return False
 
-def is_number(s):
-    type_of_s = type(s)
-    return type_of_s in __all_python_num_types or (_numpy_is_available and (numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)))
 
-
-def _is_numpy_ndslot(s):
-    # returns True if the argument is a numpy number
-    # wrapped in a fake ndarray
-    # all the following conditions must be satisfied:
-    # 1. numpy is present
-    # 2. type is ndarray
-    # 3. shape is () empty tuple
-    # 4. wrapped type in ndarray is numeric.
-    try:
-        retval = is_numpy_ndarray(s) and s.shape == () and (s.dtype.type in __all_python_num_types or numpy_is_numeric(s.dtype))
-        return retval
-    except AttributeError:  # if s is not a numpy type, s.dtype triggers this
+    def _is_numpy_ndslot(s):
+        # returns True if the argument is a numpy number
+        # wrapped in a fake ndarray
+        # all the following conditions must be satisfied:
+        # 1. numpy is present
+        # 2. type is ndarray
+        # 3. shape is () empty tuple
+        # 4. wrapped type in ndarray is numeric.
+        try:
+            retval = is_numpy_ndarray(s) and s.shape == () and \
+                     (s.dtype.type in __all_python_num_types or numpy_is_numeric(s.dtype))
+            return retval
+        except AttributeError:  # if s is not a numpy type, s.dtype triggers this
+            return False
+else:
+    def numpy_is_numeric(t):
         return False
 
+
+    def numpy_is_integer(t):
+        return False
+
+
+    def _is_numpy_ndslot(s):
+        return False
+
+
+def is_number(s):
+    type_of_s = type(s)
+    return type_of_s in __all_python_num_types or numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)
+
+
+# def is_number2(s):
+#     if isinstance(s, __all_num_types_tuple):
+#         return True
+#     elif _numpy_is_available:
+#         type_of_s = type(s)
+#         if (numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)):
+#             return True
+#     else:
+#         return False
 
 def is_pandas_series(s):
     return __pandas_series_type is not None and type(s) is __pandas_series_type
@@ -144,26 +172,20 @@ def is_pandas_series(s):
 def is_pandas_dataframe(s):
     return __pandas_dataframe_type and isinstance(s, __pandas_dataframe_type)
 
-
 def is_numpy_ndarray(s):
     return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
 
-string_types  = {str}
-if six_py2:
+def is_numpy_matrix(s):
+    return __numpy_matrix_type and type(s) is __numpy_matrix_type
+
+string_types = {str}
+if SIX_PY2:
     string_types.add(unicode)
-string_types  = frozenset(string_types)
+string_types = frozenset(string_types)
+
 
 def is_string(e):
     return type(e) in string_types
-    #if e is None:
-    #    return False
-    #elif
-    #isinstance(e, str):
-    #    return True
-    #elif six_py2:
-    #    return isinstance(e, unicode)
-    #else:
-    #    return False
 
 def has_len(e):
     try:
@@ -218,6 +240,7 @@ def _to_list(arg):
         # an atom: wrap it into a list
         return list(arg)
 
+
 def _build_ordered_sequence_types():
     if __pandas_series_type and __numpy_ndslot_type:
         return (list, __pandas_series_type, __numpy_ndslot_type)
@@ -227,6 +250,7 @@ def _build_ordered_sequence_types():
         return (list, __numpy_ndslot_type)
     else:
         return (list,)
+
 
 def is_ordered_sequence(arg, type_tuple=_build_ordered_sequence_types()):
     return isinstance(arg, type_tuple)
@@ -263,14 +287,48 @@ class DOCplexSolutionValueError(DOcplexException):
         DOcplexException.__init__(self, msg)
 
 
-
-
-def normalize_basename(s, force_lowercase=True):
+def normalize_basename(s, force_lowercase=True, maxlen=255):
+    """Replaces some characters from s with a translation table:
+    
+     trans_table = {" ": "_",
+                   "/": "_slash_",
+                   "\\": "_backslash_",
+                   "?": "_question_",
+                   "%": "_percent_",
+                   "*": "_asterisk_",
+                   ":": "_colon_",
+                   "|": "_bar_",
+                   '"': "_quote_",
+                   "<": "_lt_",
+                   ">": "_gt_",
+                   "&": "_amp_"}
+    
+    then if the generated name is longer than maxlen, the name is truncated
+    to maxlen and the hash of the name modulo 0xffffffff is appended.
+    """
     # replace all whietspaces by _
     l = s.lower() if force_lowercase else s
     # table = mktrans(" ", "_")
     # return l.translate(table)
-    return l.replace(" ", "_")
+    trans_table = {" ": "_",
+                   "/": "_slash_",
+                   "\\": "_backslash_",
+                   "?": "_question_",
+                   "%": "_percent_",
+                   "*": "_asterisk_",
+                   ":": "_colon_",
+                   "|": "_bar_",
+                   '"': "_quote_",
+                   "<": "_lt_",
+                   ">": "_gt_",
+                   "&": "_amp_"}
+
+    n = ("".join([trans_table.get(x, x) for x in l]))
+
+    if len(n) > maxlen - 8:
+        h = format(hash(n) & 0xffffffff, "08x")
+        n = n[:maxlen-8] + "_"+ h
+    return n
 
 
 def make_output_path2(actual_name, extension, basename_arg, path=None):
@@ -349,6 +407,16 @@ def str_holo(arg, maxlen):
         return s
     else:
         return "{}..".format(s[:maxlen])
+
+
+try:
+    import scipy.sparse as sp
+except ImportError:
+    sp = None
+
+def is_scipy_sparse(m):
+    return sp and sp.issparse(m)
+
 
 
 DOCPLEX_CONSOLE_HANDLER = None
@@ -588,6 +656,33 @@ class ThreadedCyclicLoop(object):
 
 
 class _SymbolGenerator(object):
+    def __init__(self, pattern, offset=1):
+        ''' Initialize the counter and the pattern.
+            Fixes the pattern by suffixing '%d' if necessary.
+        '''
+        self._pattern = pattern
+        self._offset = offset
+        self._set_pattern(pattern)
+
+    def _set_pattern(self, pattern):
+        if pattern.endswith('%d'):
+            self._pattern = pattern
+        else:
+            self._pattern = pattern + '%d'
+
+    def _get_pattern(self):
+        return self._pattern
+
+    pattern = property(_get_pattern, _set_pattern)
+
+    def new_index_symbol(self, index):
+        return self._pattern % (index + self._offset)
+
+    def new_obj_symbol(self, obj):
+        return self.new_index_symbol(obj.index)
+
+
+class _AutomaticSymbolGenerator(_SymbolGenerator):
     """
     INTERNAL class
     """
@@ -596,22 +691,8 @@ class _SymbolGenerator(object):
         ''' Initialize the counter and the pattern.
             Fixes the pattern by suffixing '%d' if necessary.
         '''
-        self.__pattern = pattern
-        # add offset to counter.
-        self.__offset = offset
+        _SymbolGenerator.__init__(self, pattern, offset)
         self._last_index = -1
-        self._set_pattern(pattern)
-
-    def _set_pattern(self, pattern):
-        if pattern.endswith('%d'):
-            self.__pattern = pattern
-        else:
-            self.__pattern = pattern + '%d'
-
-    def _get_pattern(self):
-        return self.__pattern
-
-    pattern = property(_get_pattern, _set_pattern)
 
     def reset(self):
         self._last_index = -1
@@ -629,16 +710,16 @@ class _SymbolGenerator(object):
         :return: A symbol string, suposedly not yet allocated.
         """
         guessed_index = self._last_index + 1
-        coined_symbol = self.__pattern % (guessed_index + self.__offset)
+        coined_symbol = _SymbolGenerator.new_index_symbol(self, guessed_index)
         self._last_index = guessed_index
         return coined_symbol
 
 
-class _IndexScope(_SymbolGenerator):
+class _IndexScope(_AutomaticSymbolGenerator):
     # INTERNAL: full scope of indices.
 
     def __init__(self, obj_iter, pattern, offset=1):
-        _SymbolGenerator.__init__(self, pattern, offset)
+        _AutomaticSymbolGenerator.__init__(self, pattern, offset)
         self._obj_iter = obj_iter
         self._index_map = None
 
@@ -656,18 +737,18 @@ class _IndexScope(_SymbolGenerator):
         return self._index_map.get(idx)
 
     def reset(self):
-        _SymbolGenerator.reset(self)
+        _AutomaticSymbolGenerator.reset(self)
         self._index_map = None
 
     def notify_obj_index(self, obj, index):
-        _SymbolGenerator.notify_new_index(self, index)
+        _AutomaticSymbolGenerator.notify_new_index(self, index)
         if self._index_map is not None:
             self._index_map[index] = obj
 
     def notify_obj_indices(self, objs, indices):
         # take the last one??
         if indices:
-            _SymbolGenerator.notify_new_index(self, max(indices))
+            _AutomaticSymbolGenerator.notify_new_index(self, max(indices))
             idxmap = self._index_map
             if idxmap is not None:
                 for obj, idx in izip(objs, indices):
@@ -677,20 +758,9 @@ class _IndexScope(_SymbolGenerator):
         if self._index_map is not None:
             self._index_map = self._make_index_map()
 
-    def reindex_one(self, reindexed_index, indexer):
-        for ct in self._obj_iter():
-            old_model_index = ct.unchecked_index
-            if old_model_index > reindexed_index:
-                updated_index = indexer.get_ct_index(ct)
-                if updated_index != old_model_index:
-                    ct.set_index(updated_index)
-
     def reindex_all(self, indexer):
-        for ct in self._obj_iter:
-            old_model_index = ct.unchecked_index
-            updated_index = indexer.get_ct_index(ct)
-            if updated_index != old_model_index:
-                ct.set_index(updated_index)
+        for ix, obj in enumerate(self._obj_iter()):
+            obj.set_index(ix)
 
 
 class CplexParameterHandler(object):
@@ -717,3 +787,24 @@ class CplexParameterHandler(object):
                         "WARNING: Number of workers has been reduced to %s to comply with platform limitations.\n" % max_threads)
                     # ---
         return self._parameters
+
+class _ToleranceScheme(object):
+    """
+        INTERNAL
+        """
+
+    def __init__(self, absolute=1e-6, relative=1e-4):
+        assert absolute >= 0
+        assert relative >= 0
+        self._absolute_tolerance = absolute
+        self._relative_tolerance = relative
+
+    def compute_tolerance(self, obj):
+        abs_obj = abs(obj)
+        return max(self._absolute_tolerance, self._relative_tolerance * abs_obj)
+
+    def to_string(self):
+        return "tolerance(abs={0:.2f},rel={1:.3f})".format(self._absolute_tolerance, self._relative_tolerance)
+
+    def __str__(self):
+        return self.to_string()  # pragma: no cover

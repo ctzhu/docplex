@@ -32,6 +32,10 @@ The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc
    In this case, not all variables are present in the solution, and some of them may be partially instantiated.
  * To represent a *partial* model solution that is returned by the solver as result of calling method
    :meth:`docplex.cp.solver.solver.CpoSolver.propagate`.
+
+
+Detailed description
+--------------------
 """
 
 import json
@@ -517,16 +521,15 @@ class CpoModelSolution(object):
         Args:
             name: Variable name or variable expression.
         Returns:
-            Variable solution (class extending :class:`CpoVarSolution`)
-        Raises:
-            CpoException if variable solution does not exists
+            Variable solution (class extending :class:`CpoVarSolution`),
+            None if variable not found
         """
         if isinstance(name, CpoExpr):
-            name = name.get_name()
-        value = self.vars.get(name)
-        if value is None:
-            raise CpoException("Variable '{}' does not exists in this solution".format(name))
-        return value
+            name = name.name
+        return self.vars.get(name)
+        # if value is None:
+        #     raise CpoException("Variable '{}' does not exists in this solution".format(name))
+        # return value
 
 
     def get_all_var_solutions(self):
@@ -555,8 +558,6 @@ class CpoModelSolution(object):
             name: Variable name, or model variable descriptor.
         Returns:
             Variable value, None if variable is not found.
-        Raises:
-            CpoException if variable solution does not exists
         """
         var = self.get_var_solution(name)
         return None if var is None else var.get_value()
@@ -1149,7 +1150,7 @@ class CpoRefineConflictResult(CpoRunResult):
         """ Returns the list of all variables that are certainly member of the conflict.
 
         Returns:
-            List of model variables (class CpoVariable) certainly member of the conflict.
+            List of model variables (class CpoIntVar or CpoIntervalVar) certainly member of the conflict.
         """
         return self.member_variables
 
@@ -1158,7 +1159,7 @@ class CpoRefineConflictResult(CpoRunResult):
         """ Returns the list of all variables that are possibly member of the conflict.
 
         Returns:
-            List of model variables (class CpoVariable) possibly member of the conflict.
+            List of model variables (class CpoIntVar or CpoIntervalVar) possibly member of the conflict.
         """
         return self.possible_variables
 

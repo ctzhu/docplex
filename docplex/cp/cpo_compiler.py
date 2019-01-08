@@ -164,7 +164,7 @@ class CpoCompiler(object):
                 if isinstance(v, CpoStateFunction):
                     continue
                 # Compute CPO printable variable name
-                vname = v.get_name()
+                vname = v.name
                 vpname = strname = to_printable_symbol(vname)
                 if len(vpname) > mnl:
                     # Replace by an alias
@@ -242,8 +242,8 @@ class CpoCompiler(object):
             self._write_sub_expression(out, sx)
 
         # Write expression label (for constraints)
-        if expr.has_name() and not expr.is_variable():
-            out.write(self._get_id_string(expr.get_name()))
+        if expr.name and not expr.type.is_variable:
+            out.write(self._get_id_string(expr.name))
             out.write(u";\n")
 
 
@@ -255,7 +255,7 @@ class CpoCompiler(object):
             expr:  Expression to write
         """
         # Write expression
-        id = expr.get_name()
+        id = expr.name
         if id is not None:
             wid = self._get_id_string(id)
             out.write(wid)
@@ -280,7 +280,7 @@ class CpoCompiler(object):
         else:
             raise CpoException("Internal error: unsupported starting point variable: " + str(var))
         # Write variable starting point
-        out.write(self._get_id_string(var.get_name()))
+        out.write(self._get_id_string(var.name))
         out.write(u" = ")
         out.write(u''.join(cout))
         out.write(u";\n")
@@ -323,17 +323,17 @@ class CpoCompiler(object):
             e = edscr[0]
 
             # Check if expression is named and not root (named expression and variable)
-            if (not root or (e is not expr)) and e.has_name():
-                cout.append(self._get_id_string(e.get_name()))
+            if (not root or (e is not expr)) and e.name:
+                cout.append(self._get_id_string(e.name))
                 estack.pop()
                 continue
 
             # Check constant expressions
-            t = e.get_type()
-            if t.is_constant():
+            t = e.type
+            if t.is_constant:
                 estack.pop()
-                if t.is_array():
-                    vals = e.get_value()
+                if t.is_array:
+                    vals = e.value
                     if len(vals) == 0:
                         cout.append(_ARRAY_TYPES[t])
                         cout.append("[]")
@@ -343,9 +343,9 @@ class CpoCompiler(object):
                         #cout.append(', '.join(str(v) for v in vals))
                         cout.append(']')
                 elif (t == Type_Bool):
-                    cout.append("true()" if e.get_value() else "false()")
+                    cout.append("true()" if e.value else "false()")
                 elif (t in _INTEGER_TYPES):
-                    cout.append(_number_value_string(e.get_value()))
+                    cout.append(_number_value_string(e.value))
                 elif (t == Type_TransitionMatrix):
                     self._compile_transition_matrix(e, cout)
                 elif (t == Type_TupleSet):
@@ -355,10 +355,10 @@ class CpoCompiler(object):
                 elif (t == Type_SegmentedFunction):
                     self._compile_segmented_function(e, cout)
                 else:
-                    cout.append(_number_value_string(e.get_value()))
+                    cout.append(_number_value_string(e.value))
 
             # Check variables
-            elif t.is_variable():
+            elif t.is_variable:
                 estack.pop()
                 if (t == Type_IntVar):
                     self._compile_int_var(e, cout)
@@ -370,8 +370,8 @@ class CpoCompiler(object):
                     self._compile_state_function(e, cout)
 
             # Check expression array
-            elif (t.is_array()):
-                oprnds = e._get_children()
+            elif t.is_array:
+                oprnds = e.children
                 alen = len(oprnds)
                 if alen == 0:
                     cout.append(_ARRAY_TYPES[t])
@@ -393,17 +393,10 @@ class CpoCompiler(object):
 
             # General expression
             else:
-                # Get signature
-                sign = e.get_signature()
-                if (sign is None):
-                    cout.append(e.name)
-                    estack.pop()
-                    continue
-
                 # Get operation elements
-                oper = sign.operation
+                oper = e.operation
                 prio = oper.priority
-                oprnds = e.get_operands()
+                oprnds = e.children
                 oplen = len(oprnds)
                 cnx = edscr[1]
 
@@ -450,12 +443,12 @@ class CpoCompiler(object):
                             cout.append(" ")
                         # Check if operand will require to have parenthesis
                         arg = oprnds[cnx]
-                        nprio = arg.get_priority()
+                        nprio = arg.priority
                         # Parenthesis required if priority is greater than parent node, or if this node is not first child
                         chparnts = (nprio > prio) \
                                   or (nprio >= 5) \
                                   or ((nprio == prio) and (cnx > 0)) \
-                                  or ((oplen == 1) and not parents and not oprnds[0].is_leaf())
+                                  or ((oplen == 1) and not parents and oprnds[0].children)
 
                         # Put operand on stack
                         estack.append([arg, -1, chparnts])
@@ -484,7 +477,7 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("(")
-        self._compile_var_domain(v.get_value(), cout)
+        self._compile_var_domain(v.value, cout)
         cout.append(")")
 
 
@@ -552,7 +545,7 @@ class CpoCompiler(object):
         if len(lvars) == 0:
             cout.append("intervalVarArray[]")
         else:
-            cout.append("[" + ", ".join(self._get_id_string(v.get_name()) for v in lvars) + "]")
+            cout.append("[" + ", ".join(self._get_id_string(v.name) for v in lvars) + "]")
         types = sv.get_types()
         if (types is not None):
             if len(lvars) == 0:
@@ -683,15 +676,15 @@ class CpoCompiler(object):
         Args:
             expr:  Expression to compile
         Returns:
-            List of sub-expressions to compile, in compilation order. Last expression should
-            be the root expression.
+            List of sub-expressions to compile, in compilation order.
+            Last expression should be the root expression, only if not already compiled.
         """
         # Expand expressions
         exprset = self.exprset  # Set of named expressions already compiled
         estack = [expr]
         enx = 0
         while enx < len(estack):
-            for e in estack[enx]._get_children():
+            for e in estack[enx].children:
                 if not id(e) in exprset:
                     estack.append(e)
             enx += 1
@@ -701,10 +694,9 @@ class CpoCompiler(object):
         while estack:
             e = estack.pop()
             eid = id(e)
-            if not eid in exprset and (e.has_name() or e is expr):
+            if not eid in exprset and (e.name or e is expr):
                 subexpr.append(e)
                 exprset.add(eid)
-
         return subexpr
 
 

@@ -58,6 +58,28 @@ class ComparisonType(Enum):
     def python_operator(self):
         return self._pyop
 
+    @classmethod
+    def parse(cls, arg, do_raise=True):
+        # INTERNAL
+        # noinspection PyTypeChecker
+        for cmp in cls:
+            if arg == cmp or arg == cmp.value:
+                return cmp
+            elif is_string(arg):
+                if arg == str(cmp.value) \
+                        or arg.lower() == cmp.name.lower() \
+                    or arg == cmp._cplex_code:
+                    return cmp
+        else:
+            if do_raise:
+                docplex_fatal('cannot convert this to a comparison type: {0!r}'.format(arg))
+            else:
+                return None
+
+    @classmethod
+    def cplex_ctsense_to_python_op(cls, cpx_sense):
+        return cls.parse(cpx_sense).python_operator
+
 
 class RelaxationMode(Enum):
     """ This enumerated type describes the different strategies for model relaxation: MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad.
@@ -112,16 +134,6 @@ class ConflictStatus(Enum):
     """
     Excluded, Possible_member, Possible_member_lower_bound, Possible_member_upper_bound, \
         Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
-
-
-class CplexCtSenseToPython(object):
-    # INTERNAL
-    sense_map = {'G': operator.ge, 'L': operator.le, 'E': operator.eq}
-
-    @staticmethod
-    def cplex_ctsense_to_python_op(cpx_sense, _sense_map=sense_map):
-        return _sense_map[cpx_sense]
-
 
 class SOSType(Enum):
     """This enumerated class defines the SOS types:
@@ -194,3 +206,98 @@ class SolveAttribute(Enum):
                 docplex_fatal('cannot convert this to a solve attribute: {0!r}'.format(arg))
             else:
                 return None
+
+class UpdateEvent(Enum):
+    # INTERNAL
+    NoOp = 0
+    #
+    # Linear ct
+    LinearConstraintCoef = 1
+    LinearConstraintRhs = 2
+    LinearConstraintGlobal = 3  # logical and of Coef + Rhs
+    LinearConstraintType = 4
+
+    # Range
+    RangeConstraintBounds = 5
+    RangeConstraintExpr = 6
+    # Expr
+    ExprConstant = 8
+    LinExprCoef = 16
+    LinExprGlobal = 24
+    LinExprPromotedToQuad = 25  # objective is ok, constraint wont support this.
+
+    # Quad
+    QuadExprQuadCoef = 32
+    QuadExprGlobal = 64
+
+    # Ind
+    IndicatorLinearConstraint = 128
+
+    # Quadct
+    QuadraticConstraintGlobal = 256
+
+    def __bool__(self):
+        return True if self.value else False
+
+
+class ObjectiveSense(Enum):
+    """
+    This enumerated class defines the two types of objectives, `Minimize` and `Maximize`.
+    """
+    Minimize, Maximize = 1, 2
+
+    def is_minimize(self):
+        return self is ObjectiveSense.Minimize
+
+    def is_maximize(self):
+        return self is ObjectiveSense.Maximize
+
+    @property
+    def cplex_coef(self):
+        return 1 if self.is_minimize() else -1
+
+    def verb(self):
+        # INTERNAL
+        return "minimize" if self.is_minimize() else "maximize" if self.is_maximize() else "WHAT???"
+
+    def action(self):
+        # INTERNAL
+        # minimize -> minimizing, maximize -> maximizing...
+        return "%sing" % self.verb()[:-1]
+
+    @staticmethod
+    def parse(arg, logger=None, default_sense=None):
+        if isinstance(arg, ObjectiveSense):
+            return arg
+
+        elif is_string(arg):
+            lower_text = arg.lower()
+            if lower_text in {"minimize", "min"}:
+                return ObjectiveSense.Minimize
+            elif lower_text in {"maximize", "max"}:
+                return ObjectiveSense.Maximize
+            elif default_sense:
+                logger.error(
+                    "Text is not recognized as objective sense: {0}, expecting \"min\" or \"max\" - using default {1:s}",
+                    (arg, default_sense))
+                return default_sense
+            elif logger:
+                logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
+            else:
+                docplex_fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max".format(arg))
+
+        elif arg == 1:
+            return ObjectiveSense.Minimize
+        elif -1 == arg:
+            return ObjectiveSense.Maximize
+
+        elif default_sense:
+            return default_sense
+        elif logger:
+            if not default_sense:
+                logger.fatal("cannot convert: <{}> to objective sense", (arg,))
+            else:
+                logger.warning("cannot convert: <{0!r}> to objective sense - using default: {1!s}", (arg, default_sense))
+        else:
+            docplex_fatal("cannot convert: <{}> to objective sense".format(arg))
+

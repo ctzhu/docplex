@@ -91,6 +91,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         # Check if executable file exists
         if context.execfile is None:
             raise CpoException("Executable file should be given in 'execfile' context attribute.")
+        if not is_string(context.execfile):
+            raise CpoException("Executable file should be given in 'execfile' as a string.")
         #if not os.path.isfile(context.execfile):
         #    raise CpoException("Executable file '" + str(context.execfile) + "' does not exists")
 
@@ -128,7 +130,7 @@ class CpoSolverAngel(solver.CpoSolverAgent):
 
         # Send CPO model to process
         self._write_message(CMD_SET_CPO_MODEL, cpostr)
-        context.log(3, "Model sent, wait for solution")
+        context.log(3, "Model sent.")
         self._wait_event(EVT_SUCCESS)
 
 
@@ -304,7 +306,7 @@ class CpoSolverAngel(solver.CpoSolverAgent):
     def _wait_json_result(self):
         """ Wait for a solution while forwarding logs if any.
         Returns:
-            Model solution (type CpoModelSolution)
+            Model solution (type CpoSolveResult)
         """
 
         # Wait JSON result

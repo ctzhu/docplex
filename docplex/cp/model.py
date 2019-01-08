@@ -13,12 +13,16 @@ elements that compose a CPO model:
  * the constraints of the model,
  * optional objective value(s),
  * optional search phases,
- * optional starting point (not available for CPO solver release lower or equal to 12.6.3).
+ * optional starting point (available for CPO solver release greater or equal to 12.7.0).
 
 The different model expressions and elements are created using services provided by modules:
 
  * :mod:`docplex.cp.expression` for the simple expression elements,
  * :mod:`docplex.cp.modeler` to build complex expressions and constraints using the specialized CPO functions.
+
+
+Detailed description
+--------------------
 """
 
 # Following imports required to allow modeling just importing this module
@@ -102,6 +106,7 @@ class CpoModel(object):
         self.integer_var_dict  = expression.integer_var_dict
         self.interval_var      = expression.interval_var
         self.interval_var_list = expression.interval_var_list
+        self.interval_var_dict = expression.interval_var_dict
         self.sequence_var      = expression.sequence_var
         self.transition_matrix = expression.transition_matrix
         self.tuple_set         = expression.tuple_set
@@ -110,6 +115,13 @@ class CpoModel(object):
         # Copy all modeler functions in the model object
         for f in _MODELER_PUBLIC_FUNCTIONS:
             setattr(self, f.__name__, f)
+
+        # Special case for builtin functions
+        self.min = modeler.min_of
+        self.max = modeler.max_of
+        self.sum = modeler.sum_of
+        self.abs = modeler.abs_of
+        self.range = modeler.in_range
 
 
     def __enter__(self):
@@ -135,11 +147,14 @@ class CpoModel(object):
         Raises:
             CpoException in case of error.
         """
+        # Check simple boolean expressions
+        if is_bool(expr):
+            assert expr, "Try to add an expression which is already false"
+            return
+
         # Check expression
         assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of " + str(type(expr))
-        #assert expr.is_constraint_or_bool_expr(), "An expression added to the model should be a constraint or a boolean expression."
-        #print("Adding expression: {}".format(expr))
-        
+
         # Determine calling location
         if self.source_loc:
             f = inspect.currentframe().f_back
@@ -149,15 +164,15 @@ class CpoModel(object):
 
         # Scan expression to check new variables
         self._scan_expression(expr)
-        
-        if not expr.is_variable():
+        etyp = expr.type
+        if not etyp.is_variable:
             # Check constraints
-            if expr.is_constraint_or_bool_expr():
+            if etyp in (Type_Constraint, Type_BoolExpr):
                 # Check if expression is named
-                if self.name_constraints and not expr.has_name():
+                if self.name_constraints and not expr.name:
                     expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
                 self.expr_list.append((expr, loc))
-            elif expr.is_type(Type_SearchPhase):
+            elif etyp == Type_SearchPhase:
                 self.search_phases.append((expr, loc))
             else:
                 self.expr_list.append((expr, loc))
@@ -183,8 +198,8 @@ class CpoModel(object):
         for ix, (x, l) in enumerate(self.expr_list):
             if x is expr:
                 del self.expr_list[ix]
-                if expr.has_name():
-                    del self.map_expr[expr.get_name()]
+                if expr.name:
+                    del self.map_expr[expr.name]
                 return True
         return False
 
@@ -193,10 +208,11 @@ class CpoModel(object):
         """ Set a list of search phases
 
         Args:
-            phases: Array of search phases
+            phases: Array of search phases, or single phase
         """
         # Check arguments
-        assert is_array(phases), "Argument 'phases' should be a list of SearchPhases"
+        if not is_array(phases):
+            phases = [phases]
 
         # Determine calling location
         if self.source_loc:
@@ -249,7 +265,7 @@ class CpoModel(object):
         A starting point specifies a (possibly partial) solution that could be used by CP Optimizer
         to start the search.
 
-        Starting point is not available for CPO solver release lower or equal to 12.6.3.
+        Starting point is available for CPO solver release greater or equal to 12.7.0.
 
         Args:
             stpoint: Starting point, object of class CpoModelSolution
@@ -305,7 +321,7 @@ class CpoModel(object):
         """
         # Search last optimization expression
         for x, l in reversed(self.get_all_expressions()):
-            if isinstance(x, CpoFunctionCall) and x.get_operation().is_optim():
+            if isinstance(x, CpoFunctionCall) and x.operation.is_optim:
                 return x
         return None
 
@@ -451,7 +467,7 @@ class CpoModel(object):
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
             context:   Complete solving context. If not given, context is the default context that is set in config.py.
@@ -490,7 +506,7 @@ class CpoModel(object):
         require to explicitly create a CpoSolver instead of calling function at model level.
         Please refer to this class for more details.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Args:
             context:   Complete solving context. If not given, context is the default context that is set in config.py.
@@ -622,20 +638,17 @@ class CpoModel(object):
 
 
     def _add_named_expr(self, expr):
-        """ Add an expression to the map of named expressions.
+        """ If named, add an expression to the map of named expressions.
 
         Args:
             expr: Expression
         Raises:
             CpoException if name already used for another expression
         """
-        name = expr.get_name()
-        #print("Add named expression: {}: {}".format(name, expr))
+        name = expr.name
         if name:
-            oexpr = self.map_expr.get(name)
-            if (oexpr is not None) and (oexpr is not expr):
-                raise CpoException("Expression with name '{}' already exists: {}".format(name, oexpr))
-            self.map_expr[name] = expr
+            if (self.map_expr.setdefault(name, expr) is not expr):
+                raise CpoException("An expression named '{}' already exists: {}".format(name, self.map_expr[name]))
 
 
     def _add_variable(self, var):
@@ -644,18 +657,13 @@ class CpoModel(object):
         Args:
             var: Variable expression to add
         """
-        # Check if variable has a name
-        name = var.get_name()
-        if name is None:
-            name = expression._set_generated_name()
-            var.set_name(name)
-        else:
-            # Check if variable already in expressions
-            ov = self.map_expr.get(name)
-            if ov is var:
-                return
-            elif ov is not None:
-                raise CpoException("Variable name '" + str(name) + "' is already used.")
+        # Check if variable already in expressions
+        name = var.name
+        ov = self.map_expr.get(name)
+        if ov is var:
+            return
+        if ov is not None:
+            raise CpoException("Variable name '" + str(name) + "' is already used.")
         # Add variable in structures
         self.map_expr[name] = var
         self.var_set.add(var)
@@ -676,17 +684,17 @@ class CpoModel(object):
         while estack:
             # Get expression to check
             e = estack.pop()
-            t = e.get_type()
-            if not t.is_constant():
+            t = e.type
+            if not t.is_constant:
                 eid = id(e)
                 if eid not in eset:
                     eset.add(eid)
                     self.nb_expr_nodes += 1
-                    if (t.is_variable()):
+                    if t.is_variable:
                         self._add_variable(e)
                     else:
                         # Stack children expressions
-                        estack.extend(e._get_children())
+                        estack.extend(e.children)
 
 
     def _ensure_all_root_constraints_named(self):
@@ -704,7 +712,7 @@ class CpoModel(object):
             return True
         # Loop on each top-level constraints
         for (expr, l) in self.expr_list:
-            if expr.is_constraint_or_bool_expr() and (not expr.has_name()):
+            if expr.type in (Type_Constraint, Type_BoolExpr) and (not expr.name):
                 name = expression._CONSTRAINT_ID_ALLOCATOR.allocate()
                 expr.set_name(name)
                 self._add_named_expr(expr)

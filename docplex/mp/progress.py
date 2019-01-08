@@ -13,13 +13,14 @@ class ProgressData(object):
     """ A container class to hold data retrived from progress callbacks.
 
     """
+    BIGNUM = 1e+75
 
     def __init__(self):
-        BIGNUM = 1e+75
+        bignum = self.BIGNUM
         self.has_incumbent = False
-        self.current_objective = BIGNUM
-        self.best_bound = BIGNUM
-        self.mip_gap = BIGNUM
+        self.current_objective = bignum
+        self.best_bound = bignum
+        self.mip_gap = bignum
         self.current_nb_nodes = 0
         self.remaining_nb_nodes = 0
         self.time = -1
@@ -59,7 +60,6 @@ class ProgressListener(object):
 
         '''
         if self._cb is not None and not self._aborted:
-            #print('---- actually aborting cplex')
             self._aborted = True
             self._cb.abort()
 
@@ -113,7 +113,7 @@ class ProgressListener(object):
 
 class _IProgressFilter(object):
     def accept(self, pdata):
-        raise NotImplementedError  # pragma : no cover
+        raise NotImplementedError  # pragma: no cover
 
     def reset(self):
         pass
@@ -302,35 +302,51 @@ class RecordProgressListener(ProgressListener):
 
 
 class SolutionListener(ProgressListener):
+    """ A specialized implementation of Progress Listener, which memorizes intermediate solutions.
 
+    This subclass of ProgressListener memorizes only the latest solution found. It can easily
+    be subclassed to memorize *all* intermediate solutions by storing them in a list.
+    @PROOFREAD
+    """
     def __init__(self, model):
         ProgressListener.__init__(self)
         self._model = model
         self._engine_name = model.get_engine()._location()
         self._current_solution = None
-        self._current_objective = 1e+75
+        self._current_objective = ProgressData.BIGNUM
 
     def requires_solution(self):
-        # this class of listeneres requires solution information
+        # this class of listener requires solution information
         return True
 
     def notify_progress(self, progress_data):
         if progress_data.has_incumbent:
             self._current_objective = progress_data.current_objective
 
-    def notify_solution(self, incumbents):
-        # create a new instance and replace current solution
-        # check performance impact
+    def _make_solution(self, incumbents):
+        # INTERNAL
         sol = SolveSolution(self._model, obj=self._current_objective, solved_by=self._engine_name)
         for v in self._model.iter_variables():
             # incumbent values are provided as a list with indices as positions.
             incumbent_value = incumbents[v._index]
-            if 0 != incumbent_value:
+            if incumbent_value:
                 # silently round discrete values, just as with engine solutions.
                 sol._set_var_value_internal(v, incumbent_value, rounding=True, do_warn_on_non_discrete=False)
+        return sol
+
+    def notify_solution(self, incumbents):
+        sol = self._make_solution(incumbents)
         self._current_solution = sol
 
     @property
     def current_solution(self):
+        """ This property returns the last memorized solution, if any.
+
+        Returns:
+            the last memorized solution (an instance of `docplex.mp.SolveSolution`, if one has been found,
+            or None if the model has not found any solution yet.
+
+        @PROOFREAD
+        """
         return self._current_solution
 

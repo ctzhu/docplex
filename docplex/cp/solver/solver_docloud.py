@@ -12,7 +12,7 @@ This module allows to solve a model expressed as a CPO file using DOcplexcloud s
 import docplex.cp.config as config
 import docplex.cp.solution as solution
 from docplex.cp.solver.docloud_client import JobClient
-from docplex.cp.utils import CpoException
+from docplex.cp.utils import CpoException, is_number
 import docplex.cp.solver.solver as solver
 
 
@@ -62,7 +62,10 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
 
         # Solve model and retrieve solution
         name = self.model.get_name()
-        maxwait = ctx.params.TimeLimit + ctx.request_timeout + ctx.result_wait_extra_time if ctx.params.TimeLimit else 0
+        if is_number(ctx.params.TimeLimit):
+            maxwait = ctx.params.TimeLimit + ctx.request_timeout + ctx.result_wait_extra_time
+        else:
+            maxwait = 0
         try:
             # Create job and start execution
             client.create_job(name, cpostr)

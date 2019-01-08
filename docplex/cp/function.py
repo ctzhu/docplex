@@ -13,11 +13,15 @@ In particular, it defines the following classes:
 
  * :class:`CpoFunction`: the root class of all function expressions,
  * :class:`CpoSegmentedFunction`: for functions represented as a list of segments,
- * :class:`CpoStepFunction`: for functions represented as a list of steps.,
+ * :class:`CpoStepFunction`: for functions represented as a list of steps.
+
+
+Detailed description
+--------------------
 """
 
 from docplex.cp.catalog import Type_SegmentedFunction, Type_StepFunction
-from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX
+from docplex.cp.expression import CpoExpr, INTERVAL_MIN, INTERVAL_MAX
 from docplex.cp.utils import *
 import bisect
 
@@ -107,11 +111,11 @@ class CpoFunction(CpoExpr):
 
     @property
     def is_step_function(self):
-        return self.is_type(Type_StepFunction)
+        return self.type == Type_StepFunction
 
     @property
     def is_segmented_function(self):
-        return self.is_type(Type_SegmentedFunction)
+        return self.type == Type_SegmentedFunction
 
     def get_value(self, t):
         """ Gets the value of the function.
@@ -145,7 +149,7 @@ class CpoFunction(CpoExpr):
         vcopy = self._v[:]
         scopy = self._s[:]
         if type is None:
-            tp = self.get_type()
+            tp = self.type
         else:
             tp = type
         return CpoFunction(tp, self._s0, self._v0, xcopy, vcopy, scopy)
@@ -173,7 +177,7 @@ class CpoFunction(CpoExpr):
                 self._x.append(x1)
                 self._v.append(v1)
                 self._s.append(s)
-                if x2 < INT_MAX:
+                if x2 < INTERVAL_MAX:
                     self._x.append(x2)
                     self._v.append(self._v0)
                     self._s.append(0)
@@ -277,7 +281,7 @@ class CpoFunction(CpoExpr):
             self._x.append(x1)
             self._v.append(self._v0 + v1)
             self._s.append(s)
-            if x2 < INT_MAX:
+            if x2 < INTERVAL_MAX:
                 self._x.append(x2)
                 self._v.append(self._v0)
                 self._s.append(0)
@@ -346,7 +350,6 @@ class CpoFunction(CpoExpr):
             self._v0 += ov0
             for i in range(len(self._x)):
                 self._v[i] += ov0
-            return
         else:
             ox0 = other._x[0]
             if ox0 == self._x[0]:
@@ -367,8 +370,8 @@ class CpoFunction(CpoExpr):
             for i in range(ol - 1):
                 # This could be optimized to avoid calling add_slope
                 self.add_slope(other._x[i], other._x[i + 1], other._v[i], other._s[i])
-            self.add_slope(other._x[ol - 1], INT_MAX, other._v[ol - 1], other._s[ol - 1])
-            return self
+            self.add_slope(other._x[ol - 1], INTERVAL_MAX, other._v[ol - 1], other._s[ol - 1])
+        return self
 
     def _add_number(self, k):
         self._v0 += k
@@ -534,7 +537,7 @@ class CpoStepFunction(CpoFunction):
         else:
             x = []
             v = []
-            if steps[0][0] == INT_MIN:
+            if steps[0][0] == INTERVAL_MIN:
                 v0 = steps[0][1]
             else:
                 v0 = 0
@@ -550,7 +553,7 @@ class CpoStepFunction(CpoFunction):
         """
         steps = []
         if self.v0 != 0:
-            steps.append((INT_MIN, self.v0))
+            steps.append((INTERVAL_MIN, self.v0))
         for i in range(len(self.x)):
             steps.append((self.x[i], self.v[i]))
         return steps

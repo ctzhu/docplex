@@ -44,12 +44,12 @@ except NameError:       # pragma: no cover
 
 try:
     from itertools import izip
-except ImportError:  # pragma : no cover
-    izip = zip       # pragma : no cover
+except ImportError:  # pragma: no cover
+    izip = zip       # pragma: no cover
 
 # we want unicode in py2, str otherwise
 # unitext() returns a unicode representation of its parameter
-if sys.version_info[0] == 3:
+if sys.version_info[0] == 3:  # pragma: no cover
     unitext = str
 else:
     unitext = unicode

@@ -11,13 +11,18 @@ import math
 import six
 import sys
 
+try:
+    from itertools import zip_longest as izip_longest
+except ImportError:
+    from itertools import izip_longest
+
 from six import iteritems, iterkeys
 from docloud.status import JobSolveStatus
 
-from docplex.mp.compat23 import StringIO
+from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import SolveAttribute
 from docplex.mp.utils import is_iterable, is_number, is_string, str_holo
-from docplex.mp.utils import make_output_path2
+from docplex.mp.utils import make_output_path2, DOcplexException
 from docplex.mp.linear import Var
 from docplex.mp.error_handler import docplex_fatal
 
@@ -64,7 +69,7 @@ class SolveSolution(object):
 
     def __init__(self, model, var_value_map=None, obj=None, name=None, solved_by=None, keep_zeros=True,
                  rounding=False):
-        """ SolveSolution(model, var_valeu_map, obj, name)
+        """ SolveSolution(model, var_value_map, obj, name)
 
         Creates a new solution object, associated to a a model.
 
@@ -301,11 +306,6 @@ class SolveSolution(object):
             # need to check var_keys and values
             self.set_var_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding, do_warn_on_rounding=False)
 
-    def _store_attribute_results(self, var_rc_results, ct_dual_results, ct_slacks_results):
-        self._store_attribute_result(SolveAttribute.reduced_costs.name, var_rc_results, is_variable=True)
-        self._store_attribute_result(SolveAttribute.duals.name, ct_dual_results, is_variable=False)
-        self._store_attribute_result(SolveAttribute.slacks.name, ct_slacks_results, is_variable=False)
-
     def store_slacks(self, slacks):
         # INTERNAL
         assert isinstance(slacks, dict)
@@ -315,23 +315,20 @@ class SolveSolution(object):
         assert isinstance(infeasibilities, dict)
         self._attribute_map[infeas_key] = infeasibilities
 
-    def _store_attribute_result(self, attr_name, attr_idx_map, is_variable):
-        """
-        Stores attribute results from the engine; results are expected as a dictionary of index->float.
-        :param attr_name: The name of the attribute (a string).
-        :param attr_idx_map: The dicitonary of attribute values by index.
-        :param is_variable: UGLY, used to determine which comportement of indices
-        :return: None
-        """
-        if attr_idx_map:
-            mdl = self.model
-            obj_mapper = mdl.get_var_by_index if is_variable else mdl.get_constraint_by_index
-            attr_obj_map = {obj_mapper(idx): attr_val
-                            for idx, attr_val in iteritems(attr_idx_map)
-                            if obj_mapper(idx) is not None and attr_val != 0}
-        else:
-            attr_obj_map = {}
+    def _store_attribute_result(self, attr_name, attr_idx_map, obj_mapper):
+        attr_obj_map = {obj_mapper(idx): attr_val
+                        for idx, attr_val in iteritems(attr_idx_map)
+                        if attr_val and obj_mapper(idx) is not None}
         self._attribute_map[attr_name] = attr_obj_map
+
+    def store_reduced_costs(self, rcs, mapper):
+        self._store_attribute_result(SolveAttribute.reduced_costs.name, rcs, obj_mapper=mapper)
+
+    def store_dual_values(self, duals, mapper):
+        self._store_attribute_result(SolveAttribute.duals.name, duals, obj_mapper=mapper)
+
+    def store_slack_values(self, slacks, mapper):
+        self._store_attribute_result(SolveAttribute.slacks.name, slacks, obj_mapper=mapper)
 
     def iter_var_values(self):
         """Iterates over the (variable, value) pairs in the solution.
@@ -603,7 +600,7 @@ class SolveSolution(object):
             raise ValueError("format key must be one of {}".format(printers.keys()))
         return printer
 
-    def export(self, file_or_filename, format="json"):
+    def export(self, file_or_filename, format="json", **kwargs):
         """ Export this solution.
         
         Args:
@@ -612,6 +609,7 @@ class SolveSolution(object):
             format: The format of the solution. The format can be:
                 - json
                 - xml
+            kwargs: The kwargs passed to the actual exporter
         """
 
         printer = self.get_printer(format)
@@ -623,14 +621,14 @@ class SolveSolution(object):
             fp = file_or_filename
             close_fp = False
         try:
-            printer.print_to_stream(self, fp)
+            printer.print_to_stream(self, fp, **kwargs)
         finally:
             if close_fp:
                 fp.close()
 
-    def export_as_string(self, format="json"):
+    def export_as_string(self, format="json", **kwargs):
         oss = StringIO()
-        self.export(oss, format=format)
+        self.export(oss, format=format, **kwargs)
         return oss.getvalue()
 
     def check_as_mip_start(self):
@@ -674,7 +672,7 @@ class SolveSolution(object):
         var_value_dict = {}
         # INTERNAL: return a dictionary of variable_name: variable_value
         for dvar, dval in self.iter_var_values():
-            if not dvar.has_automatic_name() and (keep_zeros or dval != 0):
+            if dvar.has_user_name() and (keep_zeros or dval != 0):
                 var_value_dict[dvar.name] = dval
         return var_value_dict
 
@@ -733,12 +731,33 @@ class SolutionMSTPrinter(object):
             osa.write("   objectiveValue=\"{0:g}\"\n".format(sol.objective_value))
         osa.write("  />\n")
 
+
+        # prepare reduced costs 
+        """ For mst, we don't want this !
+        model = sol.model
+        if not model._solves_as_mip():
+            reduced_costs = model.reduced_costs(model.iter_variables())
+        else:
+            reduced_costs = []
+        """
         #  <variables>
         #    <variable name="x1" index ="1" value="3.14"/>
         #  </variables>
         osa.write(" <variables>\n")
-        for dvar, val in sol.iter_var_values():
+        """ For mst, we don't want this !
+        for (dvar, rc) in zip_longest(model.iter_variables(), reduced_costs,
+                                      fillvalue=None):
             var_name = dvar.name
+            var_value = sol[dvar]
+            var_index = dvar.index
+            rc_string = ""
+            if rc is not None:
+                rc_string = "reducedCost=\"{}\"".format(rc)
+            osa.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\" {3}/>\n"
+              .format(var_name, var_index, var_value, rc_string))
+        """
+        for dvar, val in sol.iter_var_values():
+            var_name = dvar.print_name()
             var_value = sol[dvar]
             var_index = dvar.index
             osa.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\"/>\n"
@@ -766,7 +785,7 @@ class SolutionMSTPrinter(object):
         osa.write("\n")
 
     @classmethod
-    def print_to_stream(cls, solutions, out, extension=mst_extension):
+    def print_to_stream(cls, solutions, out, extension=mst_extension, **kwargs):
         if out is None:
             # prints on standard output
             cls.print(sys.stdout, solutions)
@@ -796,6 +815,14 @@ from json import JSONEncoder
 
 
 class SolutionJSONEncoder(JSONEncoder):
+    def __init__(self, **kwargs):
+        # extract kwargs I know
+        self.keep_zeros = None
+        if "keep_zeros" in kwargs:
+            self.keep_zeros = kwargs["keep_zeros"]
+            del kwargs["keep_zeros"]
+        super(SolutionJSONEncoder, self).__init__(**kwargs)
+
     def default(self, solution):
         n = {'CPLEXSolution': self.encode_solution(solution)}
         return n
@@ -805,6 +832,12 @@ class SolutionJSONEncoder(JSONEncoder):
         n["version"] = "1.0"
         n["header"] = self.encode_header(solution)
         n["variables"] = self.encode_variables(solution)
+        lc = self.encode_linear_constraints(solution)
+        if len(lc) > 0:
+            n["linearConstraints"] = lc
+        qc = self.encode_quadratic_constraints(solution)
+        if len(qc) > 0:
+            n["quadraticConstraints"] = qc
         return n
 
     def encode_header(self, solution):
@@ -815,12 +848,82 @@ class SolutionJSONEncoder(JSONEncoder):
         n["solved_by"] = solution.solved_by
         return n
 
-    def encode_variables(self, sol):
+    def encode_linear_constraints(self, solution):
         n = []
-        for dvar, val in sol.iter_var_values():
+        model = solution.model
+        was_solved = True
+        try:
+            model.check_has_solution()
+        except DOcplexException:
+            was_solved = False
+        duals = []
+        if not model._solves_as_mip():
+            duals = model.dual_values(model.iter_linear_constraints())
+        slacks = []
+        if was_solved:
+            slacks = model.slack_values(model.iter_linear_constraints())
+        for (ct, d, s) in izip_longest(model.iter_linear_constraints(),
+                                       duals, slacks,
+                                       fillvalue=None):
+            # basis status is not yet supported
+            c = {"name": ct.name,
+                 "index": ct.index}
+            if s:
+                c["slack"] = s
+            if d:
+                c["dual"] = d
+            n.append(c)
+        return n
+
+    def encode_quadratic_constraints(self, solution):
+        n = []
+        model = solution.model
+        duals = []
+        if not model._solves_as_mip():
+            duals = model.dual_values(model.iter_quadratic_constraints())
+        slacks = []
+        was_solved = True
+        try:
+            model.check_has_solution()
+        except DOcplexException:
+            was_solved = False
+        if was_solved:
+            slacks = model.slack_values(model.iter_quadratic_constraints())
+        for (ct, d, s) in izip_longest(model.iter_quadratic_constraints(),
+                                       duals, slacks,
+                                       fillvalue=None):
+            # basis status is not yet supported
+            c = {"name": ct.name,
+                 "index": ct.index}
+            if s:
+                c["slack"] = s
+            if d:
+                c["dual"] = d
+            n.append(c)
+        return n
+
+    def encode_variables(self, sol):
+        model = sol.model
+        n = []
+        if not model._solves_as_mip():
+            reduced_costs = model.reduced_costs(model.iter_variables())
+        else:
+            reduced_costs = []
+
+        keep_zeros = sol._keep_zeros
+        if self.keep_zeros is not None:
+            keep_zeros = keep_zeros or self.keep_zeros
+
+        for (dvar, rc) in izip_longest(model.iter_variables(), reduced_costs,
+                                       fillvalue=None):
+            value = sol[dvar]
+            if not keep_zeros and value == 0:
+                continue
             v = {"index": "{}".format(dvar.index),
-                 "name": dvar.name,
-                 "value": "{}".format(sol[dvar])}
+                 "name": dvar.print_name(),
+                 "value": "{}".format(value)}
+            if rc is not None:
+                v["reducedCost"] = rc
             n.append(v)
         return n
 
@@ -829,11 +932,11 @@ class SolutionJSONPrinter(object):
     json_extension = ".json"
 
     @classmethod
-    def print(cls, out, solutions, indent=None):
+    def print(cls, out, solutions, indent=None, **kwargs):
         # solutions can be either a plain solution or a sequence or an iterator
         sol_to_print = list(solutions) if is_iterable(solutions) else [solutions]
         # encode all solutions in dict ready for json output
-        encoder = SolutionJSONEncoder()
+        encoder = SolutionJSONEncoder(**kwargs)
         solutions_as_dict = [encoder.default(sol) for sol in sol_to_print]
         # use an output stream adapter for py2/py3 and str/unicode compatibility
         osa = OutputStreamAdapter(out)
@@ -843,18 +946,18 @@ class SolutionJSONPrinter(object):
             osa.write(json.dumps({"CPLEXSolutions": solutions_as_dict}, indent=indent))
 
     @classmethod
-    def print_to_stream(cls, solutions, out, extension=json_extension, indent=None):
+    def print_to_stream(cls, solutions, out, extension=json_extension, indent=None, **kwargs):
         if out is None:
             # prints on standard output
-            cls.print(sys.stdout, solutions, indent=indent)
+            cls.print(sys.stdout, solutions, indent=indent, **kwargs)
         elif isinstance(out, str):
             # a string is interpreted as a path name
             path = out if out.endswith(extension) else out + extension
             with open(path, "w") as of:
-                cls.print_to_stream(solutions, of, indent=indent)
+                cls.print_to_stream(solutions, of, indent=indent, **kwargs)
                 # print("* file: %s overwritten" % path)
         else:
-            cls.print(out, solutions, indent=indent)
+            cls.print(out, solutions, indent=indent, **kwargs)
 
     @classmethod
     def print_to_string(cls, solutions, indent=None):

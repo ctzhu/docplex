@@ -36,7 +36,7 @@ The different methods that can be called on a CpoSolver object are:
  * :meth:`propagate` calls the propagation that communicates the domain reduction of a decision variable to
    all of the constraints that are stated over this variable.
 
-Except :meth:`solve`, these functions are only available with a local solver with release strictly greater than 12.6.3.
+Except :meth:`solve`, these functions are only available with a local solver with release greater or equal to 12.7.0.
 When a method is not available, an exception *CpoNotSupportedException* is raised.
 
 If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
@@ -48,13 +48,18 @@ the :class:`CpoSolver` object can acts as an iterator. All solutions can be retr
 
 A such solution iteration can be interrupted at any time by calling end_search() that returns
 a fail solution including the last solve status.
+
+
+Detailed description
+--------------------
 """
 
 import docplex.cp.config as config
-from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context
+from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context, is_array, is_string
 import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
 import docplex.cp.solver.environment_client as runenv
+import sys
 
 import time, importlib, inspect
 
@@ -282,6 +287,8 @@ class CpoSolver(object):
         """
         super(CpoSolver, self).__init__()
         self.solver = None
+        self.last_sol = None
+        self.status = STATUS_IDLE
 
         # Build effective context from args
         context = config._get_effective_context(**kwargs)
@@ -300,22 +307,7 @@ class CpoSolver(object):
         self.context = context
 
         # Determine appropriate solver agent
-        sctx = context.solver
-        aname = sctx.agent
-        if aname is None:
-            aname = "docloud"
-        else:
-            aname = aname.lower()
-        sctx.log(1, "Solve model '", self.model.get_name(), "' with agent '", aname, "'")
-
-        # Retrieve solver agent class and create instance
-        actx = sctx.get(aname)
-        sclass = _get_solver_agent_class(aname, actx)
-        self.solver = sclass(self.model, sctx.params, actx)
-
-        # Initialize working variables
-        self.last_sol = None
-        self.status = STATUS_IDLE
+        self.solver = self._get_solver_agent()
 
 
     def __iter__(self):
@@ -372,7 +364,7 @@ class CpoSolver(object):
     def search_next(self):
         """ Get the next available solution.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             Next model solution (object of class CpoModelSolution)
@@ -419,7 +411,7 @@ class CpoSolver(object):
     def end_search(self):
         """ End current search.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             Last (fail) model solution with last solve information (type CpoModelSolution)
@@ -459,7 +451,7 @@ class CpoSolver(object):
 
 
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             List of constraints that cause the conflict (object of class CpoRefineConflictResult)
@@ -487,7 +479,7 @@ class CpoSolver(object):
         The result is a object of class CpoSolveResult, the same than the one returned by solve() method.
         However, variable domains may not be completely defined.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             Propagation result (object of class CpoSolveResult)
@@ -521,7 +513,7 @@ class CpoSolver(object):
     def next(self):
         """ For solution iteration, get the next available solution.
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             Next model solution (object of class CpoModelSolution)
@@ -537,7 +529,7 @@ class CpoSolver(object):
     def __next__(self):
         """ Get the next available solution (same as next() for compatibility with Python 3)
 
-        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
             Next model solution (object of class  CpoModelSolution)
@@ -557,7 +549,88 @@ class CpoSolver(object):
            raise CpoException("Unexpected solver status. Should be '{}' instead of '{}'".format(ests, self.status))
 
 
+    def _get_solver_agent(self):
+        """ Get the solver agent instance that is used to solve the model.
 
+        Returns:
+            Solver agent instance
+        Raises:
+            CpoException:  Agent creation error
+        """
+        # Determine selectable agent(s)
+        sctx = self.context.solver
+        alist = sctx.agent
+        if alist is None:
+            alist = 'docloud'
+        elif not (is_string(alist) or is_array(alist)):
+            raise CpoException("Agent identifier in config.context.solver.agent should be a string or a list of strings.")
+
+        # Create agent
+        if is_string(alist):
+            aname = alist
+            agent = self._create_solver_agent(alist)
+        else:
+            # Search first available agent in the list
+            agent = None
+            errors = []
+            for aname in alist:
+                try:
+                    agent = self._create_solver_agent(aname)
+                    break
+                except Exception as e:
+                    errors.append((aname, str(e)))
+                # Agent not found
+                errstr = ', '.join(a + ": " + str(e) for (a, e) in errors)
+                raise CpoException("Agent creation error: " + errstr)
+
+        # Log solver agent
+        sctx.log(1, "Solve model '", self.model.get_name(), "' with agent '", aname, "'")
+        return agent
+
+
+    def _create_solver_agent(self, aname):
+        """ Create a new solver agent from its name.
+
+        Args:
+            name: Name of the agent
+        Returns:
+            Solver agent instance
+        Raises:
+            CpoException: Agent creation error
+        """
+        # Get agent context
+        sctx = self.context.solver.get(aname)
+        if not isinstance(sctx, Context):
+            raise CpoException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
+        cpath = sctx.class_name
+        if cpath is None:
+            raise CpoException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")
+
+        # Split class name
+        pnx = cpath.rfind('.')
+        if pnx < 0:
+            raise CpoException("Invalid class name '" + cpath + "' for solving agent '" + aname + "'. Should be <package>.<module>.<class>.")
+        mname = cpath[:pnx]
+        cname = cpath[pnx + 1:]
+
+        # Load module
+        try:
+            module = importlib.import_module(mname)
+        except Exception as e:
+            raise CpoException("Module '" + mname + "' import error: " + str(e))
+
+        # Create and check class
+        sclass = getattr(module, cname, None)
+        if sclass is None:
+            raise CpoException("Module '" + mname + "' does not contain a class '" + cname + "'")
+        if not inspect.isclass(sclass):
+            raise CpoException("Agent class '" + cpath + "' is not a class.")
+        if not issubclass(sclass, CpoSolverAgent):
+            raise CpoException("Solver agent class '" + cpath + "' does not extend CpoSolverAgent.")
+
+        # Create agent instance
+        agent = sclass(self.model, sctx.params, sctx)
+        return agent
 
 
 ###############################################################################

@@ -91,13 +91,14 @@ class open_filename_universal(object):
 
 
 def is_ignored(what, key):
+    # returns true if key is in what
     try:
         # if string, allow comma separated form
         if isinstance(what, six.string_types):
             values = what.split(",")
             if key in values:
                 return True
-        elif key in what:
+        elif what is not None and key in what:
             return True
     except AttributeError:
         # no ignored_keys, just pass
@@ -138,6 +139,57 @@ def is_auto_publishing_json_solution(context):
             auto_publish = False
     return auto_publish
 
+
+def check_credentials(context):
+    #     Checks if the context has syntactically valid credentials. The context
+    #     has valid credentials when it has an `url` and a `key` fields and that
+    #     both fields are string.
+    # 
+    #     If the credentials are not defined, `message` contains a message describing
+    #     the cause.
+    # 
+    #     Returns:
+    #         (has_credentials, message): has_credentials` - True if the context contains syntactical credentials.
+    #            and `message`  - contains a message if applicable.
+    has_credentials = True
+    message = None
+    if not context.url or not context.key:
+        has_credentials = False
+    elif not is_string(context.url):
+        message = "DOcplexcloud: URL is not a string: {0!s}".format(context.url)
+        has_credentials = False
+    elif not is_string(context.key):
+        message = "API key is not a string: {0!s}".format(context.key)
+        has_credentials = False
+    # process ignored_keys
+    if context.key and has_credentials:
+        has_credentials = not is_ignored(context.ignored_keys, context.key)
+    return has_credentials, message
+
+
+def has_credentials(context):
+    # Checks if the context has valid credentials.
+    #
+    # Returns:
+    #    True if the context has valid credentials.
+    # ignore message
+    has_credentials, _ = check_credentials(context)
+    return has_credentials
+
+
+def print_context(context):
+    # prints the context.
+    def print_r(node, prefix):
+        for n in sorted(node):
+            path = ".".join([prefix, n] if prefix else [n])
+            if not n.startswith("_") and isinstance(node.get(n), (dict, SolverContext)):
+                print(path + " %s" % (type(node.get(n))))
+                print_r(node.get(n), path)
+            elif not n.startswith("_"):
+                print(path + " = %s (%s)" % (node.get(n), type(node.get(n))))
+    print_r(context, "context")
+
+
 class BaseContext(dict):
     # Class for handling the list of parameters.
     def __init__(self, **kwargs):
@@ -162,11 +214,13 @@ class BaseContext(dict):
     def get_attribute(self, name, default=None):
         if name.startswith('__'):
             raise AttributeError
-        res = self.get(name, None)
+        res = self.get(name, default)
+        return res
+        """ iii
         if res is not None:
             return res
         raise AttributeError("'{0}' object has no attribute '{1}'".format(type(self).__name__, name))
-
+        """
 
 class SolverContext(BaseContext):
     # for internal use
@@ -214,9 +268,8 @@ class SolverContext(BaseContext):
                 output_stream = sys.stdout
             if k in ["stderr", "sys.stderr"]:
                 output_stream = sys.stderr
-        # if log_output is a boolean, do the direct mapping to default streams
-        if isinstance(log_output, bool):
-            if log_output:
+        # if log_output is == to True, just use stdout
+        if log_output == True:
                 output_stream = sys.stdout
         # if it has a write() attribute, just return it
         if hasattr(log_output, "write"):
@@ -275,20 +328,32 @@ class Context(BaseContext):
             `docplex.mp.format.ExchangeFormat`.
     """
     def __init__(self, **kwargs):
-        # initialize default env
-        cplex_parameters = kwargs.get('cplex_parameters', None)
-        if cplex_parameters is None:
-            local_env = kwargs.get('_env') or Environment.make_new_configured_env()
-            cplex_version = local_env.cplex_version
-            cplex_parameters = get_params_from_cplex_version(cplex_version)
+        # store env used for initialization
+        self['_env_at_init'] = kwargs.get('_env')
+        # map lazy members to f(model) (actually f(self) ) returning the
+        # initial value
+        self['_lazy_members'] = \
+           {'cplex_parameters': lambda m: m.init_cplex_parameters()}
         # initialize fields of this
-        super(Context, self).__init__(solver=SolverContext(docloud=DOcloudContext()),
-                                      cplex_parameters=cplex_parameters,
+        super(Context, self).__init__(solver=SolverContext(docloud=CreateDefaultDOcloudContext()),
+                                      # cplex_parameters=cplex_parameters,
                                       docplex_tests=BaseContext())
         # update will also ensure compatibility with older kwargs like
         # 'url' and 'api_key'
         self.update(kwargs, create_missing_nodes=True)
 
+    def init_cplex_parameters(self):
+        local_env = self.get('_env_at_init') or Environment.get_default_env()
+        cplex_version = local_env.cplex_version
+        cplex_parameters = get_params_from_cplex_version(cplex_version)
+        return cplex_parameters
+
+    def __getattr__(self, name):
+        if name not in self:
+            lazy_members = self.get('_lazy_members')
+            if lazy_members and name in lazy_members:
+                self[name] = lazy_members[name](self)
+        return self.get_attribute(name)
 
     @staticmethod
     def make_default_context(file_list=None, logger=None, **kwargs):
@@ -309,16 +374,6 @@ class Context(BaseContext):
                 * cplex_config_<hostname>.py
                 * docloud_config.py
 
-            * if a ``.docplexrc`` file exists in ``~``
-              (``os.path.expanduser("~")`` in Python), that file is parsed, and
-              the properties set into the context.
-
-        :deprecated:
-           As of V1.0, reading ``.docplexrc`` is deprecated, and ``.py`` files for
-           configuration should be used instead.
-
-        A ``.docplexrc`` file is similar to a Java properties file (``=`` or ``:`` separated
-        pairs of `key,values`) or a Python file if it ends with ``.py``.
         Python files are evaluated with a `context` object in the current
         scope, and you set values from this context::
 
@@ -343,17 +398,18 @@ class Context(BaseContext):
         #   A deep copy of the context.
         return deepcopy(self)
 
+    def clone(self):
+        # Makes a deep copy of the context.
+        #
+        # Returns:
+        #   A deep copy of the context.
+        return deepcopy(self)
+
     def update_from_list(self, values, logger=None):
         # For each pair of `(name, value)` in values, try to set the
         # attribute.
         for name, value in values:
             try:
-                if name in DOcloudContext.LEGACY_PROPERTIES:
-                    mapping = DOcloudContext.LEGACY_PROPERTIES[name]
-                    if mapping is None:
-                        mapping = "solver.docloud.%s" % name
-                    self._set_value(self, mapping, value)
-                else:
                     self._set_value(self, name, value)
             except AttributeError:
                 if logger is not None:
@@ -388,7 +444,7 @@ class Context(BaseContext):
         """ Updates this context from child parameters specified in ``kwargs``.
 
         The following keys are recognized:
-        
+
             - cplex_parameters: A set of CPLEX parameters to use instead of the parameters defined as ``context.cplex_parameters``.
             - agent: Changes the ``context.solver.agent`` parameter.
                 Supported agents include:
@@ -401,12 +457,12 @@ class Context(BaseContext):
             - log_output: if ``True``, solver logs are output to stdout.
                 If this is a stream, solver logs are output to that stream object.
                 Overwrites the ``context.solver.log_output`` parameter.
-        
+
         Args:
             kwargs: A ``dict`` containing keyword args to use to update this context.
             create_missing_nodes: When a keyword arg specify a parameter that is not already member of this context,
                 creates the parameter if ``create_missing_nodes`` is True.
-        
+
         """
         for k in kwargs:
             value = kwargs.get(k)
@@ -460,16 +516,6 @@ class Context(BaseContext):
                 * cplex_config_<hostname>.py
                 * docloud_config.py
 
-            * if a ``.docplexrc`` file exists in ``~``
-              (``os.path.expanduser("~")`` in Python), that file is parsed, and
-              the properties set into the context.
-
-        :deprecated:
-           As of V1.0, reading ``.docplexrc`` is deprecated, and ``.py`` files for
-           configuration should be used instead.
-        
-        A ``.docplexrc`` file is similar to a Java properties file (``=`` or ``:`` separated
-        pairs of `key,values`) or a Python file if it ends with ``.py``.
         Python files are evaluated with a `context` object in the current
         scope, and you set values from this context::
 
@@ -485,8 +531,7 @@ class Context(BaseContext):
             file_list = []
             targets = ['cplex_config.py',
                        'cplex_config_{0}.py'.format(socket.gethostname()),
-                       'docloud_config.py',
-                       os.path.expanduser("~") + os.path.sep + ".docplexrc",
+                       'docloud_config.py'
                        ]
             for target in targets:
                 if isabs(target) and isfile(target) and target not in file_list:
@@ -512,8 +557,7 @@ class Context(BaseContext):
                         logger.info("Reading settings from %s" % f)
                     if f.endswith(".py"):
                         self.read_from_python_file(f)
-                    else:
-                        self.read_from_rcfile(f, logger)
+
 
     def read_from_python_file(self, filename):
         # Evaluates the content of a Python file containing code to set up a
@@ -528,277 +572,42 @@ class Context(BaseContext):
                 exec(f.read())
         return self
 
-    def read_from_rcfile(self, filename, logger=None):
-        # Reads this context from the given resource file.
-        #
-        # The specified resource file contains `name=value` pairs. For example::
-        #
-        #   docloud.url = "https://docloud.service.com/job_manager/rest/v1"
-        #   docloud.key = "example api_key"
-        #
-        # Args:
-        #    filename (str) : The name of the file to evaluate.
-        list_of_properties = []
-        with open_filename_universal(filename) as f:
-            current_name = None
-            current_value = None
-            lineno = 0
-            for l in f:
-                lineno += 1
-                l = l.strip()
-                if len(l) == 0:
-                    continue
-                if l[-1] is '\\':
-                    s = l[:-1]
-                else:
-                    s = l
-                # process case of continuation
-                if current_value is not None:
-                    current_value += s
-                else:
-                    hash_rindex = s.rfind("#")
-                    if hash_rindex != -1:
-                        s = s[:hash_rindex]
-                    if len(s) == 0:
-                        continue
-                    if (s.find("=") != -1):
-                        spl = s.split("=", 1)
-                    elif (s.find(":") != -1):
-                        spl = s.split(":", 1)
-                    else:
-                        raise ValueError("Syntax error in line %s" % lineno)
-                    if len(spl) == 2:
-                        current_name = spl[0].strip()
-                        current_value = spl[1].strip()
-                        if current_value == '\\':
-                            current_value = ""
-                    else:
-                        raise ValueError("Syntax error in line %s" % lineno)
-                # continuation ?
-                if l[-1] != '\\':
-                    list_of_properties.append((current_name, current_value))
-                    current_name = None
-                    current_value = None
-            # cases where last line of file ends with '\'
-            if current_name is not None:
-                list_of_properties.append((current_name, current_value))
-        self.update_from_list(list_of_properties, logger=logger)
 
-
-class DOcloudContext(object):
-    # for internal use only
-    def __init__(self, url=None, api_key=None):
-        """ Creates a new DOcplexcloud context.
-        """
-        # There'se a bunch of properties defined so that we can set
-        # any values
-        self.url = url
-        self.key = api_key
-        self._run_deterministic = False
-        self._verbose = False
-        self._timeout = None
-        self._waittime = None
-        self._verify = None  # default is None so that we use defaults
-        self._log_requests = None
-        self._exchange_format = None
-        self._debug_dump = None
-        self.debug_dump_dir = None
-        self._log_poll_interval = None
-        self._progress_poll_interval = None
-        self.ignored_keys = "ENTER YOUR KEY HERE"
-        self.ignored_urls = "ENTER YOUR URL HERE"
-        self.verbose_progress_logger = None
-        self.delete_job = True
-        # if true, download job info after solve() has finished and fire
-        # the last details as a progress_info. Mostly for debug.
-        self.fire_last_progress = False
-        # Mostly for debug: This callback is called when the solve is finished.
-        # It should be a method taking **kwargs. It will be called with those kwargs:
-        # - jobid: the jobid
-        # - client: the docloud client used to connect to docloud
-        # - connector: the DOcloudConnector
-        self.on_solve_finished_cb = None
-        # The proxies
-        self.proxies = None
-
-
-    # This maps "old property names" to the corresponding new qualified name.
-    # if the qualified name is None, then it's supposed to be:
-    # solver.docloud.old_name
-    LEGACY_PROPERTIES = {"url": None,
-                         "api_key": "solver.docloud.key",
-                         "run_deterministic": None,
-                         "verbose": None,
-                         "timeout": None,
-                         "waittime": None,
-                         "verify": None,
-                         "log_requests": None,
-                         "exchange_format": None,
-                         "debug_dump": None,
-                         "debug_dump_dir": None
-                         }
-
-    @property
-    def api_key(self):
-        return self.key
-
-    # The waittime property
-    def get_waittime(self):
-        return self._waittime
-
-    def set_waittime(self, value):
-        self._waittime = _convert_to_int(value)
-
-    waittime = property(get_waittime, set_waittime)
-
-    # The timeout property
-    def get_timeout(self):
-        return self._timeout
-
-    def set_timeout(self, value):
-        self._timeout = _convert_to_int(value)
-
-    timeout = property(get_timeout, set_timeout)
-
-    # The log poll interval
-    def get_log_poll_interval(self):
-        return self._log_poll_interval
-
-    def set_log_poll_interval(self, value):
-        self._log_poll_interval = _convert_to_int(value)
-
-    log_poll_interval = property(get_log_poll_interval, set_log_poll_interval)
-
-    # The progress poll interval
-    def get_progress_poll_interval(self):
-        return self._progress_poll_interval
-
-    def set_progress_poll_interval(self, value):
-        self._progress_poll_interval = _convert_to_int(value)
-
-    progress_poll_interval = property(get_progress_poll_interval,
-                                      set_progress_poll_interval)
-
-    # The run_deterministic property
-    def get_run_deterministic(self):
-        return self._run_deterministic
-
-    def set_run_deterministic(self, value):
-        self._run_deterministic = _convert_to_bool(value)
-
-    run_deterministic = property(get_run_deterministic, set_run_deterministic)
-
-
-    # The verbose property
-    def get_verbose(self):
-        return self._verbose
-
-    def set_verbose(self, value):
-        self._verbose = _convert_to_bool(value)
-
-    verbose = property(get_verbose, set_verbose)
-
-    # The debug_dump property
-    def get_debug_dump(self):
-        return self._debug_dump
-
-    def set_debug_dump(self, value):
-        self._debug_dump = _convert_to_bool(value)
-
-    debug_dump = property(get_debug_dump, set_debug_dump)
-
-    # The verify property
-    def get_verify(self):
-        return self._verify
-
-    def set_verify(self, value):
-        self._verify = _convert_to_bool(value)
-
-    verify = property(get_verify, set_verify)
-
-    # The log_requests property
-    def get_log_requests(self):
-        return self._log_requests
-
-    def set_log_requests(self, value):
-        self._log_requests = _convert_to_bool(value)
-
-    log_requests = property(get_log_requests, set_log_requests)
-
-    # The exchange format property
-    def get_exchange_format(self):
-        return self._exchange_format
-
-    def set_exchange_format(self, exchange_format):
-        if exchange_format is not None:
-            self._exchange_format = ExchangeFormat.fromstring(exchange_format)
-        else:
-            self._exchange_format = None
-
-    exchange_format = property(get_exchange_format, set_exchange_format)
-
-    def clone(self):
-        # Makes a deep copy of this.
-        #
-        # Returns:
-        #    A deep copy of this.
-        return deepcopy(self)
-
-    def copy(self):
-        return self.clone()
-
-    def check_credentials(self):
-        """Checks if this context has syntactically valid credentials.
-
-        This method uses `warnings.warn()` to issue a warning if the credentials
-        are not valid.
-
-        Returns:
-            Boolean: `has_credentials` - True if this context contains syntactical credentials.
-        Returns:
-            string: `message`  - contains a message if applicable.
-        """
-        has_credentials = True
-        message = None
-        if not self.url or not self.key:
-            has_credentials = False
-        elif not is_string(self.url):
-            message = "DOcplexcloud: URL is not a string: {0!s}".format(self.url)
-            has_credentials = False
-        elif not is_string(self.key):
-            message = "API key is not a string: {0!s}".format(self.key)
-            has_credentials = False
-        # process ignored_keys
-        if self.key and has_credentials:
-            has_credentials = not is_ignored(self.ignored_keys, self.key)
-        return has_credentials, message
-
-
-    def has_credentials(self):
-        """Checks if this context has valid credentials.
-
-        Returns:
-            True if this context has valid credentials.
-        """
-        has_credentials, message = self.check_credentials()
-        return has_credentials
-
-    def print_information(self):
-        print(self.to_string())
-
-    def to_string(self):
-        quoted_url = "\"{}\"".format(self.url) if isinstance(self.url, str) else str(self.url)
-        quoted_key = "\"{}\"".format(self.key[:4]+"*******"+self.key[len(self.key)-4:]) if isinstance(self.key, str) else str(self.key)
-        t_out = str(self.timeout)
-        return "context<url={0}, auth={1}, timeout={2}>".format(quoted_url,
-                                                                quoted_key,
-                                                                t_out)
-
-    def __str__(self):
-        return self.to_string()
-
-    def __repr__(self):
-        return self.to_string()
-
-
+def CreateDefaultDOcloudContext():
+    # Returns a context to use as the context.solver.docloud member.
+    #
+    # This is a Context with predefined fields.
+    #
+    dctx = BaseContext()
+    # There'se a bunch of properties defined so that we can set
+    # any values
+    dctx.url = None
+    dctx.key = None
+    dctx.run_deterministic = False
+    dctx.verbose = False
+    dctx.timeout = None
+    dctx.waittime = None
+    dctx.verify = None  # default is None so that we use defaults
+    dctx.log_requests = None
+    dctx.exchange_format = None
+    dctx.debug_dump = None
+    dctx.debug_dump_dir = None
+    dctx.log_poll_interval = None
+    dctx.progress_poll_interval = None
+    dctx.ignored_keys = "ENTER YOUR KEY HERE"
+    dctx.ignored_urls = "ENTER YOUR URL HERE"
+    dctx.verbose_progress_logger = None
+    dctx.delete_job = True
+    # if true, download job info after solve() has finished and fire
+    # the last details as a progress_info. Mostly for debug.
+    dctx.fire_last_progress = False
+    # Mostly for debug: This callback is called when the solve is finished.
+    # It should be a method taking **kwargs. It will be called with those kwargs:
+    # - jobid: the jobid
+    # - client: the docloud client used to connect to docloud
+    # - connector: the DOcloudConnector
+    dctx.on_solve_finished_cb = None
+    # The proxies
+    dctx.proxies = None
+    return dctx
 

@@ -16,20 +16,20 @@ CPO catalog of types and functions.
 
 class CpoType(object):
     """ CPO type (flavor) descriptor """
-    __slots__ = ('name',          # Name of the type
-                 'is_var',        # Indicate a type corresponding to a variable
-                 'is_cst',        # Indicates that type denotes a constant (possibly array)
-                 'is_cst_atom',   # Indicates that type denotes an atomic constant
-                 'is_arr',        # Indicates that type describes an array
-                 'is_arr_expr',   # Indicates that type describes an array of expressions (not constants)
-                 'higher_types',  # List of higher types in the hierarchy
-                 'element_type',  # Type of array element (for arrays)
-                 'parent_array',  # Type corresponding to an array of this type
-                 'base_type',     # Base type to be used for signature matching
-                 'id',            # Unique type id (index) used to fasten type links
-                 'kind_of_types', # Set of types that are kind of this one
-                 'common_types'   # Dictionary of types that are common with this and others.yield
-                                  # Key is type name, value is common type with this one.
+    __slots__ = ('name',               # Name of the type
+                 'is_variable',        # Indicate a type corresponding to a variable
+                 'is_constant',        # Indicates that type denotes a constant (possibly array)
+                 'is_constant_atom',   # Indicates that type denotes an atomic constant
+                 'is_array',           # Indicates that type describes an array
+                 'is_array_of_expr',   # Indicates that type describes an array of expressions (not constants)
+                 'higher_types',       # List of higher types in the hierarchy
+                 'element_type',       # Type of array element (for arrays)
+                 'parent_array_type',  # Type corresponding to an array of this type
+                 'base_type',          # Base type to be used for signature matching
+                 'id',                 # Unique type id (index) used to fasten type links
+                 'kind_of_types',      # Set of types that are kind of this one
+                 'common_types'        # Dictionary of types that are common with this and others.yield
+                                       # Key is type name, value is common type with this one.
                 )
 
     def __init__(self, name, isvar=False, iscst=False, htyps=(), eltyp=None, bastyp=None):
@@ -44,19 +44,19 @@ class CpoType(object):
         """
         super(CpoType, self).__init__()
         self.name         = name
-        self.is_var       = isvar
-        self.is_cst       = iscst
-        self.is_cst_atom  = iscst
+        self.is_variable       = isvar
+        self.is_constant       = iscst
+        self.is_constant_atom  = iscst
         self.higher_types = (self,) + htyps
         self.element_type = eltyp
         self.base_type    = bastyp if bastyp else self
         # Process array case
-        if (eltyp is not None):
-            eltyp.parent_array = self
-            self.is_cst  = eltyp.is_constant()
-        self.is_arr      = eltyp is not None
-        self.is_arr_expr = self.is_array and not(self.is_cst)
-        self.parent_array = None
+        if eltyp is not None:
+            eltyp.parent_array_type = self
+            self.is_constant  = eltyp.is_constant
+        self.is_array      = eltyp is not None
+        self.is_array_of_expr = self.is_array and not(self.is_constant)
+        self.parent_array_type = None
 
     def get_name(self):
         """ Get the name of the type
@@ -66,69 +66,13 @@ class CpoType(object):
         """
         return self.name
 
-    def is_variable(self):
-        """ Check if this type describes a variable
-
-        Returns:
-            True if this type describes a variable, False otherwise
-        """
-        return self.is_var
-
-    def is_constant(self):
-        """ Check if this type describes a constant, or an array of constants
-
-        Returns:
-            True if this type describes a constant
-        """
-        return self.is_cst
-
-    def is_constant_atom(self):
-        """ Check if this type describes an atomic constant
-
-        Returns:
-            True if this type describes an atomic constant
-        """
-        return self.is_cst_atom
-
-    def is_array(self):
-        """ Check if this type describes an array
-
-        Returns:
-            True if this type describes an array, False otherwise
-        """
-        return self.is_arr
-
-    def is_array_of_expr(self):
-        """ Check if this type describes an array of expressions (not constants)
-
-        Returns:
-            True if this type describes an array of expressions, False otherwise
-        """
-        return self.is_arr_expr
-
-    def get_element_type(self):
-        """ Get the type of an array element, if this type is an array
-
-        Returns:
-            Array element type, None if not array
-        """
-        return self.element_type
-
-    def get_base_type(self):
-        """ Get the base type that should be used or signatures
-
-        Returns:
-            Base type (in general, returns self)
-        """
-        return self.base_type
-
     def is_kind_of(self, tp):
         """ Check if this type is a kind of another type, i.e. other type is in is hierarchy
 
         Args:
             tp: Other type to check
         Returns:
-           True if this type is a kind of tp
+            True if this type is a kind of tp
         """
         # Check if required type is the same
         # return tp.base_type in self.higher_types
@@ -169,14 +113,6 @@ class CpoType(object):
                 return ct
         return None
 
-    def get_array_type(self):
-        """ Get the array type with this type as element
-        
-        Returns:
-            The type that has this as element type, None if none
-        """
-        return self.parent_array
-        
     def __str__(self):
         """ Convert this object into a string """
         return self.name
@@ -197,8 +133,8 @@ class CpoType(object):
 
 class CpoParam(object):
     """ Descriptor of an operation parameter """
-    __slots__ = ('type',   # Parameter CPO type
-                 'defval'  # Parameter default value, None if none
+    __slots__ = ('type',          # Parameter CPO type
+                 'default_value'  # Parameter default value, None if none
                 )
     
     def __init__(self, ptyp, dval=None):
@@ -210,42 +146,18 @@ class CpoParam(object):
         """
         super(CpoParam, self).__init__()
         self.type = ptyp
-        self.defval = dval
-        
-    def get_type(self):
-        """ Get the parameter type
-        
-        Returns:
-            Parameter type (object of class CpoType)
-        """
-        return self.type
-        
-    def is_default_value(self):
-        """ Check whether this parameter has a default value
-        
-        Returns:
-            True if parameter has a default value, false otherwise
-        """
-        return not (self.defval is None)
-        
-    def get_default_value(self):
-        """ Parameter default value
-        
-        Returns:
-            Default value, None if none
-        """
-        return self.defval
+        self.default_value = dval
         
     def __str__(self):
-        if self.defval is None:
+        if self.default_value is None:
             return self.type.name
         else:
-            return self.type.name + "=" + str(self.defval)
+            return self.type.name + "=" + str(self.default_value)
 
     def __eq__(self, other):
         """ Check equality of this object with another """
         return (self is other) or \
-               (isinstance(other, self.__class__) and (self.type == other.type) and (self.defval == other.defval))
+               (isinstance(other, self.__class__) and (self.type == other.type) and (self.default_value == other.defval))
 
     def __ne__(self, other):
         """ Check inequality of this object with another """
@@ -254,10 +166,10 @@ class CpoParam(object):
             
 class CpoSignature(object):
     """ Descriptor of a signature of a CPO operation """
-    __slots__ = ('rtype',     # Return type
-                 'params',    # List of parameter descriptors
-                 'operation'  # Parent operation
-                )
+    __slots__ = ('return_type',  # Return type
+                 'parameters',   # List of parameter descriptors
+                 'operation'     # Parent operation
+                 )
     
     def __init__(self, rtyp, ptyps):
         """ Create a new signature
@@ -267,7 +179,7 @@ class CpoSignature(object):
             ptyps: Array of parameter types
         """
         super(CpoSignature, self).__init__()
-        self.rtype = rtyp
+        self.return_type = rtyp
         
         # Build list of parameters
         lpt = []
@@ -276,57 +188,17 @@ class CpoSignature(object):
                 lpt.append(pt)
             else:
                 lpt.append(CpoParam(pt)) 
-        self.params = tuple(lpt)
-        
-    def get_returned_type(self):
-        """ Get the type of the expression returned by this signature
-        
-        Returns:
-            Signature return type
-        """
-        return self.rtype
-        
-    def is_parameters(self):
-        """ Get if there are parameters to this signature
-        
-        Returns:
-            True if this signature has parameters, false otherwise
-        """
-        return len(self.params) > 0
-        
-    def get_parameters(self):
-        """ Get the list of parameter for this signature
-
-        Returns:
-            List of parameter descriptors (class CpoParam)
-        """
-        return self.params
-
-    def get_operation(self):
-        """ Get the parent operation
-        
-        Returns:
-            Parent operation
-        """
-        return self.operation
-        
-    def get_priority(self):
-        """ Get the operation priority
-        
-        Returns:
-            Operation priority
-        """
-        return self.operation.priority
+        self.parameters = tuple(lpt)
         
     def __str__(self):
-        return str(self.rtype) + "[" + ", ".join(map(str, self.params)) + "]"
+        return str(self.return_type) + "[" + ", ".join(map(str, self.parameters)) + "]"
 
     def __eq__(self, other):
         """ Check equality of this object with another """
         if self is other:
             return True
-        return isinstance(other, self.__class__) and (self.rtype == other.rtype) \
-               and (self.operation == other.operation) and (self.params == other.params)
+        return isinstance(other, self.__class__) and (self.return_type == other.rtype) \
+               and (self.operation == other.operation) and (self.parameters == other.params)
 
     def __ne__(self, other):
         """ Check inequality of this object with another """
@@ -335,13 +207,13 @@ class CpoSignature(object):
 
 class CpoOperation(object):
     """ CPO operation descriptor """
-    __slots__ = ('cpname',     # Operation CPO name
-                 'pyname',     # Operation python name
-                 'keyword',    # Operation keyword (operation symbol)
-                 'priority',   # Operator priority, -1 for function call
-                 'isoptim',    # Optimization function indicator
-                 'signatures'  # List of possible operation signatures
-                )
+    __slots__ = ('cpo_name',     # Operation CPO name
+                 'python_name',  # Operation python name
+                 'keyword',      # Operation keyword (operation symbol)
+                 'priority',     # Operator priority, -1 for function call
+                 'is_optim',     # Optimization function indicator
+                 'signatures'    # List of possible operation signatures
+                 )
 
     def __init__(self, cpname, pyname, kwrd, prio, signs):
         """ Create a new operation
@@ -356,10 +228,10 @@ class CpoOperation(object):
         super(CpoOperation, self).__init__()
         
         # Store attributes
-        self.cpname   = cpname
-        self.pyname   = pyname
+        self.cpo_name = cpname
+        self.python_name = pyname
         self.priority = prio
-        self.isoptim  = cpname.startswith("minimize") or cpname.startswith("maximize")
+        self.is_optim = cpname.startswith("minimize") or cpname.startswith("maximize")
         if kwrd:
             self.keyword = kwrd
         else:
@@ -370,61 +242,13 @@ class CpoOperation(object):
         for s in signs:
             s.operation = self
         
-    def get_cpo_name(self):
-        """ Get the CPO name of this operation
-        
-        Returns:
-            Operation CPO name
-        """
-        return self.cpname
-        
-    def get_py_name(self):
-        """ Get the Python name of this operation
-
-        Returns:
-            Operation Python name
-        """
-        return self.pyname
-
-    def is_optim(self):
-        """ Check if this function requests an optimization.
-
-        Returns:
-            True if this operation requests an optimization
-        """
-        return self.isoptim
-
-    def get_keyword(self):
-        """ Get the operation keyword.
-        
-        Returns:
-            Operation keyword
-        """
-        return self.keyword
-        
-    def get_priority(self):
-        """ Get the operation priority
-        
-        Returns:
-            Operation priority
-        """
-        return self.priority
-        
-    def get_signatures(self):
-        """ Get the list of available signatures for this operation
-        
-        Returns:
-            List of operation signatures
-        """
-        return self.signatures
-        
     def __str__(self):
-        return str(self.cpname) + "(" + ", ".join(map(str, self.signatures)) + ")"
+        return str(self.cpo_name) + "(" + ", ".join(map(str, self.signatures)) + ")"
 
     def __eq__(self, other):
         """ Check equality of this object with another """
         return (self is other) or \
-               (isinstance(other, self.__class__) and (self.cpname == other.cpname))
+               (isinstance(other, self.__class__) and (self.cpo_name == other.cpo_name))
 
     def __ne__(self, other):
         """ Check inequality of this object with another """

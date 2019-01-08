@@ -35,6 +35,7 @@ For example, a list of tuples of integers is automatically converted into a tupl
 from docplex.cp.utils import *
 from docplex.cp.catalog import *
 from docplex.cp.config import context
+
 import math
 import collections
 import threading
@@ -73,6 +74,9 @@ _CONSTRAINT_ID_ALLOCATOR = SafeIdAllocator('_CTR_')
 
 # Floating point precision to verify equality of floats
 _FLOATING_POINT_PRECISION = 1e-9
+
+# Domain for binary variables
+_BINARY_DOMAIN = ((0, 1),)
 
 
 ###############################################################################
@@ -196,7 +200,6 @@ class CpoExpr(object):
         """
         # Check if required type is the same
         return self.type.is_kind_of(tp)
-        #return (tp.base_type in self.type.higher_types)
 
     def is_variable(self):
         """ Checks if this expression is a variable.
@@ -242,9 +245,9 @@ class CpoExpr(object):
         """ Get the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
-        return None
+        return(())
 
     def is_leaf(self):
         """ Checks if this expression is a leaf (no children)
@@ -252,7 +255,7 @@ class CpoExpr(object):
         Returns:
             True if this expression is a leaf
         """
-        return self._get_children() is None
+        return not self._get_children()
 
     def get_max_depth(self):
         """ Gets the maximum expression depth.
@@ -309,9 +312,6 @@ class CpoExpr(object):
 
     def _incr_ref_count(self):
         """ Increase reference count on this expression and create a name if more than one
-
-        Args:
-            expr: Expression to update
         """
         # Increment reference count
         self.nbrefs += 1
@@ -320,44 +320,14 @@ class CpoExpr(object):
             if self.name is None:
                 self.name = self._generate_name()
 
-    def _get_expr_string(self):
-        """ Get the string representing this expression, name excluded.
-
-        Returns:
-            String representation of this expression
-        """
-        return "None"
-
-
-    def _to_string(self, root=True):
-        """ Get the string representing this expression
-
-        If 'root' flag is True, then expression is printed as [<name> =] <expression>. All sub-expressions
-        are printed with 'root' flag to False.
-
-        If 'root' flag is False, then only name is printed if any. Otherwise expression is printed
-        and sub-expressions are printed with 'root' flag to False.
-
-        Args:
-            root: Indicate a root level print.
-        Returns:
-            String representation of this expression
-            This default implementation returns the name of the expression
-        """
-        name = self.get_name();
-        if root:
-            if is_string(name):
-                return to_printable_symbol(name) + " = " + self._get_expr_string()
-            else:
-                return self._get_expr_string()
-        elif is_string(name):
-            return to_printable_symbol(name)
-        else:
-            return self._get_expr_string()
 
     def __str__(self):
         """ Convert this expression into a string """
-        return self._to_string()
+        name = self.get_name()
+        if is_string(name):
+            return to_printable_symbol(name) + " = " + _to_string(self)
+        else:
+            return _to_string(self)
 
 
 class CpoValue(CpoExpr):
@@ -370,7 +340,7 @@ class CpoValue(CpoExpr):
 
         Args:
             value:  Constant value.
-            vtyp :  Value type.
+            type :  Value type.
         """
         assert isinstance(type, CpoType), "Argument 'type' should be a CpoType"
         super(CpoValue, self).__init__(type, None)
@@ -419,22 +389,11 @@ class CpoValue(CpoExpr):
         """ Get the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
         if self.type.is_array_of_expr():
             return self.value
-        return None
-
-    def _get_expr_string(self, root=True):
-        """ Get the string representing this expression, name excluded.
-
-        Returns:
-            String representation of this expression
-        """
-        # Build expression string
-        if is_array(self.value):
-            return "[" + ", ".join(x._to_string(False) if isinstance(x, CpoExpr) else str(x) for x in self.value) + "]"
-        return str(self.value)
+        return(())
 
 
 class CpoExprList(list):
@@ -489,7 +448,7 @@ class CpoFunctionCall(CpoExpr):
                 raise CpoException("A constraint can not be operand of an expression.")
             self.operands = _update_references(oprnds)
         else:
-            self.operands = None
+            self.operands = ()
 
     def get_signature(self):
         """ Return the signature of the expression.
@@ -529,7 +488,7 @@ class CpoFunctionCall(CpoExpr):
         """ Return the operands of this expression.
 
         Returns:
-            List of operand expressions, None if no operands.
+            List of operand expressions, () if no operands.
         """
         return self.operands
 
@@ -551,21 +510,9 @@ class CpoFunctionCall(CpoExpr):
         """ Return the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
         return self.operands
-
-    def _get_expr_string(self, root=True):
-        """ Get the string representing this expression, name excluded.
-
-        Returns:
-            String representation of this expression
-            This default implementation returns the name of the expression as there is no value.
-        """
-        opsgn = self.signature
-        oprnds = self.operands
-        return opsgn.get_operation().get_py_name() + "(" + ", ".join(x._to_string(False) for x in oprnds) + ")"
-        return self.get_name()
 
 
 class CpoVariable(CpoExpr):
@@ -637,14 +584,6 @@ class CpoIntVar(CpoVariable):
         """
         return self.domain
     
-    def _get_expr_string(self, root=True):
-        """ Get the string representing this expression, name excluded.
-
-        Returns:
-            String representation of this expression
-            This default implementation returns the name of the expression as there is no value.
-        """
-        return "integer_var(" + str(self.get_domain()) + ")"
 
     def equals(self, other):
         """ Checks if this expression is equivalent to another
@@ -735,7 +674,7 @@ class CpoIntervalVar(CpoVariable):
         """ Sets the maximum value of the start interval.
 
         Args:
-            mn: Max value of the start of the interval.
+            mx: Max value of the start of the interval.
         """
         self.start = (self.start[0], mx)
 
@@ -767,7 +706,7 @@ class CpoIntervalVar(CpoVariable):
         """ Sets the maximum value of the end of the interval.
 
         Args:
-            mn: Max value of the end of the interval.
+            mx: Max value of the end of the interval.
         """
         self.end =(self.end[0], mx)
 
@@ -799,7 +738,7 @@ class CpoIntervalVar(CpoVariable):
         """ Sets the maximum value of the length interval.
 
         Args:
-            mn: Max value of the length of the interval.
+            mx: Max value of the length of the interval.
         """
         self.length = (self.length[0], mx)
 
@@ -831,7 +770,7 @@ class CpoIntervalVar(CpoVariable):
         """ Sets the maximum value of the size interval.
 
         Args:
-            mn: Max value of the size of the interval.
+            mx: Max value of the size of the interval.
         """
         self.size = (self.size[0], mx)
 
@@ -882,6 +821,14 @@ class CpoIntervalVar(CpoVariable):
         if intensity is not None:
             intensity._incr_ref_count()
 
+    def get_intensity(self):
+        """ Gets the intensity function of this interval var.
+
+        Returns:
+           Intensity function (None, or StepFunction).
+        """
+        return self.intensity
+
     def set_granularity(self, granularity):
         """ Sets the scale of the intensity function.
 
@@ -890,6 +837,14 @@ class CpoIntervalVar(CpoVariable):
         """
         assert (granularity is None) or (is_int(granularity) and (granularity >= 0)), "Argument 'granularity' should be None or positive integer"
         self.granularity = granularity 
+
+    def get_granularity(self):
+        """ Get the scale of the intensity function.
+
+        Returns:
+            Scale of the intensity function, None for default (100)
+        """
+        return self.granularity
 
     def _equals(self, other):
         """ Checks the equality of this expression with another object.
@@ -919,18 +874,9 @@ class CpoIntervalVar(CpoVariable):
         """ Get the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
-        return (self.intensity,) if self.intensity else None
-
-    def _get_expr_string(self, root=True):
-        """ Get the string representing this expression, name excluded.
-
-        Returns:
-            String representation of this expression
-            This default implementation returns the name of the expression as there is no value.
-        """
-        return "intervar_var(start=" + str(self.get_start()) + ", end=" + str(self.get_end()) + ")"
+        return (self.intensity,) if self.intensity else ()
 
 
 class CpoSequenceVar(CpoVariable):
@@ -946,9 +892,15 @@ class CpoSequenceVar(CpoVariable):
     def __init__(self, vars, types=None, name=None):
         """ Creates a new sequence variable.
 
+        This method creates an instance of sequence variable on the set of interval variables defined
+        by the array 'vars'.
+        A list of non-negative integer types can be optionally  specified.
+        List of variables and types must be of the same size and interval variable vars[i] will have type types[i]
+        in the sequence variable.
+
         Args:
-            vars:  Array of IntervalVars that constitute the sequence.
-            types: Variable types (same size as vars), default is None.
+            vars:  List of IntervalVars that constitute the sequence.
+            types: List of variable types as integers, same size as vars, or None (default).
             name:  Name of the sequence, None for automatic naming.
         """
         # Check  arguments
@@ -963,6 +915,7 @@ class CpoSequenceVar(CpoVariable):
                 types = types.value
             else:
                 types = _check_and_expand_interval_tuples('types', types)
+            assert len(types) == len(vars), "The array of types should have the same length than the array of variables."
         # Store attributes
         super(CpoSequenceVar, self).__init__(Type_SequenceVar, name)
         self.vars = vars
@@ -972,7 +925,7 @@ class CpoSequenceVar(CpoVariable):
         """ Gets the array of variables.
 
         Returns:
-            Array of variables.
+            Array of interval variables that are in the sequence.
         """
         return self.vars
     
@@ -980,7 +933,7 @@ class CpoSequenceVar(CpoVariable):
         """ Gets the array of types.
 
         Returns:
-            Array of types.
+            Array of variable types (array of integers), None if no type defined.
         """
         return self.types
     
@@ -996,20 +949,26 @@ class CpoSequenceVar(CpoVariable):
         Returns:
             True if 'other' is semantically identical to this object, False otherwise.
         """
-        return super(CpoSequenceVar, self)._equals(other)
+        # Call super
+        if not super(CpoSequenceVar, self)._equals(other):
+            return False
+        # Check equality of types
+        if self.types != other.types:
+            return False
         # List of variables is processed as expression children
+        return True
 
     def _get_children(self):
         """ Get the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
         return self.vars
 
     def __str__(self):
         """ Convert this expression into a string """
-        return "SequenceVar" + to_string(self.vars)
+        return "SequenceVar({}, types={})".format(self.vars, self.types)
 
 
 class CpoTransitionMatrix(CpoExpr):
@@ -1017,36 +976,84 @@ class CpoTransitionMatrix(CpoExpr):
     """
     __slots__ = ('size',    # Matrix width/height
                  'matrix',  # Matrix values
+                 'is_flat', # Indicates that the list of values is flat
                 )
     
     def __init__(self, size=None, values=None, name=None):
-        """ Creates a new empty transition matrix (square matrix of integers).
+        """ Creates a new transition matrix (square matrix of integers).
+
+        A transition matrix is a square matrix of non-negative integers that represents a minimal distance between
+        two interval variables.
+        An instance of transition matrix can be used in the no_overlap constraint and in state functions.
+
+          * In a no_overlap constraint the transition matrix represents the minimal distance between two
+            non-overlapping interval variables.
+            The matrix is indexed using the integer types of interval variables in the sequence variable
+            of the no_overlap constraint.
+
+          * In a state function, the transition matrix represents the minimal distance between two integer
+            states of the function.
+
+        There are two ways to create a transition matrix:
+
+          * Giving only its size. In this case, a transition matrix is created by this constructor with all
+            values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
+
+          * Giving the matrix values either as list of rows, each row being a list of integers,
+            or as a single list of integers containing the concatenation of rows.
+            Given value is not duplicated. Any change on the value is reflected in the transition matrix,
+            and any change in the matrix using :meth:`set_value` is reflected in the source object.
 
         Args:
-            size (optional):   Matrix size (width or height).
+            size (optional):  Matrix size (width or height).
                     If not given, the `values` argument must be given.
-            values (optional): List of matrix values.
+            values (optional):  Matrix value as list of integers or list of rows.
                     If not given, the method `set_value()` should be called to initialize matrix content.
-            name (optional):   Name of the matrix. None by default.
+            name (optional):  Name of the matrix. None by default.
         """
+
         super(CpoTransitionMatrix, self).__init__(Type_TransitionMatrix, name)
-        if (size is not None):
-            assert is_int(size), "Argument 'size' should be an int"
+
+        if size is not None:
+            assert is_int(size) and size >= 0, "Argument 'size' should be a positive integer"
             self.size = size
-            if (values is None):
-                self.matrix = [0] * (size * size)
-            else:
-                assert is_array_of_type(values, int) and (len(values) == size * size), "Argument 'values' should be an array of integer of size*size length"
-                self.matrix = values
-        elif (values is not None):
-            assert is_array_of_type(values, int), "Argument 'values' should be an array of integers"
-            size = math.sqrt(len(values))
-            assert (len(values) == (size * size)), "Argument 'values' should have a length that is a perfect square"
-            self.matrix = values
-            self.size = size
+
+        if values is None:
+            assert size is not None, "At least 'size' or 'values' should be given"
+            # Allocate matrix as flat array
+            self.matrix = [0] * (size * size)
+            self.is_flat = True
         else:
-            assert False, "At least 'size' or 'values' should be given"
-         
+            assert is_array(values), "Argument 'values' should be an array of integers"
+            # Check empty array
+            alen = len(values)
+            if alen == 0:
+                assert size is None or size == 0, "Size should be zero with an empty array of values"
+                self.size = 0
+                self.is_flat = True
+            else:
+                if is_int(values[0]):
+                    # Assume matrix is a flat array of integers
+                    self.is_flat = True
+                    assert all(is_int(v) and v >= 0 for v in values), "All matrix values should be positive integers"
+                    if size is None:
+                        size = int(math.sqrt(alen))
+                        assert (alen == (size * size)), "Array of values should have a length that is a perfect square"
+                        self.size = size
+                    else:
+                        assert alen == size * size, "Array of values should have a size equal to size * size"
+                else:
+                    # Assume matrix is an array of arrays
+                    self.is_flat = False
+                    if size is None:
+                        self.size = alen
+                    else:
+                        assert (alen == size), "Array of values has a size that is different than the given one"
+                    assert all(is_array(r) for r in values), "Array of values should be a list of lists of integers"
+                    assert all((len(r) == alen) for r in values), "All values rows should have the same size"
+                    assert all(all(is_int(v) and v >= 0 for v in r) for r in values), "All matrix values should be positive integers"
+            self.matrix = values
+
     def get_size(self):
         """ Returns the size of the matrix.
 
@@ -1066,13 +1073,24 @@ class CpoTransitionMatrix(CpoExpr):
         """
         assert_arg_int_interval(from_state, 0, self.size, "from_state")
         assert_arg_int_interval(to_state, 0, self.size, "to_state")
-        return self.matrix[(from_state * self.size) + to_state]
+        if self.is_flat:
+            return self.matrix[(from_state * self.size) + to_state]
+        else:
+            return self.matrix[from_state][to_state]
+
+    def get_all_values(self):
+        """ Returns an iterator on all matrix values, in row/column order
+
+        Returns:
+            Iterator on all values
+        """
+        return (self.get_value(f, t) for f in range(self.size) for t in range(self.size))
 
     def get_matrix(self):
         """ Returns the complete transition matrix.
 
         Returns:
-            Transition value (list of lists).
+            Transition matrix as a list of integers that is the concatenation of all matrix rows.
         """
         return self.matrix
 
@@ -1086,7 +1104,11 @@ class CpoTransitionMatrix(CpoExpr):
         """
         assert_arg_int_interval(from_state, 0, self.size, "from_state")
         assert_arg_int_interval(to_state, 0, self.size, "to_state")
-        self.matrix[from_state * self.size + to_state] = value
+        assert is_int(value) and value >= 0, "Value should be a positive integer"
+        if self.is_flat:
+            self.matrix[from_state * self.size + to_state] = value
+        else:
+            self.matrix[from_state][to_state] = value
 
     def _equals(self, other):
         """ Checks the equality of this expression with another object.
@@ -1183,6 +1205,14 @@ class CpoTupleSet(CpoExpr):
                (self.size == other.size) and \
                (self.tupleset == other.tupleset)
 
+    def __len__(self):
+        """ Returns the number of tuples in this tuple set.
+
+        Returns:
+            Number of tuples in this tuple set.
+        """
+        return len(self.tupleset)
+
     def __str__(self):
         """ Convert this expression into a string """
         return "TupleSet" + to_string(self.tupleset)
@@ -1244,14 +1274,15 @@ class CpoStateFunction(CpoVariable):
             True if 'other' is semantically identical to this object, False otherwise.
         """
         return super(CpoStateFunction, self)._equals(other)
+        # Transition matrix is checked as children
 
     def _get_children(self):
         """ Get the list of children expressions if any
 
         Returns:
-            List of children expressions, None if none
+            List of children expressions, () if none
         """
-        return (self.trmtx,) if self.trmtx else None
+        return (self.trmtx,) if self.trmtx else ()
 
     def __str__(self):
         """ Convert this expression into a string """
@@ -1346,7 +1377,7 @@ def integer_var_dict(keys, min, max=None, name=None):
         name (optional): Variable name prefix, or function to be called on dictionary key (example: str).
                          If not given, a name prefix is generated automatically.
     Returns:
-        Dictionary of IntVars (OrderedDict).
+        Dictionary of CpoIntVar objects (OrderedDict).
     """
     if name is None:
         name = CpoIntVar._generate_name() + "_"
@@ -1362,6 +1393,56 @@ def integer_var_dict(keys, min, max=None, name=None):
         res[k] = CpoIntVar(dom, vname)
         i += 1
     return res
+
+
+def binary_var(name=None):
+    """ Creates a binary integer variable.
+
+    An binary variable is an integer variable with domain limited to 0 and 1
+
+    Args:
+        name (optional): Variable name, default is None for automatic name.
+    Returns:
+        CpoIntVar expression
+    """
+    return CpoIntVar(_BINARY_DOMAIN, name)
+
+
+def binary_var_list(size, name=None):
+    """ Creates a list of binary variables.
+
+    This methods creates a list of binary variables.
+
+    If a name is given, each variable of the list is created with this
+    name concatenated with the index of the variable in the list, starting by zero.
+
+    Args:
+        size: Size of the list of variables
+        name (optional): Variable name prefix. If not given, a name prefix is generated automatically.
+    Returns:
+        List of binary integer variables.
+    """
+    return integer_var_list(size, _BINARY_DOMAIN, name=name)
+
+
+def binary_var_dict(keys, name=None):
+    """ Creates a dictionary of binary variables.
+
+    This methods creates a dictionary of binary variables associated to a list of keys given as first parameter.
+
+    If a name is given, each variable of the list is created with this
+    name concatenated with the string representation of the corresponding key.
+    The parameter 'name' can also be a function that is called to build the variable name
+    with the variable key as parameter.
+
+    Args:
+        keys: Iterable of variable keys.
+        name (optional): Variable name prefix, or function to be called on dictionary key (example: str).
+                         If not given, a name prefix is generated automatically.
+    Returns:
+        Dictionary of CpoIntVar objects (OrderedDict).
+    """
+    return integer_var_dict(keys, _BINARY_DOMAIN, name=name)
 
 
 def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
@@ -1432,31 +1513,60 @@ def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, lengt
     return res
 
 
-def sequence_var(ivars, types=None, name=None):
+def sequence_var(vars, types=None, name=None):
     """ Creates a new sequence variable (list of interval variables).
 
+    This method creates an instance of sequence variable on the set of interval variables defined
+    by the array 'vars'.
+    A list of non-negative integer types can be optionally  specified.
+    List of variables and types must be of the same size and interval variable vars[i] will have type types[i]
+    in the sequence variable.
+
     Args:
-        ivars:   Array of interval variables.
-        types (optional):   Variable types (same size than vars), default is None.
-        name:    Variable name, default is None for automatic name.
+        vars:  List of IntervalVars that constitute the sequence.
+        types: List of variable types as integers, same size as vars, or None (default).
+        name:  Name of the sequence, None for automatic naming.
     Returns:
         IntervalVar expression.
     """
-    return CpoSequenceVar(ivars, types, name)
+    return CpoSequenceVar(vars, types, name)
 
 
-def transition_matrix(size, name=None):
-    """ Creates an empty transition matrix.
+def transition_matrix(size=None, values=None, name=None):
+    """ Creates a new transition matrix (square matrix of integers).
 
-    The matrix can be filled using the methods provided by the TransitionMatrix object.
+    A transition matrix is a square matrix of non-negative integers that represents a minimal distance between
+    two interval variables.
+    An instance of transition matrix can be used in the no_overlap constraint and in state functions.
+
+      * In a no_overlap constraint the transition matrix represents the minimal distance between two
+        non-overlapping interval variables.
+        The matrix is indexed using the integer types of interval variables in the sequence variable
+        of the no_overlap constraint.
+
+      * In a state function, the transition matrix represents the minimal distance between two integer
+        states of the function.
+
+    There are two ways to create a transition matrix:
+
+      * Giving only its size. In this case, a transition matrix is created by this constructor with all
+        values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
+
+      * Giving the matrix values either as list of rows, each row being a list of integers,
+        or as a single list of integers containing the concatenation of rows.
+        Given value is not duplicated. Any change on the value is reflected in the transition matrix,
+        and any change in the matrix using :meth:`set_value` is reflected in the source object.
 
     Args:
-        size: Size of the square matrix.
-        name: Object name (default is None).
+        size (optional):  Matrix size (width or height).
+                If not given, the `values` argument must be given.
+        values (optional):  Matrix value as list of integers or list of rows.
+                If not given, the method `set_value()` should be called to initialize matrix content.
+        name (optional):  Name of the matrix. None by default.
     Returns:
         TransitionMatrix expression.
     """
-    return CpoTransitionMatrix(size, name)
+    return CpoTransitionMatrix(size, values, name)
  
  
 def tuple_set(size, name=None):
@@ -1782,11 +1892,11 @@ def _get_cpo_type(val):
         return _PYTHON_TO_CPO_TYPE.get(val.dtype.type)
 
     # Check arrays
-    if not isinstance(val, (list, tuple)):
+    if not is_array(val):
         return None
     
     # Check empty Array
-    if (len(val) == 0):
+    if len(val) == 0:
         return Type_IntArray
 
     # Get the most common type to all array elements
@@ -1902,11 +2012,9 @@ def _is_equal_expressions(v1, v2):
         # Get expressions to compare
         edscr = estack[-1]
         v1, v2, cx = edscr
-        #print("v1: {}, v2: {}, cx: {}".format(v1, v2, cx))
 
         # Check same object type
         if type(v1) != type(v2):
-            #print("   No the same type")
             return False
 
         # Check physical equality
@@ -1918,18 +2026,10 @@ def _is_equal_expressions(v1, v2):
         if isinstance(v1, CpoExpr):
             # Check objects itself
             if (cx < 0) and not v1._equals(v2):
-                #print("   Not basically equal. Types: {}, {}".format(v1.get_type(), v2.get_type()))
                 return False
             # Access children
             ar1 = v1._get_children()
             ar2 = v2._get_children()
-            if ar1 is None:
-                if ar2 is not None:
-                    return False
-                estack.pop()
-                continue
-            if ar2 is None:
-                return False
             # Check children
             alen = len(ar1)
             if (cx < 0) and (alen != len(ar2)):
@@ -1947,6 +2047,8 @@ def _is_equal_expressions(v1, v2):
         else:
             if not _is_equal_values(v1, v2):
                 return False
+            estack.pop()
+
 
     # Expressions identical
     return True
@@ -1972,13 +2074,24 @@ def _is_equal_values(v1, v2):
         return v1.equals(v2)
     if isinstance(v2, CpoExpr):
         return False
-    # Check basic equality
-    if v1 == v2:
-        return True
     # Check floats
     if is_float(v1):
         return is_float(v2) and (abs(v1 - v2) <= _FLOATING_POINT_PRECISION * max(abs(v1), abs(v2)))
     if is_array(v1):
         return is_array(v2) and (len(v1) == len(v2)) and all(_is_equal_values(x1, x2) for x1, x2 in zip(v1, v2))
-    return False
+    if isinstance(v1, dict):
+        return isinstance(v2, dict) and (len(v1) == len(v2)) and all(_is_equal_values(v1[k], v2[k]) for k in v1)
+    # Check finally basic equality
+    return v1 == v2
 
+
+import docplex.cp.cpo_compiler as compiler
+def _to_string(expr):
+    """ Build a string representing an expression.
+
+    Args:
+        expr:  Expression to convert into string
+    Returns:
+        String representing this expression
+    """
+    return compiler.CpoCompiler(None)._compile_expression(expr)

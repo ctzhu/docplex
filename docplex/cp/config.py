@@ -87,15 +87,10 @@ context.model.cache.size = 10000
 context.model.cache.active = True
 
 
-
-
 #-----------------------------------------------------------------------------
 # Solving parameters
 
-# Default time mode
-context.params.TimeMode = "ElapsedTime"
-
-# Default time mode
+# Default time limit
 context.params.TimeLimit = 100
 
 # Workers count
@@ -110,6 +105,9 @@ context.solver.trace_cpo = False
 
 # Indicate to trace solver log on log_output.
 context.solver.trace_log = False
+
+# Enable undocumented parameters
+context.solver.enable_undocumented_params = False
 
 # Max number of threads allowed for model solving
 context.solver.max_threads = None
@@ -155,6 +153,9 @@ context.solver.docloud.verify_ssl = True
 # Default unitary request timeout in seconds
 context.solver.docloud.request_timeout = 30
 
+# Proxies (map protocol_name/endpoint, as described in http://docs.python-requests.org/en/master/user/advanced/#proxies)
+context.solver.docloud.proxies = None
+
 # Time added to expected solve time to compute the total result waiting timeout
 context.solver.docloud.result_wait_extra_time = 60
 
@@ -181,10 +182,10 @@ LOCAL_CONTEXT.params.TimeLimit = None
 LOCAL_CONTEXT.params.Workers = None
 
 LOCAL_CONTEXT.solver.trace_log = True
-LOCAL_CONTEXT.solver.agent = 'local'
+LOCAL_CONTEXT.solver.agent = 'angel'
 LOCAL_CONTEXT.solver.max_threads = None
 
-LOCAL_CONTEXT.solver.local = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverAngel",
+LOCAL_CONTEXT.solver.angel = Context(class_name = "docplex.cp.solver.solver_angel.CpoSolverAngel",
                                      execfile   = "cpoptimizer" + EXE_EXTENSION,
                                      parameters = ['-angel'],
                                      log_prefix = "[Angel] ")
@@ -237,7 +238,7 @@ def _get_effective_context(**kwargs):
     ctx = kwargs.get('context', None)
     if (ctx is None) or (ctx in DEFAULT_VALUES):
         ctx = context
-    # print("*** Source context");
+    # print("\n*** Source context");
     # ctx.print_context()
 
     # Process changes
@@ -253,17 +254,15 @@ def _get_effective_context(**kwargs):
     # Replace or set remaining fields in parameters
     if rplist:
         params = ctx.params
-        #if params is None:
-        #    params = CpoParameters()
-        #    ctx.params = params;
+        chkparams = not ctx.solver.enable_undocumented_params
         if isinstance(params, CpoParameters):
             for k, v in rplist:
-                if not k in ALL_PARAMETER_NAMES:
+                if chkparams and not k in ALL_PARAMETER_NAMES:
                     raise CpoException("CPO solver does not accept a parameter named '{}'".format(k))
                 params.set_attribute(k, v)
 
     # Return
-    # print("*** Result context");
+    # print("\n*** Result context");
     # ctx.print_context()
     return ctx
 

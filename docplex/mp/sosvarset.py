@@ -90,3 +90,10 @@ class SOSVariableSet(ModelingObjectBase):
         vars_s = ', '.join(str(v) for v in self.iter_variables())
         repr_s = 'docplex.mp.SOSVariableSet(type={0}{1}{2})'.format(self.sos_type.value, vars_s, name_s)
         return repr_s
+
+    def copy(self, target_model, var_mapping):
+        copy_variables = [ var_mapping[v] for v in self.iter_variables()]
+        return SOSVariableSet(model=target_model,
+                              variable_sequence=copy_variables,
+                              sos_type=self.sos_type,
+                              name=self.name)

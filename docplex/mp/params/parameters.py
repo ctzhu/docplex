@@ -11,7 +11,6 @@ from six import iteritems
 from docplex.mp.utils import is_int, is_number
 from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.utils import RedirectedOutputContext
 
 
 class ParameterGroup(object):
@@ -673,7 +672,20 @@ class RootParameterGroup(ParameterGroup):
         out.write("# --- end of generated prm data ---\n")
 
     def print_information(self, indent_level=0, print_all=False):
-        self.print_info_to_stream(output=None, overload_params=None, indent_level=indent_level, print_defaults=print_all)
+        indent = ' ' * indent_level
+        param_generator = self.generate_params()
+        for param in param_generator:
+            if param.is_nondefault() or print_all:
+                param_value = param.get()
+                print("{0}{1} = {2!s}"
+                      .format(indent,
+                              param.qualified_name,
+                              _param_prm_formats[type(param)] % param_value))
+
+    def export_prm_to_path(self, path, overload_params=None):
+        with open(path, mode='w') as out:
+            self.export_prm(out, overload_params=overload_params)
+
 
     def print_info_to_stream(self, output, overload_params=None, print_defaults=False, indent_level=0):
         """ Writes parameters to an output stream.
@@ -693,20 +705,20 @@ class RootParameterGroup(ParameterGroup):
                 certain parameters. This dictionary is of the form {param: value}.
         """
         indent = " " * indent_level
-        with RedirectedOutputContext(output):
-            param_generator = self.generate_params()
-            for param in param_generator:
-                if overload_params and param in overload_params:
-                    param_value = overload_params[param]
-                elif print_defaults or param.is_nondefault():
-                    param_value = param.get()
-                else:
-                    param_value = None
-                if param_value is not None:
-                    print("{0}{1} = {2!s}"
-                          .format(indent,
-                                  param.qualified_name,
-                                  _param_prm_formats[type(param)] % param_value))
+        #with RedirectedOutputContext(output):
+        param_generator = self.generate_params()
+        for param in param_generator:
+            if overload_params and param in overload_params:
+                param_value = overload_params[param]
+            elif print_defaults or param.is_nondefault():
+                param_value = param.get()
+            else:
+                param_value = None
+            if param_value is not None:
+                output.write("{0}{1} = {2!s}\n"
+                      .format(indent,
+                              param.qualified_name,
+                              _param_prm_formats[type(param)] % param_value))
 
     def export_prm_to_string(self, overload_params=None):
         """  Exports non-default parameters in PRM format to a string.

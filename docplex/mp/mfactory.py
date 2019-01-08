@@ -9,13 +9,16 @@
 import math
 
 from docplex.mp.sosvarset import SOSVariableSet
-from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr
-from docplex.mp.constants import ComparisonType, SOSType
+from docplex.mp.basic import ObjectiveSense
+from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr, ZeroExpr, Expr
+from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint, _DummyFeasibleConstraint, _DummyInfeasibleConstraint, RangeConstraint, \
     IndicatorConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr
 from docplex.mp.compat23 import fast_range
 from docplex.mp.utils import *
+
+from docplex.mp.kpi import KPI
 
 
 def fix_format_string(fmt, dimen=1, key_format='_%s'):
@@ -93,6 +96,7 @@ class ModelFactory(object):
 
     def __init__(self, model, engine):
         self._model = model
+        self._checker = model._checker
         self.__engine = engine
         self.infinity = engine.get_infinity()
         self.zero_expr = ZeroExpr(model)
@@ -110,7 +114,7 @@ class ModelFactory(object):
         return _DummyInfeasibleConstraint(self._model, self.zero_expr, self._get_cached_one_expr())
 
     def fatal(self, msg, *args):
-        self._model.fatal(msg, args)
+        self._model.fatal(msg, *args)
 
     def warning(self, msg, *args):
         self._model.warning(msg, args)
@@ -129,15 +133,11 @@ class ModelFactory(object):
         return var
 
     def _expand_names(self, keys, user_name, arity, key_format):
+        # if user_name is None:
+        #     return []
         default_naming_fn = self._model._create_automatic_varname
         actual_naming_fn = compile_naming_function(keys, user_name, default_naming_fn, arity, key_format)
         computed_names = [str(actual_naming_fn(key)) for key in keys]
-        # if is_function(user_name):
-        #     # must check the result of user function.
-        #     for key, name in izip(keys, computed_names):
-        #         if not is_string(name):
-        #             self.fatal("Name function must return a string, got: {0}, key: {1}".format(name, key))
-
         return computed_names
 
     def _expand_bounds(self, keys, var_bound, default_bound, size, is_lb_or_ub):
@@ -165,9 +165,6 @@ class ModelFactory(object):
                 else:
                     return [float(var_bound)] * size
 
-        elif isinstance(var_bound, str):
-            self._bad_bounds_fatal(var_bound)
-
         elif isinstance(var_bound, list):
             nb_bounds = len(var_bound)
             if nb_bounds == 0:
@@ -180,7 +177,7 @@ class ModelFactory(object):
                     self.warning("Variable bounds list is too large, required: %d, got: %d." % (size, nb_bounds))
                 for b, b_value in enumerate(var_bound):
                     if not is_number(b_value):
-                        self.fatal("Variable bounds list expects numbers, got: {0!s} (pos: #{1})",
+                        self.fatal("Variable bounds list expects numbers, got: {0!r} (pos: #{1})",
                                    b_value, b)
                 return var_bound
 
@@ -257,7 +254,7 @@ class ModelFactory(object):
         all_names = self._expand_names(keys, name, arity, key_format)
 
         allvars = [Var(mdl, vartype,
-                       all_names[k],
+                       all_names[k] if all_names else '',
                        xlbs[k] if xlbs else default_lb,
                        xubs[k] if xubs else default_ub,
                        _safe_domain=is_safe,
@@ -269,7 +266,7 @@ class ModelFactory(object):
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
-    def constant_expr(self, cst, safe=False, context=None, force_clone=False):
+    def constant_expr(self, cst, safe_number=False, context=None, force_clone=False):
         if 0 == cst:
             return self.zero_expr
         elif 1 ==  cst:
@@ -278,10 +275,10 @@ class ModelFactory(object):
             else:
                 return self._get_cached_one_expr()
         else:
-            if safe:
+            if safe_number:
                 k = cst
             else:
-                k = self._model._checker.to_valid_number(cst, context_msg=context)
+                k = self._checker.to_valid_number(cst, context_msg=context)
             return LinearExpr(self._model, e=None, constant=k, safe=True)
 
     def linear_expr(self, e=0, constant=0, name=None):
@@ -289,36 +286,25 @@ class ModelFactory(object):
         return expr
 
     def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
-        if not checked_num and not is_number(e):
-            self.fatal("Not a number: {}".format(e))
-        elif math.isnan(e):
-            msg = "NaN value found in expression"
-            try:
-                msg = "{0}: {1}".format(context_msg(), msg)
-            except TypeError:
-                msg = "{0}: {1}".format(context_msg, msg)
-            self.fatal(msg)
-        elif -infinity <= e <= infinity:
-            return e
-        elif e >= infinity:
-            return infinity
-        else:
-            return -infinity
+        return self._checker.to_valid_number(e, checked_num, context_msg, infinity)
+
+    _operand_types = (AbstractLinearExpr, Var, ZeroExpr)
+
+    @staticmethod
+    def _is_operand(arg, accept_numbers=True):
+        return isinstance(arg, (Expr, Var)) or (accept_numbers and is_number(arg))
 
     def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False, context=None):
         # INTERNAL
         if isinstance(e, linexpr_class):
             if force_clone:
                 return e.clone()
-            elif force_clone:
-                return e.clone()
             else:
-                # print('-- not cloning: {0!s}'.format(e))
                 return e
-        elif isinstance(e, (AbstractLinearExpr, Var, ZeroExpr)):
+        elif isinstance(e, self._operand_types):
             return e.to_linear_expr()
         elif is_number(e):
-            return self.constant_expr(cst=e, context=context, force_clone=force_clone)
+            return self.constant_expr(cst=e, context=context, force_clone=force_clone, safe_number=False)
         else:
             try:
                 return e.to_linear_expr()
@@ -331,7 +317,7 @@ class ModelFactory(object):
         if hasattr(e, "iter_terms"):
             return e
         elif is_number(e):
-            return self.constant_expr(cst=e)
+            return self.constant_expr(cst=e, safe_number=True)
         else:
             try:
                 return e.to_linear_expr()
@@ -351,7 +337,7 @@ class ModelFactory(object):
         # noinspection PyPep8
         left_expr  = self._to_linear_expr(lhs, context="LinearConstraint.left_expr")
         right_expr = self._to_linear_expr(rhs, context="LinearConstraint.right_expr")
-        self._model._check_both_in_selfmodel(left_expr, right_expr, "new_binary_constraint")
+        self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = LinearConstraint(self._model, left_expr, ctype, right_expr, name)
         left_expr.notify_used(ct)
         right_expr.notify_used(ct)
@@ -433,3 +419,17 @@ class ModelFactory(object):
         # INTERNAL
         new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, name=name)
         return new_sos
+
+    def default_objective_sense(self):
+        return ObjectiveSense.Minimize
+
+    def new_kpi(self, kpi_arg, name_arg):
+        # make a name
+        if name_arg:
+            publish_name = name_arg
+        elif hasattr(kpi_arg, 'name') and kpi_arg.name:
+            publish_name = kpi_arg.name
+        else:
+            publish_name = str_holo(kpi_arg, maxlen=32)
+        new_kpi = KPI.new_kpi(self._model, kpi_arg, publish_name)
+        return new_kpi

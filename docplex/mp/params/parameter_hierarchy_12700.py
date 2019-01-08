@@ -56,9 +56,7 @@ def _group_benders_tolerances_make(pgroup):
 
 # generating code for group: Benders
 def _group_benders_params(pgroup):
-    return dict(display=IntParameter(pgroup, "display", "CPX_PARAM_BENDERSDISPLAY", 1502, "level of benders cut loop display", default_value=1, min_value=0.0, max_value=3.0),
-                interval=PositiveIntParameter(pgroup, "interval", "CPX_PARAM_BENDINTERVAL", 1503, "interval for printing benders cut loop display", default_value=0, max_value=9223372036800000000),
-                strategy=IntParameter(pgroup, "strategy", "CPX_PARAM_BENDERSSTRATEGY", 1501, "choice of benders decomposition to use", default_value=0, min_value=-1.0, max_value=3.0),
+    return dict(strategy=IntParameter(pgroup, "strategy", "CPX_PARAM_BENDERSSTRATEGY", 1501, "choice of benders decomposition to use", default_value=0, min_value=-1.0, max_value=3.0),
                 workeralgorithm=IntParameter(pgroup, "workeralgorithm", "CPX_PARAM_WORKERALG", 1500, "method for optimizing benders subproblems", default_value=0, min_value=0.0, max_value=5.0)
                 )
 
@@ -318,7 +316,6 @@ def _group_read_params(pgroup):
                 constraints=PositiveIntParameter(pgroup, "constraints", "CPX_PARAM_ROWREADLIM", 1021, "constraint read size", default_value=30000, max_value=2100000000),
                 datacheck=IntParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1, min_value=0.0, max_value=2.0),
                 fileencoding=StrParameter(pgroup, "fileencoding", "CPX_PARAM_FILEENCODING", 1129, "code page for file reading and writing", default_value="ISO-8859-1"),
-                lpreader=IntParameter(pgroup, "lpreader", "CPX_PARAM_LPREADER", 1152, "LP file format reader", default_value=0, min_value=0.0, max_value=1.0),
                 nonzeros=PositiveIntParameter(pgroup, "nonzeros", "CPX_PARAM_NZREADLIM", 1024, "constraint nonzero read size", default_value=250000, max_value=9223372036800000000),
                 qpnonzeros=PositiveIntParameter(pgroup, "qpnonzeros", "CPX_PARAM_QPNZREADLIM", 4001, "quadratic nonzero read size", default_value=5000, max_value=9223372036800000000),
                 scale=IntParameter(pgroup, "scale", "CPX_PARAM_SCAIND", 1034, "type of scaling used", default_value=0, min_value=-1.0, max_value=1.0),

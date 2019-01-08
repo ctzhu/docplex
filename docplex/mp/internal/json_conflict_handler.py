@@ -28,7 +28,7 @@ class JSONConflictHandler(object):
                               'member_ub': ConflictStatus.Member_upper_bound}
 
     def __init__(self, conflict_string, grps_dict, has_conflict=None):
-        '''Initialize a new JSONConflictHandler
+        """Initialize a new JSONConflictHandler
 
         This handler is initialized with a json fragment with the CPLEXConflict.
 
@@ -37,7 +37,7 @@ class JSONConflictHandler(object):
             grps_dict: dictionary of groups provided to the DOcplexcloud job, with keys = groups index
             has_conflict: if set to True or False, forces the has_conflict status. If None, this
                 is True if json is not None.
-        '''
+        """
         self.has_conflict = bool(conflict_string) if has_conflict is None else has_conflict
         if conflict_string is not None:
             self.json = json.loads(conflict_string, parse_constant='utf-8')['CPLEXConflict']

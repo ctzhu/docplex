@@ -56,7 +56,7 @@ import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
 import docplex.cp.solver.environment_client as runenv
 
-import time, importlib, inspect, io
+import time, importlib, inspect
 
 
 ###############################################################################
@@ -192,8 +192,6 @@ class CpoSolverAgent(object):
     def _get_cpo_model_string(self):
         """ Get the CPO model as a string, according to configuration
 
-        Args:
-            cpostr:  CPO model as a string in CPO format
         Return:
             String containing the CPO model in CPO file format
         """
@@ -343,6 +341,8 @@ class CpoSolver(object):
 
         Returns:
             Model solution (object of class CpoSolveResult)
+        Raises:
+            :class:`docplex.cp.utils.CpoException` (or derived) if error.
         """
         # Notify start solve to environment
         runenv.start_solve(self)
@@ -435,10 +435,29 @@ class CpoSolver(object):
     def refine_conflict(self):
         """ This method identifies a minimal conflict for the infeasibility of the current model.
 
+        Given an infeasible model, the conflict refiner can identify conflicting constraints and variable domains
+        within the model to help you identify the causes of the infeasibility.
+        In this context, a conflict is a subset of the constraints and/or variable domains of the model
+        which are mutually contradictory.
         Since the conflict is minimal, removal of any one of these constraints will remove that
         particular cause for infeasibility.
         There may be other conflicts in the model; consequently, repair of a given conflict
         does not guarantee feasibility of the remaining model.
+
+        Conflict refiner is controled by the following parameters (that can be set at CpoSolver creation):
+
+         * ConflictRefinerBranchLimit
+         * ConflictRefinerFailLimit
+         * ConflictRefinerIterationLimit
+         * ConflictRefinerOnVariables
+         * ConflictRefinerTimeLimit
+
+        that are described in module :mod:`docplex.cp.parameters`.
+
+        Note that the general *TimeLimit* parameter is used as a limiter for each conflict refiner iteration, but the
+        global limitation in time must be set using *ConflictRefinerTimeLimit* that is infinite by default.
+
+
 
         This function is available only with local CPO solver with release number strictly greater than 12.6.3.
 

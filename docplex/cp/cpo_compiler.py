@@ -14,12 +14,8 @@ from docplex.cp.solution import *
 from docplex.cp.utils import *
 import docplex.cp.config as config
 
-import sys, io
+import sys
 
-try:
-    from StringIO import StringIO
-except ImportError:
-    from io import StringIO
 
 ###############################################################################
 ## Constants
@@ -155,9 +151,8 @@ class CpoCompiler(object):
 
         # Write variables
         out.write(u"\n//--- Variables ---\n")
-        vlist = model.get_all_variables()
-        for v in self._expand_expressions(vlist):
-            self._write_expression(out, v)
+        for v in model.get_all_variables():
+            self._write_expression(out, v, None)
 
         # If aliases are requested, print as comment list of aliases
         mnl = self.alias_min_name_length
@@ -185,17 +180,16 @@ class CpoCompiler(object):
         # Write expressions
         out.write(u"\n//--- Expressions ---\n")
         self.last_loc = None
-        lexpr = model.get_all_expressions()
-        for x in self._expand_expressions(lexpr):
-            self._write_expression(out, x)
+        for x, loc in model.get_all_expressions():
+            self._write_expression(out, x, loc)
 
         # Write search phases 
         phases = model.get_search_phases()
         if phases:
             out.write(u"\n//--- Search phases ---\n")
             out.write(u"search {\n")
-            for x in self._expand_expressions(phases):
-                self._write_expression(out, x)
+            for x, loc in phases:
+                self._write_expression(out, x, loc)
             out.write(u"}\n")
 
         # Write starting point
@@ -210,8 +204,8 @@ class CpoCompiler(object):
             out.write(u"}\n")
 
         # Write parameters
-        out.write(u"\n//--- Parameters ---\n")
         if self.params and (len(self.params) > 0):
+            out.write(u"\n//--- Parameters ---\n")
             if self.last_loc is not None:
                 out.write(u"#line off\n")
             out.write(u"parameters {\n")
@@ -220,19 +214,20 @@ class CpoCompiler(object):
                 if v is not None:
                     out.write(u"   {} = {};\n".format(k, v))
             out.write(u"}\n")
-        else:
-            out.write(u"// None\n")
+
+        # Flush stream (required on Linux rhel6.7)
+        out.flush()
 
 
-    def _write_expression(self, out, xnode):
+    def _write_expression(self, out, expr, loc):
         """ Write model expression
 
         Args:
-            out:    Target output
-            xnode:  Expression node (expr, loc, root)
+            out:   Target output
+            expr:  Expression
+            loc:   Location (file, line), None if unknown
         """
         # Trace location if required
-        expr, loc, root = xnode
         lloc = self.last_loc
         if self.sourceloc and (loc is not None) and (loc != lloc):
             (file, line) = loc
@@ -242,6 +237,23 @@ class CpoCompiler(object):
             out.write(u"\n")
             self.last_loc = loc
 
+        # Write sub-expressions if any
+        for sx in self._get_all_sub_expressions(expr):
+            self._write_sub_expression(out, sx)
+
+        # Write expression label (for constraints)
+        if expr.has_name() and not expr.is_variable():
+            out.write(self._get_id_string(expr.get_name()))
+            out.write(u";\n")
+
+
+    def _write_sub_expression(self, out, expr):
+        """ Write model expression
+
+        Args:
+            out:   Target output
+            expr:  Expression to write
+        """
         # Write expression
         id = expr.get_name()
         if id is not None:
@@ -250,9 +262,6 @@ class CpoCompiler(object):
             out.write(u" = ")
         out.write(self._compile_expression(expr))
         out.write(u";\n")
-        if root and id is not None:
-            out.write(wid)
-            out.write(u";\n")
 
 
     def _write_starting_point(self, out, var):
@@ -273,7 +282,7 @@ class CpoCompiler(object):
         # Write variable starting point
         out.write(self._get_id_string(var.get_name()))
         out.write(u" = ")
-        out.write(''.join(cout))
+        out.write(u''.join(cout))
         out.write(u";\n")
 
 
@@ -305,7 +314,7 @@ class CpoCompiler(object):
         """
         # Initialize working variables
         cout = []  # Result list of strings
-        estack = [[expr, -1]]  # Expression stack [Expression, child index]
+        estack = [[expr, -1, False]]  # Expression stack [Expression, child index, parenthesis]
 
         # Loop while expression stack is not empty
         while estack:
@@ -380,7 +389,7 @@ class CpoCompiler(object):
                         edscr[1] = cnx
                         if (cnx > 0):
                             cout.append(", ")
-                        estack.append([oprnds[cnx], -1])
+                        estack.append([oprnds[cnx], -1, False])
 
             # General expression
             else:
@@ -395,7 +404,7 @@ class CpoCompiler(object):
                 oper = sign.operation
                 prio = oper.priority
                 oprnds = e.get_operands()
-                oplen = 0 if (oprnds is None) else len(oprnds)
+                oplen = len(oprnds)
                 cnx = edscr[1]
 
                 # Check if function call
@@ -412,18 +421,12 @@ class CpoCompiler(object):
                         edscr[1] = cnx
                         if (cnx > 0):
                             cout.append(", ")
-                        estack.append([oprnds[cnx], -1])
+                        estack.append([oprnds[cnx], -1, False])
 
                 # Write operation
                 else:
                     # Check parenthesis required
-                    parents = False
-                    if (len(estack) > 1):
-                        oprio = estack[-2][0].get_priority()
-                        ocnx = estack[-2][1]
-                        if (oprio >= 0):
-                            # Parenthesis required if priority is greater than parent node, or if this node is not first child
-                            parents = (prio > oprio) or (prio >= 5) or ((prio == oprio) and (ocnx > 0))
+                    parents = edscr[2]
 
                     # Write operation
                     if (cnx < 0):
@@ -433,16 +436,29 @@ class CpoCompiler(object):
                             cout.append("(")
                     cnx += 1
                     if (cnx >= oplen):
+                        # All operands have been processed
                         if parents:
                             cout.append(")")
                         estack.pop()
                     else:
+                        # Process operand
                         edscr[1] = cnx
                         if (cnx > 0):
+                            # Add operator
                             cout.append(" ")
                             cout.append(oper.keyword)
                             cout.append(" ")
-                        estack.append([oprnds[cnx], -1])
+                        # Check if operand will require to have parenthesis
+                        arg = oprnds[cnx]
+                        nprio = arg.get_priority()
+                        # Parenthesis required if priority is greater than parent node, or if this node is not first child
+                        chparnts = (nprio > prio) \
+                                  or (nprio >= 5) \
+                                  or ((nprio == prio) and (cnx > 0)) \
+                                  or ((oplen == 1) and not parents and not oprnds[0].is_leaf())
+
+                        # Put operand on stack
+                        estack.append([arg, -1, chparnts])
 
         # Check output exists
         if not cout:
@@ -568,7 +584,7 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("transitionMatrix(")
-        cout.append(", ".join(str(v) for v in tm.get_matrix()))
+        cout.append(", ".join(str(v) for v in tm.get_all_values()))
         cout.append(")")
 
 
@@ -657,44 +673,40 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _expand_expressions(self, lexpr):
-        """ Scan a list of expressions and extract named expression before usage.
+    def _get_all_sub_expressions(self, expr):
+        """ Get the list of all sub-expressions required to compile an expression.
 
-        Expressions may be named if:
+        Sub-expressions are named expressions. Cause may be:
          * used multiple times,
          * explicitly named by end-user
 
         Args:
-            lexpr:  List of expressions
+            expr:  Expression to compile
         Returns:
-            New list of expressions with named sub-expressions placed before expressions
+            List of sub-expressions to compile, in compilation order. Last expression should
+            be the root expression.
         """
-        # Initialize processing
-        nlexpr = []  # New list of expressions
-        exprset = self.exprset  # Set of named expressions already compiled
+        # Expand expressions
+        exprset = self.exprset   # Set of named expressions already compiled
+        estack = [expr]
+        enx = 0
+        while enx < len(estack):
+            for e in estack[enx]._get_children():
+                if not id(e) in exprset:
+                    estack.append(e)
+            enx += 1
 
-        # Scan all expressions
-        for v in lexpr:
-            if isinstance(v, CpoExpr):
-                expr = v
-                loc = None
-                root = False
-            else:
-                (expr, loc, root) = v
-            # Get all identified sub-expressions in the expression
-            lsexpr = reversed(_get_id_sub_expressions(expr))
-            # Add them to result if not already in
-            for se in lsexpr:
-                eid = id(se)
-                if (eid not in exprset):
-                    nlexpr.append((se, loc, root if se is expr else False))
-                    exprset.add(eid)
-            # Add initial expression if not named (processed above)
-            if expr.is_variable() or not (expr.has_name()):
-                nlexpr.append((expr, loc, root))
+        # Scan list reversly
+        exprset = self.exprset   # Set of named expressions already compiled
+        subexpr = []             # Result list of expressions
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in exprset and (e.has_name() or e is expr):
+                subexpr.append(e)
+                exprset.add(eid)
 
-        # Return new list of expressions
-        return nlexpr
+        return subexpr
 
 
 ###############################################################################
@@ -806,32 +818,3 @@ def _interval_var_domain_string(intv):
         return _interval_var_value_string(smn)
     return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
 
-
-def _get_id_sub_expressions(expr):
-    """ Build a list of all identifiable sub-expressions:
-     * referenced more than once in an expression
-     * or associated to a name
-
-    Args:
-        expr: Expression to scan
-    Returns:
-        List of identifiable sub-expressions
-    """
-    lexpr = []  # Result list of expressions
-    estack = [expr]
-    # Loop while expression stack is not empty
-    while estack:
-        # Get expression to compile
-        e = estack.pop()
-        # Check if expression is CPO
-        if isinstance(e, CpoExpr):
-            # Check if expression is named
-            if e.has_name() and not (e.is_variable()):
-                lexpr.append(e)
-            # Stack children expressions
-            chldrn = e._get_children()
-            if chldrn is not None:
-                estack.extend(chldrn)
-
-    # Return list of sub-expressions
-    return lexpr

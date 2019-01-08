@@ -12,20 +12,14 @@ CPO solver 'angel' executable (written in C++)
 """
 
 from docplex.cp.solution import *
-from docplex.cp.utils import CpoException
+from docplex.cp.utils import CpoException, StringIO
 import docplex.cp.solver.solver as solver
 
 import subprocess
-import os
 import sys
 import time
 import threading
 import json
-
-try:
-    from StringIO import StringIO
-except ImportError:
-    from io import StringIO
 
 
 ###############################################################################
@@ -134,6 +128,7 @@ class CpoSolverAngel(solver.CpoSolverAgent):
 
         # Send CPO model to process
         self._write_message(CMD_SET_CPO_MODEL, cpostr)
+        context.log(3, "Model sent, wait for solution")
         self._wait_event(EVT_SUCCESS)
 
 
@@ -381,6 +376,8 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         if data is not None:
             data = data.encode('utf-8')
             tlen += len(data) + 1
+        if tlen > 0xffffffff:
+            raise AngelException("Try to send a message with length {}, greater than {}.".format(tlen, 0xffffffff))
         frame = bytearray(6)
         frame[0] = 0xCA
         frame[1] = 0xFE
@@ -410,7 +407,7 @@ class CpoSolverAngel(solver.CpoSolverAgent):
         frame = self._read_frame(6)
         if (frame[0] != 0xCA) or (frame[1] != 0xFE):
             self.end()
-            raise AngelException("Invalid message header {}. Probable desynchronization of stream.".format(frame))
+            raise AngelException("Invalid message header '{}'. Probable wrong destination or desynchronization of stream.".format(frame))
 
         # Read message data
         tsize = (frame[2] << 24) | (frame[3] << 16) | (frame[4] << 8) | frame[5]

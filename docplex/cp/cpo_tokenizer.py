@@ -9,7 +9,7 @@
 Tokenizer for reading CPO file format
 """
 
-from docplex.cp.utils import CpoException, to_internal_string
+from docplex.cp.utils import CpoException, to_internal_string, is_string
 
 
 ###############################################################################
@@ -118,7 +118,7 @@ class CpoTokenizer(object):
         """
         super(CpoTokenizer, self).__init__()
         self.name = name
-        if isinstance(input, str):
+        if is_string(input):
             self.input = None 
             self.line = input
         else:
@@ -130,8 +130,9 @@ class CpoTokenizer(object):
 
     def next_token(self):
         """ Get the next token
-            Returns:
-                Next available token (type CpoToken), TOKEN_NONE if end of input
+
+        Returns:
+            Next available token (type CpoToken), TOKEN_NONE if end of input
         """
         # Skip separators and comments
         c = ' '
@@ -212,13 +213,8 @@ class CpoTokenizer(object):
 
         elif c in _OPERATOR_CHARS:
             c2 = self._next_char()
-            # Check special case for minus
-            if (c == '-') and (c2 >= '0') and (c2 <= '9'):
-                self._back_char()
-                tok = self.next_token()
-                return CpoToken(tok.type, "-" + tok.value)
-            # Accept next char as operator too
-            if not(c2 in _OPERATOR_CHARS):
+            # Accept next char as operator if possible
+            if not(c2 in _OPERATOR_CHARS) or (c2 == '-'):
                 self._back_char()
             return CpoToken(TOKEN_OPERATOR, self._get_token())
         

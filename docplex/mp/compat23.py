@@ -36,6 +36,7 @@ except ImportError:                 # pragma: no cover
 
 
 try:
+    # noinspection PyCompatibility
     xrange(2)
     fast_range = xrange
 except NameError:       # pragma: no cover

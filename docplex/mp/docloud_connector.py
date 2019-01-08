@@ -270,7 +270,7 @@ class DOcloudConnector(object):
             if 'progress' in info_to_monitor and info_callback:
                 logger = self.docloud_context.verbose_progress_logger
                 if logger:
-                    logger.info("polling progress");
+                    logger.info("polling progress")
                 info = loop.client.get_job(loop.jobid)
                 if logger:
                     logger.info("job info: %s" % json.dumps(info, indent=3))

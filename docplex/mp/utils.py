@@ -6,8 +6,6 @@
 
 
 # gendoc: ignore
-from docplex.mp.compat23 import izip
-
 import logging
 import os
 import sched
@@ -15,11 +13,11 @@ import tempfile
 import threading
 import time
 
-from six import itervalues
 from six import PY2 as six_py2
+from six import itervalues
 
-from docplex.mp.compat23 import Queue, StringIO
-
+from docplex.mp.compat23 import Queue
+from docplex.mp.compat23 import izip
 
 __int_types = {int}
 __float_types = {float}
@@ -375,50 +373,6 @@ def get_logger(name, verbose=False):
     return logger
 
 
-import sys
-
-
-class RedirectedOutputContext(object):
-    def __init__(self, new_out, error_handler=None):
-        if new_out is not None:
-            self._of = new_out
-        else:
-            self._of = sys.stdout
-        self._saved_out = sys.stdout
-        self.error_handler = error_handler
-
-    def __enter__(self):
-        self._saved_out = sys.stdout
-        sys.stdout = self._of
-        if self.error_handler:
-            self.error_handler.suspend()
-        return self._of
-
-    # noinspection PyUnusedLocal
-    def __exit__(self, atype, avalue, atraceback):
-        sys.stdout = self._saved_out
-        if self.error_handler:
-            self.error_handler.flush()
-
-
-class RedirectedOutputToStringContext(RedirectedOutputContext):
-    def __init__(self, error_handler=None):
-        self._oss = StringIO()
-        RedirectedOutputContext.__init__(self, new_out=self._oss, error_handler=error_handler)
-
-    def __enter__(self):
-        RedirectedOutputContext.__enter__(self)
-        # return self as we need to extract the string after exit
-        return self
-
-    def get_str(self):
-        return self._oss.getvalue()
-
-    def __del__(self):
-        # kill the stringio on deletion
-        self._oss = None
-
-
 def open_universal_newline(filename, mode):
     """Opens a file in universal new line mode, in a python 2 and python 3
     compatible way.
@@ -675,7 +629,7 @@ class _SymbolGenerator(object):
         """
         guessed_index = self._last_index + 1
         coined_symbol = self.__pattern % (guessed_index + self.__offset)
-        self.notify_new_index(guessed_index)
+        self._last_index = guessed_index
         return coined_symbol
 
 

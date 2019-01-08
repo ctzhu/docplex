@@ -25,9 +25,6 @@ class VarType(object):
         self._ub = ub
         self._cpx_typecode = cplex_typecode
 
-    def _check_number(self, arg):
-        if not is_number(arg):
-            raise ValueError('Variable bound expects number, got: {0!s}'.format(arg))
 
     def get_cplex_typecode(self):
         # INTERNAL
@@ -86,27 +83,34 @@ class VarType(object):
         raise NotImplementedError  # pragma: no cover
 
     def accept_value(self, numeric_value):
-        """ Checks if the `numeric_value` is valid for the type.
-
-        Accepted values depend on the type:
-
-        - Binary type accepts only 0 or 1.
-
-        - Integer type accepts only integers.
-
-        - Continuous type accepts any floating-point number within -inf and +inf, where inf
-          is the model's infinity value.
-
-        This method never raises an exception.
-
-        Args:
-            numeric_value: The candidate value.
-
-        Returns:
-            Boolean: True if the candidate value is valid, else False.
-
-        """
+        # """ Checks if the `numeric_value` is valid for the type.
+        #
+        # Accepted values depend on the type:
+        #
+        # - Binary type accepts only 0 or 1.
+        #
+        # - Integer type accepts only integers.
+        #
+        # - Continuous type accepts any floating-point number within -inf and +inf, where inf
+        #   is the model's infinity value.
+        #
+        # This method never raises an exception.
+        #
+        # Args:
+        #     numeric_value: The candidate value.
+        #
+        # Returns:
+        #     Boolean: True if the candidate value is valid, else False.
+        #
+        # """
         raise NotImplementedError  # pragma: no cover
+
+    def accept_domain_value(self, candidate_value, lb, ub):
+        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
+        return self.accept_value(candidate_value) and (lb <= candidate_value <= ub)
+
+
+
 
     def to_string(self):
         """
@@ -165,14 +169,14 @@ class BinaryVarType(VarType):
         return True
 
     def accept_value(self, numeric_value):
-        """ Checks if `numeric_value` equals 0 or 1.
-
-        Args:
-            numeric_value: The candidate value.
-
-        Returns:
-            Boolean: True if `numeric_value` equals 0 or 1.
-        """
+        # """ Checks if `numeric_value` equals 0 or 1.
+        #
+        # Args:
+        #     numeric_value: The candidate value.
+        #
+        # Returns:
+        #     Boolean: True if `numeric_value` equals 0 or 1.
+        # """
         return 0 == numeric_value or 1 == numeric_value
 
     def one_letter_symbol(self):
@@ -195,12 +199,15 @@ class ContinuousVarType(VarType):
         self._minus_infinity = - plus_infinity
 
     def compute_ub(self, candidate_ub):
-        self._check_number(candidate_ub)
-        return self._plus_infinity if candidate_ub > self._plus_infinity else float(candidate_ub)
+        return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
 
     def compute_lb(self, candidate_lb):
-        self._check_number(candidate_lb)
-        return self._minus_infinity if candidate_lb < self._minus_infinity else float(candidate_lb)
+        if 0 == candidate_lb:
+            return 0
+        elif candidate_lb <= self._minus_infinity:
+            return self._minus_infinity
+        else:
+            return float(candidate_lb)
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -211,15 +218,15 @@ class ContinuousVarType(VarType):
         return False
 
     def accept_value(self, numeric_value):
-        """ Checks if the value is within the minus infinity to positive infinity range.
-
-        Args:
-            numeric_value: The candidate value.
-
-        Returns:
-            Boolean: True if the candidate value is a valid floating-point number
-            with respect to the model's infinity.
-        """
+        # """ Checks if the value is within the minus infinity to positive infinity range.
+        #
+        # Args:
+        #     numeric_value: The candidate value.
+        #
+        # Returns:
+        #     Boolean: True if the candidate value is a valid floating-point number
+        #     with respect to the model's infinity.
+        # """
         return self._minus_infinity <= numeric_value <= self._plus_infinity
 
     def one_letter_symbol(self):
@@ -258,16 +265,16 @@ class IntegerVarType(VarType):
         return True
 
     def accept_value(self, numeric_value):
-        """ Redefines the generic `accept_value` method.
-
-        A value is valid if is an integer and belongs to the variable's domain.
-
-        Args:
-            numeric_value: The numeric value being tested.
-
-        Returns:
-            True if the value is valid for the type, else False.
-        """
+        # """ Redefines the generic `accept_value` method.
+        #
+        # A value is valid if is an integer and belongs to the variable's domain.
+        #
+        # Args:
+        #     numeric_value: The numeric value being tested.
+        #
+        # Returns:
+        #     True if the value is valid for the type, else False.
+        # """
         return is_int(numeric_value) or numeric_value == int(numeric_value)
 
     def one_letter_symbol(self):
@@ -288,11 +295,9 @@ class SemiContinuousVarType(VarType):
         self._plus_infinity = plus_infinity
 
     def compute_ub(self, candidate_ub):
-        self._check_number(candidate_ub)
-        return self._plus_infinity if candidate_ub > self._plus_infinity else float(candidate_ub)
+        return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
 
     def compute_lb(self, candidate_lb):
-        self._check_number(candidate_lb)
         if candidate_lb <= 0:
             raise ValueError('semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
@@ -306,16 +311,20 @@ class SemiContinuousVarType(VarType):
         return False
 
     def accept_value(self, numeric_value):
-        """ Checks if the value is within the minus infinity to positive infinity range.
-
-        Args:
-            numeric_value: The candidate value.
-
-        Returns:
-            Boolean: True if the candidate value is a valid floating-point number
-            with respect to the model's infinity.
-        """
+        # """ Checks if the value is within the minus infinity to positive infinity range.
+        #
+        # Args:
+        #     numeric_value: The candidate value.
+        #
+        # Returns:
+        #     Boolean: True if the candidate value is a valid floating-point number
+        #     with respect to the model's infinity.
+        # """
         return 0 <= numeric_value <= self._plus_infinity
+
+    def accept_domain_value(self, candidate_value, lb, ub):
+        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
+        return 0 ==  candidate_value or (lb <= candidate_value <= ub)
 
     def one_letter_symbol(self):
         return 'S'

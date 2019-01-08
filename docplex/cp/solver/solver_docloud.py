@@ -182,34 +182,3 @@ def _add_details(msol, detls):
     nbitvvars = int(detls.get('MODEL_DETAIL_INTERVAL_VARS', 0))
     nbseqvars = int(detls.get('MODEL_DETAIL_SEQUENCE_VARS', 0))
     msol._set_model_attributes(nbintvars=nbintvars, nbitvvars=nbitvvars, nbseqvars=nbseqvars, nbctrs=nbctrs)
-        
-        
-###############################################################################
-##  Test program
-###############################################################################
-
-if __name__ == "__main__":
-    # Solve sample model
-    if True:
-        import os
-        from docplex.cp.cpo_parser import CpoParser
-        mfile = os.path.dirname(__file__) + "/../../../UnitTests/cpomodels/Color.cpo"
-        print("Solve model from file: " + mfile)
-        prs = CpoParser()
-        prs.parse(mfile)
-        dcld = CpoSolverDocloud(prs.get_model(), params=prs.get_parameters(), context=config.context.solver.docloud)
-        msol = dcld.solve()
-        msol.print_solution()
-
-    # List all jobs
-    if False:
-        jcli = JobClient(config.context.docloud)
-        ljobs = jcli.get_all_jobs()
-        print(str(len(ljobs)) + " jobs:")
-        for job in ljobs:
-            print(job['attachments'][0]['name'] + ": " + job['_id'] + ", " + job['solveStatus'])
-
-    # Clear all jobs
-    if False:
-        jcli = JobClient(config.context.docloud)
-        jcli.clean_all_jobs()

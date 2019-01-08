@@ -7,7 +7,7 @@
 from docplex.mp.linear import Var
 from docplex.mp.basic import Expr
 
-from docplex.mp.utils import is_number, is_function, str_holo
+from docplex.mp.utils import is_number, is_string, is_function, str_holo
 
 
 class KPI(object):
@@ -31,7 +31,7 @@ class KPI(object):
         raise NotImplementedError  # pragma: no cover
 
     def set_name(self, new_name):
-        pass
+        pass  # pragma: no cover
 
     def get_model(self):
         """
@@ -45,12 +45,8 @@ class KPI(object):
         raise NotImplementedError   # pragma: no cover
 
     def _check_name(self, name_arg):
-        if not isinstance(name_arg, str):
-            self.get_model().fatal("KPI_name, not a string: {0!s}", (name_arg,))
-        elif not name_arg:
-            self.get_model().fatal("KPI_name must be non-empty string, got: {0!s}", (name_arg,))
-        else:
-            pass
+        if not is_string(name_arg) or not name_arg:
+            self.get_model().fatal("KPI.set_name() expects a non-empty string, got: {0!r}", name_arg)
 
     def requires_solution(self):
         """ KPIs based on decision expressions or variables require a successful solution
@@ -111,6 +107,7 @@ class DecisionKPI(KPI):
         return self._name
 
     def set_name(self, new_name):
+        self._check_name(new_name)
         self._name = new_name
 
     name = property(get_name, set_name)

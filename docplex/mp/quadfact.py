@@ -8,9 +8,9 @@
 from docplex.mp.mfactory import _AbstractModelFactory
 
 from docplex.mp.constants import ComparisonType
-from docplex.mp.utils import is_number, DOCPlexQuadraticArithException
+from docplex.mp.utils import is_number
 from docplex.mp.quad import QuadExpr, VarPair
-from docplex.mp.linear import Var, MonomialExpr, LinearExpr, ZeroExpr
+from docplex.mp.linear import Var, MonomialExpr, LinearExpr, ZeroExpr, AbstractLinearExpr
 from docplex.mp.constr import QuadraticConstraint
 
 
@@ -55,7 +55,7 @@ class QuadFactory(IQuadFactory):
         return self.new_quad(quad_args=(var, var, 1))
 
     def new_var_product(self, var, other):
-        # computes and returns the p[roduct var * other
+        # computes and returns the product var * other
         if isinstance(other, Var):
             return self.new_quad(quad_args=(var, other, 1), safe=True)
         elif isinstance(other, MonomialExpr):
@@ -131,7 +131,7 @@ class QuadFactory(IQuadFactory):
         # noinspection PyPep8
         left_expr  = self._to_expr(lhs, context="QuadraticConstraint.left_expr")
         right_expr = self._to_expr(rhs, context="QuadraticConstraint.right_expr")
-        self._model._check_both_in_selfmodel(left_expr, right_expr, "new_binary_constraint")
+        self._model._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = QuadraticConstraint(self._model, left_expr, ctype, right_expr, name)
         left_expr.notify_used(ct)
         right_expr.notify_used(ct)
@@ -139,14 +139,12 @@ class QuadFactory(IQuadFactory):
 
     def _to_expr(self, e, context=None):
         # INTERNAL
-        if hasattr(e, "iter_terms"):
+        if isinstance(e, (AbstractLinearExpr, QuadExpr)):
             return e
         elif is_number(e):
             return self._model._lfactory.constant_expr(cst=e, context=context)
         else:
             try:
                 return e.to_linear_expr()
-            except DOCPlexQuadraticArithException:
-                return e
             except AttributeError:
                 self._model.fatal("cannot convert to expression: {0!r}", e)

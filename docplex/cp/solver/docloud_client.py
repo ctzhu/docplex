@@ -25,6 +25,9 @@ ALL_JOB_STATUSES = ('CREATED', 'NOT_STARTED', 'RUNNING', 'INTERRUPTING', 'INTERR
 # Default polling parameters
 _DEFAULT_POLLING = Context(min=1, max=3, incr=0.2)
 
+# Unknown job id
+_UNKNOWN_JOB_ID = "Unknown"
+
 
 ###############################################################################
 ##  Public classes
@@ -54,7 +57,7 @@ class JobClient(object):
             ctx: DOcplexcloud context
         """
         self.ctx = ctx
-        self.jobid = "Unknown"
+        self.jobid = _UNKNOWN_JOB_ID
         # Build default headers
         self.headers = {'X-IBM-Client-Id': ctx.key, 'Content-Type': 'application/json'}
         if ctx.always_close_connection:
@@ -62,6 +65,7 @@ class JobClient(object):
         # Disable warnings if verify sll is false
         if not ctx.verify_ssl:
             requests.packages.urllib3.disable_warnings()
+
 
     def create_job(self, name, cpodata):
         """ Create a new model solving job. JobId is stored in this object.
@@ -83,10 +87,12 @@ class JobClient(object):
         self._request('put', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + name + "/blob", [204], data=cpodata, headers=hdrs)
         self.ctx.log(2, "Model data '", name, "' uploaded (", len(cpodata), " bytes)")
 
+
     def execute_job(self):
         """ Request job execution """
         self._request('post', self.ctx.url + "/jobs/" + self.jobid + "/execute", [204])
         self.ctx.log(2, "Model solving requested")
+
 
     def get_status(self):
         """ Get the job status
@@ -97,6 +103,7 @@ class JobClient(object):
         status = rsp.json()["executionStatus"]
         self.ctx.log(3, "Job status is ", status)
         return status
+
 
     def wait_job_termination(self, maxwait=0, lognotif=None):
         """ Wait for termination of the job
@@ -129,7 +136,7 @@ class JobClient(object):
             terminated = status in ('INTERRUPTED', 'FAILED', 'PROCESSED')
             if not terminated:
                 if (maxwait > 0) and (time.time() > etime):
-                    self._raiseException("Timeout of " + str(maxwait) + "sec elapsed waiting for job termination.")
+                    self._raise_exception("Timeout of " + str(maxwait) + "sec elapsed waiting for job termination.")
                 # Wait delay and increment it if possible
                 time.sleep(wdelay)
                 if wdelay < plmax:
@@ -144,6 +151,7 @@ class JobClient(object):
         self.ctx.log(2, "Solve terminated. Status is ", status)
         return status
 
+
     def get_info(self):
         """ Get the job information
         Returns:
@@ -151,6 +159,7 @@ class JobClient(object):
         """
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid, [200])
         return rsp.json()
+
 
     def get_attachment(self, aname):
         """ Get a job attachment
@@ -162,6 +171,7 @@ class JobClient(object):
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + aname + "/blob", [200])
         return rsp.content.decode('utf-8')
 
+
     def get_log_blob(self):
         """ Get the whole job execution log as a string.
         Returns:
@@ -170,6 +180,7 @@ class JobClient(object):
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/log/blob", [200])
         self.ctx.log(2, "Log retrieved")
         return rsp.content.decode('utf-8')
+
 
     def get_log_items(self, start):
         """ Get the job execution log.
@@ -183,9 +194,11 @@ class JobClient(object):
         self.ctx.log(2, "Log items retrieved")
         return rsp.json()
 
+
     def abort_job(self):
         """ Abort the job handled by this client. """
         self._request('delete', self.ctx.url + "/jobs/" + self.jobid + "/execute", [204])
+
 
     def delete_job(self):
         """ Delete the job handled by this client.
@@ -195,20 +208,23 @@ class JobClient(object):
         rsp = self._request('delete', self.ctx.url + "/jobs/" + self.jobid, [200])
         return(rsp.json().get('status', None) == 'DELETED')
 
+
     def clean_job(self):
         """ Clean a job (abort and delete)
         This method should be called to cancel and clean a job in case of error
         No exception is thrown if an error occur
         """
-        try:
-            self.abort_job()
-        except Exception:
-            pass
-        try:
-            self.delete_job()
-        except Exception:
-            pass
+        if self.jobid != _UNKNOWN_JOB_ID:
+            try:
+                self.abort_job()
+            except Exception:
+                pass
+            try:
+                self.delete_job()
+            except Exception:
+                pass
         self.ctx.log(2, "Solving job " + str(self.jobid) + " terminated")
+
 
     def get_all_jobs(self):
         """ Return all jobs for this account.
@@ -219,12 +235,14 @@ class JobClient(object):
         rsp = self._request('get', self.ctx.url + "/jobs", [200])
         return rsp.json()
 
+
     def map_to_job(self, jobid):
         """ Set this job client for a given jobid
         Args:
             jobid: Job id to address
         """
         self.jobid = jobid
+
 
     def clean_all_jobs(self):
         """ Clear all jobs attached to this user.
@@ -237,6 +255,7 @@ class JobClient(object):
             self.clean_job()
         return ljobs
 
+
     def _request(self, mth, url, astc, **kwargs):
         """ Send a request to DOcplexcloud with default headers and check response.
         Args:
@@ -248,19 +267,27 @@ class JobClient(object):
         Returns:
             Request response
         """
-        # Send request
+        # Build requests arguments
+        ctx = self.ctx
         kwargs.setdefault('headers',         self.headers)
-        kwargs.setdefault('verify',          self.ctx.verify_ssl)
-        kwargs.setdefault('timeout',         self.ctx.request_timeout)
+        kwargs.setdefault('verify',          ctx.verify_ssl)
+        kwargs.setdefault('timeout',         ctx.request_timeout)
         kwargs.setdefault('allow_redirects', True)
-        self.ctx.log(4, "Send request ", mth, " ", url)
+        proxies = ctx.proxies
+        if proxies:
+            kwargs.setdefault('proxies', proxies)
+        # print("Arguments: " + str(kwargs))
+
+        # Send request
+        ctx.log(4, "Send request ", mth, " ", url)
         try:
             rsp = requests.request(mth, url, **kwargs)
         except Exception as e:
-            self._raiseException("Rest request error :" + str(e))
+            self._raise_exception("Rest request error :" + str(e))
+
         # Check response
         sc = rsp.status_code
-        self.ctx.log(4, "Response code: ", sc)
+        ctx.log(4, "Response code: ", sc)
         if not (sc in astc):
             # Get message if any
             try:
@@ -272,11 +299,12 @@ class JobClient(object):
                 message = "Access forbidden: " + message
             elif sc == 404:
                 message = "Page not found: " + message
-            self._raiseException(message)
+            self._raise_exception(message)
         # Return
         return rsp
 
-    def _raiseException(self, msg):
+
+    def _raise_exception(self, msg):
         """ Raise a DocloudException
         Args:
             msg:  Exception message

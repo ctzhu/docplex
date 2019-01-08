@@ -39,6 +39,9 @@ class ModelingObjectBase(object):
 
     def set_name(self, name):
         self.check_name(name)
+        self._set_name(name)
+
+    def _set_name(self, name):
         self._name = name
         if name:
             self._has_automatic_name = False
@@ -142,8 +145,10 @@ class ModelingObject(ModelingObjectBase):
         # INTERNAL: This is where the valid index check is performed
         return idx >= 0
 
+    _invalid_index = -2
+
     # @profile
-    def __init__(self, model, name=None, index=-1, is_automatic_name=False, container=None):
+    def __init__(self, model, name=None, index=_invalid_index, is_automatic_name=False, container=None):
         ModelingObjectBase.__init__(self, model, name, has_automatic_name=is_automatic_name)
         self._index = index
         self._origin = None
@@ -198,7 +203,25 @@ class ModelingObject(ModelingObjectBase):
         return self._container
 
 
-class Expr(ModelingObjectBase):
+class Operand(object):
+
+    __slots__ = ()
+
+    def get_constant(self):
+        return 0
+
+    def is_constant(self):
+        return False
+
+    def notify_used(self, user):
+        pass
+
+    def get_linear_part(self):
+        return self
+
+
+
+class Expr(ModelingObjectBase, Operand):
     """Expr()
 
     Parent class for all expression classes.
@@ -277,13 +300,7 @@ class Expr(ModelingObjectBase):
     def is_zero(self):
         return False
 
-    def is_constant(self):
-        return False
-
-    def get_constant(self):
-        return 0
-
-    constant = property(get_constant)
+    constant = property(Operand.get_constant)
 
     @property
     def float_precision(self):
@@ -298,10 +315,6 @@ class Expr(ModelingObjectBase):
     def _get_solution_value(self):
         # INTERNAL: compute solutoion value.
         raise NotImplementedError  # pragma: no cover
-
-    def notify_used(self, ct):
-        # INTERNAL
-        pass
 
     @property
     def solution_value(self):
@@ -345,6 +358,11 @@ class Expr(ModelingObjectBase):
             pass
         return self._model._lfactory
 
+    def get_linear_part(self):
+        if self.is_quad_expr():
+            return self.get_linear_part()
+        else:
+            return self
 
 # --- Priority class used for relaxation
 class Priority(Enum):
@@ -461,11 +479,6 @@ class ObjectiveSense(Enum):
     This enumerated class defines the two types of objectives, `Minimize` and `Maximize`.
     """
     Minimize, Maximize = 1, 2
-
-    # static method: which type is the default.
-    @staticmethod
-    def default_sense():
-        return ObjectiveSense.Minimize
 
     def is_minimize(self):
         return self is ObjectiveSense.Minimize

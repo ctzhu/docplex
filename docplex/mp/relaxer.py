@@ -6,7 +6,7 @@
 
 from six import iteritems
 from collections import defaultdict, namedtuple
-from docplex.mp.constants import RelaxerMode
+from docplex.mp.constants import RelaxationMode
 
 from docplex.mp.utils import is_function, CplexParameterHandler
 from docplex.mp.basic import Priority
@@ -266,6 +266,8 @@ class Relaxer(object):
     '''
     _default_precision = 1e-5
 
+    _default_mode = RelaxationMode.OptSum
+
     def __init__(self, prioritizer='all', **kwargs):
 
         self._precision = kwargs.get('precision', self._default_precision)
@@ -369,11 +371,14 @@ class Relaxer(object):
 
     _param_data = {}
 
-    def relax(self, mdl, **kwargs):
+    def relax(self, mdl, relax_mode=None, **kwargs):
         """ Runs the relaxation loop.
 
         Args:
             mdl: The model to be relaxed.
+            relax_mode: the relaxation mode. Accept either None (in which case the default mode is
+                used, or an instance of ``RelaxationMode`` enumerated type, or a string
+                that can be translated to a relaxation mode.
             kwargs: Accepts named arguments similar to ``solve``.
 
         Returns:
@@ -381,7 +386,8 @@ class Relaxer(object):
 
         See Also:
             :func:`docplex.mp.model.Model.solve`,
-            :class:`docplex.mp.solution.SolveSolution`
+            :class:`docplex.mp.solution.SolveSolution`,
+            :class:`docplex.mp.constants.RelaxationMode`
 
         """
         self._reset()
@@ -405,7 +411,6 @@ class Relaxer(object):
         is_cumulative = self._cumulative
 
         engine = mdl.get_engine()
-        is_model_optimized = mdl.is_optimized()
 
         # save this for restore later
         saved_context_log_output = mdl.context.solver.log_output
@@ -414,6 +419,13 @@ class Relaxer(object):
 
         # take into account local argument overrides
         context = mdl.prepare_actual_context(**kwargs)
+        if relax_mode is None:
+            used_relax_mode = self._default_mode
+        else:
+            used_relax_mode = RelaxationMode.parse(relax_mode)
+        if not mdl.is_optimized():
+            used_relax_mode = RelaxationMode.get_no_optimization_mode(used_relax_mode)
+        #print("-- using relaxation mode: {0!s}".format(relax_mode))
 
         try:
             # mdl.context has been saved in saved_context above
@@ -425,7 +437,7 @@ class Relaxer(object):
             parameters = parameters_handler.get_updated_parameters(context.solver)
             mdl._apply_parameters_to_engine(parameters)
 
-            relax_mode = RelaxerMode.compute_mode(is_model_optimized)
+
 
             relaxed_sol = None
             for prio in self._ordered_priorities:
@@ -460,7 +472,7 @@ class Relaxer(object):
                     # ---
 
                     try:
-                        relaxed_sol = engine.solve_relaxed(mdl, prio.name, all_groups, relax_mode)
+                        relaxed_sol = engine.solve_relaxed(mdl, prio.name, all_groups, used_relax_mode)
                     finally:
                         self._last_relaxation_details = engine.get_solve_details()
                     # ---

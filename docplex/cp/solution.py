@@ -34,7 +34,7 @@ The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc
    :meth:`docplex.cp.solver.solver.CpoSolver.propagate`.
 """
 
-import os, sys, json, io
+import json
 
 from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX
 import docplex.cp.utils as utils
@@ -136,7 +136,8 @@ class CpoVarSolution(object):
                 except:
                     raise AssertionError("Argument 'name' should be a string, or an object with a method get_name() or an attribute 'name'")
         self.name = name
-        
+
+
     def get_name(self):
         """ Gets the name of the variable.
 
@@ -144,7 +145,8 @@ class CpoVarSolution(object):
             Name of the variable.
         """
         return self.name
-    
+
+
     def get_value(self):
         """ Gets the variable value.
         This method is overloaded by each class extending this class.
@@ -153,6 +155,7 @@ class CpoVarSolution(object):
             Value of the variable, represented according to its semantic (see specific variable documentation).
         """
         return None
+
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -192,7 +195,8 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         super(CpoIntVarSolution, self).__init__(name)
         self.value = _check_arg_domain(value, 'value')
-        
+
+
     def get_value(self):
         """ Gets the value of the variable.
 
@@ -236,6 +240,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         self.size  = size
         self.length = None
 
+
     def is_present(self):
         """ Check if the interval is present.
 
@@ -243,6 +248,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
             True if interval is present.
         """
         return self.presence is True
+
 
     def is_absent(self):
         """ Check if the interval is absent.
@@ -252,6 +258,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """
         return self.presence is False
 
+
     def is_optional(self):
         """ Check if the interval is optional.
 
@@ -259,6 +266,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
             True if interval is optional.
         """
         return self.presence is None
+
 
     def get_start(self):
         """ Gets the interval start.
@@ -268,6 +276,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """
         return self.start
 
+
     def get_end(self):
         """ Gets the interval end.
 
@@ -276,6 +285,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """
         return self.end
 
+
     def get_size(self):
         """ Gets the interval size.
 
@@ -283,6 +293,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
             Interval size value, or domain (tuple (min, max)) if not fully instantiated
         """
         return self.size
+
 
     def get_length(self):
         """ Gets the interval length.
@@ -293,6 +304,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         if self.length is None:
             return self.end - self.start
         return self.length
+
 
     def get_value(self):
         """ Gets the interval variable value as a tuple (start, end, size), or () if absent.
@@ -314,7 +326,8 @@ class CpoIntervalVarSolution(CpoVarSolution):
             else:
                 return (self.start, self.end, self.size, self.length)
         return ()
-    
+
+
     def __str__(self):
         """ Convert this expression into a string """
         res = [self.get_name(), ': ']
@@ -345,7 +358,8 @@ class CpoSequenceVarSolution(CpoVarSolution):
         """
         super(CpoSequenceVarSolution, self).__init__(name)
         self.lvars = lvars
-        
+
+
     def get_interval_variables(self):
         """ Gets the list of CpoIntervalVarSolution in this sequence.
 
@@ -354,6 +368,7 @@ class CpoSequenceVarSolution(CpoVarSolution):
         """
         return self.lvars
 
+
     def get_value(self):
         """ Gets the list of CpoIntervalVarSolution in this sequence.
 
@@ -361,7 +376,8 @@ class CpoSequenceVarSolution(CpoVarSolution):
             List of CpoIntervalVarSolution in this sequence.
         """
         return self.lvars
-    
+
+
     def __str__(self):
         """ Convert this expression into a string """
         return self.get_name() + ": (" + ", ".join([v.get_name() for v in self.lvars]) + ")"
@@ -384,7 +400,8 @@ class CpoStateFunctionSolution(CpoVarSolution):
         """
         super(CpoStateFunctionSolution, self).__init__(name)
         self.steps = steps
-        
+
+
     def get_function_steps(self):
         """ Gets the list of function steps.
 
@@ -393,6 +410,7 @@ class CpoStateFunctionSolution(CpoVarSolution):
         """
         return self.steps
 
+
     def get_value(self):
         """ Gets the list of function steps. Identical to `get_function_steps()`.
 
@@ -400,7 +418,8 @@ class CpoStateFunctionSolution(CpoVarSolution):
             List of function steps.
         """
         return self.steps
-    
+
+
     def __str__(self):
         """ Convert this expression into a string """
         return self.get_name() + ": (" + ", ".join([str(s) for s in self.steps]) + ")"
@@ -432,6 +451,7 @@ class CpoModelSolution(object):
         self.vars = {}
         self.objvalues = None
 
+
     def _set_objective_values(self, ovals):
         """ Set the numeric values of all objectives.
 
@@ -439,6 +459,7 @@ class CpoModelSolution(object):
             ovals: Array of objective values
         """
         self.objvalues = ovals
+
 
     def get_objective_values(self):
         """ Gets the numeric values of all objectives.
@@ -450,6 +471,7 @@ class CpoModelSolution(object):
         """
         return self.objvalues
 
+
     def add_var_solution(self, vsol):
         """ Add a solution to a variable to this model solution.
 
@@ -458,6 +480,7 @@ class CpoModelSolution(object):
         """
         assert isinstance(vsol, CpoVarSolution)
         self.vars[vsol.get_name()] = vsol
+
 
     def add_integer_var_solution(self, name, value):
         """ Add a new integer variable solution from its name and value..
@@ -470,6 +493,7 @@ class CpoModelSolution(object):
             value: Variable value, or domain if not completely instantiated
         """
         self.add_var_solution(CpoIntVarSolution(name, value))
+
 
     def add_interval_var_solution(self, name, presence=None, start=None, end=None, size=None):
         """ Add a new interval variable solution.
@@ -486,17 +510,24 @@ class CpoModelSolution(object):
         """
         self.add_var_solution(CpoIntervalVarSolution(name, presence, start, end, size))
 
+
     def get_var_solution(self, name):
         """ Gets a variable solution from this model solution.
 
         Args:
             name: Variable name or variable expression.
         Returns:
-            Variable solution (class extending :class:`CpoVarSolution`), None if not found.
+            Variable solution (class extending :class:`CpoVarSolution`)
+        Raises:
+            CpoException if variable solution does not exists
         """
         if isinstance(name, CpoExpr):
             name = name.get_name()
-        return self.vars.get(name, None)
+        value = self.vars.get(name)
+        if value is None:
+            raise CpoException("Variable '{}' does not exists in this solution".format(name))
+        return value
+
 
     def get_all_var_solutions(self):
         """ Gets the list of all variable solutions from this model solution.
@@ -505,6 +536,7 @@ class CpoModelSolution(object):
             List of all variable solutions (class extending :class:`CpoVarSolution`).
         """
         return list(self.vars.values())
+
 
     def get_value(self, name):
         """ Gets the value of a variable.
@@ -523,11 +555,12 @@ class CpoModelSolution(object):
             name: Variable name, or model variable descriptor.
         Returns:
             Variable value, None if variable is not found.
+        Raises:
+            CpoException if variable solution does not exists
         """
         var = self.get_var_solution(name)
-        if (var is None):
-            return None
-        return var.get_value()
+        return None if var is None else var.get_value()
+
 
     def _add_json_solution(self, jsol):
         """ Add a json solution to this solution descriptor
@@ -589,6 +622,7 @@ class CpoModelSolution(object):
         """
         return(self.get_value(name))
 
+
     def print_solution(self, out=None):
         """ Prints the solution on a given output.
 
@@ -609,6 +643,7 @@ class CpoModelSolution(object):
         else:
             self._write_solution(out)
 
+
     def _write_solution(self, out):
         """ Write the solution
 
@@ -625,6 +660,7 @@ class CpoModelSolution(object):
         for v in lvars:
             out.write(str(self.get_var_solution(v)))
             out.write('\n')
+
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -644,6 +680,7 @@ class CpoRunResult(object):
         super(CpoRunResult, self).__init__()
         self.solverLog = None                      # Solver log
 
+
     def _set_solver_log(self, log):
         """ Set the solver log as a string.
 
@@ -652,6 +689,7 @@ class CpoRunResult(object):
         """
         self.solverLog = log
 
+
     def get_solver_log(self):
         """ Gets the log of the solver.
 
@@ -659,6 +697,7 @@ class CpoRunResult(object):
             Solver log as a string, None if unknown.
         """
         return self.solverLog
+
 
 class CpoSolveResult(CpoRunResult):
     """ This class represents the result of a call to the solve of a model.
@@ -688,6 +727,7 @@ class CpoSolveResult(CpoRunResult):
         self.infos = None                          # Solving information attributes map
         self.solution = CpoModelSolution()         # Solution
 
+
     def _set_solve_status(self, ssts):
         """ Set the solve status
 
@@ -695,6 +735,7 @@ class CpoSolveResult(CpoRunResult):
             ssts: Solve status
         """
         self.solve_status = ssts
+
 
     def get_solve_status(self):
         """ Gets the solve status.
@@ -704,6 +745,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.solve_status
 
+
     def _set_fail_status(self, fsts):
         """ Set the fail status
 
@@ -711,6 +753,7 @@ class CpoSolveResult(CpoRunResult):
             fsts: Fail status
         """
         self.fail_status = fsts
+
 
     def get_fail_status(self):
         """ Gets the solving fail status.
@@ -720,25 +763,6 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.fail_status
 
-    def __nonzero__(self):
-        """ Check if this descriptor contains a solution to the problem.
-        Equivalent to is_solution()
-
-        Returns:
-            True if a solution is available (Search status is 'Feasible' or 'Optimal')
-        """
-        return self.is_solution()
-
-    def __bool__(self):
-        """ Check if this descriptor contains a solution to the problem.
-        Equivalent to is_solution()
-
-        Equivalent to __nonzero__ for Python 3
-
-        Returns:
-            True if a solution is available (Search status is 'Feasible' or 'Optimal')
-        """
-        return self.is_solution()
 
     def is_solution(self):
         """ Checks if this descriptor contains a valid solution to the problem.
@@ -751,6 +775,29 @@ class CpoSolveResult(CpoRunResult):
         """
         return (self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)
 
+
+    def __nonzero__(self):
+        """ Check if this descriptor contains a solution to the problem.
+        Equivalent to is_solution()
+
+        Returns:
+            True if a solution is available (Search status is 'Feasible' or 'Optimal')
+        """
+        return self.is_solution()
+
+
+    def __bool__(self):
+        """ Check if this descriptor contains a solution to the problem.
+        Equivalent to is_solution()
+
+        Equivalent to __nonzero__ for Python 3
+
+        Returns:
+            True if a solution is available (Search status is 'Feasible' or 'Optimal')
+        """
+        return self.is_solution()
+
+
     def is_solution_optimal(self):
         """ Checks if this descriptor contains an optimal solution to the problem.
 
@@ -758,6 +805,7 @@ class CpoSolveResult(CpoRunResult):
             True if there is a solution that is optimal.
         """
         return self.solve_status is SOLVE_STATUS_OPTIMAL
+
 
     def get_objective_values(self):
         """ Gets the numeric values of all objectives.
@@ -767,6 +815,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.solution.get_objective_values()
 
+
     def get_parameters(self):
         """ Gets the complete dictionary of solving parameters.
 
@@ -774,6 +823,7 @@ class CpoSolveResult(CpoRunResult):
             Solving parameters (object of class CpoParameters), None if undefined.
         """
         return self.parameters
+
 
     def get_parameter(self, name, default=None):
         """ Get a particular solving parameter.
@@ -788,6 +838,7 @@ class CpoSolveResult(CpoRunResult):
             return default
         return self.parameters.get(name, default)
 
+
     def _add_infos(self, infos):
         """ Add solving information to existing ones.
 
@@ -798,6 +849,7 @@ class CpoSolveResult(CpoRunResult):
             self.infos = {}
         self.infos.update(infos)
 
+
     def get_infos(self):
         """ Gets the complete dictionary of information attributes.
 
@@ -805,6 +857,7 @@ class CpoSolveResult(CpoRunResult):
             Dictionary of information attributes, None if undefined.
         """
         return self.infos
+
 
     def get_info(self, name, default=None):
         """ Gets a particular information attribute.
@@ -818,6 +871,7 @@ class CpoSolveResult(CpoRunResult):
         if self.infos is None:
             return default
         return self.infos.get(name, default)
+
 
     def _set_model_attributes(self, nbintvars=0, nbitvvars=0, nbseqvars=0, nbctrs=0):
         """ Set the general model attributes.
@@ -835,6 +889,7 @@ class CpoSolveResult(CpoRunResult):
                          INFO_NUMBER_OF_SEQUENCE_VARIABLES: nbseqvars,
                          INFO_NUMBER_OF_CONSTRAINTS: nbctrs})
 
+
     def _set_solve_time(self, time):
         """ Set the solve time required for this solution.
 
@@ -842,6 +897,7 @@ class CpoSolveResult(CpoRunResult):
             time (float): Solve time in seconds
         """
         self.solveTime = time
+
 
     def get_solve_time(self):
         """ Gets the solve time required for this solution.
@@ -851,6 +907,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.solveTime
 
+
     def get_number_of_integer_vars(self):
         """ Gets the number of integer variables in the model.
 
@@ -858,6 +915,7 @@ class CpoSolveResult(CpoRunResult):
             Number of integer variables.
         """
         return self.get_info(INFO_NUMBER_OF_INTEGER_VARIABLES, 0)
+
 
     def get_number_of_interval_vars(self):
         """ Gets the number of interval variables in the model.
@@ -867,6 +925,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.get_info(INFO_NUMBER_OF_INTERVAL_VARIABLES, 0)
 
+
     def get_number_of_sequence_vars(self):
         """ Gets the number of sequence variables in the model.
 
@@ -875,6 +934,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.get_info(INFO_NUMBER_OF_SEQUENCE_VARIABLES, 0)
 
+
     def get_number_of_constraints(self):
         """ Gets the number of constraints in the model.
 
@@ -882,6 +942,7 @@ class CpoSolveResult(CpoRunResult):
             Number of constraints.
         """
         return self.get_info(INFO_NUMBER_OF_CONSTRAINTS, 0)
+
 
     def get_var_solution(self, name):
         """ Gets a variable solution from this model solution.
@@ -893,6 +954,7 @@ class CpoSolveResult(CpoRunResult):
         """
         return self.solution.get_var_solution((name))
 
+
     def get_all_var_solutions(self):
         """ Gets the list of all variable solutions from this model solution.
 
@@ -900,6 +962,7 @@ class CpoSolveResult(CpoRunResult):
             List of all variable solutions (class CpoVarSolution).
         """
         return self.solution.get_all_var_solutions()
+
 
     def get_value(self, name):
         """ Gets the value of a variable.
@@ -915,6 +978,7 @@ class CpoSolveResult(CpoRunResult):
             Variable value, None if variable is not found.
         """
         return self.solution.get_value(name)
+
 
     def _add_json_solution(self, jsol):
         """ Add a json solution to this solution descriptor
@@ -949,6 +1013,7 @@ class CpoSolveResult(CpoRunResult):
         # Add solution
         self.solution._add_json_solution(jsol)
 
+
     def __getitem__(self, name):
         """ Overloading of [] to get a variable solution from this model solution
 
@@ -958,6 +1023,7 @@ class CpoSolveResult(CpoRunResult):
             Variable solution (class CpoVarSolution)
         """
         return(self.get_value(name))
+
 
     def print_solution(self, out=None):
         """ Prints the solution on a given output.
@@ -978,6 +1044,7 @@ class CpoSolveResult(CpoRunResult):
                 self._write_solution(f)
         else:
             self._write_solution(out)
+
 
     def _write_solution(self, out):
         """ Write the solution
@@ -1000,6 +1067,22 @@ class CpoSolveResult(CpoRunResult):
 
         if self.is_solution():
             self.solution._write_solution(out)
+
+
+    def __str__(self):
+        """ Build a string representation of this object.
+
+        The string that is returned is the same than what is printed by calling :meth:`print_solution`.
+
+        Returns:
+            String representation of this object.
+        """
+        out = StringIO()
+        self._write_solution(out)
+        res = out.getvalue()
+        out.close()
+        return res
+
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -1043,6 +1126,7 @@ class CpoRefineConflictResult(CpoRunResult):
         self.member_variables = []      # List of member variables
         self.possible_variables = []    # List of possible member variables
 
+
     def get_all_member_constraints(self):
         """ Returns the list of all constraints that are certainly member of the conflict.
 
@@ -1050,6 +1134,7 @@ class CpoRefineConflictResult(CpoRunResult):
             List of model constraints (class CpoExpr) certainly member of the conflict.
         """
         return self.member_constraints
+
 
     def get_all_possible_constraints(self):
         """ Returns the list of all constraints that are possibly member of the conflict.
@@ -1059,6 +1144,7 @@ class CpoRefineConflictResult(CpoRunResult):
         """
         return self.possible_constraints
 
+
     def get_all_member_variables(self):
         """ Returns the list of all variables that are certainly member of the conflict.
 
@@ -1067,6 +1153,7 @@ class CpoRefineConflictResult(CpoRunResult):
         """
         return self.member_variables
 
+
     def get_all_possible_variables(self):
         """ Returns the list of all variables that are possibly member of the conflict.
 
@@ -1074,6 +1161,39 @@ class CpoRefineConflictResult(CpoRunResult):
             List of model variables (class CpoVariable) possibly member of the conflict.
         """
         return self.possible_variables
+
+
+    def is_conflict(self):
+        """ Checks if this descriptor contains a valid conflict.
+
+        Returns:
+            True if there is a conflict, False otherwise.
+        """
+        return len(self.member_constraints) != 0 or len(self.possible_constraints) != 0 \
+               or len(self.member_variables) != 0 or len(self.possible_variables) != 0
+
+
+    def __nonzero__(self):
+        """ Check if this descriptor contains a conflict.
+        Equivalent to is_conflict()
+
+        Returns:
+            True if there is a conflict, False otherwise.
+        """
+        return self.is_conflict()
+
+
+    def __bool__(self):
+        """ Check if this descriptor contains a conflict.
+        Equivalent to is_conflict()
+
+        Equivalent to __nonzero__ for Python 3
+
+        Returns:
+            True if there is a conflict, False otherwise.
+        """
+        return self.is_conflict()
+
 
     def _add_json_solution(self, jsol):
         """ Add a json solution to this result descriptor
@@ -1141,6 +1261,9 @@ class CpoRefineConflictResult(CpoRunResult):
             out: Target output
         """
         out.write("Conflict refiner result:\n")
+        if not self.is_conflict():
+            out.write("   None\n")
+            return
         # Print constraints in the conflict
         lc = self.get_all_member_constraints()
         if lc:
@@ -1163,6 +1286,21 @@ class CpoRefineConflictResult(CpoRunResult):
             out.write("Possible member variables:\n")
             for c in lc:
                 out.write("   {}\n".format(c))
+
+
+    def __str__(self):
+        """ Build a string representation of this object.
+
+        The string that is returned is the same than what is printed by calling :meth:`print_conflict`.
+
+        Returns:
+            String representation of this object.
+        """
+        out = StringIO()
+        self._write_conflict(out)
+        res = out.getvalue()
+        out.close()
+        return res
 
 
     def __eq__(self, other):
@@ -1215,6 +1353,7 @@ def _get_domain(val):
     else:
         return _get_num_value(val)
 
+
 def _get_num_value(val):
     """ Convert a solution value into number.
     Interpret intmin, intmax, intervalmin, intervalmax, NaN, Infinity if any.
@@ -1225,6 +1364,7 @@ def _get_num_value(val):
         Converted value, itself if not found
     """
     return _CONSTANTS_VALUES.get(val, val)
+
 
 def _check_arg_domain(val, name):
     """ Check that an argument is a correct domain and raise error if wrong
@@ -1245,7 +1385,7 @@ def _check_arg_domain(val, name):
     if is_int(val):
         return val
     # Check list of integers or tuples
-    assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+    assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals"
     for v in val:
         if not is_int(v):
             assert _is_domain_interval(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
@@ -1278,9 +1418,6 @@ def _build_conflict_constraint_string(ctr):
     Returns:
         Constraint string
     """
-    cn = ctr.get_name()
-    if (cn is None) or (cn.startswith('_')):
-        return ctr._get_expr_string()
-    return ctr._to_string()
+    return str(ctr)
 
 

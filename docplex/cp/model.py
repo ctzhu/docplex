@@ -22,20 +22,29 @@ The different model expressions and elements are created using services provided
 """
 
 # Following imports required to allow modeling just importing this module
-from docplex.cp.expression import *
-from docplex.cp.function import *
 from docplex.cp.modeler import *
 from docplex.cp.solution import *
+from docplex.cp.expression import *
+from docplex.cp.function import *
 
 # Imports required locally
 import docplex.cp.expression as expression
+import docplex.cp.modeler as modeler
 from docplex.cp.solver.solver import CpoSolver
 from docplex.cp.cpo_compiler import CpoCompiler
 import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
 import sys
+import time
 
+
+###############################################################################
+##  Constants
+###############################################################################
+
+# List of all modeler public functions
+_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler)
 
 ###############################################################################
 ##  Public classes
@@ -44,20 +53,6 @@ import sys
 class CpoModel(object):
     """ This class is the Python container of a CPO model.
     """
-    __slots__ = ('name',             # Name of the model
-                 'format_version',   # Version of the CPO format
-                 'source_file',      # Name of the python source file
-                 'var_list',         # List of model variables, in declaration order
-                 'var_set',          # Set of model variables
-                 'expr_list',        # List of model root expressions as tuples (expression, location, root)
-                 'search_phases',    # List of search phases
-                 'starting_point',   # Starting point
-                 'nb_expr_nodes',    # Number of expression nodes
-                 'all_expr_set',     # Set of all expression ids already in the model
-                 'source_loc',       # Indicate to set in the model information of source location
-                 'name_constraints', # Indicate to always name added constraints (for conflict refiner)
-                 'map_expr',         # Map of expressions by name
-                )
 
     def __init__(self, name=None, sfile=None):
         """ Constructor.
@@ -68,17 +63,24 @@ class CpoModel(object):
         """
         ctx = config.get_default()
         super(CpoModel, self).__init__()
-        self.format_version   = None
-        self.var_list          = []
-        self.var_set           = set()
-        self.expr_list         = []
-        self.search_phases    = []
-        self.starting_point   = None
-        self.nb_expr_nodes    = 0
-        self.all_expr_set     = set()
+        self.format_version   = None     # Version of the CPO format
+        self.var_list         = []       # List of model variables, in declaration order
+        self.var_set          = set()    # Set of model variables
+        self.expr_list        = []       # List of model root expressions as tuples (expression, location)
+        self.search_phases    = []       # List of search phases
+        self.starting_point   = None     # Starting point
+        self.nb_expr_nodes    = 0        # Number of expression nodes
+        self.all_expr_set     = set()    # Set of all expression ids already in the model
+        self.map_expr         = {}       # Map of expressions by name
+
+        # Indicate to set in the model information of source location
         self.source_loc       = ctx.get_by_path("model.add_source_location", True)
+        # Indicate to always name added constraints (for conflict refiner)
         self.name_constraints = ctx.get_by_path("model.name_all_constraints", False)
-        self.map_expr         = {}
+
+        # Initialize times to compute modeling time
+        self.create_time      = time.time()        # Model creation absolute time
+        self.last_add_time    = self.create_time   # Last time something has been added to the model
 
         # Store filename of the calling Python source
         if sfile is None:
@@ -94,6 +96,21 @@ class CpoModel(object):
             name = utils.get_file_name_only(sfile)
         self.name = name
 
+        # Duplicate constructor functions to make them callable from the model
+        self.integer_var       = expression.integer_var
+        self.integer_var_list  = expression.integer_var_list
+        self.integer_var_dict  = expression.integer_var_dict
+        self.interval_var      = expression.interval_var
+        self.interval_var_list = expression.interval_var_list
+        self.sequence_var      = expression.sequence_var
+        self.transition_matrix = expression.transition_matrix
+        self.tuple_set         = expression.tuple_set
+        self.state_function    = expression.state_function
+
+        # Copy all modeler functions in the model object
+        for f in _MODELER_PUBLIC_FUNCTIONS:
+            setattr(self, f.__name__, f)
+
 
     def __enter__(self):
         # Implemented for compatibility with cplex
@@ -105,11 +122,11 @@ class CpoModel(object):
         return False  # No exception handling
 
 
-    def add(self, expr, root=True):
+    def add(self, expr):
         """ Adds a CP expression to the model.
 
-        This method adds a CP expression to the model. The expression is scanned to identify all variables
-        that are referenced by the expression to automatically add them to the model.
+        This method adds a CP expression to the model.
+        All the variables that are used by this expression are automatically added to the model.
 
         The order in which expressions are added to the model is preserved when it is submitted for solving.
 
@@ -131,32 +148,25 @@ class CpoModel(object):
             loc = None
 
         # Scan expression to check new variables
-        self._scan_expression(expr, loc)
+        self._scan_expression(expr)
         
-        # Append to the list of expressions
         if not expr.is_variable():
             # Check constraints
             if expr.is_constraint_or_bool_expr():
                 # Check if expression is named
-                if expr.has_name():
-                    # Ignore if same than previous (for named constraints declared then added)
-                    l = len(self.expr_list)
-                    if (l > 0) and self.expr_list[l - 1][0] is expr:
-                        self.expr_list[l - 1] = (expr, loc, True)
-                        return
-                else:
-                    # Add name if required
-                    if self.name_constraints:
-                        expr.name = expression._CONSTRAINT_ID_ALLOCATOR.allocate()
-                self.expr_list.append((expr, loc, root))
+                if self.name_constraints and not expr.has_name():
+                    expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
+                self.expr_list.append((expr, loc))
             elif expr.is_type(Type_SearchPhase):
-                self.search_phases.append((expr, loc, False))
+                self.search_phases.append((expr, loc))
             else:
-                self.expr_list.append((expr, loc, False))
+                self.expr_list.append((expr, loc))
 
             # Add to the map of named expressions
-            if expr.has_name():
-                self._add_named_expr(expr, expr.get_name())
+            self._add_named_expr(expr)
+
+        # Update last add time
+        self.last_add_time = time.time()
 
 
     def remove(self, expr):
@@ -170,7 +180,7 @@ class CpoModel(object):
         Returns:
             True if expression has been removed, False if not found
         """
-        for ix, (x, l, r) in enumerate(self.expr_list):
+        for ix, (x, l) in enumerate(self.expr_list):
             if x is expr:
                 del self.expr_list[ix]
                 if expr.has_name():
@@ -198,10 +208,10 @@ class CpoModel(object):
         # Set list of phases
         self.search_phases = []
         for p in phases:
-            if p.get_type() is not Type_SearchPhase:
+            if not p.is_type(Type_SearchPhase):
                 raise AssertionError("Argument 'phases' should be an array of SearchPhases")
-            self._scan_expression(p, loc)
-            self.search_phases.append((p, loc, False))
+            self._scan_expression(p)
+            self.search_phases.append((p, loc))
 
 
     def add_search_phase(self, phase):
@@ -221,7 +231,8 @@ class CpoModel(object):
             loc = None
 
         # Append to list of phases
-        self.search_phases.append((phase, loc, False))
+        self._scan_expression(phase)
+        self.search_phases.append((phase, loc))
 
     def get_search_phases(self):
         """ Get the list of search phases.
@@ -260,8 +271,7 @@ class CpoModel(object):
         """ Gets the list of all model variables.
 
         Returns:
-            List of model variables. List elements are tuples (Variable, Location).
-            Location is a tuple (filename, line number).
+            List of model variables.
         """
         return self.var_list
 
@@ -294,7 +304,7 @@ class CpoModel(object):
             Optimization expression, None if satisfaction problem.
         """
         # Search last optimization expression
-        for (x, l, r) in reversed(self.get_all_expressions()):
+        for x, l in reversed(self.get_all_expressions()):
             if isinstance(x, CpoFunctionCall) and x.get_operation().is_optim():
                 return x
         return None
@@ -327,6 +337,18 @@ class CpoModel(object):
         return self.source_file
 
 
+    def get_modeling_duration(self):
+        """ Get the time spent in modeling.
+
+        This time is computes as difference between the last time an expression has been added
+        and the model object creation time.
+
+        Returns:
+            Modeling duration in seconds
+        """
+        return self.last_add_time - self.create_time
+
+
     def print_information(self, out=None):
         """ Prints model information.
 
@@ -335,7 +357,7 @@ class CpoModel(object):
         """
         if out is None:
             out = sys.stdout
-        if is_string(out, str):
+        if is_string(out):
             make_directories(os.path.dirname(out))
             with open(out, 'w') as f:
                 self._write_information(f)
@@ -350,7 +372,7 @@ class CpoModel(object):
             out: Output stream
         """
         out.write("Model: " + self.get_name() + "\n")
-        out.write(" - source file: " + str(self.get_source_file()) + "\n")
+        out.write(" - source file: {}\n".format(self.get_source_file()))
         nbintvar = 0
         nbintervvar = 0
         nbsequencevar = 0
@@ -363,11 +385,10 @@ class CpoModel(object):
                 nbintervvar += 1
             elif isinstance(v, CpoSequenceVar):
                 nbsequencevar += 1
-        out.write(" - variables: " + str(len(avars)))
-        out.write(" (integer: " + str(nbintvar))
-        out.write(", interval: " + str(nbintervvar))
-        out.write(", sequence: " + str(nbsequencevar) + ")\n")
-        out.write(" - constraints: " + str(len(lexpr)) + ", expression nodes: " + str(self.nb_expr_nodes) + "\n")
+        out.write(" - variables: {} (integer: {}, interval: {}, sequence: {})\n"
+                  .format(len(avars), nbintvar, nbintervvar, nbsequencevar))
+        out.write(" - constraints: {}, expression nodes: {}\n".format(len(lexpr), self.nb_expr_nodes))
+        out.write(" - modeling time: {0:.2f} sec\n".format(self.get_modeling_duration()))
 
 
     def solve(self, **kwargs):
@@ -376,13 +397,12 @@ class CpoModel(object):
         This method solves the model using the appropriate solver according to the optional parameters
         and/or configuration attributes.
 
-        It is equivalent to call the method :meth:`docplex.cp.solver.solver.CpoSolver.solve` on a CpoSolver object
-        created with this model as parameter.
+        This method creates a new CpoSolver with given arguments, and then calls its method *solve()*.
 
         The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
-        but also some others functions allowing to invoke more specialized functions such as
-        conflict refiner, propagation, solution iteration, etc.
-        Please refer to this class for more details (see :mod:`docplex.cp.solver.solver`).
+        but also some others functions allowing to invoke more specialized functions. An advanced programming may
+        require to explicitly create a CpoSolver instead of calling function at model level.
+        Please refer to this class for more details.
 
         Args:
             context:   Complete solving context. If not given, context is the default context that is set in config.py.
@@ -391,10 +411,102 @@ class CpoModel(object):
             key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
             (others):  All other context parameters that can be changed.
         Returns:
-            Model solve result (type CpoSolveResult).
+            Model solve result (object of class CpoSolveResult).
+        Raises:
+            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = CpoSolver(self, **kwargs)
         return solver.solve()
+
+
+    def refine_conflict(self, **kwargs):
+        """ This method identifies a minimal conflict for the infeasibility of the current model.
+
+        Given an infeasible model, the conflict refiner can identify conflicting constraints and variable domains
+        within the model to help you identify the causes of the infeasibility.
+        In this context, a conflict is a subset of the constraints and/or variable domains of the model
+        which are mutually contradictory.
+        Since the conflict is minimal, removal of any one of these constraints will remove that
+        particular cause for infeasibility.
+        There may be other conflicts in the model; consequently, repair of a given conflict
+        does not guarantee feasibility of the remaining model.
+
+        Conflict refiner is controled by the following parameters (that can be set at CpoSolver creation):
+
+         * ConflictRefinerBranchLimit
+         * ConflictRefinerFailLimit
+         * ConflictRefinerIterationLimit
+         * ConflictRefinerOnVariables
+         * ConflictRefinerTimeLimit
+
+        that are described in module :mod:`docplex.cp.parameters`.
+
+        Note that the general *TimeLimit* parameter is used as a limiter for each conflict refiner iteration, but the
+        global limitation in time must be set using *ConflictRefinerTimeLimit* that is infinite by default.
+
+        This method creates a new CpoSolver with given arguments, and then call its method *refine_conflict*.
+
+        The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
+        but also some others functions allowing to invoke more specialized functions. An advanced programming may
+        require to explicitly create a CpoSolver instead of calling function at model level.
+        Please refer to this class for more details.
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+
+        Args:
+            context:   Complete solving context. If not given, context is the default context that is set in config.py.
+            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
+            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (others):  All other context parameters that can be changed.
+        Returns:
+            List of constraints that cause the conflict (object of class CpoRefineConflictResult)
+        Raises:
+            :class:`docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
+        """
+        solver = CpoSolver(self, **kwargs)
+        return solver.refine_conflict()
+
+
+    def propagate(self, **kwargs):
+        """ This method invokes the propagation on the current model.
+
+        Constraint propagation is the process of communicating the domain reduction of a decision variable to
+        all of the constraints that are stated over this variable.
+        This process can result in more domain reductions.
+        These domain reductions, in turn, are communicated to the appropriate constraints.
+        This process continues until no more variable domains can be reduced or when a domain becomes empty
+        and a failure occurs.
+        An empty domain during the initial constraint propagation means that the model has no solution.
+
+        The result is a object of class CpoSolveResult, the same than the one returned by solve() method.
+        However, variable domains may not be completely defined.
+
+        This method creates a new CpoSolver with given arguments, and then call its method *propagate*.
+
+        The class :class:`docplex.cp.solver.solver.CpoSolver` contains the actual implementation of this method,
+        but also some others functions allowing to invoke more specialized functions. An advanced programming may
+        require to explicitly create a CpoSolver instead of calling function at model level.
+        Please refer to this class for more details.
+
+        This function is available only with local CPO solver with release number strictly greater than 12.6.3.
+
+        Args:
+            context:   Complete solving context. If not given, context is the default context that is set in config.py.
+            params:    Solving parameters (CpoParameters) that overwrite those in the solving context
+            url:       URL of the DOcplexcloud service that overwrites the one defined in the solving context.
+            key:       Authentication key of the DOcplexcloud service that overwrites the one defined in the solving context.
+            (others):  All other context parameters that can be changed.
+        Returns:
+            Propagation result (object of class CpoSolveResult)
+        Raises:
+            :class:`docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`docplex.cp.utils.CpoException`: (or derived) if error.
+        """
+        solver = CpoSolver(self, **kwargs)
+        return solver.propagate()
+
 
 
     def export_as_cpo(self, out=None, **kwargs):
@@ -503,25 +615,27 @@ class CpoModel(object):
         """
         return self.equals(other)
 
+
     def __ne__(self, other):
         """ Check inequality of this object with another """
         return not self.__eq__(other)
 
 
-    def _add_named_expr(self, expr, name):
+    def _add_named_expr(self, expr):
         """ Add an expression to the map of named expressions.
 
         Args:
             expr: Expression
-            name: Expression name
         Raises:
             CpoException if name already used for another expression
         """
+        name = expr.get_name()
         #print("Add named expression: {}: {}".format(name, expr))
-        oexpr = self.map_expr.get(name)
-        if (oexpr is not None) and (oexpr is not expr):
-            raise CpoException("Expression with name '{}' already exists: {}".format(name, oexpr))
-        self.map_expr[name] = expr
+        if name:
+            oexpr = self.map_expr.get(name)
+            if (oexpr is not None) and (oexpr is not expr):
+                raise CpoException("Expression with name '{}' already exists: {}".format(name, oexpr))
+            self.map_expr[name] = expr
 
 
     def _add_variable(self, var):
@@ -533,7 +647,7 @@ class CpoModel(object):
         # Check if variable has a name
         name = var.get_name()
         if name is None:
-            name = expression._allocate_var_name()
+            name = expression._set_generated_name()
             var.set_name(name)
         else:
             # Check if variable already in expressions
@@ -548,12 +662,11 @@ class CpoModel(object):
         self.var_list.append(var)
 
 
-    def _scan_expression(self, expr, loc):
+    def _scan_expression(self, expr):
         """ Scan an expression to add all referenced variables and update statistics
 
         Args:
             expr: Expression to scan
-            loc:  Expression location
         Raises:
             CpoException if error detected
         """
@@ -573,9 +686,7 @@ class CpoModel(object):
                         self._add_variable(e)
                     else:
                         # Stack children expressions
-                        oprnds = e._get_children()
-                        if oprnds is not None:
-                            estack.extend(oprnds)
+                        estack.extend(e._get_children())
 
 
     def _ensure_all_root_constraints_named(self):
@@ -592,11 +703,11 @@ class CpoModel(object):
         if self.name_constraints:
             return True
         # Loop on each top-level constraints
-        for (expr, l, r) in self.expr_list:
-            if r and (not expr.has_name()):
+        for (expr, l) in self.expr_list:
+            if expr.is_constraint_or_bool_expr() and (not expr.has_name()):
                 name = expression._CONSTRAINT_ID_ALLOCATOR.allocate()
                 expr.set_name(name)
-                self._add_named_expr(expr, name)
+                self._add_named_expr(expr)
         self.name_constraints = True
         return False
 

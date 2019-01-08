@@ -172,8 +172,6 @@ class CpoType(object):
     def get_array_type(self):
         """ Get the array type with this type as element
         
-        Args:
-            tp: Other type 
         Returns:
             The type that has this as element type, None if none
         """
@@ -218,7 +216,7 @@ class CpoParam(object):
         """ Get the parameter type
         
         Returns:
-            Parameter type
+            Parameter type (object of class CpoType)
         """
         return self.type
         
@@ -297,10 +295,10 @@ class CpoSignature(object):
         return len(self.params) > 0
         
     def get_parameters(self):
-        """ Get the list of parameters for this signature
+        """ Get the list of parameter for this signature
 
         Returns:
-            List of parameter types
+            List of parameter descriptors (class CpoParam)
         """
         return self.params
 

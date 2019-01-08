@@ -81,6 +81,10 @@ class CpoFunction(CpoExpr):
             self._s = s
         assert len(self._s) == l, "Lists x and s must have the same length"
 
+    def _get_expr_string(self):
+        """ Get the string representing this expression, name excluded. """
+        return "Function(...)"
+
     @property
     def v0(self):
         return self._v0
@@ -502,6 +506,10 @@ class CpoSegmentedFunction(CpoFunction):
             segments.append((self.x[i], self.v[i], self.s[i]))
         return segments
 
+    def _get_expr_string(self):
+        """ Get the string representing this expression, name excluded. """
+        return "SegmentedFunction(...)"
+
 
 class CpoStepFunction(CpoFunction):
     """ Class representing a step function.
@@ -546,3 +554,9 @@ class CpoStepFunction(CpoFunction):
         for i in range(len(self.x)):
             steps.append((self.x[i], self.v[i]))
         return steps
+
+    def _get_expr_string(self):
+        """ Get the string representing this expression, name excluded. """
+        return "StepFunction(...)"
+
+

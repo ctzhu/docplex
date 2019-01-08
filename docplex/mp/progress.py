@@ -306,7 +306,7 @@ class SolutionListener(ProgressListener):
     def __init__(self, model):
         ProgressListener.__init__(self)
         self._model = model
-        self._engine_name = model.get_engine().name
+        self._engine_name = model.get_engine()._location()
         self._current_solution = None
         self._current_objective = 1e+75
 
@@ -321,7 +321,7 @@ class SolutionListener(ProgressListener):
     def notify_solution(self, incumbents):
         # create a new instance and replace current solution
         # check performance impact
-        sol = SolveSolution(self._model, obj=self._current_objective, engine_name=self._engine_name)
+        sol = SolveSolution(self._model, obj=self._current_objective, solved_by=self._engine_name)
         for v in self._model.iter_variables():
             # incumbent values are provided as a list with indices as positions.
             incumbent_value = incumbents[v._index]

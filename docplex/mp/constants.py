@@ -23,15 +23,27 @@ class ComparisonType(Enum):
 
         where e1 and e2 denote linear expressions.
     """
-    LE, EQ, GE = range(1, 4)
+    LE = 1, '<=', 'L', operator.le
+    EQ = 2, '==', 'E', operator.eq
+    GE = 3, '>=', 'G', operator.ge
+
+    def __new__(cls, code, operator_symbol, cplex_kw, python_op):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj._cplex_code = cplex_kw
+        obj._op_symbol = operator_symbol
+        obj._pyop = python_op
+        return obj
 
     # NOTE: Never add a static field in an enum class: it would be interpreted as an other enum
 
     @property
     def short_name(self):
-        return _ComparisonUtils.get_name(self)
+        return self.name
 
-    def get_operator_symbol(self):
+    @property
+    def operator_symbol(self):
         """ Returns a string operator for the constraint.
 
         Example:
@@ -40,70 +52,63 @@ class ComparisonType(Enum):
         Returns:
             string: A string describing the logical operator used in the constraint.
         """
-        return _ComparisonUtils.get_operator(self)
+        return self._op_symbol
+
+    @property
+    def python_operator(self):
+        return self._pyop
 
 
-class _ComparisonUtils(object):
-    # INTERNAL.
-    # raison d'etre: cannot add static fields in an enumerated type, so we deport them elsewhere
+class RelaxationMode(Enum):
+    """ This enumerated type describes the different strategies for model relaxation: MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad.
 
-    @staticmethod
-    def _get_map_value(cttype, attribute_map, default_value=None):
-        if cttype not in attribute_map:
-            docplex_fatal("unexpected constraint type: {0!s}".format(cttype))  # pragma: no cover
+    Relaxation algorithms work in two phases: in the first phase, they attempt to find a
+    feasible solution while making minimal changes to the model (according to a metric). In a second phase, they
+    attempt to find an optimal solution while keeping the relaxation at the minimal value found in phase 1.
 
-        return attribute_map.get(cttype, default_value)
+    Values of this type define two aspects of the algorithm:
+     - whether or not they should continue to a second phase: all OptXxx values continue to a second phase, and
+       MinXxx values stop at phase 1.
+    - which metric to use for evaluating the relaxation in the first phase. There are three metrics:
+        - the sum of relaxations for OptSum, MinSum, or
+        - the total number of constraints being relaxed for OptInf, MinInf, or
+        - the sum of squares of relaxations for OptQuad, MinQuad.
 
-    _operator_symbol_map = {ComparisonType.LE: "<=",
-                            ComparisonType.EQ: "==",
-                            ComparisonType.GE: ">="}
-    _name_map = {ComparisonType.LE: "LE",
-                 ComparisonType.EQ: "EQ",
-                 ComparisonType.GE: "GE"}
+    """
 
-    _python_op_map = {ComparisonType.LE: operator.le,
-                      ComparisonType.EQ: operator.eq,
-                      ComparisonType.GE: operator.ge}
-
-    @staticmethod
-    def get_operator(cttype):
-        return _ComparisonUtils._get_map_value(cttype, _ComparisonUtils._operator_symbol_map)
-
-    @staticmethod
-    def get_name(cttype):
-        return _ComparisonUtils._get_map_value(cttype, _ComparisonUtils._name_map)
-
-    @staticmethod
-    def get_python_operator_fn(cttype):
-        """
-        Returns the Python operator function associated with the ct.
-        For example, returns operator.ge(a, b) for a GE constraint.
-        :param cttype: A binary constraint type (LE, EQ, GE.
-        :return: A Python operator function.
-        """
-        return _ComparisonUtils._get_map_value(cttype, _ComparisonUtils._python_op_map)
-
-
-
-class RelaxerMode(Enum):
-    MinSum, OptSum, MinInf, OptInf = range(4)
+    MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad = range(6)
 
 
     @staticmethod
-    def compute_mode(optimize, use_sum_infeas=True):
-        # which forced mode for feasopt? switch this flag for testing
-        # with 12.6.2 and nurse, INF is very slow...
-        if use_sum_infeas:
-            if optimize:
-                new_mode = RelaxerMode.OptSum
-            else:
-                new_mode = RelaxerMode.MinSum
+    def parse(arg):
+        # INTERNAL
+        # noinspection PyTypeChecker
+        for m in RelaxationMode:
+            if arg == m or arg == m.value:
+                return m
+            elif is_string(arg):
+                if arg == str(m.value) or arg.lower() == m.name.lower():
+                    return m
         else:
-            if optimize:  # pragma: no cover
-                new_mode = RelaxerMode.MinSum  # pragma: no cover
-            else:  # pragma: no cover
-                new_mode = RelaxerMode.MinInf  # pragma: no cover
-        return new_mode
+            docplex_fatal('cannot parse this as a relaxation mode: {0!r}'.format(arg))
+
+
+    @staticmethod
+    def get_no_optimization_mode(mode):
+        assert isinstance(mode, RelaxationMode)
+        # even values are MinXXX modes
+        relax_code = mode.value
+        if 0 == relax_code % 2:
+            return mode
+        else:
+            # OptXXX is 2k+1 when MinXXX is 2k
+            return RelaxationMode(relax_code - 1)
+
+    def __repr__(self):
+        return 'docplex.mp.RelaxationMode.{0}'.format(self.name)
+
+
+
 
 
 # class ConstraintType(Enum):
@@ -135,7 +140,7 @@ class SOSType(Enum):
 
         - SOS1 for SOS type 2.
     """
-    SOS1, SOS2 = 1,2
+    SOS1, SOS2 = 1, 2
 
     def lower(self):
         return self.name.lower()

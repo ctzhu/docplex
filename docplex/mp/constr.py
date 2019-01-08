@@ -6,7 +6,7 @@
 import sys
 
 from docplex.mp.basic import ModelingObject, Priority
-from docplex.mp.constants import _ComparisonUtils, ComparisonType
+from docplex.mp.constants import ComparisonType
 from docplex.mp.utils import is_number
 
 
@@ -81,7 +81,7 @@ class AbstractConstraint(ModelingObject):
     # noinspection PyMethodMayBeStatic
     def notify_deleted(self):
         # INTERNAL
-        pass  # pragma: no cover
+        self._index = self._invalid_index
 
     def short_typename(self):
         return "constraint"
@@ -91,6 +91,21 @@ class AbstractConstraint(ModelingObject):
 
     def is_linear(self):
         return False
+
+    def is_quadratic(self):
+        return False
+
+    @property
+    def slack_value(self):
+        """ Returns the slack value of the constraint.
+
+        Note:
+            This method will raise an exception if the model has not been solved successfully.
+
+        Returns:
+            The slack value of the constraint in the latest solve (a float value).
+        """
+        return self._model.slack_values(cts=self)
 
 
 # noinspection PyAbstractClass
@@ -141,6 +156,8 @@ class BinaryConstraint(AbstractConstraint):
         """
         return self._right_expr
 
+
+
     def to_string(self):
         """ Returns a string representation of the constraint.
 
@@ -156,17 +173,17 @@ class BinaryConstraint(AbstractConstraint):
         left_string = self.left_expr.to_string()
         right_string = self.right_expr.to_string()
         return u"%s %s %s" % (left_string,
-                              self._ctype.get_operator_symbol(),
+                              self._ctype.operator_symbol,
                               right_string)
 
     def rhs(self):
-        right_cst = self._right_expr.constant
-        left_cst = self._left_expr.constant
+        right_cst = self._right_expr.get_constant()
+        left_cst = self._left_expr.get_constant()
         return right_cst - left_cst
 
     def __repr__(self):
         classname = self.__class__.__name__
-        user_name = self.name if self.has_user_name() else ""
+        user_name = self._get_safe_name()
         typename = self.type.short_name
         sleft = self._left_expr.truncated_str()
         sright = self._right_expr.truncated_str()
@@ -175,12 +192,12 @@ class BinaryConstraint(AbstractConstraint):
 
     def _is_trivially_feasible(self):
         # INTERNAL : assume self is trivial()
-        op_func = _ComparisonUtils.get_python_operator_fn(self.type)
+        op_func = self.type.python_operator
         return op_func(self.left_expr.constant, self.right_expr.constant) if op_func else False
 
     def _is_trivially_infeasible(self):
         # INTERNAL: assume self is trivial .
-        op_func = _ComparisonUtils.get_python_operator_fn(self.type)
+        op_func = self.type.python_operator
         return not op_func(self.left_expr.constant, self.right_expr.constant) if op_func else False
 
     def is_trivial_feasible(self):
@@ -188,16 +205,6 @@ class BinaryConstraint(AbstractConstraint):
 
     def is_trivial_infeasible(self):
         return self.is_trivial() and self._is_trivially_infeasible()
-
-    def _generate_net_linear_coefs2(self, left_expr, right_expr):
-        # INTERNAL
-        for lv, lk in left_expr.iter_terms():
-            net_k = lk - right_expr[lv]
-            if 0 != net_k:
-                yield lv, net_k
-        for rv, rk in right_expr.iter_terms():
-            if rv not in left_expr and 0 != rk:
-                yield rv, -rk
 
     def _generate_opposite_linear_coefs(self, expr):
         for v, k in expr.iter_terms():
@@ -240,6 +247,21 @@ class BinaryConstraint(AbstractConstraint):
         for rv in self.right_expr.iter_variables():
             if rv not in left_expr:
                 yield rv
+
+    def _generate_net_linear_coefs2(self, left_expr, right_expr):
+        # INTERNAL
+        for lv, lk in left_expr.iter_terms():
+            net_k = lk - right_expr[lv]
+            if 0 != net_k:
+                yield lv, net_k
+        for rv, rk in right_expr.iter_terms():
+            if rv not in left_expr and 0 != rk:
+                yield rv, -rk
+
+    def _generate_net_linear_coefs(self):
+        return self._generate_net_linear_coefs2(self._left_expr, self._right_expr)
+
+
 
 
 class LinearConstraint(BinaryConstraint):
@@ -411,6 +433,7 @@ class LinearConstraint(BinaryConstraint):
     def fast_get_coef(self, dvar):
         return self._left_expr[dvar] - self._right_expr[dvar]
 
+
     def iter_net_linear_coefs(self):
         # INTERNAL
         left_expr = self._left_expr
@@ -422,8 +445,6 @@ class LinearConstraint(BinaryConstraint):
         else:
             return self._generate_net_linear_coefs2(left_expr, right_expr)
 
-    def _generate_net_linear_coefs(self):
-        return self._generate_net_linear_coefs2(self._left_expr, self._right_expr)
 
 
 
@@ -571,7 +592,7 @@ class RangeConstraint(AbstractConstraint):
         return self.to_string()
 
     def __repr__(self):
-        printable_name = self.name if self.has_user_name() else ""
+        printable_name = self._get_safe_name()
         return "docplex.mp.linear.RangeConstraint[{0}]({1},{2!s},{3})".format(printable_name, self.lb, self.__expr,
                                                                               self.ub)
 
@@ -703,6 +724,9 @@ class QuadraticConstraint(BinaryConstraint):
     def compute_infeasibility(self, slack):
         pass
 
+    def is_quadratic(self):
+        return True
+
     __slots__ = ()
 
     def __init__(self, model, left_expr, ctype, right_expr, name=None):
@@ -710,12 +734,6 @@ class QuadraticConstraint(BinaryConstraint):
                                   ctype=ctype,
                                   right_expr=right_expr,
                                   name=name)
-
-    def _get_linear_part(self, expr):
-        if expr.is_quad_expr():
-            return expr.linear_part
-        else:
-            return expr
 
     def is_trivial(self):
         for qv, nqk in self.iter_net_quads():
@@ -729,8 +747,8 @@ class QuadraticConstraint(BinaryConstraint):
         return True
 
     def iter_net_linear_coefs(self):
-        linear_left = self._get_linear_part(self._left_expr)
-        linear_right = self._get_linear_part(self._right_expr)
+        linear_left = self._left_expr.get_linear_part()
+        linear_right = self._right_expr.get_linear_part()
         return self._iter_net_linear_coefs2(linear_left, linear_right)
 
     def iter_net_quads(self):
@@ -740,13 +758,9 @@ class QuadraticConstraint(BinaryConstraint):
         if not right_expr.is_quad_expr():
             return left_expr.iter_quads()
         elif not left_expr.is_quad_expr():
-            return self.generate_opposite_quads(right_expr)
+            return right_expr.iter_opposite_quads()
         else:
             return self.generate_ordered_net_quads(left_expr, right_expr)
-
-    def generate_opposite_quads(self, q):
-        for qv, qk in q.iter_quads():
-            yield qv, -qk
 
     def generate_ordered_net_quads(self, qleft, qright):
         # left first, then right

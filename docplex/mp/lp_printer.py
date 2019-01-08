@@ -9,6 +9,7 @@ from __future__ import print_function
 # from six import iteritems, itervalues
 
 import re
+import sys
 
 from docplex.mp.linear import *
 from docplex.mp.constants import ComparisonType
@@ -256,7 +257,7 @@ class LPModelPrinter(TextModelPrinter):
         wrapper = _ExportWrapper(out, indent_str=self.__expr_indent)
         wrapper.write(' obj:')
         objexpr = model.objective_expr
-        obj_offset = objexpr.constant
+        obj_offset = objexpr.get_constant()
         #obj_constant_term_varname = None
         if objexpr.is_constant():
             if obj_offset:

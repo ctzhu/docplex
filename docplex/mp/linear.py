@@ -13,13 +13,13 @@ from six import iteritems
 
 from docplex.mp.constants import ComparisonType
 from docplex.mp.compat23 import unitext
-from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase
+from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, Operand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
 from docplex.mp.xcounter import ExprCounter
 
 
-class Var(ModelingObject):
+class Var(ModelingObject, Operand):
     """Var()
 
     This class models decision variables.
@@ -47,8 +47,8 @@ class Var(ModelingObject):
             self._lb = vartype.default_lb
             self._ub = vartype.default_ub
         else:
-            used_lb = vartype.get_default_lb() if lb is None else vartype.compute_lb(lb)
-            used_ub = vartype.get_default_ub() if ub is None else vartype.compute_ub(ub)
+            used_lb = vartype.resolve_lb(lb)
+            used_ub = vartype.resolve_ub(ub)
             if used_lb <= used_ub:
                 self._lb = used_lb
                 self._ub = used_ub
@@ -58,6 +58,13 @@ class Var(ModelingObject):
     # noinspection PyUnusedLocal
     def copy(self, new_model, var_mapping):
         return var_mapping[self]
+
+
+    def iter_terms(self):
+        yield self, 1
+
+    def iter_variables(self):
+        yield self
 
     def equals(self, other):
         if type(other) != Var:
@@ -73,10 +80,8 @@ class Var(ModelingObject):
             return False
         return True
 
-    def accept_initial_value(self, numeric_value):
-        if not self.vartype.accept_value(numeric_value):
-            return False
-        return self.lb <= numeric_value <= self.ub
+    def accept_initial_value(self, candidate_value):
+        return self.vartype.accept_domain_value(candidate_value, lb=self._lb, ub=self._ub)
 
     def check_name(self, new_name):
         ModelingObject.check_name(self, new_name)
@@ -104,6 +109,7 @@ class Var(ModelingObject):
 
     def set_name(self, new_name):
         # INTERNAL
+        self.check_name(new_name)
         self.model.set_var_name(self, new_name)
 
     def get_lb(self):
@@ -119,8 +125,9 @@ class Var(ModelingObject):
         self.model.set_var_lb(self, lb)
 
     def set_lb(self, lb):
-        self._set_lb(lb)
-        return self._lb
+        if lb != self._lb:
+            self._set_lb(lb)
+            return self._lb
 
     lb = property(get_lb, _set_lb)
 
@@ -147,8 +154,9 @@ class Var(ModelingObject):
         self.model.set_var_ub(self, ub)
 
     def set_ub(self, ub):
-        self._set_ub(ub)
-        return self._ub
+        if ub != self._ub:
+            self._set_ub(ub)
+            return self._ub
 
     ub = property(get_ub, _set_ub)
 
@@ -209,7 +217,7 @@ class Var(ModelingObject):
         Returns:
             Boolean: True if the variable is of  type Binary or Integer.
         """
-        return self.is_binary() or self.is_integer()
+        return self.vartype.is_discrete()
 
     @property
     def float_precision(self):
@@ -456,7 +464,7 @@ class Var(ModelingObject):
             return ""   # no suffix for usernames
 
     def to_string(self):
-        str_name = self.name or '%s_var_%d' % (self.vartype.short_name, self.unchecked_index)
+        str_name = self.get_name() or ('_x%d' % (self.unchecked_index +1 ))
         return str_name
 
     def to_full_string(self):
@@ -474,14 +482,25 @@ class Var(ModelingObject):
 
     def __repr__(self):
         repr_name = self.name or "NO_NAME"
-        name_mark = self._name_marker()
         self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
         if self_vartype.is_default_domain(self_lb, self_ub):
             repr_bounds = ""
         else:
             repr_bounds = ",lb=%g,ub=%g" % (self_lb, self_ub)
-        return 'docplex.mp.linear.Var(type={0},name={1}{2}{3})'.\
-            format(self_vartype.one_letter_symbol(), repr_name, name_mark, repr_bounds)
+        return "docplex.mp.linear.Var(type={0},name='{1}'{2})".\
+            format(self_vartype.one_letter_symbol(), repr_name, repr_bounds)
+
+    @property
+    def reduced_cost(self):
+        """ Returns the reduced cost of the variable.
+
+        Note:
+            This method will raise an exception if the model has not been solved successfully as a LP.
+
+        Returns:
+            The reduced cost of the variable (a float value).
+        """
+        return self._model.reduced_costs(self)
 
 
 # noinspection PyAbstractClass
@@ -1035,7 +1054,7 @@ class LinearExpr(AbstractLinearExpr):
     def _add_term(self, dvar, coef=1):
         self._check_mutable()
         # INTERNAL
-        if coef != 0:
+        if coef:
             self_terms = self.__terms
             if dvar not in self_terms:
                 self_terms[dvar] = coef
@@ -1424,7 +1443,14 @@ class LinearExpr(AbstractLinearExpr):
         return self.plus(e)
 
     def __iadd__(self, e):
-        return self.add(e)
+        try:
+            self.add(e)
+            return self
+        except DOCPlexQuadraticArithException:
+            # modify self
+            r = e + self
+            self = r
+            return self
 
     def __sub__(self, e):
         return self.minus(e)
@@ -1436,7 +1462,13 @@ class LinearExpr(AbstractLinearExpr):
         return cloned
 
     def __isub__(self, e):
-        return self.subtract(e)
+        try:
+            return self.subtract(e)
+        except DOCPlexQuadraticArithException:
+            # modify self
+            r = -e + self
+            self = r
+            return self
 
     def __neg__(self):
         return self.opposite()
@@ -1620,12 +1652,9 @@ class ZeroExpr(AbstractLinearExpr):
     # noinspection PyMethodMayBeStatic
     def minus(self, e):
         return -e
-        # expr = e.to_linear_expr().clone()
-        # expr.negate()
-        # return expr
 
     def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
-        return "0"
+        return '0'
 
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         oss.write(self.to_string())
@@ -1677,7 +1706,7 @@ class ZeroExpr(AbstractLinearExpr):
     # arithmetci to self
     add = plus
     subtract = minus
-    tmultiply = times
+    multiply = times
 
     def _scale(self, factor):
         return self

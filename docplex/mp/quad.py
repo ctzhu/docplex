@@ -5,8 +5,8 @@
 # --------------------------------------------------------------------------
 from six import iteritems
 
-from docplex.mp.compat23 import unitext
-from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
+from docplex.mp.compat23 import unitext, izip
+from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr, LinearExpr
 from docplex.mp.utils import *
 
 from docplex.mp.xcounter import FastOrderedDict
@@ -22,7 +22,6 @@ class VarPair(object):
     __slots__ = ("first", "second", "_cached_hash")
 
     def __init__(self, v1, v2=None):
-        self._cached_hash = None
         if v2 is None:
             self.first = v1
             self.second = v1
@@ -32,6 +31,7 @@ class VarPair(object):
         else:
             self.first = v2
             self.second = v1
+        self._cached_hash = self._hash_pair()
 
     def is_square(self):
         return self.first is self.second
@@ -41,12 +41,21 @@ class VarPair(object):
         # VarPair ensures variables are sorted by indices
         return isinstance(other, VarPair) and (self.first is other.first) and (self.second is other.second)
 
+    def _hash_pair(self):
+        if self.is_square():
+            return hash(self.first)
+        else:
+            f = hash(self.first)
+            s = hash(self.second)
+            # cantor encoding. must cast to int() for py3
+            self_hash = int(((f + s) * (s + f + 1) / 2) + s)
+            if self_hash == -1:
+                # value -1 is reserved for errors
+                self_hash = -2
+            return self_hash
+
     def __hash__(self):
-        self_hash = self._cached_hash
-        if self_hash is None:
-            self_hash = hash(self.first) + hash(self.second)
-            self._cached_hash = self_hash
-        return self_hash
+        return self._cached_hash
 
     def __repr__(self):
         return "docplex.mp.quad.VarPair(first={0!s},second={1!s})".format(self.first, self.second)
@@ -162,6 +171,7 @@ class QuadExpr(Expr):
         else:
             self._linexpr = self.model._to_linear_expr(linexpr)
 
+
     def clone(self):
         """ Makes a copy of the quadratic expression and returns it.
 
@@ -193,6 +203,11 @@ class QuadExpr(Expr):
 
     def iter_quads(self):
         return iteritems(self._quadterms)
+
+    def iter_opposite_quads(self):
+        # INTERNAL
+        for qv, qk in self.iter_quads():
+            yield qv, -qk
 
     def iter_quad_triplets(self):
         """ Iterates over quadratic terms.
@@ -313,10 +328,16 @@ class QuadExpr(Expr):
 
     @property
     def constant(self):
+        return self.get_constant()
+
+    def get_constant(self):
         return self._linexpr.constant
 
     @property
     def linear_part(self):
+        return self.get_linear_part()
+
+    def get_linear_part(self):
         return self._linexpr
 
     def iter_variables(self):
@@ -598,15 +619,36 @@ class QuadExpr(Expr):
             pass
 
     def _add_one_quad_term(self, qv, qk):
-        qterms = self._quadterms
-        if qv in qterms:
-            new_qk = qterms[qv] + qk
-            if 0 != new_qk:
-                qterms[qv] = new_qk
+        if qk != 0:
+            qterms = self._quadterms
+            if qv in qterms:
+                new_qk = qterms[qv] + qk
+                if 0 != new_qk:
+                    qterms[qv] = new_qk
+                else:
+                    del qterms[qv]
             else:
-                del qterms[qv]
+                qterms[qv] = qk
+
+    def _add_one_quad_triplet(self, qv1, qv2, qk):
+        self._add_one_quad_term(VarPair(qv1, qv2), qk)
+
+    def _add_linear_term(self, v, k):
+        if k:
+            self._linexpr._add_term(v, k)
+
+    def normalize(self):
+        # INTERNAL
+        if self._quadterms:
+            return self
+        elif not self._linexpr.is_constant():
+            return self._linexpr
         else:
-            qterms[qv] = qk
+            k = self.get_constant()
+            if 0 == k:
+                return self._model._get_zero_expr()
+            else:
+                return self._linexpr
 
 
     def clear(self):
@@ -615,12 +657,19 @@ class QuadExpr(Expr):
 
     # quad-specific
     def _add_quad(self, other_quad):
+        # add quad part
         for oqv, oqk in other_quad.iter_quads():
             self._add_one_quad_term(oqv, oqk)
+        # add linear part
+        self._linexpr.add(other_quad._linexpr)
 
     def _subtract_quad(self, other_quad):
+        # subtract quad
         for oqv, oqk in other_quad.iter_quads():
             self._add_one_quad_term(oqv, -oqk)
+        # subtract linear part
+        self._linexpr.subtract(other_quad._linexpr)
+
 
     def to_linear_expr(self):
         if self.has_quadratic_term():

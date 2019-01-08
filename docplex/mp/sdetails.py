@@ -7,7 +7,7 @@ from docplex.mp.compat23 import StringIO
 
 from math import isnan
 
-from six import PY2 as six_py2
+from six import PY2 as SIX_PY2
 
 
 class SolveDetails(object):
@@ -80,7 +80,7 @@ class SolveDetails(object):
 
     @staticmethod
     def to_plain_str(arg_s):
-        if six_py2:  # we are in py2: docloud returns unicode.
+        if SIX_PY2:  # we are in py2: docloud returns unicode.
             try:
                 return arg_s.encode()  # if unicode strings , come from cplex worker
             except AttributeError:
@@ -251,7 +251,7 @@ class SolveDetails(object):
     best_bound = property(get_best_bound)
 
     def __repr__(self):
-        return "docplex.mp.solution.SolveDetails(time={0:g}, status={2:s})" \
+        return "docplex.mp.SolveDetails(time={0:g},status={1!r})" \
             .format(self._time, self._solve_status)
 
     def print_information(self):
@@ -276,9 +276,9 @@ class SolveDetails(object):
     def __str__(self):
         return self.to_string()
 
-    _limit_statuses = {104,  # solution limit
-                       107, 108  # time limit
-                       }
+    _limit_statuses = frozenset({104,  # solution limit
+                                 107, 108  # time limit
+                                 })
 
     def has_hit_limit(self):
         """

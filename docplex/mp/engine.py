@@ -31,7 +31,6 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-
     def solve(self, mdl, parameters):
         ''' Redefine this method for the real solve.
             Returns True if model is well-formed and a solution has been found.
@@ -100,6 +99,9 @@ class ISolver(object):
     def get_solve_details(self):
         raise NotImplementedError  # pragma: no cover
 
+    def clean_before_solve(self):
+        raise NotImplementedError  # pragma: no cover
+
 
 # noinspection PyAbstractClass
 class IEngine(ISolver):
@@ -109,6 +111,9 @@ class IEngine(ISolver):
     def name(self):
         ''' Returns the code to be used in model'''
         raise NotImplementedError  # pragma: no cover
+
+    def _location(self):
+        return None
 
     def get_var_index(self, var):
         raise NotImplementedError  # pragma: no cover
@@ -209,7 +214,6 @@ class DummyEngine(IEngine):
     def set_var_type(self, var, new_type):
         pass  # nothing to do, except in cplex...
 
-
     def create_binary_linear_constraint(self, binaryct):
         return -1  # pragma: no cover
 
@@ -256,6 +260,9 @@ class DummyEngine(IEngine):
 
     def get_cplex(self):
         raise DOcplexException("No CPLEX is available.")  # pragma: no cover
+
+    def clean_before_solve(self):
+        pass  # pragma: no cover
 
 
 # noinspection PyAbstractClass,PyUnusedLocal
@@ -406,7 +413,6 @@ class ZeroSolveEngine(IndexerEngine):
     def last_solved_parameters(self):
         return self._last_solved_parameters
 
-
     @property
     def name(self):
         return "zero_solve"  # pragma: no cover
@@ -422,7 +428,7 @@ class ZeroSolveEngine(IndexerEngine):
         # return a feasible value: max of zero and the lower bound
         zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb != 0}
         obj = mdl.objective_expr.constant
-        return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, engine_name=self.name)  # pragma: no cover
+        return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, solved_by=self.name)  # pragma: no cover
 
     def get_solutions(self, args):
         if not args:

@@ -18,6 +18,7 @@ from docplex.mp.compat23 import StringIO
 from docplex.mp.utils import is_iterable, is_number, is_string, str_holo
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
+from docplex.mp.error_handler import docplex_fatal
 
 from collections import defaultdict
 
@@ -63,7 +64,7 @@ class SolveSolution(object):
     def _is_discrete_value(v):
         return v == int(v)
 
-    def __init__(self, model, var_value_map=None, obj=None, name=None, engine_name=None, keep_zeros=True,
+    def __init__(self, model, var_value_map=None, obj=None, name=None, solved_by=None, keep_zeros=True,
                  rounding=False):
         """ SolveSolution(model, var_valeu_map, obj, name)
 
@@ -75,7 +76,7 @@ class SolveSolution(object):
             obj: The value of the objective in the solution. A value of None means the objective is not defined at the
                 time the solution is created, and will be set later.
 
-            var_value_map: a Python dictionary containing associtaions of variables to values.
+            var_value_map: a Python dictionary containing associations of variables to values.
 
             name: a name for the solution. The default is None, in which case the solution is named after the
                 model name.
@@ -83,7 +84,7 @@ class SolveSolution(object):
         :return: A solution object.
         """
         assert model is not None
-        assert engine_name is None or is_string(engine_name)
+        assert solved_by is None or is_string(solved_by)
         assert obj is None or is_number(obj)
 
         self.__model = model
@@ -92,23 +93,29 @@ class SolveSolution(object):
         self._problem_name = model.name
         self._problem_objective_expr = model.objective_expr if model.has_objective() else None
         self.__objective__ = self.NO_OBJECTIVE_VALUE if obj is None else obj
-        self.__engine_name = engine_name
+        self._solved_by = solved_by
         self.__var_value_map = {}
         self._attribute_map = defaultdict(dict)
         self.__round_discrete = rounding
         self._solve_status = JobSolveStatus.UNKNOWN
+        self._keep_zeros = keep_zeros
 
         if var_value_map is not None:
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
     @staticmethod
-    def make_engine_solution(model, var_value_map=None, obj=None, engine_name=None, solve_status=None):
+    def make_engine_solution(model, var_value_map=None, obj=None, location=None, solve_status=None):
         # INTERNAL
         sol = SolveSolution(model,
-                            var_value_map=var_value_map, obj=obj,
-                            engine_name=engine_name,
+                            var_value_map=None,
+                            obj=obj,
+                            solved_by=location,
                             rounding=True,
                             keep_zeros=False)
+        # trust engines
+        for var, value in iteritems(var_value_map):
+            if 0 != value:
+                sol._set_var_value_internal(var=var, value=value, rounding=True, do_warn_on_non_discrete=False, )
         if solve_status is not None:
             sol._set_solve_status(solve_status)
         return sol
@@ -139,6 +146,21 @@ class SolveSolution(object):
     def problem_name(self):
         return self._problem_name
 
+    @property
+    def solved_by(self):
+        '''
+        Returns a string indicating how the solution was produced.
+
+        - If the solution was created by program, this field returns None.
+        - If the solution originated from a local CPLEX solve, this method returns the string 'cplex_local'.
+        - If the solution originated from a DOcplexcloud solve, this method returns 'cplex_cloud'.
+
+        Returns:
+            A string, or None.
+
+        '''
+        return self._solved_by
+
     def get_name(self):
         """ This property allows to get/set a name on the solution.
 
@@ -153,7 +175,6 @@ class SolveSolution(object):
         self._name = solution_name
 
     name = property(get_name, set_name)
-
 
     def _resolve_var(self, var_key, do_raise):
         # INTERNAL: accepts either strings or variable objects
@@ -277,6 +298,7 @@ class SolveSolution(object):
         self._solve_status = new_status
 
     def _store_var_value_map(self, key_value_map, keep_zeros=False, rounding=False):
+        # INTERNAL
         for e, val in iteritems(key_value_map):
             # need to check var_keys and values
             self.set_var_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding, do_warn_on_rounding=False)
@@ -365,13 +387,18 @@ class SolveSolution(object):
         dvar = self._resolve_var(dvar_arg, do_raise=True)
         return self.__var_value_map.get(dvar, 0) if dvar is not None else 0
 
+    def _get_values(self, dvars):
+        # internal.
+        # assume dvars is a seuqnec of decision variables.
+        self_value_map = self.__var_value_map
+        return [self_value_map.get(dv, 0) for dv in dvars]
+
     @property
     def number_of_var_values(self):
         """ This property returns the number of variable values stored in this solution.
 
         """
         return len(self.__var_value_map)
-
 
     def __getitem__(self, dvar):
         return self.get_value(dvar)
@@ -455,7 +482,7 @@ class SolveSolution(object):
                 var_value = self.get_value(dvar)
                 if print_zeros or var_value != 0:
                     print_counter += 1
-                    print(value_fmt.format(varname=dvar.name,
+                    print(value_fmt.format(varname=str(dvar),
                                            value=var_value,
                                            prec=dvar.float_precision,
                                            counter=print_counter))
@@ -484,12 +511,12 @@ class SolveSolution(object):
             obj_name = self._problem_objective_name()
             oss.write("%s: %g\n" % (obj_name, self.__objective__))
 
-        value_fmt = "{varname:s}={value:.{prec}f}"
+        value_fmt = "{var:s}={value:.{prec}f}"
         for dvar, val in self.iter_var_values():
             if not dvar.is_generated():
                 var_value = self.get_value(dvar)
                 if print_zeros or var_value != 0:
-                    oss.write(value_fmt.format(varname=dvar.name, value=var_value, prec=dvar.float_precision))
+                    oss.write(value_fmt.format(var=str(dvar), value=var_value, prec=dvar.float_precision))
                     oss.write("\n")
 
     def __str__(self):
@@ -500,7 +527,7 @@ class SolveSolution(object):
             s_obj = "obj={0:g}".format(self.objective_value)
         else:
             s_obj = "obj=N/A"
-        s_values = ",".join(["{0}:{1:g}".format(var.name, val) for var, val in iteritems(self.__var_value_map)])
+        s_values = ",".join(["{0!s}:{1:g}".format(var, val) for var, val in iteritems(self.__var_value_map)])
         r = "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
         return str_holo(r, maxlen=72)
 
@@ -534,7 +561,7 @@ class SolveSolution(object):
                 the file.
                 If given a full path, the path is directly used to write the file, and
                 the basename argument is not used.
-                If passed None, the output directory will be ``tempdir.gettempdir()``.
+                If passed None, the output directory will be ``tempfile.gettempdir()``.
 
         Example:
             Assuming the solution has the name "prob":
@@ -553,7 +580,6 @@ class SolveSolution(object):
         if mst_path:
             self.print_mst_to_stream(mst_path)
 
-
     def get_printer(self, key):
         printers = {'json': SolutionJSONPrinter,
                     'xml': SolutionMSTPrinter
@@ -563,7 +589,6 @@ class SolveSolution(object):
         if not printer:
             raise ValueError("format key must be one of {}".format(printers.keys()))
         return printer
-
 
     def export(self, file_or_filename, format="json"):
         """ Export this solution.
@@ -595,8 +620,7 @@ class SolveSolution(object):
         self.export(oss, format=format)
         return oss.getvalue()
 
-
-    def check_as_mip_start(self, error_handler=None):
+    def check_as_mip_start(self):
         """Checks that this solution is a valid MIP start.
 
         To be valid, it must have:
@@ -604,16 +628,12 @@ class SolveSolution(object):
             * at least one discrete variable (integer or binary), and
             * the values for decision variables should be consistent with the type.
 
-        Args:
-            error_handler: An instance of an error handler or None.
-
         Returns:
             Boolean: True if this solution is a valid MIP start.
         """
-        if 0 == len(self.__var_value_map):
-            if error_handler:
-                error_handler.error("MIP start solution is empty, provide at least one discrete variable value")
-            return False
+        is_explicit = self._keep_zeros
+        if is_explicit and not (self.__var_value_map):
+            docplex_fatal("MIP start solution is empty, provide at least one discrete variable value")
 
         discrete_vars = (dv for dv in self.iter_variables() if dv.is_discrete())
         count_values = 0
@@ -622,17 +642,20 @@ class SolveSolution(object):
             sol_value = self.get_value(dv)
             if not dv.accept_initial_value(sol_value):
                 count_errors += 1
-                if error_handler:
-                    error_handler.error("Wrong initial value for variable {0}: {1}, type: {2!s}",  # pragma: no cover
-                                        dv.name, sol_value, dv.vartype)  # pragma: no cover
+                docplex_fatal("Wrong initial value for variable {0!r}: {1}, type: {2!s}",  # pragma: no cover
+                              dv.name, sol_value, dv.vartype.short_name)  # pragma: no cover
             else:
                 count_values += 1
-        if count_values == 0:
-            if error_handler:
-                error_handler.error("MIP start contains no discrete variable")  # pragma: no cover
-            return False
+        if is_explicit and count_values == 0:
+            docplex_fatal("MIP start contains no discrete variable")  # pragma: no cover
+        return True
+
+    def _to_tuple_list(self, model):
+        if self._keep_zeros:
+            l = [(dv.get_index(), val) for dv, val in self.iter_var_values()]
         else:
-            return count_errors == 0
+            l = [(dv.get_index(), self[dv]) for dv in model.iter_variables()]
+        return l
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}
@@ -776,6 +799,7 @@ class SolutionJSONEncoder(JSONEncoder):
         n["problemName"] = solution.problem_name
         if solution.has_objective():
             n["objectiveValue"] = "{}".format(solution.objective_value)
+        n["solved_by"] = solution.solved_by
         return n
 
     def encode_variables(self, sol):
@@ -819,11 +843,8 @@ class SolutionJSONPrinter(object):
         else:
             cls.print(out, solutions, indent=indent)
 
-
     @classmethod
     def print_to_string(cls, solutions, indent=None):
         oss = StringIO()
         cls.print_to_stream(solutions, out=oss, indent=indent)
         return oss.getvalue()
-
-

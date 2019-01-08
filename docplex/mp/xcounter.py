@@ -253,6 +253,17 @@ class FastOrderedDict(dict):
         self._key_seq.sort(*args, **kwargs)
 
 
+    def __reduce__(self):
+        'Return state information for pickling'
+        items = [[k, self[k]] for k in self]
+        inst_dict = vars(self).copy()
+        for k in vars(OrderedDict()):
+            inst_dict.pop(k, None)
+        if inst_dict:
+            return (self.__class__, (items,), inst_dict)
+        return self.__class__, (items,)
+
+
 class FastOrderedCounter(FastOrderedDict):
     """
     A subclass of Counter which does not require a dictionary to be updated
@@ -271,12 +282,10 @@ class FastOrderedCounter(FastOrderedDict):
             dict.update(e)
 
         elif isinstance(e, list):
-            if not e:
-                pass
-            elif isinstance(e[0], tuple):
+            try:
                 for item, value in e:
                     self.update_from_item_value(item, value)
-            else:
+            except ValueError:
                 for item in e:
                     self.update_from_item(item)
         else:
@@ -336,9 +345,8 @@ class FastOrderedCounter(FastOrderedDict):
             if isinstance(iterable, (FastOrderedDict, OrderedDict)):
                 # accept only ordered types/
                 if self:
-                    self_get = self.get
                     for elem, count in iterable.iteritems():
-                        self[elem] = self_get(elem, 0) + count
+                        self.update_from_item_value(elem, count)
                 else:
                     # fast path when counter is empty
                     dict.update(self, iterable)

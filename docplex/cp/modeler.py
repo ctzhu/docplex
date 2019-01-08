@@ -15,9 +15,9 @@ the functions of this module are declared with a variable number of arguments.
 The valid combinations are detailed in the description of the function.
 """
 
-from docplex.cp.model import *
-from docplex.cp.expression import _create_operation as create_op
+from docplex.cp.catalog import *
 from docplex.cp.expression import CpoExpr
+from docplex.cp.expression import _create_operation as create_op
 import collections
 
 try:

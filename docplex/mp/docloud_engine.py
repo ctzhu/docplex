@@ -216,7 +216,11 @@ class DOcloudEngine(IndexerEngine):
         self.debug_dump_dir = docloud_context.debug_dump_dir
 
     def name(self):
-        return "docloud"
+        return 'docloud'
+
+    def _location(self):
+        # INTERNAL
+        return 'cplex_cloud'
 
     def can_solve(self):
         """
@@ -598,7 +602,7 @@ class DOcloudEngine(IndexerEngine):
         sol = SolveSolution.make_engine_solution(model=mdl,
                                                  obj=docloud_obj,
                                                  var_value_map=docloud_values_by_vars,
-                                                 engine_name=self.name(),
+                                                 location=self._location(),
                                                  solve_status=self.get_solve_status())
 
         # attributes

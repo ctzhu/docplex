@@ -10,7 +10,8 @@ from __future__ import print_function
 import sys
 
 import six
-from six import iteritems
+
+from docplex.mp.error_handler import docplex_fatal
 
 # gendoc: ignore
 
@@ -25,16 +26,13 @@ class _NumPrinter(object):
         assert (isinstance(pinf, str))
         assert (isinstance(ninf, str))
         self.true_infinity = num_infinity
-        self.__precision = nb_digits_for_floats
+        self.precision = nb_digits_for_floats
         self.__positive_infinity = pinf
         self.__negative_infinity = ninf
         # coin the format from the nb of digits
         # 2 -> %.2f
         self._double_format = "%." + ('%df' % nb_digits_for_floats)
 
-    @property
-    def precision(self):
-        return self.__precision
 
     def to_string(self, num):
         if num >= self.true_infinity:
@@ -49,17 +47,6 @@ class _NumPrinter(object):
                     return self._double_format % num
             except AttributeError:
                 return '%d' % num
-
-    def to_stringio(self, oss, num):
-        int_num = int(num)
-        if num == int_num:
-            oss.write('%d' % int_num)
-        else:
-            raw = self._double_format % num
-            oss.write(raw)
-
-    def __call__(self, num):
-        return self.to_string(num)
 
 
 class ModelPrinter(object):
@@ -111,9 +98,11 @@ class ModelPrinter(object):
     def print_model_to_stream(self, out, mdl):
         raise NotImplementedError  # pragma: no cover
 
-    def get_var_name_encoding(self):
+    def get_var_name_encoding(self):  # pragma: no cover
         return None  # default is no encoding
 
+class _DisambiguateError(Exception):
+    pass
 
 # noinspection PyAbstractClass
 class TextModelPrinter(ModelPrinter):
@@ -156,11 +145,9 @@ class TextModelPrinter(ModelPrinter):
         self._indent_map = {1: ' '}
 
         # which translate_method to use
-        try:
-            type(unicode)
-            # unciode is a type: we are in py2
+        if six.PY2:
             self._translate_chars = self._translate_chars2
-        except NameError:
+        else:  #  pragma: no cover
             self._translate_chars = self._translate_chars3
 
     def _get_indent_from_level(self, level):
@@ -173,10 +160,10 @@ class TextModelPrinter(ModelPrinter):
             return cached_indent
 
     @property
-    def nb_digits_for_floats(self):
+    def nb_digits_for_floats(self):  # pragma: no cover
         return self._num_printer.precision
 
-    def _get_hide_user_names(self):
+    def _get_hide_user_names(self):  # pragma: no cover
         """
         returns true if user names for variables and constraints should be forgotten.
         If yes, generic names (e.g. x1,x3, c45.. are generated and used everywhere).
@@ -226,41 +213,47 @@ class TextModelPrinter(ModelPrinter):
         for _ in range(nb_lines):
             out.write("\n")
 
+    def _disambiguate(self, candidate_name, names, try_max=1000):
+        # candidate_name is already in names
+        # we coin successive names with index until the suffixed name is no longer in names
+        k = 1
+        disambiguate_fmt =  '%s#%d'
+        while True:
+            cur_name = disambiguate_fmt % (candidate_name, k)
+            if cur_name not in names:
+                return cur_name
+            k += 1
+            if k >= try_max:
+                raise _DisambiguateError
+        return None
+
+
     def _precompute_name_dict(self, mobj_seq, local_index_map, prefix):
         ''' Returns a name dictionary from a sequence of modeling objects.
         '''
         fixed_name_dir = {}
         all_names = set()
         hide_names = self.encrypt_user_names()
-        for mobj in mobj_seq:
-            fixed_name = self.fix_name(mobj, prefix, local_index_map, hide_names)
-            if fixed_name:
-                if fixed_name in all_names:
-                    mobj.trace("duplicated name {0} obj is {0!s}".format(fixed_name, mobj))
-                # fixed_name_dir[mobj] = fixed_name
-                fixed_name_dir[mobj._index] = fixed_name    # Use _index attribute as key, which improves performance
-                all_names.add(fixed_name)
-            else:
-                pass
-                # sys.__stdout__.write("\n-- object has no name: {0!s}".format(mobj))
 
-        # prefix if not unique
-        global_name_set = set(fixed_name_dir.values())
-        k = 1
-        if len(global_name_set) < len(fixed_name_dir):
-            sys.__stdout__.write("\n--suffixing names")
-            for (mobj, lp_name_pass1) in iteritems(fixed_name_dir):
-                # fixed_name_dir[mobj] = "%s#%d" % (lp_name_pass1, k)
-                fixed_name_dir[mobj._index] = "%s#%d" % (lp_name_pass1, k)
-                k += 1
+        try:
+            for mobj in mobj_seq:
+                fixed_name = self.fix_name(mobj, prefix, local_index_map, hide_names)
+                if fixed_name:
+                    if fixed_name in all_names:  # pragma: no cover
+                        fixed_name = self._disambiguate(fixed_name, all_names)
+                    # fixed_name_dir[mobj] = fixed_name
+                    fixed_name_dir[mobj._index] = fixed_name    # Use _index attribute as key, which improves performance
+                    all_names.add(fixed_name)
+        except _DisambiguateError:
+            # something wrong occured, we reindex everything
+            return { mo: self._make_prefix_name(mo, prefix, local_index_map) for mo in mobj_seq}
+
+
         return fixed_name_dir
 
     def _num_to_string(self, num):
         # INTERNAL
         return self._num_printer.to_string(num)
-
-    def _num_to_stringio(self, oss, num):
-        return self._num_printer.to_stringio(oss, num)
 
     def prepare(self, model):
         """
@@ -317,42 +310,6 @@ class TextModelPrinter(ModelPrinter):
     def qc_print_name(self, quad_constraint):
         return self._qc_name_map.get(quad_constraint._index)
 
-    def max_var_name_len(self):
-        """
-        :return: the maximum length of variable names
-        """
-        return max([len(vn) for vn in self._var_name_map.values()]) if self._var_name_map else 0
-
-    def max_ct_name_len(self):
-        """
-        :return: the maximum length of constraint names
-        """
-        return max([len(cn) for cn in self._linct_name_map.values()]) if self._linct_name_map else 0
-
-    def get_extra_var_name(self, model, pattern='x%d'):
-        # UNUSED
-        # """
-        # :param pattern: a format string with one %d
-        # :return: a variable name f the form pattern %k
-        # where k is an integer, starting at max variable index+2
-        # we loop until a free name is found.
-        # """
-        if model.number_of_variables:
-            safe_index = max([dv.index for dv in model.iter_variables()]) + 2  # add1 for next, add 1 for start at 1
-        else:
-            safe_index = 1
-        model_var_names = {dv.name for dv in model.iter_variables() if dv.name is not None}
-
-        safe_name = pattern % safe_index
-        nb_tries = 0
-        while safe_name in model_var_names and nb_tries <= 1000:
-            safe_index += 1
-            safe_name = pattern % safe_index
-            nb_tries += 1
-        if nb_tries == 1000:
-            return "_zorglub"
-        else:
-            return safe_name
 
     @staticmethod
     def _make_prefix_name(mobj, prefix, local_index_map, offset=1):
@@ -388,24 +345,12 @@ class TextModelPrinter(ModelPrinter):
         return raw_name.translate(TextModelPrinter._unicode_translate_table)
 
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
-        """
-        default implementation does nothing but return the raw name
-        :param mobj: a modeling object
-        :param prefix: a naming pattern with a slot for a counter
-        :return: the new modified name if necessary, here does nothing/
-        """
+        # INTERNAL
         raw_name = mobj.name
         if hide_names or mobj.has_automatic_name() or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             return self._translate_chars(raw_name)
-
-    def _expr_to_stringio(self, oss, expr):
-        # nb digits
-        # product symbol is '*'
-        # no spaces
-        expr.to_stringio(oss, self.nb_digits_for_floats, prod_symbol='*', use_space=True,
-                         var_namer=lambda v: self._var_name_map[v._index])
 
 
     def _print_expr(self, wrapper, num_printer, var_name_map, expr, print_constant=False, allow_empty=False, force_first_plus=False):
@@ -535,13 +480,7 @@ class _ExportWrapper(object):
         self._curr_line = ''
         self._wrote = False
 
-    def reset_indent(self, new_indent):
-        self._indent_str = new_indent
-        # reset dynamic line data
-        self._curr_line = ''
-        self._wrote = False
-
-    def is_empty(self):
+    def wrote(self):  # pragma: no cover
         return not self._wrote
 
     def set_indent(self, new_indent):
@@ -569,7 +508,7 @@ class _ExportWrapper(object):
                     self._curr_line += token
             self._wrote = True
 
-        except TypeError:
+        except TypeError:  # pragma: no cover
             # An exception will occur if token is None. In that case, there is nothing to write and
             # one can safely return.
             pass

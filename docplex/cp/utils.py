@@ -16,8 +16,13 @@ import logging
 import sys
 import threading
 import io
+import inspect
 from collections import deque
 
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 
 ###############################################################################
 ## Constants
@@ -147,7 +152,7 @@ class Context(dict):
             if k:
                 res = res.get_attribute(k)
                 if res is None:
-                    return None
+                    return default
         return res
 
     def search_and_replace_attribute(self, name, value, path=""):
@@ -158,6 +163,7 @@ class Context(dict):
         Args:
             name:  Attribute name
             value: Attribute value, None to remove attribute
+            path:  Path of the current node. default is ''
         Return:
             Full path of the attribute that has been found and replaced, None if not found
         """
@@ -575,7 +581,7 @@ class Chrono(object):
         """
         return str(self.get_elapsed())
 
-class Barrier:
+class Barrier(object):
     """ Barrier blocking multiple threads
 
     This class implements a simple barrier with no timeout.
@@ -609,7 +615,7 @@ class Barrier:
         self.barrier.release()
 
 
-class FunctionCache:
+class FunctionCache(object):
     """ Object caching the result of a function.
     Future calls with same parameters returns a result stored in a cache dictionary.
 
@@ -669,7 +675,7 @@ def check_default(val, default):
     that can be computed dynamically.
 
     Args:
-        val      Value to check
+        val:     Value to check
         default: Default value to return if val is DEFAULT
     Returns:
         val if val is different from DEFAULT, default otherwise
@@ -722,7 +728,6 @@ def _get_vars(obj):
         res = getattr(obj, '__dict__').keys()
     # Check if slot is defined
     elif hasattr(obj, '__slots__'):
-        res = []
         slts = getattr(obj, '__slots__')
         if is_array(slts):
             res = list(slts)
@@ -756,8 +761,8 @@ def equals(v1, v2):
     This method does NOT call __eq__ and is then proof to possible overloads of '=='
 
     Args:
-       val1: First value
-       val2: Second value
+       v1: First value
+       v2: Second value
     Returns:
         True if both values are identical, false otherwise
     """
@@ -901,10 +906,22 @@ def open_utf8(file, mode='r'):
     """ Open a stream with UTF-8 encoding
 
     Args:
+        file:  File to open
         mode:  Open mode
     """
     encd = 'utf-8-sig' if mode.startswith('r') else 'utf-8'
     return io.open(file, mode=mode, encoding=encd)
+
+
+def list_module_public_functions(mod):
+    """ Build the list of all public functions of a module.
+
+    Args:
+        mod:  Module to parse
+    Returns:
+        List of public functions declared in this module
+    """
+    return [t[1] for t in inspect.getmembers(mod, inspect.isfunction) if not t[0].startswith('_') and inspect.getmodule(t[1]) == mod]
 
 
 #-----------------------------------------------------------------------------
@@ -999,6 +1016,19 @@ if IS_NUMPY_AVAILABLE:
         """
         return (type(val) in NUMBER_TYPES) or numpy.issubdtype(type(val), numpy.number)
 
+
+    def is_array(val):
+        """ Check if a value is an array (list or tuple)
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is an array (list or tuple)
+        """
+        if isinstance(val, (list, tuple)):
+            return True
+        return isinstance(val, numpy.ndarray) and val.shape
+
 else:
 
     def is_int(val):
@@ -1034,6 +1064,17 @@ else:
         return type(val) in NUMBER_TYPES
 
 
+    def is_array(val):
+        """ Check if a value is an array (list or tuple)
+
+        Args:
+            val: Value to check
+        Returns:
+            True if value is an array (list or tuple)
+        """
+        return isinstance(val, (list, tuple))
+
+
 def is_string(val):
     """ Check if a value is a string or a variant
 
@@ -1045,17 +1086,6 @@ def is_string(val):
     return type(val) in STRING_TYPES
 
 
-def is_array(val):
-    """ Check if a value is an array (list or tuple)
-
-    Args:
-        val: Value to check
-    Returns:
-        True if value is an array (list or tuple)
-    """
-    return isinstance(val, (list, tuple))
-
-
 def is_array_of_type(val, typ):
     """ Check that a value is an array with all elements instances of a given type
 
@@ -1065,7 +1095,7 @@ def is_array_of_type(val, typ):
     Returns:
         True if value is an array with all elements with expected type
     """
-    return isinstance(val, (list, tuple)) and (all(isinstance(x, typ) for x in val))
+    return is_array(val) and (all(isinstance(x, typ) for x in val))
 
 
 def is_interval_tuple(val):
@@ -1131,7 +1161,7 @@ def to_internal_string(strg):
     """ Convert string (with enclosing quotes) into internal string (interpret escape sequences)
 
     Args:
-        str: String to convert
+        strg: String to convert
     Returns:
         Raw string corresponding to source
     """
@@ -1202,21 +1232,6 @@ def int_to_base(val, bdgts):
     # Return
     res.reverse()
     return ''.join(res)
-
-
-#-----------------------------------------------------------------------------
-# Logging
-#-----------------------------------------------------------------------------
-
-
-def log(*msg):
-    """ Log a message on default log output
-    Args:
-        msg: List of elements to print
-    """
-    for m in msg:
-        sys.stdout.write(str(m))
-    sys.stdout.write('\n')
 
 
 #-----------------------------------------------------------------------------

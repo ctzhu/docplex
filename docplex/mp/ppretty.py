@@ -38,7 +38,7 @@ class ModelPrettyPrinter(TextModelPrinter):
         raw_name = mobj.name
         # ignore hide_names here
         if not raw_name or mobj.has_automatic_name():
-            return None # self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
+            return None # ignore automatic & generated objects
         else:
             if mobj.is_generated():
                 mobj_origin = mobj.origin()

@@ -6,10 +6,7 @@
 
 # gendoc: ignore
 
-__author__ = 'couronne'
-
 import operator
-import re
 import os
 
 # docplex
@@ -20,7 +17,6 @@ from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from cplex import Cplex
 from cplex._internal._subinterfaces import ObjSense
 from cplex.exceptions import CplexError, CplexSolverError
-
 
 class _CplexReaderFileContext(object):
     def __init__(self, filename, read_method=None):
@@ -57,30 +53,27 @@ class _CplexReaderFileContext(object):
             self._cplex = None
 
 
+
 class ModelReader(object):
     # INTERNAL
-    _RANGE_VARNAME_RE = re.compile("Rgc[1-9][\d]*")
 
-    sense_map = {'G': operator.ge,
-                 'L': operator.le,
-                 'E': operator.eq}
-    vartype_map = {}
+    sense_map = {'G': operator.ge, 'L': operator.le, 'E': operator.eq}
 
     # internal class to store range data
     # canno use tuples as they are immutable
     class _RangeData(object):
-        def __init__(self, var_index, var_name, lb=0, ub=1 + 75):
+        def __init__(self, var_index, var_name, lb=0, ub=1e+75):
             self.var_index = var_index
             self.var_name = var_name
             self.lb = lb
             self.ub = ub
 
     @staticmethod
-    def cplex_ctsense_to_python_op(cpx_sense):
-        return ModelReader.sense_map[cpx_sense]
+    def _cplex_ctsense_to_python_op(cpx_sense, _sense_map=sense_map):
+        return _sense_map[cpx_sense]
 
     @staticmethod
-    def build_linear_expr_from_sparse_pair(mdl, var_map, cpx_sparsepair):
+    def _build_linear_expr_from_sparse_pair(mdl, var_map, cpx_sparsepair):
         expr = mdl.linear_expr()
         for cpx_index, cpx_val in zip(cpx_sparsepair.ind, cpx_sparsepair.val):
             expr.add_term(var_map[cpx_index], cpx_val)
@@ -90,6 +83,17 @@ class ModelReader(object):
         self._use_block_constraints = use_block_cts
 
     def read_prm(self, filename):
+        """ Reads a CPLEX PRM file.
+
+        Reads a CPLEX file with parameters, and returns a DOcplex parameter group
+        instance. This parameter object can be used in a solve().
+
+        Args:
+            filename: a path string
+
+        Returns:
+            A RootParameterGroup object , if the read operation succeeds, else None.
+        """
         with _CplexReaderFileContext(filename, read_method=["parameters", "read_file"]) as cpx:
             if cpx:
                 # raw parameters
@@ -105,11 +109,10 @@ class ModelReader(object):
             else:
                 return None
 
-    # noinspection PyPep8
-    def read_model(self, filename, model_name=None, verbose=True):
+    def read_model(self, filename, model_name=None, verbose=True, **kwargs):
         """ Reads a model from a CPLEX export file.
 
-        Accepts all formats exported by CPLEX: LP, SAV, MPS.
+        Accepts all formats exported by CPLEX: LP, SAV, MPS...
 
         If an error occurs while reading the file, the message of the exception
         is printed and the function returns None.
@@ -118,6 +121,12 @@ class ModelReader(object):
             file: a path string
             model_name: an optional name for the newly created model. If None,
                 the model name will be the path basename.
+            kwargs: a dict of keyword-based arguments, that are used when creating the model
+                instance.
+
+        Example:
+            m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)
+
 
         Returns:
             an instance of Model, or None if an exception is raised.
@@ -127,13 +136,28 @@ class ModelReader(object):
             print("* file not found: {0}".format(filename))
             return None
 
+        # extract pure basename
+        if model_name:
+            name_to_use = model_name
+        else:
+            basename = os.path.basename(filename)
+            dotpos = basename.find(".")
+            if dotpos > 0:
+                name_to_use = basename[:dotpos]
+            else:
+                name_to_use = basename
+
+        if 0 == os.stat(filename).st_size:
+            print("* file is empty: {0} - exiting".format(filename))
+            return Model(name=name_to_use, **kwargs)
+
 
         # print("-> start reading file: {0}".format(filename))
         cpx = Cplex()
         # no warnings
         cpx.set_log_stream(None)
         cpx.set_warning_stream(None)
-        cpx.set_error_stream(None)  # renove messages about names
+        cpx.set_error_stream(None)  # remove messages about names
         try:
             cpx.read(filename)
         except CplexError as cpx_e:
@@ -143,27 +167,26 @@ class ModelReader(object):
 
         range_map = {}
 
-        #print("-> end CPLEX read file: {0}".format(filename))
-
+        #  print("-> end CPLEX read file: {0}".format(filename))
         try:
-            name_to_use = model_name or os.path.basename(filename)
-            mdl = Model(name=name_to_use, solver_agent='cplex')
+
+            mdl = Model(name=name_to_use, **kwargs)
             mdl.set_quiet()
             vartype_cont = mdl.vartype_continuous
-            self.vartype_map = {'B': mdl.vartype_binary, 'I': mdl.vartype_integer, 'C': mdl.vartype_continuous}
+            vartype_map = {'B': mdl.vartype_binary, 'I': mdl.vartype_integer, 'C': mdl.vartype_continuous}
             # 1 upload variables
             nb_vars = cpx.variables.get_num()
             all_names = cpx.variables.get_names()
             all_types = cpx.variables.get_types() if cpx._is_MIP() else []
             all_lbs = cpx.variables.get_lower_bounds()
             all_ubs = cpx.variables.get_upper_bounds()
-            var_idx_map = {}
+            idx_to_var_map = {}
             # vars
             for v in range(nb_vars):
                 varname = all_names[v]
 
                 cpx_vtype = all_types[v] if all_types else 'C'
-                vartype = self.vartype_map.get(cpx_vtype, vartype_cont)
+                vartype = vartype_map.get(cpx_vtype, vartype_cont)
                 cpx_lb = all_lbs[v]
                 cpx_ub = all_ubs[v]
                 lb = cpx_lb if cpx_lb != vartype.default_lb else None
@@ -174,7 +197,7 @@ class ModelReader(object):
                     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=ub)
                 else:
                     docplex_var = mdl._var(vartype, lb, ub, varname)
-                    var_idx_map[v] = docplex_var
+                    idx_to_var_map[v] = docplex_var
 
             # 2. upload linear constraints and ranges (mixed in cplex)
             cpx_linearcts = cpx.linear_constraints
@@ -209,8 +232,8 @@ class ModelReader(object):
                 # build an expr
 
                 if not has_range:
-                    expr = mdl.scal_prod((var_idx_map[idx] for idx in indices), coefs)
-                    op = self.cplex_ctsense_to_python_op(sense)
+                    expr = mdl.scal_prod((idx_to_var_map[idx] for idx in indices), coefs)
+                    op = self._cplex_ctsense_to_python_op(sense)
                     ct = op(expr, rhs)
                     if postpone:
                         deferred_cts.append(ct)
@@ -220,7 +243,7 @@ class ModelReader(object):
                 else:
                     expr = mdl.linear_expr()
                     for idx, koef in zip(indices, coefs):
-                        var = var_idx_map.get(idx, None)
+                        var = idx_to_var_map.get(idx, None)
                         if var:
                             expr._add_term(var, koef)
                         elif idx in range_map:
@@ -241,10 +264,11 @@ class ModelReader(object):
                             range_ub = rhs + range_val
                             mdl.add_range(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
                         else:
-                            op = self.cplex_ctsense_to_python_op(sense)
+                            op = self._cplex_ctsense_to_python_op(sense)
                             ct = op(expr, rhs)
                             mdl.add_constraint(ct, ctname)
             if deferred_cts:
+                # add constraint as a block
                 mdl._add_constraints(cts=deferred_cts, names=deferred_ctnames, do_check=False)  # disable typechecks
 
             # 3. upload indicators
@@ -281,9 +305,9 @@ class ModelReader(object):
                 ind_sense = all_ind_senses[i]
                 ind_complemented = all_ind_complemented[i]
                 # 1 . check the bvar is ok
-                ind_bvar = var_idx_map[ind_bvar]
-                ind_linexpr = self.build_linear_expr_from_sparse_pair(mdl, var_idx_map, ind_linear)
-                op = self.cplex_ctsense_to_python_op(ind_sense)
+                ind_bvar = idx_to_var_map[ind_bvar]
+                ind_linexpr = self._build_linear_expr_from_sparse_pair(mdl, idx_to_var_map, ind_linear)
+                op = self._cplex_ctsense_to_python_op(ind_sense)
                 ind_ct = op(ind_linexpr, ind_rhs)
                 mdl.add_indicator(ind_bvar, ind_ct, active_value=ind_complemented, name=ind_name)
 
@@ -292,10 +316,10 @@ class ModelReader(object):
             cpx_sense = cpx_obj.get_sense()
             obj_expr = mdl.linear_expr()
             for v in range(nb_vars):
-                if v in var_idx_map:
+                if v in idx_to_var_map:
                     obj_coef = cpx_obj.get_linear(v)
                     if obj_coef != 0:
-                        obj_expr._add_term(var_idx_map[v], obj_coef)
+                        obj_expr._add_term(idx_to_var_map[v], obj_coef)
                 else:
                     pass
             is_maximize = cpx_sense == ObjSense.maximize
@@ -340,6 +364,7 @@ def read_model(filename, verbose=False):
         print("* cannot read file: {0}".format(filename))
     return m
 
+
 def read_all_in_dir(directory, verbose=True, use_block_cts=True):
     from collections import Counter
 
@@ -357,16 +382,19 @@ def read_all_in_dir(directory, verbose=True, use_block_cts=True):
         extension = os.path.splitext(full_path)[1]
         if extension in frozenset({".lp", ".sav", ".mps"}):
             read_count += 1
-            cc.update({ extension: 1})
+            cc.update({extension: 1})
+            m = None
             try:
-                print("{0} --> start reading file: {1}".format(read_count, full_path))
+                #  print("{0} --> start reading file: {1}".format(read_count, full_path))
                 m = mreader.read_model(full_path, verbose=verbose)
             except DOcplexException:
                 m = None
             except Exception as e:
+                print("Python exception while reading file {0}: {1!s}".format(full_path, e))
                 m = None
             finally:
-                print("{0} <-- end reading file: {1}".format(read_count, full_path))
+                status = "OK" if m is not None else "KO"
+                print("{0}> read file: {1}: {2}".format(read_count, full_path, status))
 
             if m is None:
                 print("! ERROR reading: {0}".format(full_path))

@@ -29,9 +29,9 @@ class CpoCompiler(object):
     __slots__ = ('model',                  # Source model
                  'params',                 # Solving parameters
                  'sourceloc',              # Indicator to add location traces in generated output
-                 'idStrings',              # Dictionary of printable string for each identifier
-                 'lastFile',               # Last printed reference to source file
-                 'lastLine',               # Last printed reference to source line
+                 'id_strings',             # Dictionary of printable string for each identifier
+                 'last_file',              # Last printed reference to source file
+                 'last_line',              # Last printed reference to source line
                  'exprset',                # Set of ids of named expressions already compiled
                  'alias_min_name_length',  # Minimum variable name length to replace it by an alias
                  )
@@ -48,8 +48,8 @@ class CpoCompiler(object):
         self.model = model
         self.params = params
         self.sourceloc = True
+        self.id_strings = {}
         self.alias_min_name_length = None
-        self.idStrings = {}
 
     def set_source_location(self, sl):
         """ Set the indicator allowing to add python source line
@@ -64,7 +64,7 @@ class CpoCompiler(object):
         """ Set the minimal variable length to replace it with an alias
 
         Args:
-            amnl:  Minimun name length,
+            amnl:  Minimum name length,
         """
         self.alias_min_name_length = amnl
 
@@ -78,7 +78,6 @@ class CpoCompiler(object):
         if out is None:
             out = sys.stdout
         if isinstance(out, str):
-            make_directories(os.path.dirname(out))
             with open(os.path.abspath(out), 'w') as f:
                 self._write_model(f)
         else:
@@ -106,8 +105,8 @@ class CpoCompiler(object):
         # Expand model expressions if not done
         model = self.model
         self.exprset = set()
-        self.lastFile = None
-        self.lastLine = None
+        self.last_file = None
+        self.last_line = None
 
         # Write header
         banner = "/" * 79 + "\n"
@@ -117,11 +116,18 @@ class CpoCompiler(object):
         out.write("// " + sfile + "\n")
         out.write(banner)
 
+        # Write variables
+        out.write("\n//--- Variables ---\n")
+        vlist = model.get_all_variables()
+        for (v, loc) in self._expand_expressions(vlist):
+            self._write_expression(out, v, loc)
+
         # If aliases are requested, print as comment list of aliases
         mnl = self.alias_min_name_length
         if mnl is not None:
             # Preload string map with aliases when relevant
             aliasfound = False
+            alias_gen = IdAllocator('_A_', "0123456789abcdefghijklmnopqrstuvwxyz")
             for (v, loc) in model.get_all_variables():
                 if isinstance(v, CpoStateFunction):
                     continue
@@ -130,23 +136,18 @@ class CpoCompiler(object):
                 vpname = strname = to_printable_string(vname)
                 if len(vpname) > mnl:
                     # Replace by an alias
-                    vpname = v.add_alias()
+                    vpname = alias_gen.allocate()
                     # Trace alias
                     if not aliasfound:
                         aliasfound = True
                         out.write("\n//--- Aliases ---\n")
-                        out.write("// To reduce CPO file size, the following aliases have been used to replace variable names longer then " + str(mnl) + ":\n")
-                    out.write("// " + vpname + " = " + strname + "\n")
-                self.idStrings[vname] = vpname
-
-        # Write variables
-        out.write("\n//--- Variables ---\n")
-        vlist = model.get_all_variables()
-        for (v, loc) in self._expand_expressions(vlist):
-            self._write_expression(out, v, loc)
+                        out.write("// To reduce CPO file size, the following aliases have been used to replace variable names longer then " + str(mnl) + "\n")
+                    out.write(vpname + " = " + strname + ";\n")
+                self.id_strings[vname] = vpname
 
         # Write expressions
         out.write("\n//--- Expressions ---\n")
+        self.last_line = None
         lexpr = model.get_expressions()
         for (expr, loc) in self._expand_expressions(lexpr):
             self._write_expression(out, expr, loc)
@@ -181,15 +182,15 @@ class CpoCompiler(object):
         # Trace location if required
         if self.sourceloc and (loc is not None):
             (file, line) = loc
-            if (line != self.lastLine) or (file != self.lastFile):
+            if (line != self.last_line) or (file != self.last_file):
                 out.write("#line ")
                 out.write(str(line))
-                self.lastLine = line
-                if file != self.lastFile:
+                self.last_line = line
+                if file != self.last_file:
                     out.write(' "')
                     out.write(file)
                     out.write('"')
-                    self.lastFile = file
+                    self.last_file = file
                 out.write("\n")
 
         # Write expression
@@ -209,11 +210,11 @@ class CpoCompiler(object):
             CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
         """
         # Check if already converted
-        res = self.idStrings.get(id, None)
+        res = self.id_strings.get(id, None)
         if res is None:
             # Convert id into string and store result for next call
             res = to_printable_string(id)
-            self.idStrings[id] = res
+            self.id_strings[id] = res
         return res
 
     def _compile_expression(self, expr, root=True):
@@ -382,9 +383,9 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("intervalVar(")
-        if (v.absent):
+        if v.is_absent():
             cout.append("absent")
-        elif (v.present):
+        elif v.is_present():
             cout.append("present")
         else:
             cout.append("optional")

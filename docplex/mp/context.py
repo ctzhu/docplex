@@ -193,11 +193,9 @@ class Context(BaseContext):
         # initialize default env
         cplex_parameters = kwargs.get('cplex_parameters', None)
         if cplex_parameters is None:
-            local_env = kwargs.get('env') or Environment.make_new_configured_env()
+            local_env = kwargs.get('_env') or Environment.make_new_configured_env()
             cplex_version = local_env.cplex_version
             cplex_parameters = get_params_from_cplex_version(cplex_version)
-        else:
-            cplex_parameters = cplex_parameters
         # initialize fields of this
         super(Context, self).__init__(solver=SolverContext(docloud=DOcloudContext()),
                                       cplex_parameters=cplex_parameters,
@@ -218,7 +216,7 @@ class Context(BaseContext):
         of a config files to be read.
 
         if `file_list` is None or not specified, the following files are
-        read if they exists:
+        read if they exsist:
 
             * the PYTHONPATH is searched for the following files:
 
@@ -320,23 +318,31 @@ class Context(BaseContext):
         for k in kwargs:
             value = kwargs.get(k)
             if value is not None:
-                if k is 'docloud_context':
-                    print("the docloud context is: %s" % str(value))
-                    self.solver.docloud = value
-                elif k is 'cplex_parameters':
-                    self.cplex_parameters = value
-                elif k is 'url':
-                    self.solver.docloud.url = value
-                elif k is 'api_key' or k is 'key':
-                    self.solver.docloud.key = value
-                elif k is 'log_output':
-                    self.solver.log_output = value
-                else:
-                    if create_missing_nodes:
-                        self[k] = value
-                    else:
-                        warnings.warn("Unknown quick-setting in Context: %s" % k,
-                                      stacklevel=2)
+                self.update_key_value(k, value,
+                                      create_missing_nodes=create_missing_nodes)
+
+    def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
+        if k is 'docloud_context':
+            self.solver.docloud = value
+        elif k is 'cplex_parameters':
+            self.cplex_parameters = value
+        elif k is 'url':
+            self.solver.docloud.url = value
+        elif k is 'api_key' or k is 'key':
+            self.solver.docloud.key = value
+        elif k is 'log_output':
+            self.solver.log_output = value
+        elif k is 'override':
+            self.update_from_list(iteritems(value))
+        elif k is '_env':
+            # do nothing this is just here to avoid creating too many envs
+            pass
+        else:
+            if create_missing_nodes:
+                self[k] = value
+            elif warn:
+                warnings.warn("Unknown quick-setting in Context: {0:s}, value: {1!s}".format(k, value),
+                              stacklevel=2)
 
     def read_settings(self, file_list=None, logger=None):
         """Reads settings for a list of files.
@@ -348,7 +354,7 @@ class Context(BaseContext):
         of config files to be read.
 
         if `file_list` is None or not specified, the following files are
-        read if they exists:
+        read if they exsist:
 
             * the PYTHONPATH is searched for the following files:
 
@@ -497,6 +503,8 @@ class DOcloudContext(object):
         waittime: The wait time to wait for jobs to finish.
         verify: If True, verifies SSL certificates.
         log_requests: If True, the REST requests are logged.
+        log_poll_interval: The interval for log polling.
+        progress_poll_interval: The interval for progress polling.
         exchange_format: The exchange format to use.
             When setting the format, you can use the following strings: "lp".
             When getting the format, the property type is
@@ -518,6 +526,9 @@ class DOcloudContext(object):
         self._exchange_format = None
         self._debug_dump = None
         self.debug_dump_dir = None
+        self._log_poll_interval = None
+        self._progress_poll_interval = None
+
 
     # This maps "old property names" to the corresponding new qualified name.
     # if the qualified name is None, then it's supposed to be:
@@ -556,6 +567,25 @@ class DOcloudContext(object):
         self._timeout = _convert_to_int(value)
 
     timeout = property(get_timeout, set_timeout)
+
+    # The log poll interval
+    def get_log_poll_interval(self):
+        return self._log_poll_interval
+
+    def set_log_poll_interval(self, value):
+        self._log_poll_interval = _convert_to_int(value)
+
+    log_poll_interval = property(get_log_poll_interval, set_log_poll_interval)
+
+    # The progress poll interval
+    def get_progress_poll_interval(self):
+        return self._progress_poll_interval
+
+    def set_progress_poll_interval(self, value):
+        self._progress_poll_interval = _convert_to_int(value)
+
+    progress_poll_interval = property(get_progress_poll_interval,
+                                      set_progress_poll_interval)
 
     # The run_deterministic property
     def get_run_deterministic(self):

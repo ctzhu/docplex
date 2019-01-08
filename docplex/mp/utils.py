@@ -9,9 +9,19 @@
 
 import logging
 import os
+import sched
 import tempfile
+import threading
+import time
 
-from six import iteritems
+from six import iteritems, itervalues
+
+# py2/py3 compatibility
+try:
+    from Queue import Queue
+except ImportError:
+    # noinspection PyUnresolvedReferences
+    from queue import Queue
 
 # copy_reg is copyreg in Py3
 try:
@@ -72,7 +82,7 @@ def is_int(s):
     return type_of_s in __int_types
 
 
-__all_num_types = __int_types.union(__float_types)
+__all_num_types = __float_types.union(__int_types)
 
 
 def is_number(s):
@@ -105,13 +115,27 @@ def is_numpy_ndarray(s):
     return type(s) in __numpy_ndslot_types
 
 
+try:
+    type(unicode)
+    _unicode_type = True
+except NameError:
+    _unicode_type = False
+
+
+def has_unicode_type():
+    return _unicode_type
+
+
 def is_string(e):
     if e is None:
         return False
-    try:
-        return e == str(e)
-    except:
+    elif isinstance(e, str):
+        return True
+    elif _unicode_type:
+        return isinstance(e, unicode)
+    else:
         return False
+
 
 
 def has_len(e):
@@ -120,6 +144,22 @@ def has_len(e):
         return True
     except TypeError:
         return False
+
+
+def str_holo(arg, maxlen):
+    """ Returns a truncated string representation of arg
+
+    If maxlen is positive (or null), returns str(arg) up to maxlen chars.
+
+    :param arg:
+    :param maxlen:
+    :return:
+    """
+    s = str(arg)
+    if maxlen < 0 or len(s) <= maxlen:
+        return s
+    else:
+        return "{}..".format(s[:maxlen])
 
 
 def is_indexable(e):
@@ -158,7 +198,7 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
     ''' Fixes a format string so that it contains dimen slots with %s inside
         arguments are:
          --- dimen is th enumber of slots we need
-         --- meta-format is the format in which the %s is embedded. By default '_%s'
+         --- key_format is the format in which the %s is embedded. By default '_%s'
              for example if each item has to be surrounded by {} set key_format to _{%s}
     '''
     assert (dimen >= 1)
@@ -217,42 +257,70 @@ class DOCplexQuadraticNotImplementedError(DOcplexException):
 
 _default_key_format = '_%s'
 
+
 def __map_to_str(key_tuple):
     return tuple((str(z) for z in key_tuple))
 
 
-def ensure_naming_function(keys, naming_rule, default_fn, dimen=1, key_format=None):
-    ''' builds a naming rule from an input , a dimension, and an optional meta-format'''
+def compile_naming_function(keys, user_name, default_fn, dimen=1, key_format=None):
+    # INTERNAL
+    # builds a naming rule from an input , a dimension, and an optional meta-format
+    # Makes sure the format string does contain the right number of format slots
+    if user_name is None:
+        return lambda k: default_fn()
 
-
-    '''
-    Makes sure the format string does contain the right number of format slots'''
-    assert key_format is None or isinstance(key_format, str)
-    key_format = key_format or _default_key_format
-
-    if isinstance(naming_rule, str):
-        fixed_naming_rule = fix_format_string(naming_rule, dimen, key_format)
-        if 1 == dimen:
-            return lambda _obj: fixed_naming_rule % str(_obj)
+    elif isinstance(user_name, str):
+        if key_format is None:
+            used_key_format = _default_key_format
+        elif isinstance(key_format, str):
+            used_key_format = key_format
         else:
-            return lambda _tuple: fixed_naming_rule % __map_to_str(_tuple)
+            raise DOcplexException("key format accepts None or string, got: {0!r}".format(key_format))
+        fixed_format_string = fix_format_string(user_name, dimen, used_key_format)
+        if 1 == dimen:
+            return lambda k: fixed_format_string % str(k)
+        else:
+            # here keys are tuples of size >= 2
+            return lambda key_tuple: fixed_format_string % __map_to_str(key_tuple)
 
-    elif is_function(naming_rule):
-        return naming_rule
+    elif is_function(user_name):
+        return user_name
 
-    elif is_iterable(naming_rule):
+    elif is_iterable(user_name):
+        key_to_names_dict = dict(zip(keys, user_name))
         # use a closure
-        key_to_names_dict = dict(zip(keys, naming_rule))
         return lambda k: key_to_names_dict[k] if k in key_to_names_dict else default_fn()
+
     else:
-        raise DOcplexException('Cannot use this for naming variables: {0!s} -expecting string, function or iterable'
-                               .format(naming_rule))
+        raise DOcplexException('Cannot use this for naming variables: {0!r} - expecting string, function or iterable'
+                               .format(user_name))
 
 
 def normalize(s, force_lowercase=True):
     l = s.lower() if force_lowercase else s
     table = mktrans(" -+/\\<>", "_mpd___")
     return l.translate(table)
+
+
+def normalize_basename(s, force_lowercase=True):
+    # replace all whietspaces by _
+    l = s.lower() if force_lowercase else s
+    table = mktrans(" ", "_")
+    return l.translate(table)
+
+
+def make_output_path2(actual_name, extension, basename_arg, path=None):
+    # INTERNAL
+    raw_basename = resolve_pattern(basename_arg, actual_name) if basename_arg else actual_name
+    if raw_basename.find(" ") > 0:
+        actual_basename = raw_basename.replace(" ", "_")
+    else:
+        actual_basename = raw_basename
+    output_dir = path or tempfile.gettempdir()
+    if not actual_basename.endswith(extension):
+        actual_basename = actual_basename + extension
+    path = os.path.join(output_dir, actual_basename)
+    return path
 
 
 def make_path(error_handler, basename, extension, output_dir=None, name_transformer=None):
@@ -263,14 +331,14 @@ def make_path(error_handler, basename, extension, output_dir=None, name_transfor
             error_handler.error("directory not found and not created: {0:s}", output_dir)
             return None
 
-    norm_name = normalize(basename)
+    norm_name = normalize_basename(basename)
     basename = norm_name if not name_transformer else name_transformer % norm_name
     filename = basename + extension
     full_path = '/'.join([output_dir, filename])
     return full_path
 
 
-def generate_constant(the_constant, count_max=9999):
+def generate_constant(the_constant, count_max):
     loop_counter = 0
     while loop_counter <= count_max:
         yield the_constant
@@ -279,7 +347,7 @@ def generate_constant(the_constant, count_max=9999):
 
 def resolve_pattern(pattern, args):
     """
-    returns a string in which slots have been resolved with args, iff the string has slots anyway,
+    returns a string in which slots have been resolved with args, if the string has slots anyway,
     else returns the strng itself (no copy, should we??)
     :param pattern:
     :param args:
@@ -339,19 +407,15 @@ class ExprCounter(Counter):
     SEE how to remember the order in which objects are added.
     """
 
-    @classmethod
-    def fromkeys(cls, iterable, v=None):
-        raise NotImplementedError()  # pragma: no cover
-
-    def update_from_item(self, item):
+    def update_from_item(self, item, _dict_get=dict.get):
         """
         Adds one item occurence
         :param item:
         :return:
         """
-        self.update_from_item_value(item, value=1)
+        self[item] = _dict_get(self, item, 0) + 1
 
-    def update_from_item_value(self, item, value):
+    def update_from_item_value(self, item, value, _dict_get=dict.get):
         """
         This differs from standard Counter when a dict instance is required.
         :param item: the key to be updated
@@ -359,14 +423,13 @@ class ExprCounter(Counter):
         :return:
         """
         if value:
-            self[item] = self.get(item, 0) + value
+            self[item] = _dict_get(self, item, 0) + value
 
-    def update_from_scaled_dict(self, other_dict, factor):
+    def update_from_scaled_dict(self, other_dict, factor, _dict_get=dict.get):
         """
         Updates counter from a dict instance, but with an inflation factor.
         Does nothing if factor is 0
         """
-        self_get = self.get
         if factor is 0:
             # nothin to do
             pass
@@ -377,15 +440,14 @@ class ExprCounter(Counter):
             # update by scaled value
             for item, value in iteritems(other_dict):
                 if value:
-                    self[item] = self_get(item, 0) + value * factor
+                    self[item] = _dict_get(self, item, 0) + value * factor
 
-    def normalize(self):
+    def normalize(self, _dict_get=dict.get):
         """
         Removes all entries with zero value
         :return:
-        """
-        self_get = self.get
-        doomed_keys = [k for k in self if self_get(k) is 0]
+    """
+        doomed_keys = [k for k in self if _dict_get(self, k) is 0]
         for dk in doomed_keys:
             del self[dk]
         return self
@@ -511,6 +573,9 @@ def round_nearest_towards_infinity(x, infinity=1e+20):
 
 
 def open_universal_newline(filename, mode):
+    """Opens a file in universal new line mode, in a python 2 and python 3
+    compatible way.
+    """
     try:
         # try the python 3 syntax
         return open(filename, mode=mode, newline=None)
@@ -522,3 +587,196 @@ def open_universal_newline(filename, mode):
         else:
             # for other errors, just raise them
             raise
+
+
+class CyclicLoop(object):
+    """ A cyclic loop executes actions at specified intervals, until
+    ``stop()`` is called.
+
+    This loop is based on sched.scheduler
+
+    Attributes:
+        stopped: True if the loop is stopped.
+    """
+    class Task(object):
+        """This class stores information needed to manage tasks.
+
+        Attributes:
+            id: The id of the task (automatically generated)
+            interval: The interval on which that task is called
+            action: The action function to call at ``interval``
+            argument: The arguments for the action function
+        """
+        id = 0
+        idgen_lock = threading.Lock()
+
+        def __init__(self, interval, priority, action, argument=()):
+            self.interval = interval
+            self.priority = priority
+            self.action = action
+            self.argument = argument
+            with self.idgen_lock:
+                self.id = CyclicLoop.Task.id
+                CyclicLoop.Task.id += 1
+
+    def __init__(self):
+        """Initialize a new empty CyclicLoop
+        """
+        self.stop_lock = threading.Lock()
+        self.stopped = False
+        self.scheduler = sched.scheduler(time.time, time.sleep)
+        # maps task id -> ev
+        self.events_by_id = {}
+        self.tasks_by_id = {}  # task id -> task
+
+    def enter(self, interval, priority, action, argument=()):
+        """Schedule a new event.
+
+        Works like sched.scheduler.enter(), but instead of a ``delay``, the
+        first argument is the ``interval`` the action must be performed.
+        """
+        with self.stop_lock:
+            if not self.stopped:
+                task = CyclicLoop.Task(interval, priority, action, argument)
+                self.tasks_by_id[task.id] = task
+                self._queue(task)
+
+    def _queue(self, task):
+        ev = self.scheduler.enter(task.interval, task.priority,
+                                  lambda a: self._process_task(a), (task.id,))
+        self.events_by_id[task.id] = ev
+
+    def _process_task(self, task_id):
+        task = self.tasks_by_id[task_id]
+        task.action(*task.argument)
+        del self.events_by_id[task_id]
+        # do not reschedule if we are shutting down
+        with self.stop_lock:
+            if not self.stopped:
+                self._queue(task)
+
+    def start(self):
+        """Starts the loop. The loop stops only when ``stop()`` is called.
+        """
+        self.scheduler.run()
+
+    def stop(self):
+        """Stops the Loop.
+
+        When the loop is stopped, its ``stopped`` attribute is set immediately,
+        then all tasks in the scheduler are canceled.
+        """
+        with self.stop_lock:
+            self.stopped = True
+            for ev in itervalues(self.events_by_id):
+                try:
+                    self.scheduler.cancel(ev)
+                except ValueError:
+                    # if stop() is called from an event, the event has already
+                    # been triggered and poped'
+                    pass
+
+
+class ClosableQueue(Queue):
+    LAST = object()
+
+    def close(self):
+        self.put(self.LAST)
+
+    def __iter__(self):
+        while True:
+            item = self.get()
+            try:
+                if item is self.LAST:
+                    return
+                yield item
+            finally:
+                self.task_done()
+
+
+class ThreadedCyclicLoop(object):
+    """ A cyclic loop executes actions at specified intervals, until
+    ``stop()`` is called.
+
+    This loop is based on threads.
+
+    Attributes:
+        stopped: True if the loop is stopped.
+    """
+    class Task(threading.Thread):
+        """
+        Attributes:
+            id: The id of the task (automatically generated)
+            interval: The interval on which that task is called
+            action: The action function to call at ``interval``
+            argument: The arguments for the action function
+        """
+        def __init__(self, loop, interval, priority, action, argument=()):
+            super(ThreadedCyclicLoop.Task, self).__init__()
+            self.loop = loop
+            self.interval = interval
+            self.priority = priority
+            self.action = action
+            self.argument = argument
+            self.stopped = False
+
+        def run(self):
+            while not self.stopped:
+                # instead of one big sleep, do some smaller sleeps so that
+                # we can stop the thread with smaller granularity
+                for _ in range(self.interval):
+                    time.sleep(1)
+                    if self.stopped:
+                        break
+                if not self.stopped:
+                    self.perform()
+
+        def stop(self):
+            self.stopped = True
+
+        def perform(self):
+            self.action(*self.argument)
+
+    def __init__(self):
+        """Initialize a new empty ThreadedCyclicLoop
+        """
+        self.stop_lock = threading.Lock()
+        self.stopped = False
+        self.threads = set()
+        self.event_queue = ClosableQueue()
+
+    def enter(self, interval, priority, action, argument=()):
+        """Schedule a new event.
+
+        Works like sched.scheduler.enter(), but instead of a ``delay``, the
+        first argument is the ``interval`` the action must be performed.
+        """
+        with self.stop_lock:
+            if not self.stopped:
+                task = ThreadedCyclicLoop.Task(self, interval, priority,
+                                               action, argument)
+                self.threads.add(task)
+
+    def start(self, mt_worker=None, mt_arg=()):
+        """Starts the loop. The loop stops only when ``stop()`` is called.
+        """
+        for t in self.threads:
+            t.start()
+        if mt_worker:
+            while not self.stopped:
+                for task in self.event_queue:
+                    mt_worker(*((task,) + mt_arg))
+        for t in self.threads:
+            t.join()
+
+    def stop(self):
+        """Stops the Loop.
+
+        When the loop is stopped, its ``stopped`` attribute is set immediately,
+        then all tasks in the scheduler are canceled.
+        """
+        with self.stop_lock:
+            self.stopped = True
+        self.event_queue.close()
+        for t in self.threads:
+            t.stop()

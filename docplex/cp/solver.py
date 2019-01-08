@@ -101,12 +101,14 @@ class CpoSolverAgent(object):
             logstr:  Solver log
             msol:    Model solution
         """
+        '''
         lout = self.context.log_output
-        if lout and self.context.trace_log:
+        if lout and (self.context.trace_log):
             lout.write("Model '" + str(self.model.get_name()) + "' solver log:\n")
             lout.write(logstr)
             lout.write("\n")
             lout.flush()
+        '''
         if self.context.add_log_to_solution:
             msol._set_solver_log(logstr)
 
@@ -165,7 +167,12 @@ class CpoSolver(object):
         # Solve model
         stime = time.time()
         msol = solver.solve()
-        sctx.log(1, "Model '", self.model.get_name(), "' solved in ", round(time.time() - stime, 2), " sec.")
+        stime = time.time() - stime
+        sctx.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+
+        # Set solve time in solution if not done
+        if msol.get_solve_time() == 0:
+            msol._set_solve_time(stime)
 
         # Return solution
         return msol

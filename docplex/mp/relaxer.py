@@ -7,20 +7,22 @@
 from six import iteritems
 from collections import defaultdict
 
-from docplex.mp.linear import Priority
+from docplex.mp.basic import Priority
 from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.solution import SolveSolution, SolveDetails
+from docplex.mp.solution import SolveSolution
+from docplex.mp.sdetails import SolveDetails
 
 # gendoc: ignore
 
 
 def _match_priority_name(prio, s, sep='_'):
     if not s:
-        return False  #  pragma : no cover
+        return False  # pragma : no cover
 
     s_lower = s.lower()
     prio_name = prio.name.lower()
     return s_lower.find(prio_name) >= 0
+
 
 class IConstraintPrioritizer(object):
     ''' Abstract Interface for the prioritizer.
@@ -117,7 +119,7 @@ class DefaultPrioritizer(IConstraintPrioritizer):
 class NamePrioritizer(IConstraintPrioritizer):
     """ Constraint prioritizer based on constraint names.
 
-        This proiritizer analyzes constraitn names for strings that match priority names.
+        This proiritizer analyzes constraint names for strings that match priority names.
         If a constraint contains a string which matches a priority name,
         then it is assigned this priority.
 
@@ -174,13 +176,13 @@ class Relaxer(object):
                  min_relaxed=default_min_relaxed,
                  cumulative=True,
                  verbose=False,
-                 show_cplex_log=False,
                  **kwargs):
         if min_relaxed <= 0:
             print("Warning: min_relaxed should be > 0, got: {0:g}, using {1:g}"
                   .format(min_relaxed, self.default_min_relaxed))
             min_relaxed = self.default_min_relaxed
         self._min_relaxed = min_relaxed
+        # ---
         if isinstance(prioritizer, IConstraintPrioritizer):
             self.__prioritizer = prioritizer
         elif prioritizer == 'name':
@@ -192,7 +194,6 @@ class Relaxer(object):
         self._ordered_priorities = Priority.all_sorted()
         self._cumulative = cumulative
         self._verbose = verbose
-        self._trace_cplex = show_cplex_log
         self._listeners = []
 
         # result data
@@ -245,18 +246,40 @@ class Relaxer(object):
         """
         self._listeners = []
 
-    def relax(self, mdl, relax_gap=0.01, max_nb_sol=-1, pass_time_limit=-1, **kwargs):
+    def parse_kwargs(self, **kwargs):
+        # defaults: 2% gap, no sol limit, no time limit
+        relax_gap = 0.01
+        relax_nb_sols = -1
+        pass_time_limit = -1
+
+        for argname, argval in iteritems(kwargs):
+            if argname == "gap":
+                relax_gap = argval
+            elif argname == "max_nb_sol":
+                relax_nb_sols = argval
+            elif argname == "pass_time_limit":
+                pass_time_limit = argval
+            else:
+                print("relax does not recognize kwarg {0}={1!s} - ignored".format(argname, argval))
+        return relax_gap, relax_nb_sols, pass_time_limit
+
+    def relax(self, mdl, **kwargs):
         """ Runs the relaxation loop.
 
         Args:
             mdl: The model to be relaxed.
+            kwargs: accepts named arguments similar to solve.
 
         Returns:
             If the relaxation succeeds, returns a solution object, an instance of SolveSolution; otherwise returns None.
         """
-        assert relax_gap > 0
-        # max_nb_sol is ignored if negative.
+
+        relax_gap = kwargs.get("relax_gap", 0.01)  # default gap is 1% ???
+        max_nb_sol = kwargs.get("max_nb_sol", -1)
+        pass_time_limit = kwargs.get("pass_time_limit", -1)
         relaxation_limits = (relax_gap, max_nb_sol, pass_time_limit)
+        # filter out those kwargs reserved for relax
+        solve_kwargs = {k: v for k, v in iteritems(kwargs) if k not in ["relax_gap", "max_nb_sol", "pass_time_limit"]}
         self.reset()
 
         # 1. build a dir {priority : cts}
@@ -281,81 +304,94 @@ class Relaxer(object):
         relax_ok = False
         engine = mdl.get_engine()
         is_model_optimized = mdl.is_optimized()
-        # if self._verbose:
-        #     mdl.enable_trace()
-        # we iterate in the order of the list
-        saved_trace_mode = mdl.is_logged()
-        if self._trace_cplex:
-            mdl.enable_trace_mode()
 
-        # must sync parameters to engine
-        mdl._sync_parameters_to_engine()
+        # save this for restore later
+        saved_context_log_output = mdl.context.solver.log_output
+        saved_log_output_stream = mdl.get_log_output()
+        saved_context = mdl.context
 
-        for prio in self._ordered_priorities:
-            if prio in priority_map:
-                cts = priority_map[prio]
-                if not cts:
-                    # this should not happen...
-                    continue  #  pragma : no cover
+        # take into account local argument overrides
+        context = mdl.prepare_actual_context(**solve_kwargs)
 
-                pref = prio.get_geometric_preference_factor()
-                # build a new group
-                relax_group = [pref, cts]
+        try:
+            mdl.context = context
+            mdl.set_log_output(mdl.context.solver.log_output)
+            # apply parameters after the context has been updated by kwargs
+            mdl._apply_parameters_to_engine(context.cplex_parameters)
 
-                # relaxing new batch of cts:
-                if not is_cumulative:
-                    # if not cumulative reset the groupset
-                    all_groups = [relax_group]
-                    all_relaxable_cts = cts
-                else:
-                    all_groups.append(relax_group)
-                    all_relaxable_cts += cts
+            for prio in self._ordered_priorities:
+                if prio in priority_map:
+                    cts = priority_map[prio]
+                    if not cts:
+                        # this should not happen...
+                        continue  # pragma : no cover
 
-                # at this stage we have a sequence of groups
-                # a group is itself a sequence of two components
-                # - a preference factor
-                # - a sequence of constraints
-                for l in self._listeners:
-                    l.notify_start_relaxation(prio, all_relaxable_cts)
-                try:
-                    (relax_ok, relax_obj) = engine.solve_relaxed(mdl, all_groups, is_model_optimized, relaxation_limits)
-                finally:
-                    self._last_relaxation_details = engine.get_solve_details()
-                if relax_ok:
-                    self._last_successful_relaxed_priority = prio
-                    self._last_relaxation_status = True
-                    self._last_relaxation_objective = relax_obj
-                    # relaxation ok, need to compute raw infeasibilities
-                    raw_infeasibilities = engine._get_infeasibilities(all_relaxable_cts)
-                    # now filter those real infeasibilities
-                    for c in range(len(all_relaxable_cts)):
-                        ct = all_relaxable_cts[c]
-                        raw_infeas = raw_infeasibilities[c]
-                        if self._accept_violation(raw_infeas):
-                            self._relaxations[ct] = raw_infeas
+                    pref = prio.get_geometric_preference_factor()
+                    # build a new group
+                    relax_group = [pref, cts]
 
+                    # relaxing new batch of cts:
+                    if not is_cumulative:
+                        # if not cumulative reset the groupset
+                        all_groups = [relax_group]
+                        all_relaxable_cts = cts
+                    else:
+                        all_groups.append(relax_group)
+                        all_relaxable_cts += cts
+
+                    # at this stage we have a sequence of groups
+                    # a group is itself a sequence of two components
+                    # - a preference factor
+                    # - a sequence of constraints
                     for l in self._listeners:
-                        l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
-                    break
+                        l.notify_start_relaxation(prio, all_relaxable_cts)
+                    try:
+                        (relax_ok, relax_obj) = engine.solve_relaxed(mdl, all_groups, is_model_optimized, relaxation_limits)
+                    finally:
+                        self._last_relaxation_details = engine.get_solve_details()
+                    if relax_ok:
+                        self._last_successful_relaxed_priority = prio
+                        self._last_relaxation_status = True
+                        self._last_relaxation_objective = relax_obj
+                        # relaxation ok, need to compute raw infeasibilities
+                        raw_infeasibilities = engine.get_infeasibilities(all_relaxable_cts)
+                        # now filter those real infeasibilities
+                        for c in range(len(all_relaxable_cts)):
+                            ct = all_relaxable_cts[c]
+                            raw_infeas = raw_infeasibilities[c]
+                            if self._accept_violation(raw_infeas):
+                                self._relaxations[ct] = raw_infeas
+    
+                        for l in self._listeners:
+                            l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
+                        break
+                    else:
+                        # relaxation has failed, notify the listeners
+                        for l in self._listeners:
+                            l.notify_failed_relaxation(prio, all_relaxable_cts)
+    
+            if relax_ok:
+                all_indices = [dv.get_index() for dv in mdl.iter_variables()]
+                if all_indices:
+                    value_by_idx_map = engine.get_solutions(all_indices)
+                    value_by_var_map = {dv: value_by_idx_map[dv.index] for dv in mdl.iter_variables()}
                 else:
-                    # relaxation has failed, notify the listeners
-                    for l in self._listeners:
-                        l.notify_failed_relaxation(prio, all_relaxable_cts)
-
-        if relax_ok:
-            all_indices = [dv.get_index() for dv in mdl.iter_variables()]
-            if all_indices:
-                value_by_idx_map = engine.get_solutions(all_indices)
-                value_by_var_map = {dv: value_by_idx_map[dv.index] for dv in mdl.iter_variables()}
+                    value_by_var_map = {}
+                relaxed_sol = SolveSolution(mdl,
+                                            obj=self._last_relaxation_objective,
+                                            var_value_map=value_by_var_map, engine_name="relaxer")
             else:
-                value_by_var_map = {}
-            relaxed_sol = SolveSolution(mdl, self._last_relaxation_objective, value_by_var_map, "relaxer")
-        else:
-            relaxed_sol = None
-        mdl.notify_solve_relaxed(relaxed_sol)
+                relaxed_sol = None
+            mdl.notify_solve_relaxed(relaxed_sol, engine.get_solve_details())
 
-        if self._trace_cplex:
-            mdl.set_log_output(saved_trace_mode)
+        finally:
+            # --- restore context, log_output if set.
+            if saved_log_output_stream != mdl.get_log_output():
+                mdl.set_log_output_as_stream(saved_log_output_stream)
+            if saved_context_log_output != mdl.context.solver.log_output:
+                mdl.context.solver.log_output = saved_context_log_output
+            mdl.context = saved_context
+
         return relaxed_sol
 
     def iter_relaxations(self):

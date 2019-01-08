@@ -14,6 +14,7 @@ import os
 import time
 import logging
 import sys
+import threading
 
 
 ###############################################################################
@@ -287,19 +288,26 @@ class Context(dict):
 
 
 class IdAllocator(object):
-    """ Allocator of identifiers """
+    """ Allocator of identifiers
+
+    This implementation is not thread-safe.
+    Use SafeIdAllocator for a usage in a multi-thread environment.
+    """
     __slots__ = ('prefix',  # Id prefix
-                 'count'    # Allocated id count
+                 'count',   # Allocated id count
+                 'bdgts',   # Count printing base digits
                  )
-    def __init__(self, prefix):
+    def __init__(self, prefix, bdgts="0123456789"):
         """ Create a new id allocator
 
         Args:
             prefix:  Prefix of all ids
+            bdgts:   List of digit characters to be use for counter conversion
         """
         super(IdAllocator, self).__init__()
         self.prefix = prefix
         self.count = 0
+        self.bdgts = bdgts
 
     def get_count(self):
         """ Get the number of id that has been allocated by this allocator.
@@ -316,7 +324,121 @@ class IdAllocator(object):
             Next id for this allocator
         """
         self.count += 1
-        return(self.prefix + str(self.count))
+        cnt = self.count
+        res = []
+        bdgts = self.bdgts
+        blen = len(bdgts)
+        while cnt > 0:
+           res.append(bdgts[cnt % blen])
+           cnt //= blen
+        res.reverse()
+        return(self.prefix + ''.join(res))
+
+
+class SafeIdAllocator(object):
+    """ Allocator of identifiers
+
+    This implementation uses a lock to protect the increment of the counter,
+    allowing to use as shared between multiple threads.
+    """
+    __slots__ = ('prefix',  # Id prefix
+                 'count',   # Allocated id count
+                 'bdgts',   # Count printing base digits
+                 'lock',    # Lock to protect counter
+                 )
+    def __init__(self, prefix, bdgts="0123456789"):
+        """ Create a new id allocator
+
+        Args:
+            prefix:  Prefix of all ids
+            bdgts:   List of digit characters to be use for counter conversion
+        """
+        super(SafeIdAllocator, self).__init__()
+        self.prefix = prefix
+        self.count = 0
+        self.bdgts = bdgts
+        self.lock = threading.Lock()
+
+    def get_count(self):
+        """ Get the number of id that has been allocated by this allocator.
+
+        Returns:
+            Number of id that has been allocated by this allocator.
+        """
+        return self.count
+
+    def allocate(self):
+        """ Allocate a new id
+
+        Returns:
+            Next id for this allocator
+        """
+        self.lock.acquire()
+        self.count += 1
+        cnt = self.count
+        self.lock.release()
+        res = []
+        bdgts = self.bdgts
+        blen = len(bdgts)
+        while cnt > 0:
+           res.append(bdgts[cnt % blen])
+           cnt //= blen
+        res.reverse()
+        return(self.prefix + ''.join(res))
+
+
+class KeyIdDict(object):
+    """ Dictionary using id of the keys as key.
+
+    This object allows to use any Python object as key, and to map a value on the
+    physical instance of the value.
+    """
+    __slots__ = ('kdict',  # Dictionary of objects
+                 )
+
+    def __init__(self):
+        super(KeyIdDict, self).__init__()
+        self.kdict = {}
+
+    def set(self, key, value):
+        """ Set a value in the dictionary
+
+        Args:
+            key:   Key
+            value: Value
+        """
+        kid = id(key)
+        # Store value and original key, to not garbage it and preserve its id
+        self.kdict[kid] = (key, value)
+
+    def get(self, key, default=None):
+        """ Get a value from the dictionary
+
+        Args:
+            key:     Key
+            default: Default value if not found. Default is None.
+        Returns:
+            Value corresponding to the key, default value (None) if not found
+        """
+        kid = id(key)
+        v = self.kdict.get(kid, None)
+        return default if v is None else v[1]
+
+    def keys(self):
+        """ Get the list of all keys """
+        return [k for (k, v) in self.kdict.values()]
+
+    def values(self):
+        """ Get the list of all values """
+        return [v for (k, v) in self.kdict.values()]
+
+    def clear(self):
+        """ Clear all dictionary content """
+        self.kdict.clear()
+
+    def __len__(self):
+        """ Returns the number of elements in this dictionary """
+        return len(self.kdict)
 
 
 class IdentityAccessor(object):
@@ -569,7 +691,7 @@ def make_directories(path):
     Raises:
         Any IO exception if directory creation is not possible
     """
-    if not os.path.isdir(path):
+    if (path != "") and (not os.path.isdir(path)):
         os.makedirs(path)
 
 
@@ -722,6 +844,38 @@ def to_internal_string(str):
     return ''.join(res)
     
     
+def int_to_base(val, bdgts):
+    """ Convert an integer into a string with a given base
+
+    Args:
+        val:   Integer value to convert
+        bdgts: List of base digits
+    Returns:
+        String corresponding to the integer
+    """
+    # Check zero
+    if val == 0:
+        return bdgts[0]
+    # Check negative number
+    if (val < 0):
+        isneg = True
+        val = -val
+    else:
+        isneg = False
+    # Fill list of digits
+    res = []
+    blen = len(bdgts)
+    while val > 0:
+        res.append(bdgts[val % blen])
+        val //= blen
+    # Add negative sign if necessary
+    if isneg:
+        res.append('-')
+    # Return
+    res.reverse()
+    return ''.join(res)
+
+
 #-----------------------------------------------------------------------------
 # Logging
 #-----------------------------------------------------------------------------

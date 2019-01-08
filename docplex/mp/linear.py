@@ -7,20 +7,14 @@
 # pylint: disable=too-many-lines
 from __future__ import print_function
 
-# fast merge of counter-like dictionaries
-
-from six import itervalues
-from enum import Enum
 import operator
+from collections import OrderedDict
+
+from enum import Enum
 
 from docplex.mp.basic import ModelingObjectBase
 from docplex.mp.basic import ModelingObject, Expr
-from docplex.mp.functional import FunctionalExpr
-
 from docplex.mp.utils import *
-from docplex.mp.utils import StringIO
-
-from collections import OrderedDict
 
 
 class VarType(object):
@@ -193,9 +187,13 @@ class Var(ModelingObject):
     Decision variables are instantiated by :class:`docplex.mp.model.Model` methods such as :func:`docplex.mp.model.Model.var`.
 
     """
-    # @profile
-    def __init__(self, model, vartype, name, lb=None, ub=None, _safe_domain=False, is_automatic_name=False):
-        ModelingObject.__init__(self, model, name, is_automatic_name=is_automatic_name)
+    def __init__(self, model, vartype, name,
+                 lb=None, ub=None,
+                 _safe_domain=False,
+                 is_automatic_name=False,
+                 container=None):
+        ModelingObject.__init__(self, model, name, is_automatic_name=is_automatic_name,
+                                container=container)
         self._vartype = vartype
         self.__id = None  # cache the id() for perf
 
@@ -215,6 +213,7 @@ class Var(ModelingObject):
             else:
                 model.fatal("Variable: {0} has empty domain: [{1}..{2}]", name, lb, ub)
 
+    # noinspection PyUnusedLocal
     def copy(self, new_model, var_mapping):
         return var_mapping[self]
 
@@ -248,10 +247,11 @@ class Var(ModelingObject):
         # INTERNAL Necessary for python 3
         self_hash = self.__id
         if self_hash is None:
+            # beware: using anything else than id() here may generate calls to __eq__
+            # which will generate a constraint, not a boolean!
             self_hash = id(self)
             self.__id = self_hash
         return self_hash
-        # old: return id(self)
 
     def to_linear_expr(self):
         # INTERNAL
@@ -261,11 +261,11 @@ class Var(ModelingObject):
         # INTERNAL
         self.model.set_var_name(self, new_name)
 
-    def _get_lb(self):
+    def get_lb(self):
         """ This property is used to get or set the lower bound of the variable.
 
         Possible values for the lower bound depend on the variable type. Binary variables
-        accept only 0 or 1 as bounds. An integer variable will convert the upper bound value to the
+        accept only 0 or 1 as bounds. An integer variable will convert the lower bound value to the
         ceiling integer value of the argument.
         """
         return self._lb
@@ -273,7 +273,11 @@ class Var(ModelingObject):
     def _set_lb(self, lb):
         self.model.set_var_lb(self, lb)
 
-    lb = property(_get_lb, _set_lb)
+    def set_lb(self, lb):
+        self._set_lb(lb)
+        return self._lb
+
+    lb = property(get_lb, _set_lb)
 
     def _internal_set_lb(self, lb):
         # Internal, used only by the model
@@ -283,7 +287,7 @@ class Var(ModelingObject):
         # INTERNAL
         self._ub = ub
 
-    def _get_ub(self):
+    def get_ub(self):
         """ This property is used to get or set the upper bound of the variable.
 
         Possible values for the upper bound depend on the variable type. Binary variables
@@ -297,7 +301,11 @@ class Var(ModelingObject):
     def _set_ub(self, ub):
         self.model.set_var_ub(self, ub)
 
-    ub = property(_get_ub, _set_ub)
+    def set_ub(self, ub):
+        self._set_ub(ub)
+        return self._ub
+
+    ub = property(get_ub, _set_ub)
 
     def has_free_lb(self):
         return self.model.is_free_lb(self._lb)
@@ -314,10 +322,6 @@ class Var(ModelingObject):
 
         """
         return self._vartype
-
-    def _internal_set_type(self, new_type):
-        # INTERNAL
-        self._vartype = new_type
 
     def has_type(self, vartype):
         # internal
@@ -392,8 +396,9 @@ class Var(ModelingObject):
         return self.to_linear_expr().ge_constraint(e)
 
     def __ne__(self, other):
-        # INTERNAL: For now, implemented as different ids.
-        return id(self) != id(other)  # pragma: no cover
+        # INTERNAL: For now, not supported
+        self.model.unsupported_neq_error(self, other)
+
 
     def __gt__(self, e):
         self.model.unsupported_operator_error(self, ">", e)
@@ -406,11 +411,13 @@ class Var(ModelingObject):
 
     def times(self, e):
         if is_number(e):
-            if e == 0:
+            if 0 == e:
                 return self._model._get_zero_expr()
             else:
                 return MonomialExpr(self._model, self, e)
-        if AbstractLinearExpr.is_var_operand(e):
+        elif isinstance(e, _ZeroExpr):
+            return self._model._get_zero_expr()
+        elif AbstractLinearExpr.is_var_operand(e):
             raise DOCplexQuadraticNotImplementedError(self, e)
         else:
             return self.to_linear_expr()._multiply(e)
@@ -434,24 +441,28 @@ class Var(ModelingObject):
         return self.to_linear_expr()._subtract(e)
 
     def __rsub__(self, e):
-        expr = self.model.linear_expr(e)
+        # e - self
+        expr = self.model._to_linear_expr(e)  # makes a clone.
         return expr._subtract(self)
 
-    def __div__(self, e):
+    def divide(self, e):
         expr = self.to_linear_expr()
         return expr._divide(e)
+
+    def __div__(self, e):
+        return self.divide(e)
 
     def __truediv__(self, e):
         # for py3
         # INTERNAL
-        return self.__div__(e)  # pragma: no cover
+        return self.divide(e)  # pragma: no cover
 
     def __rtruediv__(self, e):
         # for py3
-        self.fatal("Variable {0!s} cannot be used as quotient of {1!s}", self, e)  # pragma: no cover
+        self.fatal("Variable {0!s} cannot be used as denominator of {1!s}", self, e)  # pragma: no cover
 
     def __rdiv__(self, e):
-        self.fatal("Variable {0!s} cannot be used as quotient of {1!s}", self, e)
+        self.fatal("Variable {0!s} cannot be used as denominator of {1!s}", self, e)
 
     def __pos__(self):
         # the "+e" unary plus is syntactic sugar
@@ -460,8 +471,6 @@ class Var(ModelingObject):
     def __neg__(self):
         # the "-e" unary minus returns a linear expression
         return self.model._monomial_expr(self, -1)
-
-
 
     def __int__(self):
         """ Converts a decision variable to a integer number.
@@ -583,23 +592,21 @@ class AbstractLinearExpr(Expr):
     def is_discrete(self):
         raise NotImplementedError  # pragma: no cover
 
-    @property
-    def float_precision(self):
-        return 0 if self.is_discrete() else self.model.float_precision
-
-    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
-        oss = StringIO()
-        if nb_digits is None:
-            nb_digits = self.model.float_precision
-        self.to_stringio(oss, nb_digits=nb_digits, prod_symbol=prod_symbol, use_space=use_space)
-        return oss.getvalue()
-
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         raise NotImplementedError  # pragma: no cover
 
+    def is_variable(self):
+        # return True if the expression is infact one variable.
+        # if True, assume you can replace the expression by the first variable
+        # returned by iter_variables()
+        return False
 
 
 class _ZeroExpr(AbstractLinearExpr):
+
+    def _get_solution_value(self):
+        return 0
+
     # INTERNAL
     __slots__ = ()
 
@@ -664,6 +671,16 @@ class _ZeroExpr(AbstractLinearExpr):
     def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
         oss.write(self.to_string())
 
+    # arithmetic
+    def __sub__(self, other):
+        return self._subtract(other)
+
+    def _subtract(self, other):
+        # return -other
+        other_expr = self.model.linear_expr(other)
+        other_expr.negate()
+        return other_expr
+
     def __rsub__(self, e):
         # e - 0 = e !
         return e
@@ -674,11 +691,29 @@ class _ZeroExpr(AbstractLinearExpr):
     def __radd__(self, other):
         return other
 
-    def __str__(self):
-        return self.to_string()
+    def __mul__(self, other):
+        return self
+
+    def __rmul__(self, other):
+        return self
+
+    def __div__(self, other):
+        return self._divide(other)
+
+    def __truediv__(self, e):
+        # for py3
+        # INTERNAL
+        return self.__div__(e)  # pragma: no cover
+
+    def _divide(self, other):
+        self.model.typecheck_as_denominator(numerator=self, denominator=other)
+        return self
 
     def __repr__(self):
-        return "docplex.mp.linear.Zero"
+        return "docplex.mp.linear.ZeroExpr()"
+
+    def equals_expr(self, other):
+        return isinstance(other, _ZeroExpr)
 
     def __ge__(self, other):
         return self._get_model().ge_constraint(self, other)
@@ -691,12 +726,17 @@ class _ZeroExpr(AbstractLinearExpr):
 
 
 class MonomialExpr(AbstractLinearExpr):
+    def _get_solution_value(self):
+        raw = self.coef * self._dvar.solution_value
+        return self._round_if_discrete(raw)
+
     # INTERNAL class
     __slots__ = ("_dvar", "_coef")
 
     # noinspection PyMissingConstructor
     def __init__(self, model, dvar, coeff):
         self._model = model  # faster than to call recursively init methods...
+        self._name = None
         self._dvar = dvar
         self._coef = coeff
 
@@ -716,6 +756,9 @@ class MonomialExpr(AbstractLinearExpr):
         # for compatibility
         return 0
 
+    def is_variable(self):
+        return 1 == self._coef
+
     def clone(self):
         return MonomialExpr(self.model, self._dvar, self._coef)
 
@@ -728,6 +771,9 @@ class MonomialExpr(AbstractLinearExpr):
 
     def _get_coefs(self):
         return [float(self._coef)]
+
+    def var_set(self):
+        return {self._dvar}
 
     def unchecked_get_coef(self, dvar):
         return self._coef if dvar is self._dvar else 0
@@ -777,7 +823,7 @@ class MonomialExpr(AbstractLinearExpr):
             return expr._multiply(e)
 
     def quotient(self, e):
-        self.model.typecheck_as_quotient(e, self)
+        self.model.typecheck_as_denominator(e, self)
         inverse = 1.0 / float(e)
         return self.model._monomial_expr(self._dvar, self._coef * inverse)
 
@@ -813,10 +859,10 @@ class MonomialExpr(AbstractLinearExpr):
 
     def __rtruediv__(self, e):
         # for py3
-        self.model.cannot_be_used_as_quotient_error(self, e)  # pragma: no cover
+        self.model.cannot_be_used_as_denominator_error(self, e)  # pragma: no cover
 
     def __rdiv__(self, e):
-        self.model.cannot_be_used_as_quotient_error(self, e)
+        self.model.cannot_be_used_as_denominator_error(self, e)
 
     def __le__(self, other):
         return self.to_linear_expr().le_constraint(other)
@@ -839,9 +885,8 @@ class MonomialExpr(AbstractLinearExpr):
         if isinstance(other, MonomialExpr):
             return self.var is other.var and self.coef == other.coef
         elif isinstance(other, LinearExpr):
-            if not other.is_monomial():
-                return False
-            else:
+            expr = other
+            if expr.constant == 0 and expr.number_of_variables() == 1:
                 other_first_var = next(other.iter_variables())
                 return self.var is other_first_var and self.coef == other[other_first_var]
         else:
@@ -868,15 +913,13 @@ class MonomialExpr(AbstractLinearExpr):
                     oss.write(' ')
         oss.write(var_namer(self._dvar))
 
-    def __str__(self):
-        return self.to_string()
-
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
 
-    @property
-    def solution_value(self):
-        return self.coef * self._dvar.solution_value
+    # @property
+    # def solution_value(self):
+    #     raw = self.coef * self._dvar.solution_value
+    #     return self._round_if_discrete(raw)
 
 
 class LinearExpr(AbstractLinearExpr):
@@ -888,9 +931,10 @@ class LinearExpr(AbstractLinearExpr):
 
     """
     _private_instance_counter = 0
+    _private_clone_counter = 0
 
     # what type to use for merging dicts
-    counter_type = Counter
+    counter_type = ExprCounter
 
     # what type to use for storing terms
     term_dict_type = OrderedDict
@@ -926,46 +970,29 @@ class LinearExpr(AbstractLinearExpr):
             self_model.typecheck_var(v)
             self_model.typecheck_num(k, 'LinearExpr:importTerms')
 
-    def _assign_var_list(self, var_seq, is_safe=False):
-        """
-        INTERNAL: Imports a list of variables, possibly with repetition.
-        :param var_seq:
-        :return:
-        """
-        if self._model._keep_ordering:
-            sum_terms = OrderedDict(zip(var_seq, generate_constant(1.0)))
-        else:
-            sum_terms = self.counter_type(var_seq)
-        self._assign_terms(sum_terms, is_safe=is_safe, assume_normalized=True)
-        return self
 
     def _assign_terms(self, terms, is_safe=False, assume_normalized=False):
         if not is_safe:
             self.__typecheck_terms_dict(terms)
         if assume_normalized:
-            # BEWARE: creating ordered dict here is very expensive
-            self.__terms = terms  # OrderedDict(terms)
+            self.__terms = terms
         else:
             # must put back to normal form
             self.__terms = self.term_dict_type([(k, v) for k, v in iteritems(terms) if v != 0])
         return self
 
-    def _new_terms_dict(self, arg=None):
+    def _new_terms_dict(self, dict_type=term_dict_type, *args):
         # INTERNAL: builds a new terms dict.
-        self_term_dict_type = self.term_dict_type
-        if arg is None:
-            return self_term_dict_type()
-        else:
-            return self_term_dict_type(arg)
+        return dict_type(*args)
 
     __slots__ = ("_constant", "__terms", "private_instance_counter")
 
-    def __init__(self, model, e=None, constant=0., name=None, safe=False):
+    def __init__(self, model, e=None, constant=0, name=None, safe=False):
         Expr.__init__(self, model, name)
         # a global counter for performance measurement
         LinearExpr._private_instance_counter += 1
         # "calling LinearExpr ctor, k=%d" % LinearExpr.InstanceCounter)
-        if 0 != constant or not safe:
+        if not safe and 0 != constant:
             model.typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
 
@@ -1003,7 +1030,7 @@ class LinearExpr(AbstractLinearExpr):
                 self.fatal("Not a (variable, value) tuple: {0!s}", e)
         elif isinstance(e, LinearExpr):
             self._constant = e.constant
-            self._assign_terms(e._get_terms_dict(), is_safe=True, assume_normalized=True)
+            self.__terms = e._get_terms_dict()
 
         elif is_iterable(e) and not is_string(e):
             # assume only variables in iteration?:
@@ -1015,23 +1042,25 @@ class LinearExpr(AbstractLinearExpr):
         else:
             self.fatal("Cannot convert {1!s} to docplex.mp.LinearExpr, instance: {0!s}", repr(e), type(e).__name__)
 
-    # @profile
     def clone(self):
         """
         Returns:
             A copy of the expression on the same model.
         """
-        cloned = self.model.linear_expr(self._constant)
-        cloned.__terms = self.term_dict_type(self.__terms)  # faster than copy() on OrderedDict()
+        LinearExpr._private_clone_counter += 1
+        cloned_terms = self.term_dict_type(self.__terms)  # faster than copy() on OrderedDict()
+        cloned = LinearExpr(model=self.model, e=cloned_terms, constant=self._constant, safe=True)
+        # cloned = self.model.linear_expr(self._constant)
+        # cloned.__terms = cloned_terms
         return cloned
 
     def copy(self, target_model, var_mapping):
         # INTERNAL
-        copied_expr = target_model.linear_expr(self.constant)
+
         copied_terms = self._new_terms_dict()
         for v, k in self.iter_terms():
             copied_terms[var_mapping[v]] = k
-        copied_expr._assign_terms(copied_terms, is_safe=True, assume_normalized=True)
+        copied_expr = LinearExpr(model=target_model, e=copied_terms, constant=self.constant, safe=True)
         return copied_expr
 
     def negate(self):
@@ -1078,15 +1107,10 @@ class LinearExpr(AbstractLinearExpr):
         return not self.__terms
 
     def is_variable(self):
-        if 0 != self.constant:
-            return False
-        if self.number_of_variables() != 1:
-            return False
-        return 1 == next(itervalues(self.__terms))
-
-    def is_monomial(self):
-        # INTERNAL
-        return 0 == self.constant and 1 == self.number_of_variables()
+        # INTERNAL: returns True if expression is in fact a variable (1*x)
+        return 0 == self.constant \
+               and 1 == self.number_of_variables() \
+               and 1 == next(itervalues(self.__terms))
 
     def is_normal_form(self):
         # INTERNAL
@@ -1128,13 +1152,15 @@ class LinearExpr(AbstractLinearExpr):
         # INTERNAL
         if coef != 0:
             self_terms = self.__terms
-            new_coef = coef + self_terms.get(dvar, 0)
-            if new_coef:
-                self_terms[dvar] = new_coef
+            if dvar not in self_terms:
+                self_terms[dvar] = coef
             else:
-                del self_terms[dvar]
+                new_coef = coef + self_terms[dvar]
+                if new_coef:
+                    self_terms[dvar] = new_coef
+                else:
+                    del self_terms[dvar]
 
-    # @profile
     def _add_var(self, dvar):
         old_coeff = self.__terms.get(dvar, 0)
         new_coef = 1 + old_coeff
@@ -1270,7 +1296,6 @@ class LinearExpr(AbstractLinearExpr):
             if use_space: oss.write(SP)
             self._num_to_stringio(oss, k, nb_digits)
 
-    # @profile
     def _add_expr(self, other_expr):
         """
         Internal, assume other_expr is an expression.
@@ -1284,7 +1309,6 @@ class LinearExpr(AbstractLinearExpr):
             self._add_term(v, k)
 
     # --- algebra methods always modify self.
-    #  @profile
     def _add(self, e):
         # INTERNAL: modifies self.
         if isinstance(e, Var):
@@ -1301,7 +1325,10 @@ class LinearExpr(AbstractLinearExpr):
             for elt in e:
                 self._add(elt)
         else:
-            self.fatal("Unexpected argument for add: {0!s}", e)
+            try:
+                self._add(e.to_linear_expr())
+            except AttributeError:
+                self.fatal("Unexpected argument for add: {0!s}", e)
         return self
 
     def iter_terms(self):
@@ -1341,16 +1368,22 @@ class LinearExpr(AbstractLinearExpr):
         elif isinstance(e, _ZeroExpr):
             pass
         else:
-            self.fatal("Unexpected argument for subtract: {0!s}", e)
+            try:
+                self._subtract(e.to_linear_expr())
+            except AttributeError:
+                self.fatal("Unexpected argument for subtract: {0!s}", e)
         return self
 
-    def _scale(self, factor):
+    def _scale(self, factor, dictype=term_dict_type):
         # INTERNAL: used my multiply
+        # this method modifies self.
         if 0 == factor:
             self._clear()
         elif factor != 1:
             self._constant *= factor
-            self.__terms = {v: k * factor for v, k in iteritems(self.__terms)}
+            self_terms = self.__terms
+            for v, k in iteritems(self_terms):
+                self_terms[v] = k * factor
 
     def _multiply(self, e):
         if is_number(e):
@@ -1362,26 +1395,22 @@ class LinearExpr(AbstractLinearExpr):
                 raise DOCplexQuadraticNotImplementedError(self, e)
         elif isinstance(e, Var):
             if self.is_constant():
-                k = self.constant
-                if k != 0:
-                    self._assign_terms({e: k}, is_safe=True, assume_normalized=True)
-                    self._constant = 0
+                return e.times(self._constant)
             else:
                 raise DOCplexQuadraticNotImplementedError(self, e)
         elif isinstance(e, MonomialExpr):
             if self.is_constant():
-                return self.model._monomial_expr(e._dvar, e._coef*self._constant)
+                return self.model._monomial_expr(e._dvar, e._coef * self._constant)
             else:
                 raise DOCplexQuadraticNotImplementedError(self, e)
+        elif isinstance(e, _ZeroExpr):
+            return self.model._get_zero_expr()
         else:
             self.fatal("Multiply expects variable, expr or number, got: {0!s}", e)
         return self
 
     def _divide(self, e):
-        if not is_number(e):
-            self.fatal("Divide expects number, got: {0!s}", e)
-        if 0 == e:
-            self.fatal("Zero divide on expression: {0!s}", self)
+        self.model.typecheck_as_denominator(e, numerator=self)
         inverse = 1.0 / float(e)
         return self._multiply(inverse)
 
@@ -1409,9 +1438,6 @@ class LinearExpr(AbstractLinearExpr):
         cloned = self.clone()
         cloned._divide(e)
         return cloned
-
-    def _to_clone(self):
-        return self.has_name() or not hasattr(self, "_no_clone_")
 
     def __add__(self, e):
         return self.plus(e)
@@ -1490,19 +1516,18 @@ class LinearExpr(AbstractLinearExpr):
                 if the model has not been solved.
         """
         self._check_model_has_solution()
-        return self._get_value()
+        return self._get_solution_value()
 
     def get_value(self):
-        self._check_model_has_solution()
-        return self._get_value()
+        # DEPRECATED
+        return self.solution_value  # pragma: no cover
 
-    def _get_value(self):
+    def _get_solution_value(self):
         # INTERNAL: no checks
-        # PCO: what about reduce() here ?
-        val = self.constant
+        val = self._constant
         for var, koef in self.iter_terms():
             val += koef * var.unchecked_solution_value
-        return val
+        return self._round_if_discrete(val)
 
     def is_discrete(self):
         """ Checks if the expression contains only discrete variables and coefficients.
@@ -1514,8 +1539,10 @@ class LinearExpr(AbstractLinearExpr):
         Returns:
             True if the expression contains only discrete variables and coefficients.
         """
-        if not is_int(self.constant):
+        self_cst = self._constant
+        if self_cst != int(self_cst):
             return False
+
         for v, k in self.iter_terms():
             if not v.is_discrete() or not is_int(k):
                 return False
@@ -1523,11 +1550,7 @@ class LinearExpr(AbstractLinearExpr):
             return True
 
     def __repr__(self):
-        max_len = 24
-        self_str = str(self)
-        if len(self_str) >= max_len:
-            self_str += "..."
-        return "docplex.mp.LinearExpr(%s)" % self_str
+        return "docplex.mp.LinearExpr({0})".format(self.truncated_str())
 
 
 class LinearConstraintType(Enum):
@@ -1602,66 +1625,6 @@ class _LinearConstraintTypeUtils(object):
         return _LinearConstraintTypeUtils._get_map_value(cttype, _LinearConstraintTypeUtils._python_op_map)
 
 
-class Priority(Enum):
-    # priority values are not sequential integers
-    VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH = range(100, 6 * 100, 100)
-    MANDATORY = 999999999
-
-    @staticmethod
-    def default_priority():
-        return Priority.MEDIUM
-
-    @staticmethod
-    def all_sorted():
-        # INTERNAL
-        sorted_properties = [Priority.VERY_LOW, Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.VERY_HIGH]
-        return sorted_properties
-
-    def get_index(self):
-        return self.value / 100
-
-    def _level(self):
-        # INTERNAL: retuens an integer value for priority
-        return self.value
-
-    def print_name(self):
-        priority_names = {Priority.MANDATORY: 'Mandatory',
-                          Priority.HIGH: 'High',
-                          Priority.VERY_HIGH: "Very High",
-                          Priority.MEDIUM: 'Medium',
-                          Priority.LOW: 'Low',
-                          Priority.VERY_LOW: 'Very Low'}
-        return priority_names.get(self, "Unexpected Priority")
-
-    def get_geometric_preference_factor(self, base=10.0):
-        # INTERNAL: returns a CPLEX preference factor as a poer of "base"
-        # MEDIUM priority has always a preference factor of 1
-        assert is_number(base)
-        if self.is_mandatory():
-            return 1e+20
-        else:
-            # pylint complains about no value member but is wrong!
-            diff = self.get_index() - Priority.MEDIUM.get_index()
-            factor = 1.0
-            pdiff = diff if diff >= 0 else -diff
-            for _ in range(0, int(pdiff)):
-                factor *= base
-            return factor if diff >= 0 else 1.0 / factor
-
-    def less_than(self, other):
-        assert isinstance(other, Priority)
-        return self._level() < other._level()
-
-    def __lt__(self, other):
-        return self.less_than(other)
-
-    def __gt__(self, other):
-        return other.less_than(self)
-
-    def is_mandatory(self):
-        return self == Priority.MANDATORY
-
-
 class AbstractConstraint(ModelingObject):
     __slots__ = ()
 
@@ -1699,7 +1662,7 @@ class AbstractConstraint(ModelingObject):
     def iter_variables(self):
         raise NotImplementedError  # pragma: no cover
 
-    def copy(self, traget_model, var_map):
+    def copy(self, target_model, var_map):
         raise NotImplementedError  # pragma: no cover
 
     # noinspection PyMethodMayBeStatic
@@ -1721,7 +1684,7 @@ class AbstractLinearConstraint(AbstractConstraint):
     def __init__(self, model, name=None):
         AbstractConstraint.__init__(self, model, name)
 
-    def copy(self, traget_model, var_map):
+    def copy(self, tagret_model, var_map):
         raise NotImplementedError  # pragma: no cover
 
     def get_var_coef(self, dvar):
@@ -1738,9 +1701,6 @@ class AbstractLinearConstraint(AbstractConstraint):
     def rhs(self):
         """ Redefine this for any concrete constraint class."""
         raise NotImplementedError  # pragma: no cover
-
-    def is_ranged_constraint(self):
-        return False
 
 
 # noinspection PyAbstractClass
@@ -1871,11 +1831,17 @@ class LinearConstraint(AbstractLinearConstraint):
     def __repr__(self):
         user_name = self.name if self.has_user_name() else ""
         typename = self.type.short_name
+        sleft = self._left_expr.truncated_str()
+        sright = self._right_expr.truncated_str()
         return "docplex.mp.linear.LinearConstraint[{0}]({1!s},{2},{3!s})". \
-            format(user_name, self.left_expr, typename, self.right_expr)
+            format(user_name, sleft, typename, sright)
 
     def __le__(self, e):
-        # INTERNAL: try to define ranges with operators, doe snot work.
+        # INTERNAL: define ranges with operators.
+        # Beware one must use parentheses as in r = (1 <= x) <= 2
+        # Chained comparisons like: 1 <= x <= 2 will fail as Python
+        # generates an "and" of two constraints (1<=x) and (x<=2) but
+        # constraints _cannot_ be converted to booleans.
         if not is_number(e):
             self.fatal("operator <= on constraint requires numeric argument, got: {0!s}", e)
         if self.type is LinearConstraintType.GE:
@@ -1890,9 +1856,13 @@ class LinearConstraint(AbstractLinearConstraint):
             self.fatal("operator <= is only allowed for LE constraints, type is: {0!s}", self.type)
 
     def __ge__(self, e):
-        # INTERNAL: try to define ranges with operators, does not work.
+        # INTERNAL: define ranges with operators.
+        # Beware one must use parentheses as in r = (1 <= x) <= 2
+        # Chained comparisons like: 1 <= x <= 2 will fail as Python
+        # generates an "and" of two constraints (1<=x) and (x<=2) but
+        # constraints _cannot_ be converted to booleans.
         if not is_number(e):
-            raise DOcplexException("operator >= on constraints requires number argument, got:%s" % str(e))
+            self.fatal("operator >= on constraints requires number argument, got: {0!s}", e)
         if self.type is LinearConstraintType.LE:
             rhs = self.right_expr
             if rhs.is_constant():
@@ -1900,9 +1870,9 @@ class LinearConstraint(AbstractLinearConstraint):
                 range_min = float(e)
                 return self.model.range_constraint(range_min, self.left_expr, range_max)
             else:
-                raise DOcplexException("operator >= requires a constraint with numeric RHS, got:%s" % str(rhs))
+                self.fatal("operator >= requires a constraint with numeric RHS, got: {0!s}", rhs)
         else:
-            raise DOcplexException("operator >= is only allowed for GE constraints")
+            self.fatal("operator >= is only allowed for GE constraints, not {0!s}", self.type)
 
     def iter_variables(self):
         """  Iterates over all variables mentioned in the constraint.
@@ -1924,17 +1894,18 @@ class LinearConstraint(AbstractLinearConstraint):
         else:
             # noinspection PyPep8
             if self._model._keep_ordering:
-                return self._make_ordered_var_iter()
+                return self._ordered_var_iter()
             else:
                 left_vars = self.left_expr.var_set()
                 right_vars = self.right_expr.var_set()
                 union_vars = left_vars.union(right_vars)
                 return iter(union_vars)
 
-    def _make_ordered_var_iter(self):
+    def _ordered_var_iter(self):
+        # INTERNAL
         e1 = self._left_expr._get_terms_dict()
         e2 = self._right_expr._get_terms_dict()
-        od1 = e1 if isinstance(e1, OrderedDict) else OrderedDict(e1)
+        od1 = OrderedDict(e1)
         od1.update(e2)
         return iter(od1)
 
@@ -1960,9 +1931,16 @@ class LinearConstraint(AbstractLinearConstraint):
         elif ordering:
             # build an ordered dict of left terms updated by right terms
             e1 = self._left_expr._get_terms_dict()
+            # we must create an extra od here
             od = OrderedDict(e1)
-            od2 = OrderedDict({v: -k for v, k in self._right_expr.iter_terms()})
-            od.update(od2)
+            #  update od no need to create yet another od
+            for v, rk in self._right_expr.iter_terms():
+                if v in od:
+                    od[v] -= rk
+                else:
+                    od[v] = -rk
+            # od2 = OrderedDict({v: -k for v, k in self._right_expr.iter_terms()})
+            # od.update(od2)
             return iteritems(od)
         else:
             diff_coeffs = {v: self._left_expr[v] - self._right_expr[v] for v in self.iter_variables()}
@@ -2027,9 +2005,6 @@ class RangeConstraint(AbstractLinearConstraint):
     def short_typename(self):
         return "range"
 
-    def is_ranged_constraint(self):
-        return True
-
     def is_trivial(self):
         return self.__expr.is_constant()
 
@@ -2063,12 +2038,8 @@ class RangeConstraint(AbstractLinearConstraint):
         """
         return self.__ub
 
-    def range(self):
-        # INTERNAL
-        return self.__ub - self.__lb
-
     def is_valid(self):
-        return self.range() >= 0
+        return self.__ub >= self.__lb
 
     def iter_variables(self):
         """Iterates over all the variables of the range constraint.
@@ -2169,7 +2140,7 @@ class IndicatorConstraint(AbstractLogicalConstraint):
     @property
     def logical_rhs(self):
         """
-        This property returns the target rhs used to trigger the linear constraint. Returns 1 if not complemented else 0.
+        This property returns the target right-hand side used to trigger the linear constraint. Returns 1 if not complemented, else 0.
         """
         return self.active_value
 
@@ -2214,389 +2185,6 @@ class IndicatorConstraint(AbstractLogicalConstraint):
 
     def __str__(self):
         return self.to_string()
-
-
-class _AbstractModelFactory(object):
-    def __init__(self, model, engine):
-        self._model = model
-        self._engine = engine
-        self._error_handler = model.error_handler
-
-
-class ModelFactory(object):
-    @property
-    def default_variable_lb(self):
-        return 0
-
-    @property
-    def default_variable_ub(self):
-        return self.infinity
-
-    def is_free_lb(self, var_lb):
-        return var_lb <= - self.infinity
-
-    def is_free_ub(self, var_ub):
-        return var_ub >= self.infinity
-
-    def __init__(self, model, engine):
-        self.__model = model
-        self.__engine = engine
-        self.__error_handler = model.error_handler
-        self.infinity = engine.get_infinity()
-        self.zero_expr = 0  # assigned to an expr later on.
-
-    def init(self):
-        model = self.__model
-        self.zero_expr = LinearExpr(model, 0.0)
-        self.unique_zero_expr = _ZeroExpr(model)
-
-    def new_trivial_feasible_ct(self):
-        return _DummyFeasibleConstraint(self.__model, self.zero_expr)
-
-    def new_trivial_infeasible_ct(self):
-        return _DummyInfeasibleConstraint(self.__model, self.zero_expr)
-
-    def fatal(self, msg, *args):
-        self.__error_handler.fatal(msg, args)
-
-    def warning(self, msg, *args):
-        self.__error_handler.warning(msg, args)
-
-    def update_engine(self, engine):
-        # the model has already disposed the old engine, if any   
-        self.__engine = engine
-        self.infinity = engine.get_infinity()
-
-    # # @profile
-    # def __make_one_var(self, m, vartype, varname, lb, ub, safe_domain=False, is_automatic_name=False):
-    #     return Var(m, vartype, varname, lb, ub, _safe_domain=safe_domain, is_automatic_name=is_automatic_name)
-
-    def var(self, vartype, lb=None, ub=None, varname=None):
-        actual_name = varname or self.__model._create_automatic_varname()
-        var = Var(self.__model, vartype, actual_name, lb, ub, is_automatic_name=not bool(varname))
-        idx = self.__engine.create_one_variable(vartype, var.lb, var.ub, actual_name)
-        self.__model._register_one_var(var, idx)
-        return var
-
-    def _compute_safe_naming_rule(self, keys, user_naming_rule, arity, key_format):
-        ''' Builds a safe naming rule scheme.
-        '''
-        default_naming_fn = self.__model._create_automatic_varname
-        if user_naming_rule is None:
-            # in this branch we cover the None case
-            # and the null list
-            return lambda k: default_naming_fn()
-        else:
-            return ensure_naming_function(keys, user_naming_rule, default_naming_fn, arity, key_format)
-
-    def _expand_bounds(self, keys, var_bound, size, lb_or_ub):
-        ''' Converts raw bounds data (either LB or UB) to CPLEX-compatible bounds list.
-            If lbs is None, this is the default, return [].
-            If lbs is [] take the default again.
-            If it is a number, build a list of size <size> with this number.
-            If it is a list, use it if size ok (check numbers??),
-            else try it as a function over keys.
-        '''
-        if isinstance(var_bound, str):
-            self._bad_bounds_fatal(var_bound)
-        elif var_bound is None:
-            # default lb is zero, default ub is infinity
-            return []
-        elif is_number(var_bound):
-            return [var_bound] * size
-        elif isinstance(var_bound, list):
-            nb_bounds = len(var_bound)
-            if nb_bounds == 0:
-                return None  # use defaults
-            elif nb_bounds < size:
-                # see how we can use defaults for those missing bounds
-                self.fatal("Variable bounds list is too small, expecting: %d, got: %d" % (size, nb_bounds))
-            else:
-                if nb_bounds > size:
-                    self.warning("Variable bounds list is too large, required: %d, got: %d." % (size, nb_bounds))
-                for b in range(size):
-                    b_value = var_bound[b]
-                    if not is_number(b_value):
-                        self.fatal("Variable bounds list expects numbers, got: {0!s} (pos: #{1})",
-                                   b_value, b)
-                return var_bound
-        elif is_iterator(var_bound):
-            # unfold the iterator, as CPLEX needs a list
-            return list(var_bound)
-        elif isinstance(var_bound, dict):
-            default_bound = -self.infinity if lb_or_ub else self.infinity
-            return [var_bound.get(k, default_bound) for k in keys]
-        else:
-            # try a function?
-            try:
-                _computed_bounds = [var_bound(k) for k in keys]
-                if not is_iterable(_computed_bounds):
-                    self._bad_bounds_fatal(var_bound)
-                elif _computed_bounds:
-                    for b in _computed_bounds:
-                        if not is_number(b):
-                            self.fatal("computed bound expects a number, got: {0!s}", b)
-                return _computed_bounds
-            except TypeError:
-                self._bad_bounds_fatal(var_bound)
-            except Exception as e:
-                self.fatal("error calling function model bounds: {0!s}, error: {1!s}", var_bound, e)
-
-    def _bad_bounds_fatal(self, bad_bound):
-        self.fatal("unexpected variable bound: {0!s}, expecting: None|number|function|iterable", bad_bound)
-
-    # @profile
-    def var_list(self, keys, vartype,
-                 lb=None, ub=None,
-                 name=str,
-                 arity=1, key_format=None,
-                 allow_empty_keys=True):
-        if not keys:
-            if allow_empty_keys:
-                return []
-            else:
-                self.fatal("No keys to index the variables.")
-        else:
-            if any((k is None for k in keys)):
-                self.fatal("A variable key cannot be None, see: {0!s}", keys)
-
-        actual_naming_rule = self._compute_safe_naming_rule(keys, name, arity, key_format)
-
-        number_of_vars = len(keys)
-        xlbs = self._expand_bounds(keys, lb, number_of_vars, lb_or_ub=True)
-        xubs = self._expand_bounds(keys, ub, number_of_vars, lb_or_ub=False)
-        # at this point both list are either [] or have size numberOfVars
-        self.__error_handler.ensure(len(xlbs) == 0 or len(xlbs) == number_of_vars, "bad lb sequence", xlbs)
-        self.__error_handler.ensure(len(xubs) == 0 or len(xubs) == number_of_vars, "bad ub sequence", xubs)
-
-        # compute defaults once
-        default_lb = vartype.default_lb
-        default_ub = vartype.default_ub
-        use_default_lbs = (xlbs == [])
-        use_default_ubs = (xubs == [])
-        is_safe = use_default_ubs and use_default_lbs
-        mdl = self.__model
-
-        is_auto = name is None  # not bool(name)
-
-        allvars = [Var(mdl, vartype,
-                                       actual_naming_rule(key),
-                                       xlbs[k] if xlbs else default_lb,
-                                       xubs[k] if xubs else default_ub,
-                                       _safe_domain=is_safe,
-                                       is_automatic_name=is_auto) for k, key in enumerate(keys)]
-
-        indices = self.__engine.create_variables(keys, vartype, xlbs, xubs, actual_naming_rule)
-        # with MyTimer("register_block_vars"):
-        self.__model._register_block_vars(allvars, indices)
-        return allvars
-
-    def linear_expr(self, e=0, constant=0, name=None):
-        # handle here the special case for 0.
-        expr = LinearExpr(self.__model, e, constant, name)
-        return expr
-
-    def _new_zero_expr(self):
-        return self.linear_expr()
-
-    def scal_prod(self, dvars, coefs=1.0):
-        # Testing anumpy array for its logical value will not work:
-        # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
-        # we would have to trap the test for ValueError then call any()
-        #
-        if is_number(coefs):
-            coefs = generate_constant(coefs)
-        else:
-            self.__model.typecheck_iterable(coefs)
-
-        if not is_iterable(dvars):
-            dvars = [dvars]
-        else:
-            # iterable
-            pass
-
-        if has_len(coefs) and 0 == len(coefs):
-            skip = True
-        elif has_len(dvars) and 0 == len(dvars):
-            skip = True
-        else:
-            skip = False
-        if skip:
-            return self._new_zero_expr()
-        else:
-            return self._scal_prod(dvars, coefs)
-
-    def _scal_prod(self, dvars, coefs):
-        """
-        INTERNAL, dvars is not empty.
-        :param dvars:
-        :param coefs:
-        :return:
-        """
-        total_num = 0
-        fcc = ExprCounter()
-
-        normalizer = 0
-        for item, coef in zip(dvars, coefs):
-            if 0 == coef:
-                pass
-            elif isinstance(item, Var):
-                fcc.update_from_item_value(item, coef)
-                if coef < 0:
-                    normalizer = coef
-            elif isinstance(item, LinearExpr):
-                fcc.update_from_scaled_dict(item._get_terms_dict(), coef)
-                normalizer = -999
-            elif isinstance(item, MonomialExpr):
-                fcc.update_from_item_value(item.var, item.coef * coef)
-                if item.coef < 0:
-                    normalizer = item.coef
-            elif is_number(item):
-                if item:
-                    total_num += coef * item
-            else:
-                self.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
-        # pass
-        if normalizer < 0:  # normalize only if we saw a negative coeff
-            fcc.normalize()
-
-
-        res_dict = self._sort_terms_if_needed(fcc)
-        scalprod_expr = LinearExpr(self.__model, e=res_dict, safe=True)
-        #scalprod_expr._assign_terms(res_dict, is_safe=True, assume_normalized=True)
-        return scalprod_expr
-
-    def sum(self, sum_args):
-        if is_iterable(sum_args):
-            if is_iterator(sum_args):
-                return self._sum_with_iter(sum_args)
-            if has_len(sum_args) and 0 == len(sum_args):
-                return self.linear_expr()
-            elif isinstance(sum_args, dict):
-                # handle dict: sum all values
-                return self._sum_with_seq(sum_args.values())
-            elif is_indexable(sum_args):
-                first = sum_args[0]
-                if self.__model._is_operand(first):
-                    return self._sum_with_seq(sum_args)
-                elif is_numpy_ndarray(sum_args):
-                    return self._sum_with_iter(sum_args.flat)
-                else:
-                    self.fatal("cannot handle sequence with type: {0!s}", type(sum_args))
-            else:
-                return self._sum_with_seq(sum_args)
-        elif is_number(sum_args):
-            return sum_args
-        else:
-            return self.__model._to_linear_expr(sum_args)
-
-    def _sort_terms_if_needed(self, counter):
-        if not self.__model._keep_ordering:
-            return counter
-        elif isinstance(counter, OrderedDict):
-            return counter
-        else:
-            # normalize by sorting variables by increasing indices
-            return OrderedDict(sorted(counter.items(), key=lambda vk: vk[0].get_index()))
-
-    # Hi @profile
-    def _sum_with_iter(self, args):
-        """
-        x-seq is an iterator so can be used only once.
-        :param args:
-        :return:
-        """
-        accumulated_ct = 0
-        # do we really need to sort variables here??
-        acc = ExprCounter()
-        for item in args:
-            if isinstance(item, Var):
-                acc.update_from_item(item)
-            elif isinstance(item, MonomialExpr):
-                acc.update_from_item_value(item._dvar, item._coef)
-            elif isinstance(item, LinearExpr):
-                acc.update(item._get_terms_dict())
-                accumulated_ct += item.constant
-            elif isinstance(item, FunctionalExpr):
-                acc.update_from_item(item.functional_var)
-            elif isinstance(item, _ZeroExpr):
-                pass
-            else:
-                accumulated_ct += item
-
-        #sum_x = self.linear_expr(constant=accumulated_ct)
-        res_terms = self._sort_terms_if_needed(acc)
-        sum_x = LinearExpr(self.__model, e=res_terms, constant=accumulated_ct, safe=True)
-        #sum_x._assign_terms(res_terms, is_safe=True, assume_normalized=True)
-        return sum_x
-
-    # @profile
-    def _sum_with_seq(self, x_list):
-        for z in x_list:
-            if not isinstance(z, Var):
-                x_seq_all_variables = False
-                break
-        else:
-            x_seq_all_variables = True
-
-        if x_seq_all_variables:
-            expr = self.linear_expr()
-            # in this case, we are sure the resulting dict is always normalize (no zero value)
-            # however, the ordering might be random
-            return expr._assign_var_list(x_list, is_safe=True)
-        else:
-            return self._sum_with_iter(args=x_list)
-
-    def _new_binary_constraint(self, lhs, ctype, rhs, name=None):
-        ct = LinearConstraint(self.__model, lhs, ctype, rhs, name)
-        return ct
-
-    def set_objective(self, sense, expr):
-        raise NotImplementedError
-
-    def le_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.LE, rhs, name=ctname)
-
-    def eq_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.EQ, rhs, name=ctname)
-
-    def ge_constraint(self, e, rhs, ctname=None):
-        return self._new_binary_constraint(e, LinearConstraintType.GE, rhs, name=ctname)
-
-    def new_range_constraint(self, lb, expr, rhs, ctname=None):
-        # INTERNAL
-        rng = RangeConstraint(self.__model, expr, lb, rhs, ctname)
-        return rng
-
-    def new_indicator_constraint(self, binary_var, linear_ct, active_value=1, ctname=None):
-        # INTERNAL
-        indicator_ct = IndicatorConstraint(self.__model, binary_var, linear_ct, active_value, ctname)
-        return indicator_ct
-
-    def resync_whole_model(self):
-        self_model = self.__model
-        self_engine = self.__engine
-
-        for var in self_model.iter_variables():
-            # do not call create_one_var public API
-            # or resync would loop
-            idx = self_engine.create_one_variable(var.vartype, var.lb, var.ub, var.name)
-            if idx != var.get_index():
-                print("index discrepancy: {0!s}".format(var))
-
-        for ct in self_model.iter_constraints():
-            if isinstance(ct, LinearConstraint):
-                self_engine.create_binary_linear_constraint(ct)
-            elif isinstance(ct, RangeConstraint):
-                self_engine.create_range_constraint(ct)
-            elif isinstance(ct, IndicatorConstraint):
-                self_engine.create_indicator_constraint(ct)
-            else:
-                self_model.error("Unexpected constraint type: {0!s} - ignored", type(ct))
-                pass
-
-        # send objective
-        self_engine.set_objective(self_model.objective_sense, self_model.objective_expr)
 
 
 class ObjectiveSense(Enum):

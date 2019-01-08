@@ -20,7 +20,7 @@ This module implements one class per solution element:
 
 import os, sys, json
 
-from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, _ALIAS_ALLOCATOR
+from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX
 from docplex.cp.utils import make_directories, IdentityAccessor
 
 ###############################################################################
@@ -587,41 +587,33 @@ class CpoModelSolution(object):
         if ovals:
             self._set_objective_values(ovals)
 
-        # In case of alias, build a map between alias and real name
-        if (_ALIAS_ALLOCATOR.get_count() == 0):
-            alias_map = IdentityAccessor()
-        else:
-            alias_map = {}
-            for v, l in model.get_all_variables():
-                alias_map[v._get_alias_then_name()] = v.get_name()
-
         # Add integer variables if any
         vars = jsol.get('intVars', ())
         for vname in vars:
-            self._add_var_solution(CpoIntVarSolution(alias_map[vname], _get_num_value(vars[vname])))
+            self._add_var_solution(CpoIntVarSolution(vname, _get_num_value(vars[vname])))
 
         # Add interval variables if any
         vars = jsol.get('intervalVars', ())
         for vname in vars:
             v = vars[vname]
             if 'start' in v:
-                vsol = CpoIntervalVarSolution(alias_map[vname], True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
+                vsol = CpoIntervalVarSolution(vname, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
             else:
-                vsol = CpoIntervalVarSolution(alias_map[vname], False)
+                vsol = CpoIntervalVarSolution(vname, False)
             self._add_var_solution(vsol)
 
         # Add sequence variables if any
         vars = jsol.get('sequenceVars', ())
         for vname in vars:
-            vnlist = [alias_map[v] for v in vars[vname]]
+            vnlist = [v for v in vars[vname]]
             ivres = [self.get_var_solution(vn) for vn in vnlist]
-            self._add_var_solution(CpoSequenceVarSolution(alias_map[vname], ivres))
+            self._add_var_solution(CpoSequenceVarSolution(vname, ivres))
 
         # Add state functions if any
         funs = jsol.get('stateFunctions', ())
         for fname in funs:
             lpts = [( _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['value'])) for v in funs[fname]]
-            self._add_var_solution(CpoStateFunctionSolution(alias_map[fname], lpts))
+            self._add_var_solution(CpoStateFunctionSolution(fname, lpts))
 
         # Add parameters
         self._set_parameters(jsol.get('parameters', {}))
@@ -679,7 +671,8 @@ class CpoModelSolution(object):
         out.write(", sequence: " + str(self.get_number_of_sequence_vars()))
         out.write('\n')
         # Print search status
-        out.write("Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
+        #out.write("Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
+        out.write("Solve status: " + str(self.get_solve_status()) + "\n")
         out.write("Solve time: " + str(round(self.get_solve_time(), 2)) + " sec\n")
         out.write("-------------------------------------------------------------------------------\n")
         

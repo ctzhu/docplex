@@ -31,9 +31,8 @@ class CpoModel(object):
                  'varList',      # List of model variables, in declaration order
                  'varSet',       # Set of model variables
                  'exprList',     # List of model root expressions (tuples (expression, location))
-                 'srch_phases',  # Search phases list
+                 'srch_phases',  # List of search phases
                  'nameSet',      # Set of variable names
-                 'intIdCount',   # Counter for internal ids generated for sub-expressions
                  'nbExprNodes',  # Number of expression nodes
                  'allExprSet',   # Set of all expression ids already in the model
                  'sourceloc',    # Indicate to set in the model information of source location
@@ -53,7 +52,6 @@ class CpoModel(object):
         self.exprList        = []
         self.srch_phases     = []
         self.nameSet         = set()
-        self.intIdCount      = 0
         self.nbExprNodes     = 0
         self.allExprSet      = set()
         self.sourceloc       = True
@@ -75,7 +73,12 @@ class CpoModel(object):
 
 
     def add(self, expr):
-        """ Adds an expression to the model.
+        """ Adds a CP expression to the model.
+
+        This method adds a CP expression to the model. The expression is scanned to identify all variables
+        that are referenced by the expression to automatically add them to the model.
+
+        The order in which expressions are added to the model is preserved when it is submitted for solving.
 
         Args:
             expr: Expression to add.

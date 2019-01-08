@@ -12,6 +12,7 @@ available in a DOcplex.CP model.
 
 from docplex.cp.model import *
 from docplex.cp.expression import _create_operation as create_op
+import collections
 
 try:
     import __builtin__ as builtin  # Python 2.7
@@ -22,6 +23,17 @@ except ImportError:
 ###############################################################################
 ##  Private methods
 ###############################################################################
+
+def _expand(arg):
+    """ Expand an argument if it is an iterator
+    Args:
+        arg: Argument to check
+    Returns:
+        Argument, expanded as list if it is an iterator (recursively)
+    """
+    if isinstance(arg, collections.Iterator):
+       return [_expand(x) for x in arg]
+    return arg
 
 def _no_cpo_args(largs):
     """ Check if a list of arguments does not contain any CPO expression
@@ -56,6 +68,7 @@ def abs(*args):
     Returns:
         An expression of type float expression or integer expression
     """
+    args = [_expand(x) for x in args]
     if _no_cpo_args(args):
         return builtin.abs(*args)
     return create_op(Oper_abs, args)
@@ -141,7 +154,7 @@ def all_min_distance(*args):
 
 
 def allowed_assignments(*args):
-    """ Explicity defines possible assignments on one or more integer expressions.
+    """ Explicitly defines possible assignments on one or more integer expressions.
 
     This Boolean expression (which is interpreted as a constraint outside of
     an expression) determines whether the assignment to a single expression *expr*
@@ -1440,6 +1453,7 @@ def max(*args):
     Returns:
         An expression of type float expression or integer expression
     """
+    args = [_expand(x) for x in args]
     if _no_cpo_args(args):
         return builtin.max(*args)
     return create_op(Oper_max, args)
@@ -1524,6 +1538,7 @@ def min(*args):
     Returns:
         An expression of type float expression or integer expression
     """
+    args = [_expand(x) for x in args]
     if _no_cpo_args(args):
         return builtin.min(*args)
     return create_op(Oper_min, args)
@@ -1857,6 +1872,7 @@ def range(*args):
     Returns:
         An expression of type boolean expression
     """
+    args = [_expand(x) for x in args]
     if _no_cpo_args(args):
         return builtin.range(*args)
     return create_op(Oper_range, args)
@@ -2547,6 +2563,7 @@ def sum(*args):
     Returns:
         An expression of type float expression or integer expression
     """
+    args = [_expand(x) for x in args]
     if _no_cpo_args(args):
         return builtin.sum(*args)
     return create_op(Oper_sum, args)

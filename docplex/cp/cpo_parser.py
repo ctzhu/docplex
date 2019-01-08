@@ -203,7 +203,7 @@ class CpoParser(object):
         Returns:
             CPO Expression for a IntervalVar declaration
         """
-        res = CpoIntervalVar(name=name)
+        res = interval_var(name=name)
         self._check_token_value(self._next_token(), '(')
         tok = self._next_token()
         while (not tok.is_value(')')):

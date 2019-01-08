@@ -87,7 +87,7 @@ context.params.Workers = 4
 # Indicate to trace CPO model before solving
 context.solver.trace_cpo = False
 
-# Indicate to trace solver log after solving
+# Indicate to trace solver log on log_output.
 context.solver.trace_log = False
 
 # Indicate to add solver log to the solution
@@ -134,6 +134,9 @@ context.solver.docloud.always_close_connection = False
 
 # Log prefix
 context.solver.docloud.log_prefix = "[DOcloud] "
+
+# Polling delay (min, max and increment)
+context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 
 
 ##############################################################################

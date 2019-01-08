@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 
 
-from docplex.mp.solution import SolveSolution, SolveDetails
+from docplex.mp.solution import SolveSolution
+from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException
 from docloud.status import JobSolveStatus
 # gendoc: ignore
@@ -15,6 +16,7 @@ class ISolver(object):
     """
     The pure solving part
     """
+
     def can_solve(self):
         """
         :return: True if this engine class can truly solve
@@ -148,7 +150,6 @@ class IEngine(ISolver):
 
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
-
     def create_range_constraint(self, rangect):
         return -1  # pragma: no cover
 
@@ -218,10 +219,13 @@ class DummyEngine(IEngine):
     def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
         raise NotImplementedError  # pragma: no cover
 
+    def get_infeasibilities(self, cts):
+        raise NotImplementedError  # pragma: no cover
+
     def get_solve_attribute(self, attr_name, indices):
         return {}  # pragma: no cover
 
-    def get_solutions(self, *args):
+    def get_solutions(self, dvars):
         return {}  # pragma: no cover
 
     def clear_objective(self, expr):
@@ -230,11 +234,8 @@ class DummyEngine(IEngine):
     def get_cplex(self):
         raise DOcplexException("No CPLEX is available.")  # pragma: no cover
 
-    def get_solve_details(self):
-        return SolveDetails.make_dummy()
 
-
-# noinspection PyAbstractClass
+# noinspection PyAbstractClass,PyUnusedLocal
 class IndexerEngine(DummyEngine):
     """
     An abstract engine facade which generates unique indices for variables, constraints
@@ -246,27 +247,27 @@ class IndexerEngine(DummyEngine):
         self.__var_counter = self._initial_index
         self.__ct_counter = self._initial_index
 
-    def _incrementVars(self, size=1):
+    def _increment_vars(self, size=1):
         self.__var_counter += size
         return self.__var_counter
 
-    def _incrementCts(self, size=1):
+    def _increment_cts(self, size=1):
         self.__ct_counter += size
         return self.__ct_counter
 
     def create_one_variable(self, vartype, lb, ub, name):
         old_count = self.__var_counter
-        self._incrementVars(1)
+        self._increment_vars(1)
         return old_count
 
     def create_variables(self, keys, vartype, lb, ub, namer):
         old_count = self.__var_counter
-        new_count = self._incrementVars(len(keys))
+        new_count = self._increment_vars(len(keys))
         return list(range(old_count, new_count))
 
     def _create_one_ct(self):
         old_ct_count = self.__ct_counter
-        self._incrementCts(1)
+        self._increment_cts(1)
         return old_ct_count
 
     def create_binary_linear_constraint(self, binaryct):
@@ -274,7 +275,7 @@ class IndexerEngine(DummyEngine):
 
     def create_block_linear_constraints(self, ct_seq):
         old_ct_count = self.__ct_counter
-        self._incrementCts(len(ct_seq))
+        self._increment_cts(len(ct_seq))
         return range(old_ct_count, self.__ct_counter)
 
     def create_range_constraint(self, rangect):
@@ -313,8 +314,14 @@ class IndexerEngine(DummyEngine):
         """
         return parameter.get()
 
+    def get_infeasibilities(self, cts):
+        return [0 for _ in cts]
+
 
 class NoSolveEngine(IndexerEngine):
+    def get_solve_details(self):
+        SolveDetails.make_fake_details(time=0, feasible=False)
+
     # INTERNAL: a dummy engine that cannot solve.
 
     def __init__(self, mdl, **kwargs):
@@ -346,8 +353,8 @@ class NoSolveEngine(IndexerEngine):
     @staticmethod
     def make_from_model(mdl):
         eng = NoSolveEngine(mdl)
-        eng._incrementVars(mdl.number_of_variables)
-        eng._incrementCts(mdl.number_of_constraints)
+        eng._increment_vars(mdl.number_of_variables)
+        eng._increment_cts(mdl.number_of_constraints)
         return eng
 
 
@@ -358,6 +365,16 @@ class ZeroSolveEngine(IndexerEngine):
         IndexerEngine.__init__(self)  # pragma: no cover
         self._last_solved_parameters = None
 
+    def show_parameters(self, params):
+        if params is None:
+            print("DEBUG> parameters: None")
+        else:
+            if params.has_nondefaults():
+                print("DEBUG> parameters:")
+                params.print_information(indent_level=8)  #
+            else:
+                print("DEBUG> parameters: defaults")
+
     @property
     def last_solved_parameters(self):
         return self._last_solved_parameters
@@ -366,34 +383,37 @@ class ZeroSolveEngine(IndexerEngine):
     def name(self):
         return "zero_solve"  # pragma: no cover
 
+    def get_var_zero_solution(self, dvar):
+        return max(0, dvar.lb)
+
     def solve(self, mdl, parameters):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
-        # sets all variable values to zero
-        # --- print parameters ---
-        if parameters is None:
-            print("DEBUG> parameters: None")
-        else:
-            if parameters.has_nondefaults():
-                print("DEBUG> parameters:")
-                parameters.print_information(indent_level=8)  #
-            else:
-                print("DEBUG> parameters: defaults")
+        self.show_parameters(parameters)
         # ---
         # return a feasible value: max of zero and the lower bound
-        zlb_map = {v: max(0, v.lb) for v in mdl.iter_variables() if v.lb != 0}
+        zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb != 0}
         obj = mdl.objective_expr.constant
         return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, engine_name=self.name)  # pragma: no cover
+
+    def get_solutions(self, args):
+        if not args:
+            return {}
+        else:
+            return {v: 0 for v in args}
 
     def can_solve(self):
         return True  # pragma: no cover
 
     def solve_relaxed(self, mdl, relaxable_groups, optimize, limits, parameters=None):
+        params = parameters or mdl.parameters
+        self._last_solved_parameters = params
+        self.show_parameters(params)
         return True, 0  # pragma: no cover
 
     def get_solve_details(self):
         # 1 is cplex status optimal...
-        return SolveDetails(time=0, dettime=0, status=1, status_string="OPTIMAL")
+        return SolveDetails.make_fake_details(time=0, feasible=True)
 
 
 class FakeFailEngine(IndexerEngine):
@@ -419,14 +439,15 @@ class FakeFailEngine(IndexerEngine):
         return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
 
     def get_solve_details(self):
-        return SolveDetails(time=0, dettime=0, status=3, status_string="infeasible")
+        return SolveDetails.make_fake_details(time=0, feasible=False)
 
 
 class RaiseErrorEngine(IndexerEngine):
     # INTERNAL: a dummy engine that says it can solve
     # but always raises an exception, this is for testing
 
-    def _simulate_error(self):
+    @staticmethod
+    def _simulate_error():
         raise DOcplexException("simulate exception")
 
     def __init__(self, mdl, **kwargs):
@@ -449,3 +470,6 @@ class RaiseErrorEngine(IndexerEngine):
 
     def get_solve_status(self):
         return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
+
+    def get_solve_details(self):
+        return SolveDetails.make_fake_details(time=0, feasible=False)

@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 from __future__ import print_function
-from docplex.mp.utils import DOcplexException, resolve_pattern
+from docplex.mp.utils import DOcplexException, resolve_pattern, is_int, is_string
 
 from enum import Enum
 
@@ -57,18 +57,27 @@ class InfoLevel(Enum):
     INFO, WARNING, ERROR, FATAL = 1, 10, 100, 9999999
 
     @classmethod
-    def parse(cls, int_level):
+    def parse(cls, arg, default_level=INFO):
         # INTERNAL
-        if int_level < 10:
-            # anything below 10 is INFO
-            return cls.INFO
-        elif int_level < 100:
-            return cls.WARNING
-        elif int_level < 1000:
-            return cls.ERROR
+        if not arg:
+            return default_level
+        elif isinstance(arg, cls):
+            return arg
+        elif is_string(arg):
+            return cls._name2level_map().get(arg.lower(), default_level)
+        elif is_int(arg):
+            if arg < 10:
+                # anything below 10 is INFO
+                return cls.INFO
+            elif arg < 100:
+                return cls.WARNING
+            elif arg < 1000:
+                return cls.ERROR
+            else:
+                # level fatal prints nothing except fatal errors
+                return cls.FATAL
         else:
-            # level fatal prints nothing except fatal errors
-            return cls.FATAL
+            raise DOcplexException("Cannot convert this to InfoLevel: {0!r}".format(arg))
 
     def __str__(self):
         return self.name
@@ -80,6 +89,13 @@ class InfoLevel(Enum):
                 InfoLevel.WARNING: "Warning:",
                 InfoLevel.ERROR: "Error:"
                 }
+
+    @staticmethod
+    def _name2level_map():
+        return {"fatal": InfoLevel.FATAL,
+                "error": InfoLevel.ERROR,
+                "warning": InfoLevel.ERROR,
+                "info": InfoLevel.INFO}
 
     def header(self):
         # cannot put the dict in the class
@@ -121,17 +137,10 @@ class AbstractErrorHandler(IErrorHandler):
     def get_output_level(self):
         return self._output_level
 
-    def set_output_level(self, output_level):
+    def set_output_level(self, output_level_arg):
+        output_level = InfoLevel.parse(output_level_arg)
         if output_level != self._output_level:
-            if isinstance(output_level, InfoLevel):
-                self._output_level = output_level
-            elif isinstance(output_level, int):
-                # convert to InfoLevel
-                self._output_level = InfoLevel.parse(output_level)
-            else:
-                self.fatal("Unexpected level: {0!s}, expecting InfoLevel object", (output_level,))
-
-    outputLevel = property(get_output_level, set_output_level)
+            self._output_level = output_level
 
     def set_trace_mode(self, trace_mode):
         self._trace_enabled = trace_mode

@@ -12,7 +12,7 @@ This module implements a DOcloud client allowing to submit a CPO model for solvi
 
 import time, json, requests
 
-from docplex.cp.utils import CpoException, is_symbol_char
+from docplex.cp.utils import CpoException, is_symbol_char, Context
 
 
 ###############################################################################
@@ -22,10 +22,8 @@ from docplex.cp.utils import CpoException, is_symbol_char
 # Job execution statuses
 ALL_JOB_STATUSES = ('CREATED', 'NOT_STARTED', 'RUNNING', 'INTERRUPTING', 'INTERRUPTED', 'FAILED', 'PROCESSED')
 
-# Wait termination delay parameters
-_DELAY_MIN = 1
-_DELAY_MAX = 3
-_DELAY_STEP = 0.1
+# Default polling parameters
+_DEFAULT_POLLING = Context(min=1, max=3, incr=0.2)
 
 
 ###############################################################################
@@ -99,18 +97,30 @@ class JobClient(object):
         self.ctx.log(3, "Job status is ", status)
         return status
 
-    def wait_job_termination(self, maxwait=0):
+    def wait_job_termination(self, maxwait=0, lognotif=None):
         """ Wait for termination of the job
         Args:
-            maxwait: Maximum wait time in seconds, 0 for infinite. Default is zero.
+            maxwait:  Maximum wait time in seconds, 0 for infinite. Default is zero.
+            lognotif: Function allowing to notify log records when available. Default is none (no log).
         Returns:
             Status string
         Raises:
             DocloudException if wait timeout reached
         """
-        self.ctx.log(2, "Waiting model solving termination")
+        self.ctx.log(2, "Waiting model solving termination.")
+
+        # Retrieve polling parameters
+        plprms = self.ctx.get_attribute('polling', _DEFAULT_POLLING)
+        plmin  = plprms.get_attribute('min',  _DEFAULT_POLLING.min)
+        plmax  = plprms.get_attribute('max',  _DEFAULT_POLLING.max)
+        plincr = plprms.get_attribute('incr', _DEFAULT_POLLING.incr)
+
+        # Initialize continuous log polling
+        logseqid = 0
+
+        # Initialize waiting loop
         etime = time.time() + maxwait
-        wdelay = _DELAY_MIN
+        wdelay = plmin
         terminated = False
         status = 'UNKNOWN'
         while not terminated:
@@ -119,10 +129,17 @@ class JobClient(object):
             if not terminated:
                 if (maxwait > 0) and (time.time() > etime):
                     self._raiseException("Timeout of " + str(maxwait) + "sec elapsed waiting for job termination.")
-                # Wait some time
+                # Wait delay and increment it if possible
                 time.sleep(wdelay)
-                if wdelay < _DELAY_MAX:
-                    wdelay += _DELAY_STEP
+                if wdelay < plmax:
+                    wdelay += plincr
+            # Get log if needed
+            if lognotif is not None:
+                log = self.get_log_items(logseqid)
+                if log:
+                    for li in log:
+                        lognotif(li['records'])
+                    logseqid = log[-1]['seqid'] + 1
         self.ctx.log(2, "Solve terminated. Status is ", status)
         return status
 
@@ -142,16 +159,28 @@ class JobClient(object):
             Attachment content as a string
         """
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/attachments/" + aname + "/blob", [200])
-        return rsp.content
+        return rsp.content.decode('utf-8')
 
-    def get_log(self):
-        """ Get the job execution log.
+    def get_log_blob(self):
+        """ Get the whole job execution log as a string.
         Returns:
-            The job log as a string.
+            The whole job log as a string.
         """
         rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/log/blob", [200])
         self.ctx.log(2, "Log retrieved")
-        return rsp.content
+        return rsp.content.decode('utf-8')
+
+    def get_log_items(self, start):
+        """ Get the job execution log.
+        Args:
+            start: Log start index
+        Returns:
+            Log items as JSON document
+        """
+        # Build headers
+        rsp = self._request('get', self.ctx.url + "/jobs/" + self.jobid + "/log/items?start=" + str(start) + "&continuous=true", [200])
+        self.ctx.log(2, "Log items retrieved")
+        return rsp.json()
 
     def abort_job(self):
         """ Abort the job handled by this client. """
@@ -210,9 +239,11 @@ class JobClient(object):
     def _request(self, mth, url, astc, **kwargs):
         """ Send a request to DOcloud with default headers and check response.
         Args:
-            mth:  HTTP method name
-            url:  Target url
-            astc: List of expected status codes
+            mth:     HTTP method name
+            url:     Target url
+            astc:    List of expected status codes
+            headers: Extra headers
+            kwargs:  Arguments to pass to request
         """
         # Send request
         kwargs.setdefault('headers',         self.headers)

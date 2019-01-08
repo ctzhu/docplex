@@ -4,7 +4,6 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-import time
 from io import BytesIO
 
 from six import iteritems
@@ -12,7 +11,8 @@ from six import iteritems
 from docplex.mp.engine import IndexerEngine
 from docplex.mp.docloud_connector import DOcloudConnector
 from docplex.mp.printer_factory import ModelPrinterFactory
-from docplex.mp.solution import SolveSolution, SolveDetails
+from docplex.mp.solution import SolveSolution, SolutionMSTPrinter
+from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.format import LP_format
 from docplex.mp.utils import StringIO
@@ -49,8 +49,11 @@ class DOcloudEngine(IndexerEngine):
         else:
             docloud_context = None
 
+        # --- log output can be overridden at solve time, so use te one from the context, not the model's
+        actual_log_output = kwargs.get('log_output') or mdl.log_output
+
         verbose = docloud_context.verbose if docloud_context is not None else None
-        self.__connector = DOcloudConnector(docloud_context, verbose=verbose, log_output=mdl.log_output)
+        self.__connector = DOcloudConnector(docloud_context, verbose=verbose, log_output=actual_log_output)
         self.__error_handler = mdl.error_handler
         self.__exchange_format = exchange_format
 
@@ -93,6 +96,12 @@ class DOcloudEngine(IndexerEngine):
         if progress_listener_list:
             self.__error_handler.warning("Progress listeners are not supported on DOcloud.")
 
+
+    def _docloud_cplex_version(self):
+        # INTERNAL: returns the version of CPLEX used in DOcloud
+        # for now returns a string. maybe we could ping Docloud and get a dynamic answer.
+        return "12.6.3.0"
+
     def _compute_prm_data_from_parameters(self, mdl_parameters, run_deterministic):
         # return a string in PRM format
         # overloaded params are:
@@ -105,6 +114,9 @@ class DOcloudEngine(IndexerEngine):
         if run_deterministic:
             # overloaded_params[mdl_parameters.threads] = 1 cf RTC28458
             overloaded_params[mdl_parameters.parallel] = 1  # 1 is deterministic
+
+        # do we need to limit the version to the one use din docloud
+        # i.e. if someone has a *newer* version than docloud??
         prm_data = mdl_parameters.export_prm_to_string(overloaded_params)
         return prm_data
 
@@ -123,8 +135,6 @@ class DOcloudEngine(IndexerEngine):
     def solve(self, mdl, parameters=None):
         self_connector = self.__connector
         mdl.notify_start_solve()
-        if mdl.mip_start:
-            mdl.warning("DOcloud cannot handle MIP starts (yet), ignored")
 
         # step 1 : prints the model in whatever exchange format
         printer = self._lazy_get_printer(mdl.error_handler)
@@ -136,11 +146,10 @@ class DOcloudEngine(IndexerEngine):
             filemode = "w"
             oss = StringIO()
 
-        t = time.time()
+        #t = time.time()
         printer.printModel(mdl, oss)
-        elapsed_t = time.time() - t
-
-        self_connector.log("elapsed time in model printing = {0}".format(elapsed_t))
+        #elapsed_t = time.time() - t
+        #self_connector.log("elapsed time in model printing = {0}".format(elapsed_t))
 
         var_name_encoding = printer.get_var_name_encoding()
 
@@ -171,16 +180,30 @@ class DOcloudEngine(IndexerEngine):
         docloud_parameters = parameters if parameters is not None else mdl.parameters
         prm_data = self._compute_prm_data_from_parameters(docloud_parameters,
                                                           self_connector.run_deterministic)
+        # export mipstart solution in CPLEX mst format, if any, else None
+        mdl_mipstarts = mdl.mip_starts
+        if mdl_mipstarts:
+            warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts)
+        else:
+            warmstart_data = None
+
+        info_to_monitor = {'jobid'}
+        if mdl.progress_listeners:
+            info_to_monitor.add('progress')
 
         def notify_info(info):
             if "jobid" in info:
                 mdl.fire_jobid(jobid=info["jobid"])
+            if "progress" in info:
+                mdl.fire_progress(progress_data=info["progress"])
 
         self_connector.submit_model_data(job_name, model_data,
                                          self.__exchange_format.extension,
                                          prm_data=prm_data,
+                                         warmstart_data=warmstart_data,
                                          gzip=not self.__exchange_format.is_binary,
-                                         info_callback=notify_info)
+                                         info_callback=notify_info,
+                                         info_to_monitor={'jobid', 'progress'})
         ok = self.__connector.has_solution()
         # cplex solve details
         json_details = self_connector.get_cplex_details()
@@ -204,7 +227,8 @@ class DOcloudEngine(IndexerEngine):
     def _make_solution(self, mdl):
         # Store the results of solve ina solution object.
         local_var_encoding = self._var_name_encoding
-        docloud_obj = self.__connector.get_objective()
+        raw_docloud_obj = self.__connector.get_objective()
+        docloud_obj = mdl.round_objective_if_discrete(raw_docloud_obj)
         docloud_values_by_idx, docloud_var_rcs = self.__connector.variable_results()
         # CPLEX index to name map
         # for those variables returned by CPLEX.

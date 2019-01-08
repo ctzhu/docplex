@@ -24,18 +24,17 @@ class LPModelPrinter(TextModelPrinter):
 
     _lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
 
-    def __init__(self, hide_user_names=False, indentLevel=1, wrap_lines=True):
+    _lp_symbol_map = {LinearConstraintType.EQ: " = ",  # BEWARE NOT ==
+                      LinearConstraintType.LE: " <= ",
+                      LinearConstraintType.GE: " >= "}
+
+    def __init__(self, hide_user_names=False, indent_level=1, wrap_lines=True):
         TextModelPrinter.__init__(self,
-                                  indent=indentLevel,
+                                  indent=indent_level,
                                   comment_start='\\',
                                   hide_user_names=hide_user_names,
                                   nb_digits_for_floats=9,
                                   wrap_lines=wrap_lines)
-
-        # symbols for constraints, not including whitespace 
-        self.ct_symbol_map = {LinearConstraintType.EQ: "=",  # BEWARE NOT ==
-                              LinearConstraintType.LE: "<=",
-                              LinearConstraintType.GE: ">="}
 
         self.wrapper = self.create_wrapper(line_width=79, initial_indent=1)
 
@@ -60,11 +59,11 @@ class LPModelPrinter(TextModelPrinter):
             indented += (len(lp_ctname) + 1)
         return indented
 
-    def _print_binary_ct(self, oss, num_printer, var_name_map, binary_ct):
+    def _print_binary_ct(self, oss, num_printer, var_name_map, binary_ct, _symbol_map=_lp_symbol_map):
         # ensure consistent ordering: left termes then right terms
         iter_diff_coeffs = binary_ct._iter_net_coeffs(ordering=True)
         self._print_expr_iter(oss, num_printer, var_name_map, iter_diff_coeffs, constant_to_print=None)
-        oss.write(' %s ' % self.ct_symbol_map[binary_ct.type])
+        oss.write(_symbol_map.get(binary_ct.type, " ?? "))
         num_printer.to_stringio(oss, binary_ct.rhs())
 
     def _print_ranged_ct(self, oss, num_printer, var_name_map, ranged_ct):
@@ -92,7 +91,7 @@ class LPModelPrinter(TextModelPrinter):
         oss.write(INDICATOR_SYMBOL)
         self._print_binary_ct(oss, num_printer, var_name_map, indicator_ct.linear_constraint)
 
-    def _print_constraint(self, oss, num_printer, var_name_map, ct):
+    def _print_constraint(self, out, oss, num_printer, var_name_map, ct):
         indented = 0
         if isinstance(ct, LinearConstraint):
             if not ct.is_trivial_feasible():
@@ -105,12 +104,12 @@ class LPModelPrinter(TextModelPrinter):
             indented = 0 if self._hide_user_names else self._print_ct_name(oss, ct)
             self._print_indicator_ct(oss, num_printer, var_name_map, ct)
         else:
-            ct.error("ERROR: unexpected constraint not printed: {0!s}".format(ct))
+            ct.error("ERROR: unexpected constraint not printed: {0!s}".format(ct))  # pragma: no cover
 
-        self.wrap_and_print(oss, self.wrapper, subsequent_level=indented)
+        self.wrap_and_print(out, oss, subsequent_level=indented)
 
     def _print_expr(self, oss, num_printer, var_name_map, expr, print_constant=True):
-        """ prints an expr to a string io-like object."""
+        # prints an expr to a stream
         printed_constant = expr._get_constant() if print_constant else None
         term_iter = expr.iter_terms()
         self._print_expr_iter(oss, num_printer, var_name_map, term_iter, printed_constant)
@@ -162,7 +161,7 @@ class LPModelPrinter(TextModelPrinter):
             # expr is empty, we must print something, so 0
             oss.write("0")
 
-    def _print_var_block(self, iter_vars, header):
+    def _print_var_block(self, out, iter_vars, header):
         printed_header = False
         oss = None
         c = 0
@@ -171,66 +170,59 @@ class LPModelPrinter(TextModelPrinter):
             if oss is None:
                 oss = StringIO()
             if not printed_header:
-                print('\n', header, sep='')
+                out.write("\n%s\n" % header)
                 printed_header = True
             if c > 0:
                 oss.write(' ')
             oss.write(lp_name)
             c += 1
         if printed_header:
-            self.wrap_and_print(oss, self.wrapper, subsequent_level=self._indent_level)
+            self.wrap_and_print(out, oss, subsequent_level=self._indent_level)
 
-    def _print_var_bounds(self, varname, lb, ub):
+    def _print_var_bounds(self, out, varname, lb, ub, varname_indent=5*' '):
         LE = "<="
         FREE = "Free"
-        VARNAME_INDENT = 4 * ' '
 
         if lb is None and ub is None:
             # try to indent with space of '0 <= ', that is 5 space
-            print(VARNAME_INDENT, varname, FREE)
+            out.write("%s %s %s\n" % (varname_indent, varname, FREE))
         elif lb is None:
-            print(varname, LE, self._num_to_string(ub))
+            out.write("%s %s %s %s\n" % (varname_indent, varname, LE, self._num_to_string(ub)))
         elif ub is None:
-            print(self._num_to_string(lb), LE, varname)
+            out.write("%s %s %s\n" % (self._num_to_string(lb), LE, varname))
         elif lb == ub:
-            print(VARNAME_INDENT, varname, '=', self._num_to_string(lb))
+            out.write("%s %s %s %s\n" % (varname_indent, varname, "=", self._num_to_string(lb)))
         else:
-            print(self._num_to_string(lb), LE, varname, LE, self._num_to_string(ub))
+            out.write("%s %s %s %s %s\n" % (self._num_to_string(lb), LE, varname, LE, self._num_to_string(ub)))
 
     TRUNCATE = 200
 
-    def fix_name(self, mobj, prefix, local_index_map):
+    def fix_name(self, mobj, prefix, local_index_map, hide_names):
         raw_name = mobj.name
 
         # anonymous constraints must be named in a LP (we follow CPLEX here)
-        if self.encrypt_user_names() or not raw_name or self._is_automatic_name(raw_name):
+        if hide_names or mobj.has_automatic_name() or mobj.is_generated() or not raw_name:
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
+        elif not self._is_lp_compliant(raw_name):
+             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
         else:
             # swap blanks with underscores
-            fixed_name = self.translate_chars(raw_name)
+            fixed_name = self._translate_chars(raw_name)
             # truncate if necessary, again this does nothing if name is too short
             return fixed_name[:self.TRUNCATE]
 
-    def _print_model_name(self, model):
+    def _print_model_name(self, out, model):
         printed_name = model.name or 'CPLEX'
-        print("\\Problem name: %s\n" % printed_name)
+        out.write("\\Problem name: %s\n" % printed_name)
 
     @staticmethod
-    def _is_lp_compliant(name):
+    def _is_lp_compliant(name, _lpname_regexp=_lp_re):
         if name is None:
-            return True
+            return True  # pragma: no cover
         # PUT THIS SOMEWHERE ELSE
         fixed_name = LPModelPrinter.fix_whitespace(name)
-        #lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
-        lp_match = LPModelPrinter._lp_re.match(fixed_name)
-        if lp_match is None:
-            return False
-        elif lp_match.start() != 0:
-            return False
-        elif lp_match.end() != len(fixed_name):
-            return False
-        else:
-            return True
+        lp_match = _lpname_regexp.match(fixed_name)
+        return lp_match and lp_match.start() == 0 and lp_match.end() == len(fixed_name)
 
     @staticmethod
     def _is_injective(name_map):
@@ -238,40 +230,40 @@ class LPModelPrinter(TextModelPrinter):
         nb_different_names = len(set(name_map.values()))
         return nb_different_names == nb_keys
 
-    #@profile
-    def printModelInternal(self, model):
+    #  @profile
+    def print_model_to_stream(self, out, model):
         # first , check that all fixed names are lp compliant
-        for dv in model.iter_variables():
-            if dv.has_user_name() and not self._is_lp_compliant(dv.name):
-                self._noncompliant_varname = dv.name
-                break
-        else:
-            self._noncompliant_varname = None
-
-        #self._noncompliant_varname = [dv for dv in model.iter_variables() if not self._is_lp_compliant(dv.name)]
-        if self._noncompliant_varname:
-            model.error_handler.info("#non-compliant LP name: |{0}|\n".format(self._noncompliant_varname))
+        # for dv in model.iter_variables():
+        #     if not dv.is_generated() and dv.has_user_name() and not self._is_lp_compliant(dv.name):
+        #         self._noncompliant_varname = dv.name
+        #         break
+        # else:
+        #     self._noncompliant_varname = None
+        #
+        # if self._noncompliant_varname:
+        #     model.error_handler.info("#non-compliant LP name: |{0}|\n".format(self._noncompliant_varname))
 
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
-            sys.__stdout__.write("-- refining variable names\n")
+            sys.__stdout__.write("\DOcplex: refine variable names\n")
             k = 0
             for dv, lp_name in iteritems(self._var_name_map):
                 refined_name = "%s#%d" % (lp_name, k)
                 self._var_name_map[dv] = refined_name
                 k += 1
-            #assert self._is_injective(self._var_name_map)
 
         TextModelPrinter.prepare(self, model)
         self_num_printer = self._num_printer
         var_name_map = self._var_name_map
 
-        self._print_signature()
-        self._print_encoding()
-        self._print_model_name(model)
+        self._print_signature(out)
+        self._print_encoding(out)
+        self._print_model_name(out, model)
+        self._newline(out)
 
         # print objective
-        print(model.objective_sense.name)
+        out.write(model.objective_sense.name)
+        self._newline(out)
         objexpr = model.objective_expr
         obj_constant = objexpr.constant
         # the new dummy var has name 'x' + (max_index+2
@@ -285,37 +277,37 @@ class LPModelPrinter(TextModelPrinter):
             oss.write(' + ')
         oss.write(obj_constant_term_varname)
         # 6 is len("obj: ") + 1
-        self.wrap_and_print(oss, self.wrapper, subsequent_level=6)
-        print("Subject To")
+        self.wrap_and_print(out, oss, subsequent_level=6)
+        out.write("Subject To\n")
 
         for ct in model.iter_constraints():
             oss = StringIO()
-            self._print_constraint(oss, self_num_printer, var_name_map, ct)
+            self._print_constraint(out, oss, self_num_printer, var_name_map, ct)
 
-        print("\nBounds")
+        out.write("\nBounds\n")
         for dvar in model.iter_variables():
             lp_name = self._var_print_name(dvar)
             if dvar.is_binary():
-                self._print_var_bounds(lp_name, 0, 1)
+                self._print_var_bounds(out, lp_name, 0, 1)
             else:
                 free_lb = dvar.has_free_lb()
                 free_ub = dvar.has_free_ub()
                 if free_lb and free_ub:
-                    self._print_var_bounds(lp_name, None, None)
+                    self._print_var_bounds(out, lp_name, None, None)
                 elif free_ub:
-                    self._print_var_bounds(lp_name, dvar.lb, None)
+                    self._print_var_bounds(out, lp_name, dvar.lb, None)
                 elif free_lb:
-                    self._print_var_bounds(lp_name, None, dvar.ub)
+                    self._print_var_bounds(out, lp_name, None, dvar.ub)
                 else:
-                    self._print_var_bounds(lp_name, dvar.lb, dvar.ub)
+                    self._print_var_bounds(out, lp_name, dvar.lb, dvar.ub)
         # add constant term
-        self._print_var_bounds(obj_constant_term_varname, obj_constant, obj_constant)
+        self._print_var_bounds(out, obj_constant_term_varname, obj_constant, obj_constant)
         # add ranged cts vars
         for rng in model.iter_range_constraints():
             (varname, _, ub) = self._rangeData[rng]
-            self._print_var_bounds(varname, 0, ub)
+            self._print_var_bounds(out, varname, 0, ub)
 
-        self._print_var_block(model.iter_binary_vars(), 'Binaries')
-        self._print_var_block(model.iter_integer_vars(), 'Generals')
+        self._print_var_block(out, model.iter_binary_vars(), 'Binaries')
+        self._print_var_block(out, model.iter_integer_vars(), 'Generals')
 
-        print("End")
+        out.write("End\n")

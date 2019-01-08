@@ -37,6 +37,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         if (context.key is None) or (' ' in context.key):
             raise CpoException("Your DOcloud key has not been set")
         super(CpoSolverDocloud, self).__init__(model, params, context)
+        self.log_records = []
 
     def solve(self):
         """ Solve the model
@@ -64,9 +65,16 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         name = self.model.get_name()
         maxwait = ctx.params.TimeLimit + ctx.request_timeout + ctx.result_wait_extra_time if ctx.params.TimeLimit else 0
         try:
+            # Create job and start execution
             client.create_job(name, cpostr)
             client.execute_job()
-            client.wait_job_termination(maxwait=maxwait)
+
+            # Wait job termination
+            lgntf = None
+            if self._is_log_required():
+                self.log_records = []
+                lgntf = (lambda recs: self._log_records(recs))
+            client.wait_job_termination(maxwait=maxwait, lognotif=lgntf)
             jinfo = client.get_info()
 
             # Trace response if required
@@ -92,15 +100,15 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             jsol = None
             if msol.is_solution():
                 try:
-                    jsol = client.get_attachment("solution.json").decode('utf-8')
+                    jsol = client.get_attachment("solution.json")
                 except Exception as e:
                     raise CpoException("Model solution access error: " + str(e))
 
                 ctx.log(3, "JSON solution:\n", jsol)
 
             # Get log
-            if self._is_log_required():
-                logstr = client.get_log()
+            if lgntf:
+                logstr = '\n'.join([rec['message'] for rec in self.log_records])
                 self._set_solver_log(logstr, msol)
 
         finally:
@@ -114,6 +122,22 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
 
         # Return
         return msol
+
+    def _log_records(self, records):
+        """ Method called when new log records are provided
+        Args:
+            records: List of new records
+        """
+        self.log_records.extend(records)
+        if self.context.trace_log:
+            out = self.context.log_output
+            if out is not None:
+                for rec in records:
+                    out.write(rec['message'])
+                    out.write('\n')
+                    out.flush()
+
+
 
 
 ###############################################################################

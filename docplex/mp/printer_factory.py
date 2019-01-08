@@ -8,6 +8,7 @@
 
 from docplex.mp.lp_printer import LPModelPrinter
 
+
 class ModelPrinterFactory(object):
     __printer_ext_map = \
         {printer().get_format(): printer for printer in {LPModelPrinter}}
@@ -22,7 +23,8 @@ class ModelPrinterFactory(object):
         :param hide_user_names:
         :return:
         """
-        printer_type = ModelPrinterFactory.__printer_ext_map.get(exchange_format, ModelPrinterFactory.default_printer_type)
+        printer_type = ModelPrinterFactory.__printer_ext_map.get(exchange_format,
+                                                                 ModelPrinterFactory.default_printer_type)
         if not printer_type:
             error_handler.fatal("Unsupported output format: {0!s}", exchange_format)
         else:

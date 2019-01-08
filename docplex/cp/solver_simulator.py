@@ -49,7 +49,7 @@ class CpoSolverSimulatorFail(solver.CpoSolverAgent):
             Model solution expressed as CpoModelSolution
         """
         # Warn about simulator
-        print("WARNING: Solver simulator that always fail")
+        print("WARNING: Solver simulator always returns fail")
 
         # Build fake infeasible solution
         msol = CpoModelSolution()
@@ -79,7 +79,11 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
             Model solution expressed as CpoModelSolution
         """
         # Warn about simulator
-        print("WARNING: Solver simulator returning a random solution")
+        print("WARNING: Solver simulator returns a random solution")
+
+        # Force generation of CPO format if required (for testing purpose only)
+        if self.context.create_cpo:
+            self._get_cpo_model_string()
 
         # Build fake feasible solution
         msol = CpoModelSolution()
@@ -107,9 +111,9 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
 
             elif isinstance(var, CpoIntervalVar):
                 # Generate presence
-                if var.absent:
+                if var.is_absent():
                     present = False
-                elif var.present:
+                elif var.is_present():
                     present = True
                 else:
                     present = (random.random() > 0.3)

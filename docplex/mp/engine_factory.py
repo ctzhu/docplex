@@ -71,9 +71,9 @@ class EngineFactory(object):
             engine_type = cls._get_engine_by_code(solver_agent, DOcloudEngine)
 
         else:
-            # no CPLEX, no credentials!
-            model.warning("CPLEX DLL not found and model has no DOcloud credentials."
-                          "Provide credentials at solve time")
+            # no CPLEX, no credentials
+            # model.trace("CPLEX DLL not found and model has no DOcloud credentials. "
+            #               "Credentials are required at solve time")
             engine_type = NoSolveEngine
 
         if not engine_type:

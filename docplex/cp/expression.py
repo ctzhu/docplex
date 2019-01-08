@@ -35,6 +35,7 @@ from docplex.cp.utils import *
 from docplex.cp.catalog import *
 import math
 import collections
+import threading
 
 
 ###############################################################################
@@ -76,7 +77,8 @@ class CpoExpr(object):
         return int(id(self) / 16)
 
     '''
-    # DO NOT activate these functions with cloudpickle
+    # These functions are required with standard 'pickle'
+    # But DO NOT activate them with cloudpickle
     def __getstate__(self):
         """ Build a picklable object from this object
         """
@@ -335,6 +337,33 @@ class CpoValue(CpoExpr):
         return str(self.value)
 
 
+class CpoExprList(list):
+    """ List of CPO expressions.
+
+    This extension of a standard Python list overwrites __getitem__ to call element() constraint
+    if the index is a CPO integer expression.
+
+    This object is used as returned object by constructor methods integer_var_list() in this module.
+    """
+
+    def __init__(self):
+        super(CpoExprList, self).__init__()
+
+    def __getitem__(self, nx):
+        """ Overloading of [] to create a CPO element() expression if index is a CPO integer expression.
+
+        Args:
+            nx: Element index
+        Returns:
+            If the index is a CPO integer expression, returns a CPO element() expression.
+            Otherwise, returns the element corresponding to the index.
+        """
+        if isinstance(nx, CpoExpr) and nx.is_kind_of(Type_IntExpr):
+            return(_create_operation(Oper_element, (nx, self)))
+        return super(CpoExprList, self).__getitem__(nx)
+
+
+
 class CpoFunctionCall(CpoExpr):
     """ Constraint programming model expression representing a function call. """
     __slots__ = ('signature',  # Signature of the operation (None if none)
@@ -442,8 +471,6 @@ class CpoFunctionCall(CpoExpr):
 
 class CpoVariable(CpoExpr):
     """ Expression representing a variable. """
-    __slots__ = ('alias',  # Variable name alias, None if none
-                )
 
     def __init__(self, type, name):
         """ Creates a new variable expression.
@@ -454,7 +481,7 @@ class CpoVariable(CpoExpr):
         """
         # Check name length
         if name is None:
-            name = _allocate_identifier()
+            name = _allocate_var_name()
         super(CpoVariable, self).__init__(type, name)
         self.alias = None
 
@@ -466,39 +493,6 @@ class CpoVariable(CpoExpr):
         """
         return True
 
-    def get_alias(self):
-        """ Gets the alias of this variable.
-
-        Returns:
-            Variable alias, None if none.
-        """
-        return self.alias
-
-    def is_alias(self):
-        """ Checks if this variable has an alias set.
-
-        Returns:
-            True if there is an alias to this variable, False otherwise.
-        """
-        return self.alias is not None
-
-    def add_alias(self):
-        """ Adds an alias to this variable, if not already set.
-
-        Return:
-            The variable alias.
-        """
-        if self.alias is None:
-            self.alias = _allocate_alias()
-        return self.alias
-
-    def _get_alias_then_name(self):
-        """ Get the alias of this variable, or name if no alias
-
-        Returns:
-            Variable alias, or name
-        """
-        return self.name if self.alias is None else self.alias
 
 class CpoIntVar(CpoVariable):
     """ Integer variable. """
@@ -506,17 +500,9 @@ class CpoIntVar(CpoVariable):
                  )
     
     def __init__(self, dom, name):
-        """ Creates an integer variable.
-
-        Args:
-            dom:   List of integers or interval tuples representing the variable domain
-                   See method set_domain() for details.
-            name:  Variable name, None for anonymous/autonamed variable.
-        Returns:
-            IntVar expression
-        """
+        # Private constructor
         super(CpoIntVar, self).__init__(Type_IntVar, name)
-        self.set_domain(dom)
+        self.domain = dom
         
     def set_domain(self, dom):
         """ Sets the domain of the variable.
@@ -534,12 +520,7 @@ class CpoIntVar(CpoVariable):
         Args:
             dom: List of integers or interval tuples representing the variable domain.
         """
-        if __debug__:
-            assert is_array(dom), "Argument 'dom' should be an array of integers and/or intervals (tuples of 2 integers)"
-            for v in dom:
-                if not is_int(v):
-                    assert _is_interval_tuple(v), "Argument 'dom' should be an array of integers and/or intervals (tuples of 2 integers)"
-        self.domain = dom
+        self.domain = _check_arg_domain(dom, 'dom')
     
     def get_domain(self):
         """ Gets the domain of the variable.
@@ -571,6 +552,11 @@ INFINITY = float('inf')
 DEFAULT_INTERVAL = (0, INTERVAL_MAX)
 """ Default interval. """
 
+# Different interval variable presence states
+_PRES_ALWAYS_PRESENT = 0  # Always present
+_PRES_ALWAYS_ABSENT  = 1  # Always absent
+_PRES_OPTIONAL       = 2  # Present or absent, choice made by the solver
+
 
 class CpoIntervalVar(CpoVariable):
     """ Interval variable. """
@@ -580,36 +566,21 @@ class CpoIntervalVar(CpoVariable):
                  'size',         # Size domain
                  'intensity',    # Specifies relation between size and length of the interval.
                  'granularity',  # Scale of the intensity function.
-                 'present',      # Present indicator
-                 'absent',       # Absent indicator
+                 'presence',     # Presence requirement
                  )
-    
-    def __init__(self, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                 intensity=None, granularity=None, present=True, absent=False, name=None):
-        """ Creates a new interval variable.
 
-        Args:
-            start:       Start interval (single integer or interval expressed as a tuple of 2 integers).
-            end:         End interval (single integer or interval expressed as a tuple of 2 integers).
-            length:      Length interval (single integer or interval expressed as a tuple of 2 integers).
-            size:        Size interval (single integer or interval expressed as a tuple of 2 integers).
-            intensity:   StepFunction that specifies relation between size and length of the interval.
-            granularity: Scale of the intensity function. None or positive integer.
-            present:     Presence indicator. None or Boolean.
-            absent:      Absence indicator. None or Boolean.
-            name:        Name of the variable, None for automatic naming.
-        """
+    def __init__(self, start, end, length, size, intensity, granularity, presence, name):
+        # Private constructor
         super(CpoIntervalVar, self).__init__(Type_IntervalVar, name)
-        
-        # Check and store arguments
-        self.start   = _check_arg_interval(start,  "start")
-        self.end     = _check_arg_interval(end,    "end")
-        self.length  = _check_arg_interval(length, "length")
-        self.size    = _check_arg_interval(size,   "size")
-        self.present = _check_arg_boolean(present, "present")
-        self.absent  = _check_arg_boolean(absent,  "absent")
-        self.set_granularity(granularity)  # Set before intensity
-        self.set_intensity(intensity)
+        self.start   = start
+        self.end     = end
+        self.length  = length
+        self.size    = size
+        self.presence = presence
+        self.granularity = granularity
+        self.intensity = intensity
+        if intensity is not None:
+            intensity._incr_ref_count()
 
     def set_start(self, intv):
         """ Sets the start interval.
@@ -741,18 +712,39 @@ class CpoIntervalVar(CpoVariable):
 
     def set_present(self):
         """ Specifies that this IntervalVar must be present. """
-        self.present = True
-        self.absent = False
+        self.presence = _PRES_ALWAYS_PRESENT
+
+    def is_present(self):
+        """ Check if this interval variable must be present.
+
+        Returns:
+            True if this interval variable must be present, False otherwise.
+        """
+        return self.presence == _PRES_ALWAYS_PRESENT
 
     def set_absent(self):
-        """ Specifies that this IntervalVar must be absent. """
-        self.present = False
-        self.absent = True
+        """ Specifies that this interval variable must be absent. """
+        self.presence = _PRES_ALWAYS_ABSENT
+
+    def is_absent(self):
+        """ Check if this interval variable must be absent.
+
+        Returns:
+            True if this interval variable must be absent, False otherwise.
+        """
+        return self.presence == _PRES_ALWAYS_ABSENT
 
     def set_optional(self):
-        """ Specifies that this IntervalVar is optional. """
-        self.present = False
-        self.absent = False
+        """ Specifies that this interval variable is optional. """
+        self.presence = _PRES_OPTIONAL
+
+    def is_optional(self):
+        """ Check if this interval variable is optional.
+
+        Returns:
+            True if this interval variable is optional, False otherwise.
+        """
+        return self.presence == _PRES_OPTIONAL
 
     def set_intensity(self, intensity):
         """ Sets the intensity function of this interval var.
@@ -760,19 +752,10 @@ class CpoIntervalVar(CpoVariable):
         Args:
            intensity:  Intensity function (None, or StepFunction).
         """
-        if (intensity is not None):
-            # Check intensity function (with type to avoid recursive import - beurk)
-            if __debug__:
-                assert isinstance(intensity, CpoExpr) and (intensity.get_type() == Type_StepFunction), "Argument 'intensity' should be None or StepFunction"
-                for (s, v) in intensity.get_step_list():
-                    assert is_int(s), "'intensity' step start should be an integer"
-                    gran = self.granularity
-                    if (gran is None):
-                        gran = 100
-                    assert is_int(v) and (v >= 0) and (v <= gran), "'intensity' step value should be in [0..granularity]"
-            # Update references on intensity function
-            intensity._incr_ref_count()
+        _check_arg_intensity(intensity, self.granularity)
         self.intensity = intensity
+        if intensity is not None:
+            intensity._incr_ref_count()
 
     def set_granularity(self, granularity):
         """ Sets the scale of the intensity function.
@@ -1062,15 +1045,7 @@ def integer_var(min, max=None, name=None):
     Returns:
         CpoIntVar expression
     """
-    # Create name if none
-    if name is None:
-        name = _allocate_var_name()
-    # Build domain
-    if max is None:
-        dom = min
-    else:
-        dom = ((min, max),)
-    return CpoIntVar(dom, name)
+    return CpoIntVar(_build_int_var_domain(min, max), name)
 
 
 def integer_var_list(size, min, max=None, name=None):
@@ -1093,10 +1068,11 @@ def integer_var_list(size, min, max=None, name=None):
         List of integer variables.
     """
     if name is None:
-        name = _allocate_var_name()
-    res = []
+        name = _allocate_var_name() + "_"
+    dom = _build_int_var_domain(min, max)
+    res = CpoExprList()
     for i in range(size):
-        res.append(integer_var(min, max, name + str(i)))
+        res.append(CpoIntVar(dom, name + str(i)))
     return res
 
 
@@ -1123,67 +1099,88 @@ def integer_var_dict(keys, min, max=None, name=None):
         Dictionary of IntVars (OrderedDict).
     """
     if name is None:
-        name = _allocate_var_name()
+        name = _allocate_var_name() + "_"
+    dom = _build_int_var_domain(min, max)
     res = collections.OrderedDict()
     i = 0
+    isnamestr = isinstance(name, str)
     for k in keys:
-        if isinstance(name, str):
+        if isnamestr:
             vname = name + str(i) 
         else:
             vname = name(k)
-        res[k] = integer_var(min, max, vname)
+        res[k] = CpoIntVar(dom, vname)
         i += 1
     return res
 
 
 def interval_var(start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                  intensity=None, granularity=None, present=True, absent=False, name=None):
+                  intensity=None, granularity=None, optional=False, name=None, present=True):
     """ Creates an interval variable.
 
+    Represents an interval of integers. Interval variables are used mostly for scheduling to represent a
+    task as an interval of time.
+    In its most basic form, an interval variable can be seen as a pair of two integer variables start and end
+    such that start ? end.
+    However there is an important difference: the interval variable can be absent to represent the fact that the
+    interval does not exist at all (which is different from a zero-length interval).
+
     Args:
-        start:       Interval defining start (object of type Interval).
-        end:         Interval defining end (object of type Interval).
-        length:      Interval defining length (object of type Interval).
-        size:        Interval defining size (object of type Interval).
+        start:       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+        end:         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+        length:      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+        size:        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
         intensity:   StepFunction that specifies relation between size and length of the interval.
         granularity: Scale of the intensity function.
-        present:     Presence indicator.
-        absent:      Absence indicator.
+        optional:    Optional presence indicator.
         name:        Name of the variable.
+    Deprecated:
+        present:     Presence indicator. present=False is equivalent to optional=True)
     Returns:
         IntervalVar expression.
     """
-    return CpoIntervalVar(start=start, end=end, length=length, size=size,
-                          intensity=intensity, granularity=granularity, present=present, absent=absent, name=name)
+    start  = _check_arg_interval(start,  "start")
+    end    = _check_arg_interval(end,    "end")
+    length = _check_arg_interval(length, "length")
+    size   = _check_arg_interval(size,   "size")
+    _check_arg_intensity(intensity, granularity)
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_ALWAYS_PRESENT
+    return CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name)
 
 
 def interval_var_list(asize, start=DEFAULT_INTERVAL, end=DEFAULT_INTERVAL, length=DEFAULT_INTERVAL, size=DEFAULT_INTERVAL,
-                 intensity=None, granularity=None, present=True, absent=False, name=None):
+                 intensity=None, granularity=None, optional=False, name=None, present=True):
     """ Creates a list of interval variables.
 
     If a name is given, each variable of the array is created with this
     name concatenated with the index of the variable in the list.
 
     Args:
-        asize:       Result array size.
-        start:       Interval defining start (object of type Interval).
-        end:         Interval defining end (object of type Interval).
-        length:      Interval defining length (object of type Interval).
-        size:        Interval defining size (object of type Interval).
+        asize:       Result list size.
+        start:       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
+        end:         Allowed range for the end the interval (single integer or interval expressed as a tuple of 2 integers).
+        length:      Allowed range for the length the interval (single integer or interval expressed as a tuple of 2 integers).
+        size:        Allowed range for the size the interval (single integer or interval expressed as a tuple of 2 integers).
         intensity:   StepFunction that specifies relation between size and length of the interval.
         granularity: Scale of the intensity function.
-        present:     Presence indicator.
-        absent:      Absence indicator.
-        name:        Name of the variable.
+        optional:    Optional presence indicator.
+        name:        Variable name prefix.
+    Deprecated:
+        present:     Presence indicator. present=False is equivalent to optional=True)
     Returns:
         List of interval variables.
     """
+    start  = _check_arg_interval(start,  "start")
+    end    = _check_arg_interval(end,    "end")
+    length = _check_arg_interval(length, "length")
+    size   = _check_arg_interval(size,   "size")
+    _check_arg_intensity(intensity, granularity)
+    presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional") or not present) else _PRES_ALWAYS_PRESENT
     if name is None:
-        name = _allocate_var_name()
+        name = _allocate_var_name() + "_"
     res = []
     for i in range(asize):
-        res.append(interval_var(start=start, end=end, length=length, size=size,
-                                intensity=intensity, granularity=granularity, present=present, absent=absent, name=name + str(i)))
+        res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name+str(i)))
     return res
 
 
@@ -1326,10 +1323,10 @@ def _create_operation(oper, params):
 ###############################################################################
 
 # Map of CPO expressions corresponding to Python values
-_CPO_VALUES_FROM_PYTHON_ = dict()
+_CPO_VALUES_FROM_PYTHON = KeyIdDict()
 
-# List of Python values converted in CPO. Used only to keep a pointer on and not reuse their id
-_CONVERTED_PYTHON_VALUES = []
+# Lock to protect the map
+_CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
 
 def _build_cpo_expr(val):
     """ Builds an expression from a given Python value.
@@ -1356,15 +1353,17 @@ def _build_cpo_expr(val):
         val = tuple(val)
 
     # Check if already converted
-    vid = id(val)
-    cpval = _CPO_VALUES_FROM_PYTHON_.get(vid, None)
+    _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
+    cpval = _CPO_VALUES_FROM_PYTHON.get(val)
+    _CPO_VALUES_FROM_PYTHON_LOCK.release()
     if cpval is not None:
         return cpval
 
     # Build new expression
     cpval = create_cpo_expr(val)
-    _CPO_VALUES_FROM_PYTHON_[vid] = cpval
-    _CONVERTED_PYTHON_VALUES.append(val)  # Keep val to ensure id is never reused
+    _CPO_VALUES_FROM_PYTHON_LOCK.acquire()
+    _CPO_VALUES_FROM_PYTHON.set(val, cpval)
+    _CPO_VALUES_FROM_PYTHON_LOCK.release()
     return cpval
 
 
@@ -1386,7 +1385,6 @@ _PYTHON_TO_CPO_TYPE[CpoStateFunction]    = Type_StateFunction
 
 def _is_interval_tuple(val):
     """ Check if a value is a tuple representing an integer interval
-
     Args:
         val:  Value to check
     Returns:
@@ -1397,7 +1395,6 @@ def _is_interval_tuple(val):
 
 def _check_arg_boolean(arg, name):
     """ Check that an argument is a boolean and raise error if wrong
-
     Args:
         arg:  Argument value
         name: Argument name
@@ -1412,7 +1409,6 @@ def _check_arg_boolean(arg, name):
 
 def _check_arg_interval(arg, name):
     """ Check that an argument is an interval and raise error if wrong
-
     Args:
         arg:  Argument value
         name: Argument name
@@ -1427,9 +1423,43 @@ def _check_arg_interval(arg, name):
     return arg
 
 
+def _check_arg_domain(val, name):
+    """ Check that an argument is a correct domain and raise error if wrong
+    Args:
+        val:  Argument value
+        name: Argument name
+    Returns:
+        Domain to be set
+    Raises:
+        Exception if argument has the wrong format
+    """
+    assert is_array(val), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+    for v in val:
+        if not is_int(v):
+            assert _is_interval_tuple(v), "Argument '" + name + "' should be a list of integers and/or intervals (tuples of 2 integers)"
+    return val
+
+
+def _build_int_var_domain(min, max):
+    """ Create/check integer variable domain from parameters min and max
+    Args:
+        min:  Domain min value, or extensive list of values and/or intervals expressed as tuples of integers.
+        max:  Domain max value, default is None and indicates that 'min' should contain an extensive list of values.
+    Returns:
+        Valid integer variable domain
+    Raises:
+        Exception if argument has the wrong format
+    """
+    if max is None:
+        assert is_array(min), "When 'max' is not specified, argument 'min' should be a list of integers and/or intervals (tuples of 2 integers)"
+        return(_check_arg_domain(min, 'min'))
+    else:
+        assert is_int(min) and is_int(max), "Domain 'min' and 'max' values should be int"
+        return ((min, max),)
+
+
 def _check_arg_step_function(arg, name):
     """ Check that an argument is a step function and raise error if wrong
-
     Args:
         arg:  Argument value
         name: Argument name
@@ -1442,9 +1472,23 @@ def _check_arg_step_function(arg, name):
     return arg
 
 
+def _check_arg_intensity(intensity, granularity):
+    """ Check the intensity parameter of an interval var.
+    Args:
+       intensity:   Intensity function (None, or StepFunction).
+       granularity: Granularity
+    """
+    if __debug__ and (intensity is not None):
+        assert isinstance(intensity, CpoExpr) and (intensity.get_type() == Type_StepFunction), "Interval variable 'intensity' should be None or a StepFunction"
+        for (s, v) in intensity.get_step_list():
+            assert is_int(s), "'intensity' step start should be an integer"
+            if granularity is None:
+                granularity = 100
+            assert is_int(v) and (v >= 0) and (v <= granularity), "'intensity' step value should be in [0..granularity]"
+
+
 def _check_and_expand_interval_tuples(name, arr):
     """ Check that a list contains only integers and expand interval tuples if any
-
     Args:
         name:  Argument name
         arr:   Array of integers and/or intervals
@@ -1470,15 +1514,13 @@ def _check_and_expand_interval_tuples(name, arr):
 
 def _get_cpo_type(val):
     """ Determine the CPO type of a given Python value
-
     Args:
         val: Python value
     Returns:
         Corresponding CPO Type, None if none
     """
     # Check simple types
-    typ = type(val)
-    ctyp = _PYTHON_TO_CPO_TYPE.get(typ)
+    ctyp = _PYTHON_TO_CPO_TYPE.get(type(val))
     if ctyp:
         return ctyp
 
@@ -1486,12 +1528,12 @@ def _get_cpo_type(val):
     if isinstance(val, CpoExpr):
         return val.get_type()
 
-    # Check numpy Array Scalars
+    # Check numpy Array Scalars (special case when called from overloaded)
     if IS_NUMPY_AVAILABLE and type(val) is numpy.ndarray and not val.shape:
         return(_PYTHON_TO_CPO_TYPE.get(val.dtype.type))
 
     # Check arrays
-    if typ not in (list, tuple):
+    if not isinstance(val, (list, tuple)):
         return(None)
     
     # Check empty Array
@@ -1592,31 +1634,19 @@ def _is_matching_arguments(sgn, args):
     return True   
 
 
-_ANONYMOUS_VAR_ID_ALLOCATOR = IdAllocator('_ANONYM_')
+_ANONYMOUS_VAR_ID_ALLOCATOR = SafeIdAllocator('_ANM_')
 def _allocate_var_name():
     """ Allocate a new variable name for anonymous variables
-
     Returns:
         New variable name
     """
     return _ANONYMOUS_VAR_ID_ALLOCATOR.allocate()
 
 
-_IDENTIFIER_ALLOCATOR = IdAllocator('_ID_')
+_IDENTIFIER_ALLOCATOR = SafeIdAllocator('_ID_')
 def _allocate_identifier():
     """ Allocate a new expression identifier
-
     Returns:
         New identifier
     """
     return _IDENTIFIER_ALLOCATOR.allocate()
-
-
-_ALIAS_ALLOCATOR = IdAllocator('_ALIAS_')
-def _allocate_alias():
-    """ Allocate a new alias identifier
-
-    Returns:
-        New identifier
-    """
-    return _ALIAS_ALLOCATOR.allocate()

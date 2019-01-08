@@ -61,10 +61,10 @@ class KPI(object):
 
 
 class DecisionKPI(KPI):
-    """ Specialized class of Key Performance Indicator, based in expressions.
+    """ Specialized class of Key Performance Indicator, based on expressions.
 
     This subclass is built from a decision variable or a linear expression.
-    The compute() method returns the solution value afetr a successful solve()
+    The :func:`compute` method returns the solution value after a successful solve.
 
     """
     def __init__(self, decision_obj, name=None):
@@ -82,14 +82,13 @@ class DecisionKPI(KPI):
         return self._dobj.model
 
     def compute(self):
-        """ Recdfintion of the abstract compute() method
+        """ Redefinition of the abstract `compute()` method.
 
         Returns:
-            the decision expression solution value.
+            The value of the decision expression at the solution.
 
         Raises:
-            evaluating theis KPi raises an exception if the underlying model
-            has not been solved successfully.
+            Evaluating this KPI raises an exception if the underlying model has not been solved successfully.
         """
         return self._dobj.solution_value
 

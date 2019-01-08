@@ -222,6 +222,7 @@ class Environment(object):
     def __reduce__(self):
         return Environment.make_new_configured_env, ()
 
+
 def get_closed_environment():
     # This instance assumes nothing is found, CPLEX, numpy, etc, to be used for tests
     env = Environment(start_auto_configure=False)

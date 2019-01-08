@@ -102,7 +102,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         #    raise CpoException("Executable file '" + str(context.execfile) + "' does not exists")
 
         # Create solving process
-        cmd = [context.execpath if context.execpath else context.execfile]
+        cmd = [context.execfile]
         if context.parameters is not None:
             cmd.extend(context.parameters)
         context.log(2, "Solver exec command: '", ' '.join(cmd), "'")
@@ -489,7 +489,12 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                     else:
                         raise LocalSolverException("Nothing to read from local solver process. Check its availability.")
                 else:
-                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped.")
+                    try:
+                        self.process.wait()
+                        rc = self.process.returncode
+                    except:
+                        rc = "unknown"
+                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped (current rc={}).".format(rc))
             else:
                 raise LocalSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
 

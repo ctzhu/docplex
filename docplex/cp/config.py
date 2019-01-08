@@ -104,13 +104,6 @@ General parameters
     :class:`~docplex.cp.parameters.CpoParameters` (in :doc:`parameters.py</docplex.cp.parameters.py>`)
     which describes all of the public solver parameters as properties.
 
-    The default configuration limits the solving time to 100 seconds by using following settings:
-    ::
-
-        context.params.TimeMode = "ElapsedTime"
-        context.params.TimeLimit = 100
-
-    These parameters may have a different default setting if the solver is not *DOcplexcloud*.
 
 Configuration of the model solving
 ----------------------------------
@@ -241,6 +234,9 @@ except:
 
 EXE_EXTENSION = ".exe" if IS_WINDOWS else ""
 
+# CP Optimizer Interactive executable name
+CPO_EXEC_INTERACTIVE = "cpoptimizer" + EXE_EXTENSION
+
 
 ##############################################################################
 ## Define default context for DOcloud solving
@@ -302,11 +298,11 @@ context.parser.fzn_reduce = False
 
 context.params = CpoParameters()
 
-# Default time limit
-context.params.TimeLimit = 100
+# Default time limit in seconds (None for no limit)
+context.params.TimeLimit = None
 
-# Workers count
-context.params.Workers = 4
+# Workers count (None for number of cores)
+context.params.Workers = None
 
 
 #-----------------------------------------------------------------------------
@@ -397,7 +393,7 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 # Local solving agent context
 
 context.solver.local = Context(class_name = "docplex.cp.solver.solver_local.CpoSolverLocal",
-                               execfile   = "cpoptimizer" + EXE_EXTENSION,
+                               execfile   = CPO_EXEC_INTERACTIVE,
                                parameters = ['-angel'],
                                log_prefix = "[Local] ")
 
@@ -405,31 +401,29 @@ context.solver.local = Context(class_name = "docplex.cp.solver.solver_local.CpoS
 DOCLOUD_CONTEXT = context
 LOCAL_CONTEXT = context.clone()
 
-# Unlimit local parameters
-LOCAL_CONTEXT.params.pop('TimeLimit')
-LOCAL_CONTEXT.params.pop('Workers')
+# Remove all possible default settins for local parameters
+LOCAL_CONTEXT.params = CpoParameters()
 
+# Set local context
 LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
 LOCAL_CONTEXT.solver.agent = 'local'
 LOCAL_CONTEXT.solver.max_threads = None
 LOCAL_CONTEXT.model.length_for_alias = None
 
-# Select local context if execfile is given extensively (with a parent directory)
-if not os.path.dirname(LOCAL_CONTEXT.solver.local.execfile):
-    # Search exec file in the path
-    python_home = os.path.dirname(os.path.abspath(sys.executable))
-    if IS_WINDOWS:
-        pext = [os.path.join(python_home, "Scripts")]
-        appdata = os.environ.get('APPDATA')
-        if appdata is not None:
-            pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
-    else:
-        pext = ["~/.local/bin", os.path.join(python_home, "bin")]
-    cpfile = search_file_in_path(LOCAL_CONTEXT.solver.local.execfile, pext)
-    # Select local context if exec file is visible in the path
-    if cpfile:
-        LOCAL_CONTEXT.solver.local.execpath = cpfile
-        context = LOCAL_CONTEXT
+# Search exec file in the path
+python_home = os.path.dirname(os.path.abspath(sys.executable))
+if IS_WINDOWS:
+    pext = [os.path.join(python_home, "Scripts")]
+    appdata = os.environ.get('APPDATA')
+    if appdata is not None:
+        pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
+else:
+    pext = ["~/.local/bin", os.path.join(python_home, "bin")]
+cpfile = search_file_in_path(LOCAL_CONTEXT.solver.local.execfile, pext)
+# Select local context if exec file is visible in the path
+if cpfile:
+    LOCAL_CONTEXT.solver.local.execfile = cpfile
+    context = LOCAL_CONTEXT
 
 
 #-----------------------------------------------------------------------------

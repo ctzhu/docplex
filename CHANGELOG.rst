@@ -1,7 +1,7 @@
 Changelog
 ---------
 
-Changed in 2.6.93:
+Changed in 2.6.94:
 ``````````````````
 * In ``docplex.cp``:
    * Allow CpoModel.add() to accept list of constraints.

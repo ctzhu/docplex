@@ -6,7 +6,7 @@
 
 import math
 
-from docplex.mp.utils import is_int
+from docplex.mp.utils import is_int, is_number
 
 
 class VarType(object):
@@ -36,11 +36,29 @@ class VarType(object):
         """
         return self._lb
 
+    def get_default_lb(self):
+        return self._lb
+
     @property
     def default_ub(self):
         """  This property returns the default upper bound for the type.
         """
         return self._ub
+
+    def get_default_ub(self):
+        return self._ub
+
+    def resolve_lb(self, candidate_lb):
+        if candidate_lb is None:
+            return self._lb
+        else:
+            return self.compute_lb(candidate_lb)
+
+    def resolve_ub(self, candidate_ub):
+        if candidate_ub is None:
+            return self._ub
+        else:
+            return self.compute_ub(candidate_ub)
 
     def compute_lb(self, candidate_lb):
         # INTERNAL
@@ -109,6 +127,18 @@ class VarType(object):
     def hash_vartype(self):
         return hash(self.one_letter_symbol())
 
+    def process_var_bound(self, m, candidate_bound, is_lb):
+        # INTERNAL
+        if candidate_bound is None:
+            return self.default_lb if is_lb else self.default_ub
+        elif is_number(candidate_bound):
+            if is_lb:
+                return self.compute_lb(candidate_bound)
+            else:
+                return self.compute_ub(candidate_bound)
+        else:
+            m.fatal("Variable bound is not a number: {0!s}", candidate_bound)
+
 
 class BinaryVarType(VarType):
     """BinaryVarType()
@@ -123,11 +153,11 @@ class BinaryVarType(VarType):
 
     def compute_lb(self, candidate_lb):
         # INTERNAL
-        return 0
+        return 0 if candidate_lb <= 0 else 1
 
     def compute_ub(self, candidate_ub):
         # INTERNAL
-        return 1
+        return 1 if candidate_ub >= 1 else 0
 
     def is_discrete(self):
         """ Checks if this is a discrete type.

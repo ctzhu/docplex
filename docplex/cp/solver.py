@@ -27,6 +27,33 @@ import time, importlib, inspect
 ##  Public classes
 ###############################################################################
 
+class CpoSolutionIterator(object):
+    """ Iterator over the different solver solutions provided by next() method.
+    """
+
+    def __init__(self, solver):
+        """ Create a new solution iterator
+        """
+        self.solver = solver
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        """ Get the next available solution.
+        Returns:
+            Next model solution (object of class  CpoModelSolution)
+        """
+        msol = self.solver.next()
+        if msol:
+            return msol
+        else:
+            raise StopIteration()
+
+    def __next__(self): # Compatibility for Python 3
+        return self.next()
+
+
 class CpoSolverAgent(object):
     """ CPO model abstract solver agent
 
@@ -52,9 +79,19 @@ class CpoSolverAgent(object):
         """ Solve the model
 
         Returns:
-            Model solution (type CpoModelSolution)
+            Model solution (object of class CpoModelSolution)
         """
-        raise CpoException("The solve() method not implemented")
+        raise CpoException("Method not implemented in this solver agent.")
+
+    def next(self):
+        """ Get the next available solution.
+
+        (This method starts search automatically.)
+
+        Returns:
+            Next model solution (object of class  CpoModelSolution)
+        """
+        raise CpoException("Method not implemented in this solver agent.")
 
     def _get_cpo_model_string(self):
         """ Get the CPO model as a string, according to configuration
@@ -131,15 +168,8 @@ class CpoSolver(object):
         self.model = model
         self.context = context
 
-    def solve(self):
-        """ Solve the model
-
-        Returns:
-            Model solution (type CpoModelSolution)
-        """
-        sctx = self.context.solver
-
         # Determine appropriate solver agent
+        sctx = context.solver
         aname = sctx.agent
         if aname is None:
             aname = "docloud"
@@ -150,13 +180,21 @@ class CpoSolver(object):
         # Retrieve solver agent class and create instance
         actx = sctx[aname]
         sclass = _get_solver_agent_class(aname, actx)
-        solver = sclass(self.model, sctx.params, actx)
+        self.solver = sclass(self.model, sctx.params, actx)
+
+
+    def solve(self):
+        """ Solve the model
+
+        Returns:
+            Model solution (object of class CpoModelSolution)
+        """
 
         # Solve model
         stime = time.time()
-        msol = solver.solve()
+        msol = self.solver.solve()
         stime = time.time() - stime
-        sctx.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+        self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
 
         # Set solve time in solution if not done
         if msol.get_solve_time() == 0:
@@ -166,26 +204,60 @@ class CpoSolver(object):
         return msol
         
      
+    def next(self):
+        """ Get the next available solution.
+
+        (This method starts search automatically.)
+
+        Returns:
+            Next model solution (object of class CpoModelSolution)
+        """
+        # Solve model
+        stime = time.time()
+        msol = self.solver.next()
+        stime = time.time() - stime
+        self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
+
+        # Set solve time in solution if not done
+        if msol.get_solve_time() == 0:
+            msol._set_solve_time(stime)
+
+        # Return solution
+        return msol
+
+    def solutions_iterator(self):
+        """ Get an iterator on the sequence of solutions
+
+        Returns:
+            Solution iterator (each item is object of class CpoModelSolution)
+        """
+        return CpoSolutionIterator(self)
+
+
 ###############################################################################
 ##  Private Functions
 ###############################################################################
+
+# Attribute values denoting a default value
+DEFAULT_VALUES = ("ENTER YOUR KEY HERE", "ENTER YOUR URL HERE", "default")
+
 
 def _update_context(ctx, kwargs):
     """ Build real context from source and list of replacements
 
     Args:
         ctx:     Source context
-        kwargs:  Dixtionary of replacements
+        kwargs:  Dictionary of replacements
     Returns:
         Updated context (source context is cloned)
     """
     ctx = ctx.clone()
     rplist = []  # List of replacements to be done in solving parameters
     for k, v in kwargs.items():
-        if v is not DEFAULT:
+        if v not in DEFAULT_VALUES:
             rp = ctx.search_and_replace_attribute(k, v)
             # If not found, set in solving parameters
-            if not rp:
+            if (rp is None):
                 rplist.append((k, v))
     # Replace in parameters
     params = ctx.params

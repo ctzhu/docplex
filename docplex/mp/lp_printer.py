@@ -49,8 +49,8 @@ class LPModelPrinter(TextModelPrinter):
         """
         return TextModelPrinter.encrypt_user_names(self) or self._noncompliant_varname
 
-    def _print_ct_name(self, ct):
-        lp_ctname = self.ct_print_name(ct)
+    def _print_ct_name(self, ct, name_map):
+        lp_ctname = name_map.get(ct._index)
         indented = self._indent_level
 
         if lp_ctname is not None:
@@ -102,7 +102,7 @@ class LPModelPrinter(TextModelPrinter):
                 if self._hide_user_names:
                     indent_str = ''
                 else:
-                    indent_str, ct_label = self._print_ct_name(ct)
+                    indent_str, ct_label = self._print_ct_name(ct, name_map=self._ct_name_map)
                 wrapper.reset_indent(indent_str)
                 if ct_label is not None:
                     wrapper.write(ct_label)
@@ -111,7 +111,7 @@ class LPModelPrinter(TextModelPrinter):
             if self._hide_user_names:
                 indent_str = ''
             else:
-                indent_str, ct_label = self._print_ct_name(ct)
+                indent_str, ct_label = self._print_ct_name(ct, name_map=self._ct_name_map)
             wrapper.reset_indent(indent_str)
             if ct_label is not None:
                 wrapper.write(ct_label)
@@ -120,7 +120,7 @@ class LPModelPrinter(TextModelPrinter):
             if self._hide_user_names:
                 indent_str = ''
             else:
-                indent_str, ct_label = self._print_ct_name(ct)
+                indent_str, ct_label = self._print_ct_name(ct, name_map=self._ic_name_map)
             wrapper.reset_indent(indent_str)
             if ct_label is not None:
                 wrapper.write(ct_label)

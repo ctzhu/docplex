@@ -86,11 +86,9 @@ class CpoModel(object):
             CpoException in case of error.
         """
         # Check expression
-        #if expr is True:
-        #    return
         assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of " + str(type(expr))
         
-        # Determine source location
+        # Determine calling location
         if self.sourceloc:
             f = inspect.currentframe().f_back
             loc = (f.f_code.co_filename, f.f_lineno)
@@ -104,14 +102,32 @@ class CpoModel(object):
         if expr.has_name():
             self._add_named_expr(expr)
 
-        # Check search phase
-        if expr.get_type() is Type_SearchPhase:
-            self.srch_phases.append((expr, loc))
-        else:
-            # Append to the list of expressions    
-            if not expr.is_variable():
-                self.exprList.append((expr, loc))
-            
+        # Append to the list of expressions
+        if not expr.is_variable():
+            self.exprList.append((expr, loc))
+
+
+    def remove(self, expr):
+        """ Remove an expression from the model.
+
+        This method removes from the model the first occurrence of the expression given as parameter.
+        It does not remove the expression it it used as sub-expression of another expression.
+
+        Args:
+            expr: Expression to remove.
+        Returns:
+            True if expression has been removed, False if not found
+        """
+        for ix, (x, l) in enumerate(self.exprList):
+            if x is expr:
+                del self.exprList[ix]
+                if expr.has_name():
+                    del self.mapExpr[expr.get_name()]
+
+                return True
+        return False
+
+
     def set_search_phases(self, phases):
         """ Set a list of search phases
 
@@ -119,13 +135,23 @@ class CpoModel(object):
             phases: Array of search phases
         """
         # Check arguments
-        assert is_array_of_type(phases, CpoExpr), "Argument 'phases' should be an array of SearchPhases"
+        assert is_array(phases), "Argument 'phases' should be a list of SearchPhases"
+
+        # Determine calling location
+        if self.sourceloc:
+            f = inspect.currentframe().f_back
+            loc = (f.f_code.co_filename, f.f_lineno)
+        else:
+            loc = None
+
+        # Set list of phases
+        self.srch_phases = []
         for p in phases:
             if p.get_type() is not Type_SearchPhase:
                 raise AssertionError("Argument 'phases' should be an array of SearchPhases")
-            self.add(p)
-        # self.srch_phases = phases
-       
+            self._scan_expression(p, loc)
+            self.srch_phases.append((p, loc))
+
     def get_search_phases(self):
         """ Returns list of search phases.
 

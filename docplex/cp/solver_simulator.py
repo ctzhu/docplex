@@ -24,6 +24,9 @@ import random
 # Max value used by solution simulator
 MAX_SIMULATED_VALUE = 10000
 
+# Max number of solutions when using next() iterator
+MAX_ITERATED_SOLUTIONS = 6
+
 
 ###############################################################################
 ##  Public classes
@@ -71,6 +74,8 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
             context:  Solver context
         """
         super(CpoSolverSimulatorRandom, self).__init__(model, params, context)
+        self.max_iterator_solutions = random.randint(0, MAX_ITERATED_SOLUTIONS)
+        self.solution_count = 0
 
     def solve(self):
         """ Solve the model.
@@ -85,6 +90,45 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         if self.context.create_cpo:
             self._get_cpo_model_string()
 
+        # Build fake feasible solution
+        return self._generate_solution()
+
+
+    def next(self):
+        """ Get the next available solution.
+
+        (This method starts search automatically.)
+
+        Returns:
+            Next model solution (type CpoModelSolution)
+        """
+        # Check first call to next
+        if self.solution_count == 0:
+            print("WARNING: Solver simulator returns a random list of solutions")
+            # Force generation of CPO format if required (for testing purpose only)
+            if self.context.create_cpo:
+                self._get_cpo_model_string()
+
+        # Check all solutions already generated
+        if self.solution_count >= self.max_iterator_solutions:
+            # Generate last solution
+            msol = CpoModelSolution()
+            msol._set_solve_status(SOLVE_STATUS_FEASIBLE)
+            msol._set_fail_status(FAIL_STATUS_SEARCH_COMPLETED)
+            return msol
+
+        else:
+           # Generate next solution
+           self.solution_count += 1
+           return self._generate_solution()
+
+
+    def _generate_solution(self):
+        """ Generate a random solution complying to the model
+
+        Returns:
+            Random model solution expressed as CpoModelSolution
+        """
         # Build fake feasible solution
         msol = CpoModelSolution()
         msol._set_solve_status(SOLVE_STATUS_FEASIBLE)
@@ -103,7 +147,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                 ovals.append(random.randint(0, MAX_SIMULATED_VALUE))
             msol._set_objective_values(ovals)
 
-        # Generate a solution for simple each variable
+        # Generate a solution for each variable
         for (var, loc) in self.model.get_all_variables():
             if isinstance(var, CpoIntVar):
                 vsol = CpoIntVarSolution(var.get_name(), _random_value_in_complex_domain(var.get_domain()))

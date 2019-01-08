@@ -12,9 +12,6 @@ from textwrap import TextWrapper
 
 from six import iteritems
 
-from docplex.mp.linear import LinearConstraint, IndicatorConstraint, RangeConstraint
-
-
 # gendoc: ignore
 
 class _NumPrinter(object):
@@ -155,7 +152,9 @@ class TextModelPrinter(ModelPrinter):
         self._encoding = encoding  # None is a valid value, in which case no encoding is printed
         #
         self._var_name_map = {}
-        self._ct_name_map = {}
+        self._ct_name_map = {}  # linear constraints
+        self._ic_name_map = {}  # indicators have a seperate index space.
+
         # created on demand if model is not fully indexed
         self._local_var_indices = None
         self._local_ct_indices = None
@@ -236,14 +235,13 @@ class TextModelPrinter(ModelPrinter):
         for _ in range(nb_lines):
             out.write("\n")
 
-    def _precompute_name_dict(self, mobj_seq, prefixer, local_index_map):
+    def _precompute_name_dict(self, mobj_seq, local_index_map, prefix):
         ''' Returns a name dictionary from a sequence of modeling objects.
         '''
         fixed_name_dir = {}
-        all_names = set({})
+        all_names = set()
         hide_names = self.encrypt_user_names()
         for mobj in mobj_seq:
-            prefix = prefixer(mobj)
             fixed_name = self.fix_name(mobj, prefix, local_index_map, hide_names)
             if fixed_name:
                 if fixed_name in all_names:
@@ -282,11 +280,9 @@ class TextModelPrinter(ModelPrinter):
         self._local_var_indices = {dv: k for k, dv in enumerate(model.iter_variables())}
         self._local_ct_indices = {ct: k for k, ct in enumerate(model.iter_constraints())}
 
-        var_prefixer = lambda _: 'x'
-        self._var_name_map = self._precompute_name_dict(model.iter_variables(), var_prefixer, self._local_var_indices)
-        ct_type_to_prefix_map = {LinearConstraint: 'c', IndicatorConstraint: 'ic', RangeConstraint: 'c'}
-        ct_prefixer = lambda ct: ct_type_to_prefix_map.get(type(ct), 'c')
-        self._ct_name_map = self._precompute_name_dict(model.iter_constraints(), ct_prefixer, self._local_ct_indices)
+        self._var_name_map = self._precompute_name_dict(model.iter_variables(), self._local_var_indices, prefix='x')
+        self._ct_name_map = self._precompute_name_dict(model.iter_linear_constraints(), self._local_ct_indices,prefix='c')
+        self._ic_name_map = self._precompute_name_dict(model.iter_indicator_constraints(), self._local_ct_indices, prefix='ic')
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -321,6 +317,9 @@ class TextModelPrinter(ModelPrinter):
 
     def ct_print_name(self, ct):
         return self._ct_name_map.get(ct._index)
+
+    def ic_print_name(self, indicator):
+        return self._ic_name_map.get(indicator._index)
 
     def max_var_name_len(self):
         """

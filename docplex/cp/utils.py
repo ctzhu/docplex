@@ -15,7 +15,7 @@ import time
 import logging
 import sys
 import threading
-
+from inspect import isfunction
 
 ###############################################################################
 ## Constants
@@ -26,14 +26,22 @@ import threading
 DEFAULT = "default"
 
 # Determine list of types representing the different python scalar types
-BOOL_TYPES = {bool}
+BOOL_TYPES    = {bool}
 INTEGER_TYPES = {int}
-FLOAT_TYPES = {float}
+FLOAT_TYPES   = {float}
+STRING_TYPES  = {str}
 
 # Add Python2 long if any
 try:
     if type(long) is type:
         INTEGER_TYPES.add(long)
+except:
+    pass
+
+# Add Python2 unicode if any
+try:
+    if type(unicode) is type:
+        STRING_TYPES.add(unicode)
 except:
     pass
 
@@ -71,10 +79,11 @@ except:
     pass
 
 # Build all number type sets
-NUMBER_TYPES  = frozenset(INTEGER_TYPES.union(FLOAT_TYPES))
 INTEGER_TYPES = frozenset(INTEGER_TYPES)
 FLOAT_TYPES   = frozenset(FLOAT_TYPES)
 BOOL_TYPES    = frozenset(BOOL_TYPES)
+NUMBER_TYPES  = frozenset(INTEGER_TYPES.union(FLOAT_TYPES))
+BASIC_TYPES   = frozenset(NUMBER_TYPES.union(BOOL_TYPES).union(STRING_TYPES))
 
 
 ###############################################################################
@@ -182,7 +191,7 @@ class Context(dict):
 
         Args:
             name:  Attribute name
-            value: Attribute value
+            value: Attribute value, None to remove attribute
         Return:
             Full path of the attribute that has been found and replaced, None if not found
         """
@@ -214,6 +223,19 @@ class Context(dict):
             Parent context, None if this context is root
         """
         return vars(self)['parent']
+
+    def get_root(self):
+        """ Get the root context (last parent with no parent).
+
+        Return:
+            Root context
+        """
+        res = self
+        pp = res.get_parent()
+        while pp is not None:
+            res = pp
+            pp = pp.get_parent()
+        return res
 
     def clone(self):
         """ Clone this context and all sub-contexts recursively.
@@ -592,6 +614,17 @@ def is_number(val):
     return type(val) in NUMBER_TYPES
 
 
+def is_string(val):
+    """ Check if a value is a string or a variant
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is a string
+    """
+    return type(val) in STRING_TYPES
+
+
 def is_array(val):
     """ Check if a value is an array (list or tuple)
 
@@ -652,10 +685,51 @@ def to_string(val):
     return str(val)
 
 
+def _get_vars(obj):
+    """ Get the list variable names of an object
+    """
+    # Check if a dictionary is present
+    if hasattr(obj, '__dict__'):
+        res = getattr(obj, '__dict__').keys()
+    # Check if slot is defined
+    elif hasattr(obj, '__slots__'):
+        res = []
+        slts = getattr(obj, '__slots__')
+        if is_array(slts):
+            res = list(slts)
+        else:
+            res = [slts]
+        # Go upper in the class hierarchy
+        obj = super(obj.__class__, obj)
+        while hasattr(obj, '__slots__'):
+            slts = getattr(obj, '__slots__')
+            if is_array(slts):
+                res.extend(slts)
+            else:
+                res.append(slts)
+            obj = super(obj.__class__, obj)
+        return res
+    # No attributes
+    else:
+        res = ()
+    return sorted(res)
+
+def _equals_lists(l1, l2):
+    """ Utility function for equals() to check two lists.
+    """
+    # Check same object (also covers some primitive types as int, float and strings, but not guarantee)
+    l = len(l1)
+    if not (l == len(l2)):
+        return False
+    for i in range(l):
+        if not equals(l1[i], l2[i]):
+            return False
+    return True
+
 def equals(v1, v2):
     """ Check that two values are logically equal, i.e. with the same attributes with the same values, recursively
 
-    This method does NOT call __eq__ and is then proof to overloading of '=='
+    This method does NOT call __eq__ and is then proof to possible overloads of '=='
 
     Args:
        val1: First value
@@ -663,7 +737,7 @@ def equals(v1, v2):
     Returns:
         True if both values are identical, false otherwise
     """
-    # Check same value (also covers some primitive types as int, float and strings, but not guarantee)
+    # Check same object (also covers some primitive types as int, float and strings, but not guarantee)
     if v1 is v2:
         return True
     
@@ -673,13 +747,13 @@ def equals(v1, v2):
         return False
     
     # Check basic types
-    if (t in (int, float, str)):
+    if (t in BASIC_TYPES):
         return (v1 == v2)
     
     # Check list or tuple
-    if isinstance(v1, (list, tuple)):
+    if isinstance(v1, (list, tuple, bytes, bytearray)):
         l = len(v1)
-        if not (l is len(v2)):
+        if not (l == len(v2)):
             return False
         for i in range(l):
             if not equals(v1[i], v2[i]):
@@ -688,12 +762,11 @@ def equals(v1, v2):
     
     # Check dictionary
     if isinstance(v1, dict):
-        if not (len(v1) is len(v2)):
+        if not (len(v1) == len(v2)):
             return False
         # Compare keys
         k1 = sorted(tuple(v1.keys()))
-        k2 = sorted(tuple(v2.keys()))
-        if not equals(k1, k2):
+        if not _equals_lists(k1, sorted(tuple(v2.keys()))):
             return False
         # Compare values
         for k in k1:
@@ -702,24 +775,20 @@ def equals(v1, v2):
         return True
 
     # Check sets
-    if isinstance(v1, set):
-        if not (len(v1) is len(v2)):
+    if isinstance(v1, (set, frozenset)):
+        if not (len(v1) == len(v2)):
             return False
         # Compare values
-        return equals(sorted(tuple(v1)), sorted(tuple(v2)))
+        return _equals_lists(sorted(tuple(v1)), sorted(tuple(v2)))
 
-    # Check object values with slots
-    if (hasattr(v1, '__slots__')):
-        for k in v1.__slots__:
-            if not equals(getattr(v1, k), getattr(v2, k)):
-                return False
-        return True
-    
-    try:
-        # Compare dictionaries
-        return equals(v1.__dict__, v2.__dict__)
-    except:
+    # Compare object attributes
+    dv1 = _get_vars(v1)
+    if not _equals_lists(dv1, _get_vars(v2)):
         return False
+    for k in dv1:
+        if not equals(getattr(v1, k), getattr(v2, k)):
+           return False
+    return True
 
 
 def make_directories(path):

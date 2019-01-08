@@ -10,6 +10,7 @@ from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.ppretty import ModelPrettyPrinter
 from docplex.mp.utils import DOcplexException
 
+
 class ModelPrinterFactory(object):
     __printer_ext_map = \
         {printer().get_format(): printer for printer in {LPModelPrinter}}

@@ -166,7 +166,9 @@ class CpoCompiler(object):
         if self.params and len(self.params) > 0:
             out.write("parameters {\n")
             for k in sorted(self.params.keys()):
-                out.write("   " + k + " = " + str(self.params[k]) + ";\n")
+                v = self.params[k]
+                if v is not None:
+                    out.write("   " + k + " = " + str(v) + ";\n")
             out.write("}\n")
         else:
             out.write("// None\n")
@@ -576,8 +578,8 @@ def get_cpo_model(model, params=None, ctx=None):
     # Create compiler
     cplr = CpoCompiler(model, params)
     if ctx:
-        if ctx.add_source_location:
-            cplr.set_source_location(True)
+        if ctx.add_source_location is not None:
+            cplr.set_source_location(ctx.add_source_location)
         cplr.set_min_name_length_for_alias(ctx.length_for_alias)
     # Build CPO string
     return cplr.get_as_string()

@@ -6,7 +6,7 @@
 from enum import Enum
 
 from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import is_number, is_string, str_holo
+from docplex.mp.utils import is_number, is_string, str_holo, iter_emptyset
 
 
 class ModelingObjectBase(object):
@@ -319,7 +319,6 @@ class Expr(ModelingObjectBase):
         self.model.unsupported_relational_operator_error(self, "<", e)
 
 
-
 # --- Priority class used for relaxation
 class Priority(Enum):
     # priority values are not sequential integers
@@ -434,7 +433,7 @@ class ObjectiveSense(Enum):
                 logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
 
 
-class _ZeroExpr(Expr):
+class ZeroExpr(Expr):
 
     def _get_solution_value(self):
         return 0
@@ -452,7 +451,7 @@ class _ZeroExpr(Expr):
         return self  # this is not cloned.
 
     def copy(self, target_model, var_map):
-        return _ZeroExpr(target_model)
+        return ZeroExpr(target_model)
 
     def to_linear_expr(self):
         return self  # this is a linear expr.
@@ -461,10 +460,10 @@ class _ZeroExpr(Expr):
         return 0
 
     def iter_variables(self):
-        return iter([])
+        return iter_emptyset()
 
     def iter_terms(self):
-        return iter(())
+        return iter_emptyset()
 
     def is_constant(self):
         return True
@@ -491,14 +490,16 @@ class _ZeroExpr(Expr):
     def plus(self, e):
         return e
 
+
     def times(self, _):
         return self
 
     # noinspection PyMethodMayBeStatic
     def minus(self, e):
-        expr = e.to_linear_expr().clone()
-        expr.negate()
-        return expr
+        return -e
+        # expr = e.to_linear_expr().clone()
+        # expr.negate()
+        # return expr
 
     def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
         return "0"
@@ -507,18 +508,15 @@ class _ZeroExpr(Expr):
         oss.write(self.to_string())
 
     # arithmetic
-    def __sub__(self, other):
-        return self._subtract(other)
-
-    def _subtract(self, other):
-        # return -other
-        other_expr = self.model.linear_expr(other)
-        other_expr.negate()
-        return other_expr
+    def __sub__(self, e):
+        return self.minus(e)
 
     def __rsub__(self, e):
         # e - 0 = e !
         return e
+
+    def __neg__(self):
+        return self
 
     def __add__(self, other):
         return other
@@ -548,7 +546,7 @@ class _ZeroExpr(Expr):
         return "docplex.mp.linear.ZeroExpr()"
 
     def equals_expr(self, other):
-        return isinstance(other, _ZeroExpr)
+        return isinstance(other, ZeroExpr)
 
     def __ge__(self, other):
         return self._get_model().ge_constraint(self, other)
@@ -560,4 +558,12 @@ class _ZeroExpr(Expr):
         return self._get_model().eq_constraint(self, other)
 
     def square(self):
+        return self
+
+    # arithmetci to self
+    add = plus
+    subtract = minus
+    tmultiply = times
+
+    def _scale(self, factor):
         return self

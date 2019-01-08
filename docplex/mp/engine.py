@@ -141,11 +141,17 @@ class IEngine(ISolver):
     def notify_trace_output(self, out):
         raise NotImplementedError  # pragma: no cover
 
-    def set_var_attribute(self, var, attr_name, attr_val):
-        raise NotImplementedError  # pragma: no cover
-
     def get_var_attribute(self, var, attr_name):
         raise NotImplementedError  # pragma: no cover
+
+    def set_var_lb(self, var_lbs):
+        raise NotImplementedError  # pragma: no cover
+
+    def set_var_ub(self, var_ubs):
+        raise NotImplementedError  # pragma: no cover
+
+    def rename_var(self, var, new_name):
+        raise NotImplementedError  # pragam: no cover
 
 
 # noinspection PyAbstractClass
@@ -174,8 +180,14 @@ class DummyEngine(IEngine):
     def create_variables(self, keys, vartype, lb, ub, namer):
         return [-1] * len(keys)  # pragma: no cover
 
-    def set_var_attribute(self, dvar, attr_name, attr_val):
-        return attr_val  # pragma: no cover
+    def set_var_lb(self, var_lbs):
+        pass
+
+    def set_var_ub(self, var_ubs):
+        pass
+
+    def rename_var(self, var, new_name):
+        pass  # nothing to do, except in cplex...
 
     def get_var_attribute(self, var, attr_name):  # pragma: no cover
         if "name" == attr_name:

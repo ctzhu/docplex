@@ -64,7 +64,8 @@ class ParameterGroup(object):
         """ Iterates over the group's own parameters.
 
         Returns:
-            iterator: An non-recursive iterator over the group's parameters.
+            A iterator over directparameters belonging to the group, not including
+            sub-groups.
         """
         return iter(self._params)
 
@@ -309,22 +310,66 @@ class Parameter(object):
 
     @property
     def qualified_name(self, sep='.'):
+        """ Returns a hierarchical name string for the parameter.
+
+        The qualified name reflects the location of the parameter in the parameter hierarchy.
+        The qualified name of a parameter is guaranteed to be unique.
+
+        Examples:
+            `parameters.mip.tolerances.mipgap -> mip.tolerances.mipgap`
+
+        Returns:
+            A unique name that reflects the parameter location in the hierarchy.
+        :rtype:
+            string
+        """
         return "%s.%s" % (self._parent.qualified_name(sep=sep), self.short_name)
 
     @property
     def cpx_name(self):
+        """ Returns the CPLEX name of the parameter. This string is the CPLEX reference name which is used
+        in CPLEX Reference Manual.
+
+        Examples:
+            `parameters.mip.tolerances.mipgap` has the name `CPX_PARAM_EPGAP` in CPLEX
+
+        :rtype:
+            string
+        """
         return self._cpx_name
 
     @property
     def cpx_id(self):
+        """ Returns the CPLEX integer code of the parameter.  See the CPLEX Reference Manual for more
+        information.
+
+        Returns:
+            An integer code.
+        """
         return self._id
 
     @property
     def description(self):
+        """ Returns a string describing the parameter.
+
+        :rtype:
+           string
+        """
         return self._description
 
     @property
     def default_value(self):
+        """ Returns the default value of the parameter. This value can be numeric or a string,
+        depending on the parameter type.
+
+        Examples:
+            `parameters.workdir` has default value "."
+            `parameters.optimalitytarget` has default value 0
+            `parameters.mip.tolerances.mipgap` has default value of 0.0001
+
+        Returns:
+           The default value.
+        """
         return self._default_value
 
     def reset_default_value(self, new_default):
@@ -349,9 +394,10 @@ class Parameter(object):
         raise NotImplementedError()  # pragma: no cover
 
     def transform_value(self, raw_value):
+        # INTERNAL
         return raw_value
 
-    def check_value(self, raw_value):
+    def _check_value(self, raw_value):
         if raw_value == self.default_value:
             return raw_value
         elif not self.accept_value(raw_value):
@@ -363,8 +409,11 @@ class Parameter(object):
     def set(self, new_value):
         """ Changes the value of the parameter to `new_value`.
 
-        This method checks that the new value is valid.
-        If not valid, an exception is raised.
+        This method checks that the new value has the proper type and is valid.
+        Numeric parameters often specify a valid range with a minimum and a maximum value.
+
+        If the value is valid, the current value of the parameter is changed, otherwise
+        an exception is raised.
 
         Args:
             new_value: The new value for the parameter.
@@ -372,15 +421,14 @@ class Parameter(object):
         Raises:
             An exception if the value is not valid.
         """
-        accepted_value = self.check_value(new_value)
+        accepted_value = self._check_value(new_value)
+        # do not use if accepted value here as 0 evalutes to False in Python!
         if accepted_value is not None:
             self._current_value = accepted_value
         return accepted_value
 
     def get(self):
-        """
-        Returns:
-           float: The current value of the parameter.
+        """ Returns the current value of the parameter.
         """
         return self._current_value
 
@@ -393,7 +441,7 @@ class Parameter(object):
         """ Checks if the current value of the parameter does not equal its default.
 
         Returns:
-           Boolean: True if the current value of the parameter does not equal its default.
+           Boolean: True if the current value of the parameter differs from its default.
 
         """
         return self.get() != self._default_value
@@ -415,15 +463,24 @@ class Parameter(object):
         return True
 
     def to_string(self):
+        """ Converts the parameter to a string.
+
+        This method is used in the `__str__` method to convert a parameter to a string.
+
+        :rtype:
+            string
+        """
         return "{0}:{1:s}(2!s)".format(self._short_name, self.type_name(), self._current_value)
 
     def __str__(self):
         return self.to_string()
 
     def is_numeric(self):
+        # INTERNAL
         return False  # pragma: no cover
 
     def type_name(self):
+        # INTERNAL
         raise NotImplementedError  # pragma: no cover
 
     def _root_group(self):
@@ -517,7 +574,7 @@ class PositiveIntParameter(IntParameter):
 
 
 class NumParameter(Parameter):
-    """ A numeric parameter can take any floating-point value, inside a range of `[min,max]` values.
+    """ A numeric parameter can take any floating-point value in the range of `[min,max]` values.
     """
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,

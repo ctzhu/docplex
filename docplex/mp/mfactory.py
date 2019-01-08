@@ -7,7 +7,7 @@
 # gendoc: ignore
 
 from docplex.mp.linear import Var, LinearExpr, MonomialExpr, AbstractLinearExpr
-from docplex.mp.basic import _ZeroExpr
+from docplex.mp.basic import ZeroExpr
 from docplex.mp.linear import _DummyFeasibleConstraint, _DummyInfeasibleConstraint
 from docplex.mp.linear import LinearConstraintType, LinearConstraint, RangeConstraint, IndicatorConstraint
 
@@ -99,8 +99,7 @@ class ModelFactory(object):
 
     def init(self):
         model = self.__model
-        self.zero_expr = LinearExpr(model, 0.0)
-        self.unique_zero_expr = _ZeroExpr(model)
+        self.zero_expr = ZeroExpr(model)
 
     def new_trivial_feasible_ct(self):
         return _DummyFeasibleConstraint(self.__model, self.zero_expr)
@@ -130,7 +129,7 @@ class ModelFactory(object):
     def _expand_names(self, keys, user_name, arity, key_format):
         default_naming_fn = self.__model._create_automatic_varname
         actual_naming_fn = compile_naming_function(keys, user_name, default_naming_fn, arity, key_format)
-        computed_names = [ str(actual_naming_fn(key)) for key in keys]
+        computed_names = [str(actual_naming_fn(key)) for key in keys]
         # if is_function(user_name):
         #     # must check the result of user function.
         #     for key, name in izip(keys, computed_names):
@@ -270,7 +269,7 @@ class ModelFactory(object):
 
     def constant_expr(self, cst):
         if 0 == cst:
-            return self.unique_zero_expr
+            return self.zero_expr
         else:
             return LinearExpr(self.__model, e=cst)
 
@@ -280,8 +279,11 @@ class ModelFactory(object):
         return expr
 
     def _to_linear_expr(self, e):
+        return self._to_linear_expr_internal(e)
+
+    def _to_linear_expr_internal(self, e, linexpr_class=LinearExpr):
         # INTERNAL
-        if isinstance(e, LinearExpr):
+        if isinstance(e, linexpr_class):
             return e
         elif is_number(e):
             return self.constant_expr(cst=e)
@@ -315,7 +317,7 @@ class ModelFactory(object):
         else:
             return MonomialExpr(self.__model, dvar, coef)
 
-    def scal_prod(self, dvars, coefs=1.0):
+    def scal_prod(self, terms, coefs=1.0):
         # Testing anumpy array for its logical value will not work:
         # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
         # we would have to trap the test for ValueError then call any()
@@ -324,45 +326,41 @@ class ModelFactory(object):
             if 0 == coefs:
                 return self.zero_expr
             else:
-                sum_expr = self.sum(dvars)
+                sum_expr = self.sum(terms)
                 return sum_expr * coefs
         else:
             self.__model.typecheck_iterable(coefs)
 
-        if not is_iterable(dvars):
-            dvars = [dvars]
+        if not is_iterable(terms):
+            terms = [terms]
 
-        return self._scal_prod(dvars, coefs)
+        return self._scal_prod(terms, coefs)
 
-    def _scal_prod(self, dvars, coefs, cc_type=LinearExpr.counter_type):
+    def _scal_prod(self, terms, coefs, cc_type=LinearExpr.counter_type):
         # INTERNAL
         total_num = 0
         fcc = cc_type()
 
-        for item, coef in izip(dvars, coefs):
+        for item, coef in izip(terms, coefs):
             if 0 == coef:
                 pass
             elif isinstance(item, Var):
                 fcc.update_from_item_value(item, coef)
 
-            elif isinstance(item, MonomialExpr):
-                fcc.update_from_item_value(item.var, item.coef * coef)
-
-            elif isinstance(item, LinearExpr):
+            elif isinstance(item, AbstractLinearExpr):
                 total_num += coef * item.constant
                 for lv, lk in item.iter_terms():
                     fcc.update_from_item_value(lv, lk * coef)
 
-            elif is_number(item) and item:
-                total_num += coef * item
+            # elif is_number(item) and item:
+            #     total_num += coef * item
 
             # --- all is lost ---
             else:
                 self.fatal("scal_prod accepts variables, expressions, numbers, not: {0!s}", item)
 
-        res_dict = self._sort_terms_if_needed(fcc)
-        scalprod_expr = LinearExpr(self.__model, e=res_dict, constant=total_num, safe=True)
-
+        sorted_terms = LinearExpr._sort_terms_if_needed(mdl=self.__model, counter=fcc)
+        scalprod_expr = LinearExpr(self.__model, e=sorted_terms, constant=total_num, safe=True)
         return scalprod_expr
 
     def sum(self, sum_args):
@@ -377,33 +375,19 @@ class ModelFactory(object):
             elif is_indexable(sum_args):
                 if has_len(sum_args) and 0 == len(sum_args):
                     return self.zero_expr
-                first = sum_args[0]
-                if self.__model._is_operand(first):
-                    return self._sum_with_seq(sum_args)
+
                 elif is_numpy_ndarray(sum_args):
                     return self._sum_with_iter(sum_args.flat)
                 elif is_pandas_series(sum_args):
                     return self.sum(sum_args.values)
                 else:
-                    self.fatal("cannot handle sequence with type: {0!s}, first: {1!r} type: {2!s}",
-                               type(sum_args), first, type(first))
+                    return self._sum_with_seq(sum_args)
             else:
                 return self._sum_with_seq(sum_args)
         elif is_number(sum_args):
             return sum_args
         else:
             return self._to_linear_expr(sum_args)
-
-    def _sort_terms_if_needed(self, counter, term_dict_type=LinearExpr.term_dict_type):
-        if not self.__model._keep_ordering:
-            return counter
-        elif isinstance(counter, term_dict_type):
-            return counter
-        else:
-            # normalize by sorting variables by increasing indices
-            sorted_items = sorted(counter.items(), key=lambda vk: vk[0].get_index())
-            od = term_dict_type(sorted_items)
-            return od
 
     def _sum_with_iter(self, args, cctype=LinearExpr.counter_type):
         accumulated_ct = 0
@@ -418,16 +402,19 @@ class ModelFactory(object):
                 accumulated_ct += item.constant
             elif isinstance(item, _IAdvancedExpr):
                 acc.update_from_item_value(item.functional_var)
-            elif isinstance(item, _ZeroExpr):
+            elif isinstance(item, ZeroExpr):
                 pass
             elif is_number(item):
                 accumulated_ct += item
             else:
                 self.fatal("Model.sum() expects numbers/variables/expressions, got: {0!s}", item)
 
-        res_terms = self._sort_terms_if_needed(acc)
-        sum_x = LinearExpr(self.__model, e=res_terms, constant=accumulated_ct, safe=True)
-        return sum_x
+        res_terms = LinearExpr._sort_terms_if_needed(mdl=self.__model, counter=acc)
+        if res_terms or accumulated_ct:
+            return LinearExpr(self.__model, e=res_terms, constant=accumulated_ct, safe=True)
+        else:
+            return self.zero_expr
+        #return sum_x
 
     def _varlist_to_terms(self, var_list,
                           cc_type=LinearExpr.counter_type,

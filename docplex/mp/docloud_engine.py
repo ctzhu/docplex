@@ -145,10 +145,7 @@ class DOcloudEngine(IndexerEngine):
             filemode = "w"
             oss = StringIO()
 
-        #t = time.time()
         printer.printModel(mdl, oss)
-        #elapsed_t = time.time() - t
-        #self_connector.log("elapsed time in model printing = {0}".format(elapsed_t))
 
         self._var_name_encoding = printer.get_name_to_var_map(mdl)
 

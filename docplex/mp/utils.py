@@ -21,7 +21,7 @@ from docplex.mp.compat23 import Queue, StringIO, has_unicode_type
 
 __int_types = {int}
 __float_types = {float}
-__numpy_ndslot_types = set()
+__numpy_ndslot_type = None
 __pandas_series_type = None
 
 try:
@@ -51,7 +51,7 @@ try:
     from numpy import ndarray
     import numpy as npcplex
 
-    __numpy_ndslot_types.add(ndarray)
+    __numpy_ndslot_type = ndarray
 except ImportError:  # pragma: no cover
     _numpy_is_available = False  # pragma: no cover
 
@@ -83,7 +83,7 @@ def _is_numpy_ndslot(s):
     # 2. type is ndarray
     # 3. shape is () empty tuple
     # 4. wrapped type in ndarray is numeric.
-    return type(s) in __numpy_ndslot_types and s.shape == () and s.dtype.type in __all_num_types
+    return type(s) is __numpy_ndslot_type and s.shape == () and s.dtype.type in __all_num_types
 
 
 def is_pandas_series(s):
@@ -91,7 +91,7 @@ def is_pandas_series(s):
 
 
 def is_numpy_ndarray(s):
-    return type(s) in __numpy_ndslot_types
+    return __numpy_ndslot_type and type(s) is __numpy_ndslot_type
 
 
 def is_string(e):
@@ -145,6 +145,33 @@ def is_function(e):
     return isinstance(e, Callable)
 
 
+def _to_list(arg):
+    # INTERNAL:
+    # 1. checks the argument is either a sequence or iterator,;
+    # if sequence, returns the sequence, else converts to a list by exhsuating the iterator
+    # BEWARE of the infinite generator!
+    if is_iterator(arg):
+        return list(arg)
+    elif is_iterable(arg):
+        return arg
+    else:
+        # an atom: wrap it into a list
+        return list(arg)
+
+def _build_ordered_sequence_types():
+    if __pandas_series_type and __numpy_ndslot_type:
+        return (list, __pandas_series_type, __numpy_ndslot_type)
+    elif __pandas_series_type:
+        return (list, __pandas_series_type)
+    elif __numpy_ndslot_type:
+        return (list, __numpy_ndslot_type)
+    else:
+        return (list,)
+
+def is_ordered_sequence(arg, type_tuple=_build_ordered_sequence_types()):
+    return isinstance(arg, type_tuple)
+
+
 class DOcplexException(Exception):
     """ Base class for modeling exceptions 
     """
@@ -184,12 +211,6 @@ class DOCplexQuadraticNotImplementedError(DOcplexException):
 
 class DOCPlexQuadraticArithException(Exception):
     pass
-
-
-# def normalize(s, force_lowercase=True):
-#     l = s.lower() if force_lowercase else s
-#     table = mktrans(" -+/\\<>", "_mpd___")
-#     return l.translate(table)
 
 
 def normalize_basename(s, force_lowercase=True):
@@ -234,6 +255,9 @@ def generate_constant(the_constant, count_max):
     while loop_counter <= count_max:
         yield the_constant
         loop_counter += 1
+
+def iter_emptyset():
+    return iter([])
 
 
 def resolve_pattern(pattern, args):

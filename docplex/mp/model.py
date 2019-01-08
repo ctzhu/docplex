@@ -31,7 +31,7 @@ from docplex.mp.mfactory import ModelFactory, NotImplementedQuadFactory
 from docplex.mp.compat23 import StringIO, izip
 
 from docplex.mp.utils import is_indexable, is_iterable, is_iterator, has_len, is_int, is_number, is_string, \
-    make_output_path2, generate_constant
+    make_output_path2, generate_constant, is_ordered_sequence
 from docplex.mp.numutils import round_nearest_towards_infinity
 from docplex.mp.utils import DOcplexException
 
@@ -42,7 +42,7 @@ from docplex.mp.format import LP_format, SAV_format
 from docplex.mp.kpi import KPI
 
 try:
-    from docplex.dodocplexcloud.solvehook import get_solve_hook
+    from docplex.worker.solvehook import get_solve_hook
 except ImportError:
     get_solve_hook = None
 
@@ -296,9 +296,9 @@ class ModelStatistics(object):
         """ This property returns the total number of variables in the model.
 
         """
-        return self._number_of_binary_variables + \
-               self._number_of_integer_variables + \
-               self._number_of_continuous_variables
+        return self._number_of_binary_variables\
+               + self._number_of_integer_variables\
+               + self._number_of_continuous_variables
 
     @property
     def number_of_binary_variables(self):
@@ -605,7 +605,8 @@ class Model(object):
     # ---- type checking
     def typecheck_iterable(self, arg):
         # INTERNAL: checks for an iterable
-        self.error_handler.ensure(is_iterable(arg), "Expecting iterable, got: {0!s}", arg)
+        if not is_iterable(arg):
+            self.fatal("Expecting iterable, got: {0!s}", arg)
 
     def _to_fixed_list(self, arg):
         # INTERNAL:
@@ -638,14 +639,8 @@ class Model(object):
 
     @staticmethod
     def _is_operand(arg, accept_numbers=True):
-        if isinstance(arg, Expr):
-            return True
-        elif isinstance(arg, Var):
-            return True
-        elif accept_numbers:
-            return is_number(arg)
-        else:
-            return False
+        return isinstance(arg, (Expr, Var)) or (accept_numbers and is_number(arg))
+
 
     def typecheck_operand(self, arg, caller=None, accept_numbers=True):
         if not self._is_operand(arg, accept_numbers=accept_numbers):
@@ -766,6 +761,8 @@ class Model(object):
                 self._trivial_cts_message_level = arg_val
             elif arg_name == "max_repr_len":
                 self._max_repr_len = int(arg_val)
+            elif arg_name == "clone_transients":
+                self._clone_transient_exprs = bool(arg_val)
             else:
                 self.warning("argument: {0:s}:{1!s} - is not recognized (ignored)", arg_name, arg_val)
 
@@ -851,6 +848,9 @@ class Model(object):
         # control whether to warn about trivial constraints
         self._trivial_cts_message_level = self.warn_trivial_infeasible
 
+        # internal
+        self._clone_transient_exprs = True  # use False to get fast clone...with the risk of side effects...
+
         # update from kwargs,, before the actual inits.
         self._parse_kwargs(kwargs)
 
@@ -872,6 +872,7 @@ class Model(object):
         self.__solution = None
         self._solve_details = None
 
+
         # all the following must be placed after an engine has been set.
         self.__factory.init()
         self._default_objective_expr = self.linear_expr(constant=1)
@@ -889,7 +890,7 @@ class Model(object):
                 # cplex is more recent than parameters. must update defaults.
                 self.info(
                     "reset parameter defaults, from parameter version: {0} to installed version: {1}"  # pragma: no cover
-                        .format(self_cplex_parameters_version, installed_cplex_version))  # pragma: no cover
+                    .format(self_cplex_parameters_version, installed_cplex_version))  # pragma: no cover
                 nb = self._sync_parameter_defaults_from_engine()  # pragma: no cover
                 if nb:  # pragma: no cover
                     self.trace("#parameter defaults have been reset: %d" % nb)  # pragma: no cover
@@ -1474,23 +1475,6 @@ class Model(object):
             self.__vars_by_index = self._build_index_dict(self.__allvars)
         return self.__vars_by_index.get(idx)
 
-    def set_var_ub(self, var, new_ub):
-        # INTERNAL: use var.ub property to set ub
-        if new_ub is not None:
-            self.typecheck_num(new_ub, "set_var_ub")
-            if new_ub != var.ub:
-                fub = float(new_ub)
-                self.__engine.set_var_attribute(var, "ub", fub)  # force float() conversion
-                var._internal_set_ub(new_ub)
-
-    def set_var_lb(self, var, new_lb):
-        # INTERNAL: use var.lb to set lb
-        if new_lb is not None:
-            self.typecheck_num(new_lb, "set_var_ub")
-            if new_lb != var.lb:
-                flb = float(new_lb)
-                self.__engine.set_var_attribute(var, "lb", flb)
-                var._internal_set_lb(new_lb)
 
     def set_var_name(self, dvar, new_arg_name):
         # INTERNAL: use var.name to set variable names
@@ -1498,23 +1482,51 @@ class Model(object):
         if not new_name:
             self.fatal("Not a valid name: {0!s}", new_arg_name)
         elif new_name != dvar.name:
-            self.__engine.set_var_attribute(dvar, "name", new_name)
+            self.__engine.rename_var(dvar, new_name)
             ModelingObjectBase.set_name(dvar, new_name)
         return self
 
     def _typecheck_bounds(self, header, candidate_bounds):
-        check_ok = True
         if is_number(candidate_bounds):
-            pass
-        elif not is_iterable(candidate_bounds):
-            check_ok = False
+            return True
+        elif is_iterable(candidate_bounds) and all(is_number(b) for b in candidate_bounds):
+            return True
         else:
-            check_ok = all(is_number(b) for b in candidate_bounds)
-        if not check_ok:
             self.fatal("Model.{0}: expecting either number or number_sequence as bounds, got: {1!s}",
                        header, candidate_bounds)
 
-    def set_var_lbs(self, changed_vars, new_lbs):
+    def zip_var_bounds(self, dvars, bounds, is_lb):
+        # INTERNAL
+        self.typecheck_iterable(dvars)
+        # transform bounds
+        if bounds is None:
+            if is_lb:
+                return [(v, v.vartype.default_lb) for v in dvars]
+            else:
+                return [(v, v.vartype.default_ub) for v in dvars]
+        elif is_number(bounds):
+            return [(v, v.vartype.process_var_bound(self, bounds, is_lb)) for v in dvars]
+        elif is_iterable(bounds):
+            # zip variables and bounds
+            raw_zip = izip(dvars, bounds)
+            return [(v, v.vartype.process_var_bound(self, b, is_lb)) for v, b in raw_zip]
+        else:
+            header = "set_lbs" if is_lb else "set_ubs"
+            self.fatal("Model.{0}: expecting either number or number_sequence as bounds, got: {1!s}",
+                       header, bounds)
+
+
+    def _process_var_bound(self, var, new_bound, is_lb):
+        # INTERNAL
+        return var.vartype.process_var_bound(m=self, candidate_bound=new_bound, is_lb=is_lb)
+
+    def set_var_lb(self, var, candidate_lb):
+        # INTERNAL: use var.lb to set lb
+        new_lb = self._process_var_bound(var, candidate_lb, is_lb=True)
+        self.__engine.set_var_lb((var, new_lb))
+        var._internal_set_lb(new_lb)
+
+    def set_var_lbs(self, changed_vars, lbs):
         """ Change lower bounds of a collection of variables.
 
         `new_lbs` accepts either a single number (all lower bounds are set to this number)
@@ -1524,21 +1536,22 @@ class Model(object):
 
         Args:
             changed_vars: The collection of variables to be changed.
-            new_lbs: Either a number or a collection of numbers.
+            lbs: Either a number or a collection of numbers.
 
         """
-        self.typecheck_iterable(changed_vars)
-        self._typecheck_bounds("set_var_lbs", new_lbs)
-
-        if is_iterable(new_lbs):
-            engine_new_lbs = new_lbs
-        else:
-            engine_new_lbs = [new_lbs] * len(changed_vars)
-        actual_lbs = self.__engine.set_var_attribute(changed_vars, "lb", engine_new_lbs)
-        for var, new_lb in zip(changed_vars, actual_lbs):
+        warnings.warn("This function is deprecated, use var.lb in a loop", stacklevel=2)
+        var_lbs = self.zip_var_bounds(changed_vars, lbs, is_lb=True)
+        self.__engine.set_var_lb(var_lbs)
+        for var, new_lb in var_lbs:
             var._internal_set_lb(new_lb)
 
-    def set_var_ubs(self, changed_vars, new_ubs):
+    def set_var_ub(self, var, candidate_ub):
+        # INTERNAL: use var.ub to set ub
+        new_ub = self._process_var_bound(var, candidate_ub, is_lb=False)
+        self.__engine.set_var_ub((var, new_ub))
+        var._internal_set_ub(new_ub)
+
+    def set_var_ubs(self, changed_vars, ubs):
         """ Change upper bounds of a collection of variables.
 
         `new_ubs` accepts either a single number (all upper bounds are set to this number)
@@ -1549,13 +1562,14 @@ class Model(object):
             changed_vars: The collection of variables to be changed.
             new_ubs: Either a number or a collection of numbers.
 
-        """
-        self.typecheck_iterable(changed_vars)
-        self._typecheck_bounds("set_var_ubs", new_ubs)
+        Note:
+            This method is deprecated since docplex version > 545
 
-        new_lbs = [b for b in new_ubs] if is_iterable(new_ubs) else [new_ubs] * len(changed_vars)
-        actual_ubs = self.__engine.set_var_attribute(changed_vars, "ub", new_lbs)
-        for var, new_ub in zip(changed_vars, actual_ubs):
+        """
+        warnings.warn("This function is deprecated, use var.ub in a loop", stacklevel=2)
+        var_ubs = self.zip_var_bounds(changed_vars, ubs, is_lb=False)
+        self.__engine.set_var_ub(var_ubs)
+        for var, new_ub in var_ubs:
             var._internal_set_ub(new_ub)
 
     def get_constraint_by_name(self, name):
@@ -2242,7 +2256,7 @@ class Model(object):
                 # delegate to the factory
                 return self.__factory.linear_expr(e)
 
-    def scal_prod(self, dvars, coefs):
+    def scal_prod(self, terms, coefs):
         """
         Creates a linear expression equal to the scalar product of a list of decision variables and a sequence of coefficients.
 
@@ -2253,7 +2267,7 @@ class Model(object):
         In this last case the scalar product reduces to a sum times this coefficient.
 
 
-        :param dvars: A list or an iterator on variables or expressions.
+        :param terms: A list or an iterator on variables or expressions.
         :param coefs: A list or an iterator on numbers, or a number.
 
         Note: 
@@ -2261,13 +2275,18 @@ class Model(object):
 
         :return: A linear expression or 0.
         """
-        return self.__factory.scal_prod(dvars, coefs)
+        if is_iterable(terms):
+            if is_iterator(terms):
+                pass  # iterators are ok
+            elif not is_ordered_sequence(terms):
+                self.fatal("Model.scal_prod() requires a list of expressions/variables, got: {0!s}", type(terms))
+        return self.__factory.scal_prod(terms, coefs)
 
-    def dot(self, dvars, coefs):
+    def dot(self, terms, coefs):
         """ Synonym for :func:`scal_prod`.
 
         """
-        return self.scal_prod(dvars, coefs)
+        return self.scal_prod(terms, coefs)
 
     def sum(self, args):
         """ Creates a linear expression summing over a sequence.
@@ -2412,6 +2431,8 @@ class Model(object):
         else:
             if do_check:
                 self.typecheck_constraint(ct)
+                if not ct.is_in_model(self):
+                    self.fatal("Constraint {0!s} does not belong to model {1}", ct, self.name)
             # -- watch for trivial cts e.g. linexpr(0) <= linexpr(1)
             if ct.is_trivial():
                 if ct._is_trivially_feasible():
@@ -2419,12 +2440,9 @@ class Model(object):
                 elif ct._is_trivially_infeasible():
                     self._notify_trivial_constraint(ct, ctname, is_feasible=False)
 
-        # is this necessary if we're sure where we are sure of the calling context??
-        if do_check and not ct.is_in_model(self):
-            self.fatal("Constraint {0!s} does not belong to model {1}", ct, self.name)
         # --- name management ---
         if not ctname:
-            if not ct.name:
+            if not ct.has_name():
                 ct_auto_name = self._create_automatic_ctname(ct)
                 ct._set_automatic_name(ct_auto_name)
         elif ctname in self.__cts_by_name:
@@ -2435,7 +2453,7 @@ class Model(object):
             ct.name = ctname
         # ---
         # at this stage we are sure the ctname is valid whatsoever.
-        assert ct.has_name()
+        # assert ct.has_name()
 
         # check for already posted cts.
         if do_check and ct.has_valid_index():
@@ -2686,6 +2704,7 @@ class Model(object):
         if posted_cts:
             ct_indices = self.__engine.create_block_linear_constraints(posted_cts)
             self._register_block_cts(posted_cts, ct_indices)
+            #self._sync_constraint_indices()
         return posted_cts
 
     def add_constraints(self, cts, names=None, do_check=True):
@@ -3165,7 +3184,7 @@ class Model(object):
             for h in self_solve_hooks:
                 h.notify_end_solve(self, has_solution, engine_status, reported_obj,
                                    self._make_end_infodict())    # pragma : no cover
-                h.update_solve_details(solve_details.as_dict())  # pragma: no cover
+                h.update_solve_details(solve_details.as_worker_dict())  # pragma: no cover
 
             # unplug worker hook if any
             if wk_hook:
@@ -4047,9 +4066,11 @@ class Model(object):
     def is_free_ub(self, var_ub):
         return self.__factory.is_free_ub(var_ub)
 
-    def _sync_constraint_indices(self, ct_iter):
+    def _sync_constraint_indices(self, ct_iter=None):
         # INTERNAL: check only when CPLEX is present.
         self_engine = self.__engine
+        if ct_iter is None:
+            ct_iter = self.iter_constraints()
         if self_engine.has_cplex():
             for ct in ct_iter:
                 model_index = ct.get_index()
@@ -4085,10 +4106,44 @@ class Model(object):
 
     @property
     def parameters(self):
+        """ This property returns the root parameter group of the model.
+
+        The root parameter group models the parameter hirerachy.
+        It is the way to access any CPLEX parameter and get or set its value.
+
+        Examples:
+
+            model.parameters.mip.limits.mipgap
+
+            Returns the parameter itself, an instance of the Parameter class.
+
+            To get the value of the parameter, use the get() method, as in:
+
+            model.parameters.mip.limits.mipgap.get()
+            >>> 0.0001
+
+            To change the value of the parameter, use a plain Python assignment:
+
+            model.parameters.mip.limits.mipgap = 0.05
+            model.parameters.mip.limits.mipgap.get()
+            >>> 0.05
+
+            Assigment is a snynonym for the set() method:
+
+            model.parameters.mip.limits.mipgap.set(0.02)
+            model.parameters.mip.limits.mipgap.get()
+            >>> 0.02
+
+
+        Returns:
+            the root parameter group, instance of ParameterGroup class.
+
+        PROOFREAD
+        """
         return self.context.cplex_parameters
 
     def set_parameter(self, param, value):
-        # DEPRECATED, left only for compatibility....
+        warnings.warn("This method is deprecated, use the parameters field to get/set parameter values.")
         param.set(value)
 
     def get_parameter_from_id(self, parameter_cpx_id):
@@ -4160,24 +4215,6 @@ class Model(object):
 class AbstractModel(Model):
     def __init__(self, name, context=None, **kwargs):
         Model.__init__(self, name=name, context=context, **kwargs)
-
-    @staticmethod
-    def _check_data_args(args, expected_sizemin, do_raise=True):
-        msg = None
-        if not args:
-            msg = "Empty data collection"
-        elif len(args) < expected_sizemin:
-            msg = "Missing data: expecting %d collections, got: %d" % (expected_sizemin, len(args))
-        else:
-            pass
-        if msg:
-            if do_raise:
-                raise DOcplexException(msg)
-            else:
-                print(msg)
-                return False
-        else:
-            return True
 
     def is_valid(self):
         """ Redefine this function to return False if some data is invalid.
@@ -4274,4 +4311,3 @@ class AbstractModel(Model):
         if ok:
             self.report()
         return ok
-        

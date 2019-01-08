@@ -159,6 +159,7 @@ class NamePrioritizer(IConstraintPrioritizer):
                         best_prio = prio
             return best_prio
 
+
 class CustomPrioritizer(IConstraintPrioritizer):
     """
     Constraint prioritizer based on a dictionary constraint -> priority.

@@ -7,6 +7,7 @@ from docplex.mp.compat23 import StringIO, has_unicode_type
 
 from math import isnan
 
+
 class SolveDetails(object):
     """
     The :class:`SolveDetails` class contains the details of a solve.
@@ -34,22 +35,19 @@ class SolveDetails(object):
         self._solution_method = -1
         # --
         self._miprelgap = self._NO_GAP if miprelgap is None else miprelgap
-        self._mipitcount = 0
 
         self._md5 = self._unknown_label
 
-    def as_dict(self):
+    def as_worker_dict(self):
         # INTERNAL
-        # Converts the solve details to a dictionary (keys may change)
-        self_as_dict = {"time": self._time,
-                        "status": self._solve_status,
-                        "problem_type": self._problem_type,
-                        "ncolumns": self._ncolumns,
-                        "linear_nonzeros": self._linear_nonzeros
-                        }
+        # Converts the solve details to a dictionary for python worker...
+        # using "legacy' keys from drop-solve
+        worker_dict = {"MODEL_DETAIL_TYPE": self._problem_type,
+                       "MODEL_DETAIL_NONZEROS": self._linear_nonzeros
+                       }
         if not isnan(self._miprelgap):
-            self_as_dict["mipgap"] = self._miprelgap
-        return self_as_dict
+            worker_dict["PROGRESS_GAP"] = self._miprelgap
+        return worker_dict
 
     _problemtype_map = {0: "LP",
                         1: "MILP",
@@ -79,7 +77,7 @@ class SolveDetails(object):
             except AttributeError:
                 return str(arg_s)
         else:
-            return arg_s # in py3 do nothing.
+            return arg_s  # in py3 do nothing.
 
     # ---
     # list of fields to be retrived from the details
@@ -94,7 +92,6 @@ class SolveDetails(object):
                     ("_ncolumns", "cplex.columns", int, 0),
                     ("_linear_nonzeros", "MODEL_DETAIL_NON_ZEROS", int, 0),
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),
-                    ("_mipitcount", "cplex.mipitcount", int, 0),
                     ("_md5", "cplex.model.md5", str, "")
                     )
 

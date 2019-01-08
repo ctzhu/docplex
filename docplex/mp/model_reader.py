@@ -18,6 +18,9 @@ from cplex import Cplex
 from cplex._internal._subinterfaces import ObjSense
 from cplex.exceptions import CplexError, CplexSolverError
 
+
+class ModelReaderError(DOcplexException): pass
+
 class _CplexReaderFileContext(object):
     def __init__(self, filename, read_method=None):
         self._cplex = None
@@ -247,15 +250,27 @@ class ModelReader(object):
                         if var:
                             expr._add_term(var, koef)
                         elif idx in range_map:
-                            assert range_data is None  # cannot use two range vars
+                            # this is a range: coeff must be 1 or -1
+                            abscoef = koef if koef >= 0 else -koef
+                            assert abscoef == 1, "range var has coef different from 1: {}".format(koef)
+                            assert range_data is None, "range_data is not None: {0!s}".format(range_data)  # cannot use two range vars
                             range_data = range_map[idx]
                         else:
-                            print("ERROR: index not in var map or range map: {0}".format(idx))
+                            raise ModelReaderError("ERROR: index not in var map or range map: {0}".format(idx))
 
                     if range_data:
-                        assert sense == 'E'
-                        rng_lb = rhs
-                        rng_ub = rhs + range_data.ub
+
+                        label = ctname or 'c#%d' % c+1
+                        if sense not in "EL":
+                            raise ModelReaderError("{0} range sense is not E: {1!s}".format(label, sense))
+                        if koef < 0:
+                            rng_lb = rhs
+                            rng_ub = rhs + range_data.ub
+                        elif koef > 0:
+                            rng_lb = rhs - range_data.ub
+                            rng_ub = rhs
+                        else:
+                            raise DOcplexException("bad range coef")
                         mdl.add_range(lb=rng_lb, expr=expr, ub=rng_ub, rng_name=ctname)
                     else:
                         if sense == 'R':
@@ -329,7 +344,7 @@ class ModelReader(object):
                     obj_coeff = cpx_all_obj_coeffs[v]
                     all_obj_coefs.append(obj_coeff)
                     all_obj_vars.append(idx_to_var_map[v])
-                    #obj_expr._add_term(idx_to_var_map[v], cpx_all_obj_coeffs[v])
+                    #  obj_expr._add_term(idx_to_var_map[v], cpx_all_obj_coeffs[v])
             obj_expr = mdl.dot(all_obj_vars, all_obj_coefs)
             is_maximize = cpx_sense == ObjSense.maximize
 
@@ -338,13 +353,18 @@ class ModelReader(object):
                     mdl.maximize(obj_expr)
                 else:
                     mdl.minimize(obj_expr)
+            mdl.output_level = final_output_level
 
         except CplexError as cpx_e:
             print("* CPLEX error: {0} reading file {1}, code={2}".format(cpx_e.args[0], filename, cpx_e.args[2]))
             mdl = None
 
-        except DOcplexException as do_e:
-            print("! Internal DOcplex error raised: {0!s} while reading file {1}".format(do_e, filename))
+        except ModelReaderError as mre:
+            print("! Model reader error: {0!s} while reading file {1}".format(mre, filename))
+            mdl = None
+
+        except DOcplexException as doe:
+            print("! Internal DOcplex error: {0!s} while reading file {1}".format(doe, filename))
             mdl = None
 
         except Exception as any_e:
@@ -355,7 +375,7 @@ class ModelReader(object):
             # clean up CPLEX instance...
             del cpx
 
-        mdl.output_level = final_output_level
+
         return mdl
 
 

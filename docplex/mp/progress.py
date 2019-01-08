@@ -8,6 +8,7 @@
 
 from docplex.mp.solution import SolveSolution
 
+
 class ProgressData(object):
     """ A container class to hold data retrived from progress callbacks.
 
@@ -177,6 +178,7 @@ class _ProgressFilter(object):
 
         return accept
 
+
 class TextProgressListener(ProgressListener):
     """ A simple implementation of Progress Listener, which prints messages to stdout
     """
@@ -280,7 +282,7 @@ class SolutionListener(ProgressListener):
         self._model = model
         self._engine_name = model.get_engine().name
         self._current_solution = None
-        self._current_objective = 1e+75 # bof
+        self._current_objective = 1e+75
 
     def requires_solution(self):
         # this class of listeneres requires solution information

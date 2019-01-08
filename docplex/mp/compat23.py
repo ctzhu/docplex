@@ -55,11 +55,6 @@ except NameError:
     _unicode_type = False
 
 
-# cmp is not available in py3
-def cmp(x, y):
-    return (x > y) - (x < y)
-
-
 def has_unicode_type():
     return _unicode_type
 

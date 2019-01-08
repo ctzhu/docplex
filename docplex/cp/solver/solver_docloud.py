@@ -76,8 +76,8 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             Conflict result,
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
-        # Force all constraints to be named
-        self.model._ensure_all_root_constraints_named()
+        # Ensure cpo model is generated with all constraints named
+        self.context.model.name_all_constraints = True
 
         return self._submit_job('RefineConflict', CpoRefineConflictResult)
 

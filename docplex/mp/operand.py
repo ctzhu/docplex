@@ -6,7 +6,7 @@
 
 # gendoc: ignore
 
-from docplex.mp.utils import iter_emptyset, is_number
+from docplex.mp.utils import iter_emptyset
 from docplex.mp.constants import ComparisonType
 
 
@@ -31,10 +31,10 @@ class Operand(object):
 
     def notify_modified(self, event):
         pass
-    # ---
 
     def keep(self):
         return self
+    # ---
 
     def resolve(self):
         # used for lazy expansions

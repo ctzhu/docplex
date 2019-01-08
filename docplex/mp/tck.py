@@ -13,10 +13,19 @@ from docplex.mp.compat23 import izip
 from docplex.mp.constr import AbstractConstraint, LinearConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.linear import Var, Expr
+from docplex.mp.pwl import PwlFunction
 from docplex.mp.progress import ProgressListener
 from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
     is_ordered_sequence, is_iterator
 from docplex.mp.vartype import VarType
+import six
+
+
+_vartype_code_map = {sc().get_cplex_typecode(): sc().short_name for sc in VarType.__subclasses__()}
+
+
+def vartype_code_to_string(vartype_code):
+    return _vartype_code_map.get(vartype_code, '????')
 
 
 class IDocplexTypeChecker(object):
@@ -29,11 +38,14 @@ class IDocplexTypeChecker(object):
     def typecheck_vartype(self, arg):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_var(self, obj):
+    def typecheck_var(self, obj, vartype=None):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_binary_var(self, obj):
-        raise NotImplementedError  # pragma: no cover
+        return self.typecheck_var(obj, vartype='B')
+
+    def typecheck_continuous_var(self, obj):
+        return self.typecheck_var(obj, vartype='C')
 
     def typecheck_var_seq(self, seq, vtype=None):
         return seq  # pragma: no cover
@@ -75,7 +87,7 @@ class IDocplexTypeChecker(object):
     def check_var_domain(self, lbs, ubs, names):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_in_model(self, model, mobj, header=''):
@@ -100,6 +112,12 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def check_solution_hook(self, mdl, sol_hook_fn):
+        raise NotImplementedError
+
+    def typecheck_pwl_function(self, pwl):
+        raise NotImplementedError
+
+    def check_duplicate_name(self, name, name_table, qualifier):
         raise NotImplementedError
 
 
@@ -138,16 +156,13 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Not a variable type: {0!s}, type: {1!s}", arg, type(arg))
         return True
 
-    def typecheck_var(self, obj):
+    def typecheck_var(self, obj, vartype=None):
         # INTERNAL: check for Var instance
         if not isinstance(obj, Var):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
-
-    def typecheck_binary_var(self, obj):
-        self.typecheck_var(obj)
-        if obj.vartype.get_cplex_typecode() != 'B':
-            self.fatal('Expecting binary variable, but variable {0!s} has type: {1}'.format(obj,
-                                                                                            obj.vartype.short_name))
+        if vartype and obj.vartype.get_cplex_typecode() != vartype:
+            self.fatal("Expecting {0} variable, got: {1!s} type: {2!s}",
+                       vartype_code_to_string(vartype), obj, obj.vartype)
 
     def typecheck_var_seq(self, seq, vtype=None):
         # build a list to avoid consuming an iterator
@@ -247,7 +262,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
         if is_string(arg):
             if not accept_empty and 0 == len(arg):
-                self.fatal("A nonempty string is not allowed here")
+                self.fatal("{0}Expecting a non-empty string", header)
         elif not (arg is None and accept_none):
             self.fatal("{0}Expecting string, got: {1!r}", header, arg)
 
@@ -310,11 +325,29 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("{0}, got: {1!s}", header, type(arg).__name__)
 
     def check_solution_hook(self, mdl, sol_hook_fn):
-        try:
-            dummy_s = mdl.new_solution()
-            sol_hook_fn(dummy_s)
-        except TypeError:
-            self.fatal('Solution hook requires a function taking a solution as argument')
+        if not callable(sol_hook_fn):
+            self.fatal('Solution hook requires a function taking a solution as argument, a non-callable was passed')
+        if six.PY3:
+            try:
+                from inspect import signature
+                hook_signature = signature(sol_hook_fn)
+                nb_params = len(hook_signature.parameters)
+                if nb_params != 1:
+                    self.fatal('Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
+                               .format(nb_params))
+            except (ImportError,TypeError):  # not a callable object or no signature
+                pass
+
+
+    def typecheck_pwl_function(self, pwl):
+        if not isinstance(pwl, PwlFunction):
+            self.fatal('Expecting piecewise-linear function, {0!r} was passed', pwl)
+
+
+    def check_duplicate_name(self, name, name_table, qualifier):
+        if name_table is not None:
+            if name in name_table:
+                self.warning("Duplicate {2} name: {0!s}, used for: {1}", name, name_table[name], qualifier)
 
 
 class NumericTypeChecker(StandardTypeChecker):
@@ -366,10 +399,7 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_vartype(self, arg):
         pass  # pragma: no cover
 
-    def typecheck_var(self, obj):
-        pass  # pragma: no cover
-
-    def typecheck_binary_var(self, obj):
+    def typecheck_var(self, obj, vartype=None):
         pass  # pragma: no cover
 
     def typecheck_var_seq(self, seq, vtype=None):
@@ -413,7 +443,7 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def check_var_domain(self, lb, ub, varname):
         pass
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
         pass  # pragma: no cover
 
     def typecheck_in_model(self, model, mobj, header=''):
@@ -438,6 +468,12 @@ class DummyTypeChecker(IDocplexTypeChecker):
         return None
 
     def check_solution_hook(self, mdl, sol_hook_fn):
+        pass
+
+    def typecheck_pwl_function(self, pwl):
+        pass
+
+    def check_duplicate_name(self, name, name_table, qualifier):
         pass
 
 

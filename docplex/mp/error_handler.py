@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 from __future__ import print_function
-from docplex.mp.utils import DOcplexException, resolve_pattern, is_int, is_string
+from docplex.mp.utils import DOcplexException, DOcplexLimitsExceeded, resolve_pattern, is_int, is_string
 
 from enum import Enum
 
@@ -208,6 +208,11 @@ class AbstractErrorHandler(IErrorHandler):
         resolved_message = resolve_pattern(msg, args)
         docplex_error_stop_here()
         raise DOcplexException(resolved_message)
+
+    def fatal_limits_exceeded(self):
+        docplex_error_stop_here()
+        raise DOcplexLimitsExceeded()
+
 
     def ok(self):
         """ Checks whether the handler has not recorded any error.

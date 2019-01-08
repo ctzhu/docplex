@@ -32,7 +32,7 @@ class CpoType(object):
                                        # Key is type name, value is common type with this one.
                 )
 
-    def __init__(self, name, isvar=False, iscst=False, htyps=(), eltyp=None, bastyp=None):
+    def __init__(self, name, isvar=False, iscst=False, isatm=False, htyps=(), eltyp=None, bastyp=None):
         """ Create a new type definition
 
         Args:
@@ -40,13 +40,14 @@ class CpoType(object):
             isvar: Indicates whether this type denotes a variable
             htyps: List of types higher in the hierarchy
             eltyp: Array element type, None (default) if not array
-            iscst: Indicate wether this type denotes a constant
+            iscst: Indicate whether this type denotes a constant
+            isatm: Indicate whether this type denotes an atomic constant
         """
         super(CpoType, self).__init__()
-        self.name         = name
+        self.name              = name
         self.is_variable       = isvar
         self.is_constant       = iscst
-        self.is_constant_atom  = iscst
+        self.is_constant_atom  = isatm
         self.higher_types = (self,) + htyps
         self.element_type = eltyp
         self.base_type    = bastyp if bastyp else self
@@ -54,7 +55,7 @@ class CpoType(object):
         if eltyp is not None:
             eltyp.parent_array_type = self
             self.is_constant  = eltyp.is_constant
-        self.is_array      = eltyp is not None
+        self.is_array = eltyp is not None
         self.is_array_of_expr = self.is_array and not(self.is_constant)
         self.parent_array_type = None
 
@@ -211,7 +212,6 @@ class CpoOperation(object):
                  'python_name',  # Operation python name
                  'keyword',      # Operation keyword (operation symbol)
                  'priority',     # Operator priority, -1 for function call
-                 'is_optim',     # Optimization function indicator
                  'signatures'    # List of possible operation signatures
                  )
 
@@ -231,7 +231,6 @@ class CpoOperation(object):
         self.cpo_name = cpname
         self.python_name = pyname
         self.priority = prio
-        self.is_optim = cpname.startswith("minimize") or cpname.startswith("maximize")
         if kwrd:
             self.keyword = kwrd
         else:

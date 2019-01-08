@@ -122,12 +122,13 @@ class IEngine(ISolver):
     """ interface for all engine facades
     """
 
-    def name(self):
+    def get_name(self):
         ''' Returns the code to be used in model'''
         raise NotImplementedError  # pragma: no cover
 
-    def _location(self):
-        return None
+    @property
+    def name(self):
+        return self.get_name()
 
     def get_var_index(self, var):
         raise NotImplementedError  # pragma: no cover
@@ -217,6 +218,12 @@ class IEngine(ISolver):
     def update_logical_constraint(self, logct, event, *args):
         raise NotImplementedError  # pragma: no cover
 
+    def check_var_indices(self, dvars):
+        raise NotImplementedError  # pragma: no cover
+
+    def check_constraint_indices(self, cts):
+        raise NotImplementedError  # pragma: no cover
+
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
     def create_range_constraint(self, rangect):
@@ -296,6 +303,9 @@ class DummyEngine(IEngine):
     def register_callback(self, cb):
         pass  # pragma: no cover
 
+    def unregister_callback(self, cb):
+        pass  # pragma: no cover
+
     def connect_progress_listeners(self, listeners):
         pass  # pragma: no cover
 
@@ -345,6 +355,12 @@ class DummyEngine(IEngine):
 
     def supports_logical_constraints(self):
         return True, None
+
+    def check_var_indices(self, dvars):
+        pass
+
+    def check_constraint_indices(self, cts):
+        pass
 
 # noinspection PyAbstractClass,PyUnusedLocal
 class IndexerEngine(DummyEngine):
@@ -455,7 +471,7 @@ class NoSolveEngine(IndexerEngine):
     def __init__(self, mdl, **kwargs):
         IndexerEngine.__init__(self)
 
-    def name(self):
+    def get_name(self):
         return "local"
 
     def get_var_index(self, var):
@@ -511,9 +527,12 @@ class ZeroSolveEngine(IndexerEngine):
     def last_solved_parameters(self):
         return self._last_solved_parameters
 
+    def get_name(self):
+        return "zero_solve"  # pragma: no cover
+
     @property
     def name(self):
-        return "zero_solve"  # pragma: no cover
+        return self.get_name()
 
     def get_var_zero_solution(self, dvar):
         return max(0, dvar.lb)
@@ -558,8 +577,8 @@ class FakeFailEngine(IndexerEngine):
     def __init__(self, mdl, **kwargs):
         IndexerEngine.__init__(self)  # pragma: no cover
 
-    def name(self):
-        return "no_solve_engine"  # pragma: no cover
+    def get_name(self):
+        return "no_solution_solve"  # pragma: no cover
 
     def solve(self, mdl, parameters):
         # solve fails equivalent to returning None
@@ -591,7 +610,7 @@ class TerminatedEngine(IndexerEngine):
         IndexerEngine.__init__(self)  # pragma: no cover
 
     def name(self):
-        return "no_solve_engine"  # pragma: no cover
+        return "exception"  # pragma: no cover
 
     def solve(self, mdl, parameters):
         # solve fails equivalent to returning None
@@ -627,8 +646,8 @@ class RaiseErrorEngine(IndexerEngine):
     def __init__(self, mdl, **kwargs):
         IndexerEngine.__init__(self)  # pragma: no cover
 
-    def name(self):
-        return "raise_engine"  # pragma: no cover
+    def get_name(self):
+        return "raise"  # pragma: no cover
 
     def solve(self, mdl, parameters):
         # solve fails equivalent to returning None

@@ -13,12 +13,15 @@ from docplex.cp.expression import *
 from docplex.cp.solution import *
 from docplex.cp.utils import *
 import docplex.cp.config as config
+import datetime
+import itertools
 
 import sys
+import functools
 
 
 ###############################################################################
-## Constants
+## Utilities
 ###############################################################################
 
 # Map of CPO names for each array type
@@ -29,9 +32,11 @@ _ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
                 Type_CumulAtomArray: '_cumulAtomArray'}
 
 
-# Set of CPO types represented by an integer
+# Set of CPO types representing an integer
 _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 
+# Symbol used to reference anonymous variables
+_ANONYMOUS = "Anonymous"
 
 ###############################################################################
 ## Public classes
@@ -39,17 +44,23 @@ _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 
 class CpoCompiler(object):
     """ Compiler to CPO file format """
-    __slots__ = ('model',                      # Source model
-                 'parameters',                 # Solving parameters
-                 'add_source_location',        # Indicator to add location traces in generated output
-                 'min_name_length_for_alias',  # Minimum variable name length to use an alias
-                 'min_name_length_for_rename', # Minimum variable name length to replace it by an alias
-                 'identifier_strings',         # Dictionary of printable string for each identifier
-                 'last_location',              # Last source location (file, line)
-                 'rename_map',                 # Dictionary of variables rename (key=new name, value = original name)
-                 'list_vars',                  # List of variables
-                 'list_exprs',                 # List of model expressions
-                 'list_phases',                # List of search phases
+    __slots__ = ('model',                 # Source model
+                 'parameters',            # Solving parameters
+                 'add_source_location',   # Indicator to add location traces in generated output
+                 'format_version',        # Output format version
+                 'is_format_12_8',        # Indicates that format version is at least 12.8
+                 'name_all_constraints',  # Indicator to fore a name on each constraint (for conflict refiner)
+                 'min_length_for_alias',  # Minimum variable name length to replace it by an alias
+                 'id_printable_strings',  # Dictionary of printable string for each identifier
+                 'last_location',         # Last source location (file, line)
+                 'list_consts',           # List of constants
+                 'list_vars',             # List of variables
+                 'list_exprs',            # List of model expressions
+                 'list_phases',           # List of search phases
+                 'expr_infos',            # Map of expression infos.
+                                          # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
+                 'expr_by_names',         # Map of expressions by CPO name. Used to retrieve expressions from solutions.
+                 'alias_name_map',        # Map of variable renamed with a shorter name. key = old name, value = new name
                  )
 
     def __init__(self, model, **kwargs):
@@ -81,20 +92,23 @@ class CpoCompiler(object):
         self.model = model
         self.parameters = context.params
 
-        self.min_name_length_for_alias = None
-        self.min_name_length_for_rename = None
-        self.identifier_strings = {}
-        self.rename_map = None
+        self.min_length_for_alias = None
+        self.id_printable_strings = {}
+        self.name_all_constraints = False
 
         # Set model parameters
         mctx = context.model
         if mctx is not None:
-            ma = mctx.length_for_alias
-            mr = mctx.length_for_rename
-            if (mr is not None) and (ma is not None) and (ma >= mr):
-                ma = None
-            self.min_name_length_for_alias = ma
-            self.min_name_length_for_rename = mr
+            self.min_length_for_alias = mctx.length_for_alias
+            self.name_all_constraints = mctx.name_all_constraints
+            cpver = mctx.version
+
+        # Determine format version
+        self.format_version = None if model is None else model.get_format_version()
+        # If not given, take default version
+        if self.format_version is None and mctx is not None:
+            self.format_version = mctx.version
+        self.is_format_12_8 = self.format_version and self.format_version >= '12.8'
 
         # Initialize source location
         if (self.parameters is not None) and (self.parameters.UseFileLocations is not None):
@@ -105,6 +119,29 @@ class CpoCompiler(object):
             self.add_source_location = True
         self.last_location = None
 
+        # Initialize expression dictionaries
+        self.expr_by_names = {}
+        self.expr_infos = {}
+        self.list_consts = []
+        self.list_vars = []
+        self.list_exprs = []
+        self.list_phases = []
+        self.alias_name_map = {}
+
+        # Precompile model
+        self._pre_compile_model()
+
+
+    def get_expr_map(self):
+        """ Get the map of model expressions.
+
+        Returns:
+            Map of model expressions.
+            Key is the name that has been used to represent the expression in the CPO file format,
+            Value is the corresponding model expression.
+        """
+        return self.expr_by_names
+
 
     def print_model(self, out=None):
         """ Compile the model and print the CPO file format in a given output.
@@ -112,17 +149,12 @@ class CpoCompiler(object):
         If the given output is a string, it is considered as a file name that is opened by this method
         using 'utf-8' encoding.
 
+        DEPRECATED. Use :meth:`write` instead.
+
         Args:
             out: Target output, stream or file name. Default is sys.stdout.
         """
-        # Check file name
-        if out is None:
-            out = sys.stdout
-        if is_string(out):
-            with open_utf8(os.path.abspath(out), mode='w') as f:
-                self._write_model(f)
-        else:
-            self._write_model(out)
+        self.write(out)
 
 
     def get_as_string(self):
@@ -133,7 +165,7 @@ class CpoCompiler(object):
         """
         # Print the model into a string
         out = StringIO()
-        self._write_model(out)
+        self.write(out)
         res = out.getvalue()
         out.close()
 
@@ -143,28 +175,26 @@ class CpoCompiler(object):
         return res
 
 
-    def get_rename_map(self):
-        """ Get the map of variables that has been renamed.
+    def write(self, out=None):
+        """ Write the model in CPO format.
 
-        This map is required to retrieve the original variable name from the name returned in the solution.
-
-        Returns:
-            Map of variable renamings. Key is new variable name, Value is original variable name.
-            None if no renaming has been done.
-        """
-        return self.rename_map
-
-
-    def _write_model(self, out):
-        """ Compile the model
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
 
         Args:
-            out: target output
+            out (Optional): Target output stream or file name. If not given, default value is sys.stdout.
         """
-        # Expand model expressions (share sub-expressions)
-        model = self.model
-        list_vars, list_exprs, list_phases = self._expand_all_expressions()
+        # Check file
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
+                self.write(f)
+                return
+        # Check default output
+        if out is None:
+            out = sys.stdout
 
+        # Initialize processing
+        model = self.model
         self.last_location = None
 
         # Write header
@@ -172,81 +202,55 @@ class CpoCompiler(object):
         mname = model.get_name()
         sfile = model.get_source_file()
         out.write(banner)
+        datestr = datetime.datetime.now().strftime("%Y.%m.%d-%H:%M:%S")
         if mname:
-            out.write(u"// CPO file generated for model: {}\n".format(mname))
+            out.write(u"// CPO file generated at {} for model: {}\n".format(datestr, mname))
         else:
-            out.write(u"// CPO file generated for anonymous model\n")
+            out.write(u"// CPO file generated at {} for anonymous model\n".format(datestr))
         if sfile:
             out.write(u"// Source file: {}\n".format(sfile))
         out.write(banner)
 
         # Write version if any
-        ver = model.get_format_version()
-        if ver is not None:
+        if self.format_version is not None:
             out.write(u"\n//--- Internals ---\n")
             out.write(u"internals {\n")
-            out.write(u"   version({});\n".format(ver))
+            out.write(u"   version({});\n".format(self.format_version))
             out.write(u"}\n")
 
-        # Get working variables
-        idstrings = self.identifier_strings
+        # Print renamed variables as comment
+        snm = self.alias_name_map
+        if snm:
+            out.write(u"\n//--- Aliases ---\n")
+            out.write(u"// To reduce CPO file size, the following aliases have been used to replace names longer than {}\n".format(self.min_length_for_alias))
+            lvars = sorted(snm.keys(), key=functools.cmp_to_key(lambda v1, v2: compare_natural(v1, v2)))
+            for v in lvars:
+                out.write(u"// {} = {}\n".format(v, snm[v]))
 
-        # Rename variables if required
-        mnl = self.min_name_length_for_rename
-        if mnl is not None:
-            # Rename variables whose name is too long
-            rename_gen = IdAllocator('_R_', IdAllocator.LETTERS_AND_DIGITS)
-            renmap = self.rename_map if self.rename_map else {}
-            for lx in list_vars:
-                v = lx[0]
-                # Compute CPO printable variable name
-                vname = v.name
-                vpname = self._get_id_string(vname)
-                if (len(vpname) > mnl) and (vpname[0] != '_'):
-                    # Rename variable
-                    vpname = rename_gen.allocate()
-                    renmap[vpname] = vname
-                    idstrings[vname] = vpname
-            self.rename_map = None if len(renmap) == 0 else renmap
+        # Write constants
+        out.write(u"\n//--- Constants ---\n")
+        for lx in self.list_consts:
+            self._write_expression(out, lx)
+
+        # Get map of expressions printable names
+        idstrings = self.id_printable_strings
 
         # Write variables
         out.write(u"\n//--- Variables ---\n")
-        for lx in list_vars:
+        for lx in self.list_vars:
             self._write_expression(out, lx)
-
-        # If aliases are requested, print as comment list of aliases
-        mnl = self.min_name_length_for_alias
-        if mnl is not None:
-            # Preload string map with aliases when relevant
-            aliasfound = False
-            alias_gen = IdAllocator('_A_', IdAllocator.LETTERS_AND_DIGITS)
-            for lx in list_vars:
-                v = lx[0]
-                # Compute CPO printable variable name
-                vname = v.name
-                vpname = strname = self._get_id_string(vname)
-                if (len(vpname) > mnl) and (vpname[0] != '_'):
-                    # Replace by an alias
-                    vpname = alias_gen.allocate()
-                    # Trace alias
-                    if not aliasfound:
-                        aliasfound = True
-                        out.write(u"\n//--- Aliases ---\n")
-                        out.write(u"// To reduce CPO file size, the following aliases have been used to replace variable names longer than " + str(mnl) + "\n")
-                    out.write(vpname + " = " + strname + ";\n")
-                    idstrings[vname] = vpname
 
         # Write expressions
         out.write(u"\n//--- Expressions ---\n")
         self.last_location = None
-        for lx in list_exprs:
+        for lx in self.list_exprs:
             self._write_expression(out, lx)
 
         # Write search phases 
-        if list_phases:
+        if self.list_phases:
             out.write(u"\n//--- Search phases ---\n")
             out.write(u"search {\n")
-            for lx in list_phases:
+            for lx in self.list_phases:
                 self._write_expression(out, lx)
             out.write(u"}\n")
 
@@ -277,15 +281,16 @@ class CpoCompiler(object):
         out.flush()
 
 
-    def _write_expression(self, out, locexpr):
+    def _write_expression(self, out, xinfo):
         """ Write model expression
 
         Args:
             out:   Target output
-            locexpr: Located expression, tuple (expr, loc, sub_expressions, already_compiled)
+            xinfo: Expression info, list [expr, location, ref_count, cpo_name, is_root, is_compiled]
         """
         # Retrieve expression elements
-        expr, loc, sexprs, compiled = locexpr
+        expr, loc, rcnt, name, isroot, iscpld = xinfo
+        #print("Write expr: {}, refcnt: {}, name: {}, root: {}, iscpld: {}".format(expr, rcnt, name, isroot, iscpld))
 
         # Trace location if required
         lloc = self.last_location
@@ -297,31 +302,25 @@ class CpoCompiler(object):
             out.write(lline + u"\n")
             self.last_location = loc
 
-        # Write sub-expressions if any
-        for sx in sexprs:
-            self._write_sub_expression(out, sx)
-
         # Write expression
-        if not compiled:
-            self._write_sub_expression(out, expr)
-
-        # Write expression label (for constraints)
-        if expr.name and expr.type in (Type_Constraint, Type_BoolExpr, Type_SearchPhase):
-            out.write(self._get_id_string(expr.name) + u";\n")
-
-    def _write_sub_expression(self, out, expr):
-        """ Write model expression
-
-        Args:
-            out:   Target output
-            expr:  Expression to write
-        """
-        # Write expression
-        id = expr.name
-        if id is not None:
-            out.write(self._get_id_string(id) + u" = ")
-        out.write(self._compile_expression(expr))
-        out.write(u";\n")
+        if iscpld:
+            if name:
+                out.write(name + u";\n")
+        else:
+            if name:
+                if isinstance(expr, CpoAlias):
+                    # Simple alias
+                    out.write(name + u" = " + self._compile_expression(expr.expr, False) + u";\n")
+                elif isroot and expr.type in (Type_Constraint, Type_SearchPhase, Type_BoolExpr):
+                    # Named constraint
+                    if self.is_format_12_8:
+                        out.write(name + u": " + self._compile_expression(expr, True) + u";\n")
+                    else:
+                        out.write(name + u" = "+ self._compile_expression(expr, True)+ u";\n" + name + u";\n")
+                else:
+                    out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n")
+            else:
+                out.write(self._compile_expression(expr, True) + u";\n")
 
 
     def _write_starting_point(self, out, var):
@@ -340,7 +339,7 @@ class CpoCompiler(object):
         else:
             raise CpoException("Internal error: unsupported starting point variable: " + str(var))
         # Write variable starting point
-        out.write(self._get_id_string(var.name) + u" = " + u''.join(cout) + u";\n")
+        out.write(self._get_expr_id(var) + u" = " + u''.join(cout) + u";\n")
 
 
     def _get_id_string(self, id):
@@ -349,15 +348,35 @@ class CpoCompiler(object):
         Args:
             id: Identifier name
         Returns:
-            CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
+            Printable identifier string (including double quotes and escape sequences if needed)
         """
         # Check if already converted
-        res = self.identifier_strings.get(id)
+        res = self.id_printable_strings.get(id)
         if res is None:
             # Convert id into string and store result for next call
-            res = to_printable_symbol(id)
-            self.identifier_strings[id] = res
+            res = to_printable_string(id)
+            self.id_printable_strings[id] = res
         return res
+
+
+    def _get_expr_id(self, expr):
+        """ Get the printable id of an expression
+
+        Args:
+            expr: Expression
+        Returns:
+            Printable identifier string (including double quotes and escape sequences if needed)
+        """
+        # Retrieve expression info
+        xinfo = self.expr_infos.get(id(expr))
+        if xinfo:
+            # Expression in a compiled model
+            return xinfo[3]
+        # Expression out of a model
+        xname = expr.get_name()
+        if xname:
+            return xname
+        return _ANONYMOUS
 
 
     def _compile_expression(self, expr, root=True):
@@ -371,7 +390,7 @@ class CpoCompiler(object):
         """
         # Initialize working variables
         cout = []  # Result list of strings
-        estack = [[expr, -1, False]]  # Expression stack [Expression, child index, parenthesis]
+        estack = [[expr, 0, False]]  # Expression stack [Expression, child index, parenthesis]
 
         # Loop while expression stack is not empty
         while estack:
@@ -380,8 +399,15 @@ class CpoCompiler(object):
             e = edscr[0]
 
             # Check if expression is named and not root (named expression and variable)
-            if (not root or (e is not expr)) and e.name:
-                cout.append(self._get_id_string(e.name))
+            xinfo = self.expr_infos.get(id(e))
+            if xinfo:
+                ename = xinfo[3]
+            else:
+                ename = e.name
+                if ename:
+                    ename = self._get_id_string(ename)
+            if ename and (not root or (e is not expr) or isinstance(e, CpoAlias)):
+                cout.append(ename)
                 estack.pop()
                 continue
 
@@ -397,19 +423,18 @@ class CpoCompiler(object):
                     else:
                         cout.append('[')
                         self._compile_var_domain(vals, cout)
-                        #cout.append(', '.join(str(v) for v in vals))
                         cout.append(']')
-                elif (t is Type_Bool):
+                elif t is Type_Bool:
                     cout.append("true()" if e.value else "false()")
-                elif (t in _INTEGER_TYPES):
+                elif t in _INTEGER_TYPES:
                     cout.append(_number_value_string(e.value))
-                elif (t is Type_TransitionMatrix):
+                elif t is Type_TransitionMatrix:
                     self._compile_transition_matrix(e, cout)
-                elif (t is Type_TupleSet):
+                elif t is Type_TupleSet:
                     self._compile_tuple_set(e.value, cout)
-                elif (t is Type_StepFunction):
+                elif t is Type_StepFunction:
                     self._compile_step_function(e, cout)
-                elif (t is Type_SegmentedFunction):
+                elif t is Type_SegmentedFunction:
                     self._compile_segmented_function(e, cout)
                 else:
                     cout.append(_number_value_string(e.value))
@@ -417,13 +442,13 @@ class CpoCompiler(object):
             # Check variables
             elif t.is_variable:
                 estack.pop()
-                if (t is Type_IntVar):
+                if t is Type_IntVar:
                     self._compile_int_var(e, cout)
-                elif (t is Type_IntervalVar):
+                elif t is Type_IntervalVar:
                     self._compile_interval_var(e, cout)
-                elif (t is Type_SequenceVar):
+                elif t is Type_SequenceVar:
                     self._compile_sequence_var(e, cout)
-                elif (t is Type_StateFunction):
+                elif t is Type_StateFunction:
                     self._compile_state_function(e, cout)
 
             # Check expression array
@@ -436,17 +461,16 @@ class CpoCompiler(object):
                     estack.pop()
                 else:
                     cnx = edscr[1]
-                    if (cnx < 0):
+                    if cnx <= 0:
                         cout.append("[")
-                    cnx += 1
-                    if (cnx >= alen):
+                    if cnx >= alen:
                         cout.append("]")
                         estack.pop()
                     else:
-                        edscr[1] = cnx
-                        if (cnx > 0):
+                        edscr[1] += 1
+                        if cnx > 0:
                             cout.append(", ")
-                        estack.append([oprnds[cnx], -1, False])
+                        estack.append([oprnds[cnx], 0, False])
 
             # General expression
             else:
@@ -458,20 +482,19 @@ class CpoCompiler(object):
                 cnx = edscr[1]
 
                 # Check if function call
-                if (prio < 0):
+                if prio < 0:
                     # Check first call
-                    if (cnx < 0):
+                    if cnx <= 0:
                         cout.append(oper.keyword)
                         cout.append("(")
-                    cnx += 1
-                    if (cnx >= oplen):
+                    if cnx >= oplen:
                         cout.append(")")
                         estack.pop()
                     else:
-                        edscr[1] = cnx
-                        if (cnx > 0):
+                        edscr[1] += 1
+                        if cnx > 0:
                             cout.append(", ")
-                        estack.append([oprnds[cnx], -1, False])
+                        estack.append([oprnds[cnx], 0, False])
 
                 # Write operation
                 else:
@@ -479,21 +502,20 @@ class CpoCompiler(object):
                     parents = edscr[2]
 
                     # Write operation
-                    if (cnx < 0):
-                        if (oplen == 1):
+                    if cnx <= 0:
+                        if oplen == 1:
                             cout.append(oper.keyword)
                         if parents:
                             cout.append("(")
-                    cnx += 1
-                    if (cnx >= oplen):
+                    if cnx >= oplen:
                         # All operands have been processed
                         if parents:
                             cout.append(")")
                         estack.pop()
                     else:
                         # Process operand
-                        edscr[1] = cnx
-                        if (cnx > 0):
+                        edscr[1] += 1
+                        if cnx > 0:
                             # Add operator
                             cout.append(" " + oper.keyword + " ")
                         # Check if operand will require to have parenthesis
@@ -505,7 +527,7 @@ class CpoCompiler(object):
                                   or ((nprio == prio) and (cnx > 0)) \
                                   or ((oplen == 1) and not parents and oprnds[0].children)
                         # Put operand on stack
-                        estack.append([arg, -1, chparnts])
+                        estack.append([arg, 0, chparnts])
 
         # Check output exists
         if not cout:
@@ -547,17 +569,17 @@ class CpoCompiler(object):
             args.append("absent")
         elif v.is_optional():
             args.append("optional")
-        if (v.start != DEFAULT_INTERVAL):
+        if v.start != DEFAULT_INTERVAL:
             args.append("start=" + _interval_var_domain_string(v.start))
-        if (v.end != DEFAULT_INTERVAL):
+        if v.end != DEFAULT_INTERVAL:
             args.append("end=" + _interval_var_domain_string(v.end))
-        if (v.length != DEFAULT_INTERVAL):
+        if v.length != DEFAULT_INTERVAL:
             args.append("length=" + _interval_var_domain_string(v.length))
-        if (v.size != DEFAULT_INTERVAL):
+        if v.size != DEFAULT_INTERVAL:
             args.append("size=" + _interval_var_domain_string(v.size))
-        if (v.intensity is not None):
+        if v.intensity is not None:
             args.append("intensity=" + self._compile_expression(v.intensity, root=False))
-        if (v.granularity is not None):
+        if v.granularity is not None:
             args.append("granularity=" + str(v.granularity))
         cout.append(", ".join(args) + ")")
 
@@ -599,7 +621,7 @@ class CpoCompiler(object):
         if len(lvars) == 0:
             cout.append("intervalVarArray[]")
         else:
-            cout.append("[" + ", ".join(self._get_id_string(v.name) for v in lvars) + "]")
+            cout.append("[" + ", ".join(self._get_expr_id(v) for v in lvars) + "]")
         types = sv.get_types()
         if (types is not None):
             if len(lvars) == 0:
@@ -647,8 +669,7 @@ class CpoCompiler(object):
             if i > 0:
                 cout.append(", ")
             cout.append("[")
-            cout.append(", ".join(str(x) for x in tpl))
-            #self._compile_list_of_integers(tpl, cout)
+            self._compile_var_domain(tpl, cout)
             cout.append("]")
         cout.append("]")
 
@@ -664,7 +685,7 @@ class CpoCompiler(object):
             for i, d in enumerate(dom):
                 if i > 0:
                     cout.append(", ")
-                if (isinstance(d, (list, tuple))):
+                if isinstance(d, (list, tuple)):
                     cout.append(_int_var_domain_string(d))
                 else:
                     cout.append(_number_value_string(d))
@@ -721,110 +742,133 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _expand_expression(self, expr, doneset):
-        """ Get the list of all sub-expressions required to compile an expression.
+    def _pre_compile_model(self):
+        """ Pre-compile model
 
-        Sub-expressions are named expressions. Cause may be:
-         * used multiple times,
-         * explicitly named by end-user
+        This method pre-compile model, compute dependencies between expressions and allocate names if required.
 
-        Args:
-            expr:    Expression to compile
-            doneset: Set of already done expressions
-        Returns:
-            List of sub-expressions to compile, in compilation order.
-            Root expression is NOT included in this list
+        Result is set in compiler attributes.
         """
-        # Expand children expressions
-        estack = []
-        for e in expr.children:
-            if not id(e) in doneset:
-                estack.append(e)
-        enx = 0
-        while enx < len(estack):
-            for e in estack[enx].children:
-                if not id(e) in doneset:
-                    estack.append(e)
-            enx += 1
+        # Check null model
+        if self.model is None:
+            return
 
-        # Scan list reversely
-        subexpr = []  # Result list of expressions
-        while estack:
-            e = estack.pop()
-            eid = id(e)
-            if not eid in doneset:  # Test again is mandatory because same sub-expr can be used twice
-                if e.name:
-                   subexpr.append(e)
-                   doneset.add(eid)
-                elif e.reference_count > 1:
-                    if not e.name:
-                        e.name = e._generate_name()
-                    subexpr.append(e)
-                    doneset.add(eid)
+        # Expand expressions
+        self.expr_infos = expr_infos = {}
+        all_exprs = []
+        for expr, loc in itertools.chain(self.model.get_all_expressions(), self.model.get_search_phases()):
+            eid = id(expr)
+            if eid in expr_infos:
+                # Expression already compiled, add it again
+                all_exprs.append([expr, loc, 1, None, True, True])
+            else:
+                expr_infos[eid] = xinfo = [expr, loc, 1, None, True, False]
+                if expr.children:
+                    # Initialize expression stack with [expression, child index]
+                    stack = [[x, 0] for x in expr.children]
+                    while stack:
+                        xdscr = stack[-1]
+                        e, cx = xdscr
+                        # Skip constants
+                        if e.type.is_constant_atom and not e.name:
+                            stack.pop()
+                            continue
+                        # Check if expression already processed
+                        xid = id(e)
+                        xnfo = expr_infos.get(xid)
+                        if xnfo:
+                            xnfo[2] += 1
+                            stack.pop()
+                            continue
+                        # Check if all children processed
+                        if cx >= len(e.children):
+                            # Add current children node and remove it from stack
+                            xnfo = [e, loc, 1, None, False, False]
+                            expr_infos[xid] = xnfo
+                            all_exprs.append(xnfo)
+                            stack.pop()
+                        else:
+                            # Push current child on the stack
+                            stack.append([e.children[cx], 0])
+                            xdscr[1] += 1
+                all_exprs.append(xinfo)
 
-        return subexpr
-
-
-    def _expand_all_expressions(self):
-        """ Expand model expressions and sort them in variables, expressions and phases.
-
-        Sub-expressions are named expressions. Cause may be:
-         * used multiple times,
-         * explicitly named by end-user
-
-        Result is a tuple (list_vars, list_exprs, list_phases) where each element is a tuple
-        (expre, loc, sub_exprs)
-        """
-        # Initialize result
+        # Initialize lists of expressions
+        list_consts = []
         list_vars = []
         list_exprs = []
         list_phases = []
+        alias_name_map = {}       # List of variable with a name but renamed shortly
+        name_constraints = self.name_all_constraints
+        min_length_for_alias = self.min_length_for_alias
 
-        # Inirialize set of expressions already expanded
-        doneset = set()
+        # Create name allocators
+        id_allocators = [IdAllocator('_EXP_')] * len(ALL_TYPES)
+        id_allocators[Type_IntVar.id] = IdAllocator('_INT_')
+        id_allocators[Type_IntervalVar.id] = IdAllocator('_ITV_')
+        id_allocators[Type_SequenceVar.id] = IdAllocator('_SEQ_')
+        id_allocators[Type_StateFunction.id] = IdAllocator('_FUN_')
+        id_allocators[Type_Constraint.id] = IdAllocator('_CTR_')
 
-        # Expand expressions
-        for expr, loc in self.model.get_all_expressions():
-            lsexpr = self._expand_expression(expr, doneset)
-            nlsexpr = []
-            # Process variables in children
-            for v in lsexpr:
-                xtyp = v.type
-                if xtyp in (Type_IntVar, Type_IntervalVar):
-                    self.model._add_named_expr(v)
-                    list_vars.append((v, None, (), False))
-                elif xtyp == Type_StepFunction:
-                    list_vars.append((v, None, (), False))
+        # Allocate names and split variables and constants
+        expr_by_names = self.expr_by_names = {}
+        for xinfo in all_exprs:
+            expr = xinfo[0]
+            typ = expr.type
+            # Allocate name if needed
+            xname = expr.get_name()
+            if xname:
+                if xinfo[5]:
+                    # Already compiled, retrieve stored name for the same expression
+                    xinfo[3] = expr_infos[id(expr)][3]
                 else:
-                    nlsexpr.append(v)
-            # Add to list of expressions
-            if expr.type in (Type_IntVar, Type_IntervalVar):
-                self.model._add_named_expr(expr)
-                list_vars.append((expr, None, (), id(expr) in doneset))
-            else:
-                list_exprs.append((expr, loc, nlsexpr, id(expr) in doneset))
-            doneset.add(id(expr))
+                    # Check if name too long
+                    if min_length_for_alias is not None and len(xname) >= min_length_for_alias:
+                        xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
+                        alias_name_map[expr.get_name()] = xname
+                        xinfo[3] = xname
+                    else:
+                        # Check if already used
+                        if xname in expr_by_names:
+                            # Allocate a next instance
+                            ndx = 1
+                            xname += "@"
+                            nname = xname + "1"
+                            while nname in expr_by_names:
+                                ndx += 1
+                                nname = xname + str(ndx)
+                            xname = nname
+                        xinfo[3] = to_printable_string(xname)
+                    expr_by_names[xname] = expr
+            elif (xinfo[2] > 1) or typ.is_variable:
+                # Allocate name
+                xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
+                expr_by_names[xname] = expr
+                xinfo[3] = xname
+            elif name_constraints and xinfo[4] and typ in (Type_Constraint, Type_SearchPhase, Type_BoolExpr):
+                xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
+                expr_by_names[xname] = expr
+                xinfo[3] = xname
 
-        # Expand phases
-        for expr, loc in self.model.get_search_phases():
-            lsexpr = self._expand_expression(expr, doneset)
-            nlsexpr = []
-            # Process variables in children
-            for v in lsexpr:
-                xtyp = v.type
-                if xtyp in (Type_IntVar, Type_IntervalVar, Type_StepFunction):
-                    self.model._add_named_expr(v)
-                    list_vars.append((v, None, (), False))
-                elif xtyp == Type_StepFunction:
-                    list_vars.append((v, None, (), False))
-                else:
-                    nlsexpr.append(v)
-            # Add to list of phases
-            list_phases.append((expr, loc, nlsexpr, id(expr) in doneset))
-            doneset.add(id(expr))
+            # Split in different expression lists
+            if typ.is_constant and xname:
+                list_consts.append(xinfo)
+            elif typ.is_variable and not isinstance(expr, CpoAlias):
+                list_vars.append(xinfo)
+            elif typ == Type_SearchPhase:
+                list_phases.append(xinfo)
+            elif xname or xinfo[4] or xinfo[2] > 1:
+                list_exprs.append(xinfo)
 
-        # Return final result
-        return (list_vars, list_exprs, list_phases)
+        # Sort list of constants and variables by natural name order
+        sortkey = functools.cmp_to_key(lambda v1, v2: compare_expressions(v1[0], v2[0]))
+        self.list_consts = sorted(list_consts, key=sortkey)
+        self.list_vars = sorted(list_vars, key=sortkey)
+
+        # Set other attributes
+        self.list_exprs = list_exprs
+        self.list_phases = list_phases
+        self.alias_name_map = alias_name_map
 
 
 ###############################################################################
@@ -847,6 +891,17 @@ def get_cpo_model(model, **kwargs):
     """
     cplr = CpoCompiler(model, **kwargs)
     return cplr.get_as_string()
+
+
+def expr_to_string(expr):
+    """ Convert a single expression into a string using CPO format
+
+    Args:
+        expr:  Expression to convert into string
+    Returns:
+        String of the expression in CPO file format
+    """
+    return CpoCompiler(None)._compile_expression(expr)
 
 
 ###############################################################################
@@ -893,6 +948,21 @@ def _int_var_value_string(ibv):
         return str(ibv)
 
 
+def _allocate_expr_id(allocator, exprmap):
+    """ Allocate a new expression id checking it is not already used.
+
+    Args:
+        allocator:  Id allocator
+        exprmap:    Map of existing expression names
+    Returns:
+        New id not in exprmap
+    """
+    id = allocator.allocate()
+    while id in exprmap:
+        id = allocator.allocate()
+    return id
+
+
 def _int_var_domain_string(intv):
     """ Build the string representing an interval domain
 
@@ -935,4 +1005,5 @@ def _interval_var_domain_string(intv):
     if (smn == smx):
         return _interval_var_value_string(smn)
     return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
+
 

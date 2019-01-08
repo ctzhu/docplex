@@ -5,60 +5,7 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from collections import Counter, OrderedDict
-
-
-class ExprCounter(Counter):
-    """
-    A subclass of Counter which does not require a dictionary to be updated
-    Can be updated from a key item and a value
-    SEE how to remember the order in which objects are added.
-    """
-    __slots__ = ()
-
-    def __init__(self, e=None):
-        dict.__init__(self)
-        if e:
-            if isinstance(e, dict):
-                dict.update(self, e)
-
-            elif isinstance(e, list):
-                dict_setitem = dict.__setitem__
-                keys = [k[0] for k in e]
-                injective = len(keys) == len(set(keys))
-                try:
-                    if injective:
-                        for k, v in e:
-                            dict_setitem(self, k, v)
-                    else:
-                        for item, value in e:
-                            self.update_from_item_value(item, value)
-                except (ValueError, TypeError):
-                    if injective:
-                        for item in e:
-                            dict_setitem(self, item, 1)
-                    else:
-                        for item in e:
-                            self.update_from_item_value(item)
-            else:
-                raise TypeError('unexpected counter arg: {0!r}'.format(e))  # pragma: no cover
-
-    def update_from_item_value(self, item, value=1, _dict_get=dict.get, _dict_setitem=dict.__setitem__):
-        """
-        This differs from standard Counter when a dict instance is required.
-        :param item: the key to be updated
-        :param value: the associated value
-        :return:
-        """
-        if value:
-            if item in self:
-                new_value = _dict_get(self, item, 0) + value
-                if not new_value:
-                    del self[item]
-                else:
-                    _dict_setitem(self, item, new_value)
-            else:
-                _dict_setitem(self, item, value)
+from collections import OrderedDict
 
 
 class FastOrderedDict(dict):

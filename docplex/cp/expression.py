@@ -59,35 +59,14 @@ INT_MAX = (2**53 - 1)  # (2^53 - 1) for 64 bits, (2^31 - 1) for 32 bits
 INT_MIN = -INT_MAX
 """ Minimum integer value. """
 
-DEFAULT_INTEGER_VARIABLE_DOMAIN = ((INT_MIN, INT_MAX))
+DEFAULT_INTEGER_VARIABLE_DOMAIN = ((INT_MIN, INT_MAX),)
 """ Default integer variable domain """
 
-# Name generator for integer variables
-_INTEGER_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_INT_')
-
-# Name generator for interval variables
-_INTERVAL_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_ITV_')
-
-# Name generator for sequence variables
-_SEQUENCE_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_SEQ_')
-
-# Name generator for state functions
-_STATE_FUNCTION_ID_ALLOCATOR = SafeIdAllocator('_FUN_')
-
-# Name generator for all other variables
-_VARIABLE_ID_ALLOCATOR = SafeIdAllocator('_VAR_')
-
-# Name generator for shared expressions
-_EXPRESSION_ID_ALLOCATOR = SafeIdAllocator('_EXP_')
-
-# Name generator for constraints
-_CONSTRAINT_ID_ALLOCATOR = SafeIdAllocator('_CTR_')
+# Domain for binary variables
+BINARY_DOMAIN = ((0, 1),)
 
 # Floating point precision to verify equality of floats
 _FLOATING_POINT_PRECISION = 1e-9
-
-# Domain for binary variables
-_BINARY_DOMAIN = ((0, 1),)
 
 
 ###############################################################################
@@ -104,14 +83,10 @@ class CpoExpr(object):
                  'name',             # Name of the expression (None if none)
                  'priority',         # Operation priority
                  'children',         # List of children, empty tuple if none
-                 'reference_count',  # Number of references on this expression
                 )
 
     # To force possible numpy operators overloading to get CPO expressions as main operand
     __array_priority__ = 100
-
-    # Expression name generator
-    __name_generator__ = _EXPRESSION_ID_ALLOCATOR
 
     def __init__(self, type, name):
         """ Constructor:
@@ -120,17 +95,18 @@ class CpoExpr(object):
             type:   Expression type.
             name:   Expression name.
         """
-        # super(CpoExpr, self).__init__()
+        super(CpoExpr, self).__init__()
         self.type = type
         self.name = name
-        self.reference_count = 0
         self.priority = -1
         self.children = ()
+
 
     def __hash__(self):
         """ Redefinition of hash function (mandatory for Python 3)
         """
         return int(id(self) / 16)
+
 
     '''
     # These functions are required with standard 'pickle'
@@ -147,6 +123,7 @@ class CpoExpr(object):
             setattr(self, k, v)
     '''
 
+
     def set_name(self, name):
         """ Set the name of the expression.
 
@@ -157,7 +134,8 @@ class CpoExpr(object):
         if name is not None:
             name = make_unicode(name)
         self.name = name
-            
+
+
     def get_name(self):
         """ Get the name of the expression.
 
@@ -166,18 +144,6 @@ class CpoExpr(object):
         """
         return self.name
 
-    @classmethod
-    def _generate_name(cls):
-        """ Generate a name for this type of expression
-        Return:
-            Unused name for this type of object
-        """
-        return cls.__name_generator__.allocate()
-
-    def _set_generated_name(self):
-        """ Generate a name for this type of expression (with corresponding generator)
-        """
-        self.name = make_unicode(self._generate_name())
 
     def is_type(self, xtyp):
         """ Check if the type of this expression is a given one
@@ -189,6 +155,7 @@ class CpoExpr(object):
         """
         return self.type == xtyp
 
+
     def is_kind_of(self, tp):
         """ Checks if the type of this expression type is compatible with another type.
 
@@ -199,6 +166,7 @@ class CpoExpr(object):
         """
         # Check if required type is the same
         return self.type.is_kind_of(tp)
+
 
     def get_max_depth(self):
         """ Gets the maximum expression depth.
@@ -224,6 +192,33 @@ class CpoExpr(object):
                     stack.append([chlds[cnx], -1])
         return depth
 
+
+    def __nonzero__(self):
+        """ Safe function to protect for use of CpoExpr as boolean.
+
+        This may occur when using comparison operators that create a CpoExpr instead of actually compare with
+        another expression.
+
+        Raises:
+            CpoException as CpoExpr should not be used as boolean.
+        """
+        raise CpoException("CPO expression can not be used as boolean.")
+
+
+    def __bool__(self):
+        """ Safe function to protect for use of CpoExpr as boolean.
+
+        This may occur when using comparison operators that create a CpoExpr instead of actually compare with
+        another expression.
+
+        Equivalent to __nonzero__ for Python 3
+
+        Raises:
+            CpoException as CpoExpr should not be used as boolean.
+        """
+        raise CpoException("CPO expression can not be used as boolean.")
+
+
     def equals(self, other):
         """ Checks the equality of this expression with another object.
 
@@ -237,6 +232,7 @@ class CpoExpr(object):
         """
         return _is_equal_expressions(self, other)
 
+
     def _equals(self, other):
         """ Checks the equality of this expression with another object.
 
@@ -249,22 +245,36 @@ class CpoExpr(object):
         Return:
             True if 'other' is equal to this object, False otherwise.
         """
-        return (type(self) == type(other)) and (self.type == other.type) and (self.name == other.name)
+        return (type(self) == type(other)) and (self.type == other.type)
 
-    def _garbage(self):
-        """ Signal that the expression is not used.
 
-        This method removes all children and decrement explicit reference_count on children.
+    def compare(self, other):
+        """ Compare this expression with another.
+
+        Args:
+            other: Other CpoExpr to compare with.
+        Returns:
+            integer <0 if self < other, 0 if self == other, >0 if self > other
         """
-        cl = self.children
-        self.children = ()
-        for c in cl:
-            c.reference_count -= 1
+        if self.type != other.type:
+            return self.type.id - other.type.id
+        if self.name != other.name:
+            return self.type.id - other.type.id
+        sclen = len(self.children)
+        oclen = len(other.children)
+        if sclen != oclen:
+            return sclen - oclen
+        for sc, oc in zip(self.children, other.children):
+            r = sc.compare(oc)
+            if r != 0:
+                return r
+        return 0
+
 
     def __str__(self):
         """ Convert this expression into a string """
         if is_string(self.name):
-            return to_printable_symbol(self.name) + " = " + _to_string(self)
+            return to_printable_string(self.name) + " = " + _to_string(self)
         else:
             return _to_string(self)
 
@@ -478,7 +488,7 @@ class CpoExpr(object):
 
 
 class CpoValue(CpoExpr):
-    """ CPO model expression node representing a constant value. """
+    """ CPO model expression representing a constant value. """
     __slots__ = ('value',  # Python value of the constant
                 )
 
@@ -492,8 +502,6 @@ class CpoValue(CpoExpr):
         assert isinstance(type, CpoType), "Argument 'type' should be a CpoType"
         super(CpoValue, self).__init__(type, None)
         if type.is_array_of_expr:
-            for e in value:
-                e.reference_count += 1
             self.children = value
         self.value = value
 
@@ -512,11 +520,30 @@ class CpoValue(CpoExpr):
         # Call super
         if not super(CpoValue, self)._equals(other):
             return False
-        # For array of expr, managed as a recursive call by _equals_expressions().
+        # For array of expr, already managed as a recursive call by _equals_expressions() called in super.
         if self.type.is_array_of_expr:
             return True
         # Check value
         return _is_equal_values(self.value, other.value)
+
+
+class CpoAlias(CpoExpr):
+    """ CPO model expression representing a symbolic alias on an expression. """
+    __slots__ = ('expr',  # Target expression
+                )
+
+    def __init__(self, expr, name):
+        """ Constructor
+
+        Args:
+            expr:  Target expression
+            name:  Name of the alias
+        """
+        assert isinstance(expr, CpoExpr), "Argument 'expr' must be a CpoExpr"
+        assert is_string(name), "Argument 'name' must be a string"
+        super(CpoAlias, self).__init__(expr.type, name)
+        self.expr = expr
+        self.children = (expr,)
 
 
 class CpoFunctionCall(CpoExpr):
@@ -542,7 +569,6 @@ class CpoFunctionCall(CpoExpr):
         # Check no toplevel constraints
         for e in oprnds:
             assert not e.is_type(Type_Constraint), "A constraint can not be operand of an expression."
-            e.reference_count += 1
         self.children = oprnds
 
     def _equals(self, other):
@@ -565,9 +591,6 @@ class CpoVariable(CpoExpr):
     """
     __slots__ = ()
 
-    # Expression name generator
-    __name_generator__ = _VARIABLE_ID_ALLOCATOR
-
     def __init__(self, type, name):
         """ Constructor:
 
@@ -575,9 +598,6 @@ class CpoVariable(CpoExpr):
             type:   Expression type.
             name:   Variable name.
         """
-        # Check name length
-        if name is None:
-            name = self._generate_name()
         super(CpoVariable, self).__init__(type, name)
 
 
@@ -594,10 +614,7 @@ class CpoIntVar(CpoVariable):
     __slots__ = ('domain',  # Variable domain
                  )
     
-    # Expression name generator
-    __name_generator__ = _INTEGER_VARIABLE_ID_ALLOCATOR
-
-    def __init__(self, dom, name):
+    def __init__(self, dom, name=None):
         # Private constructor
         super(CpoIntVar, self).__init__(Type_IntVar, name)
         self.domain = dom
@@ -628,6 +645,24 @@ class CpoIntVar(CpoVariable):
         """
         return self.domain
 
+    def get_domain_min(self):
+        """ Gets the domain lower bound.
+
+        Returns:
+            Domain lower bound.
+        """
+        v = self.domain[0]
+        return v[0] if isinstance(v, tuple) else v
+
+    def get_domain_max(self):
+        """ Gets the domain upper bound.
+
+        Returns:
+            Domain upper bound.
+        """
+        v = self.domain[-1]
+        return v[-1] if isinstance(v, tuple) else v
+
     def domain_iterator(self):
         """ Iterator on the individual values of an integer variable domain.
 
@@ -635,6 +670,14 @@ class CpoIntVar(CpoVariable):
             Value iterator on the domain of this variable.
         """
         return _domain_iterator(self.domain)
+
+    def is_bool_var(self):
+        """ Check if the domain of this variable is reduced to boolean, 0, 1
+
+        Returns:
+            True if this variable is a boolean variable
+        """
+        return self.domain == (0, 1) or self.domain == ((0, 1),)
 
     def equals(self, other):
         """ Checks if this expression is equivalent to another
@@ -684,10 +727,7 @@ class CpoIntervalVar(CpoVariable):
                  'presence',     # Presence requirement (in _PRES_*)
                  )
 
-    # Expression name generator
-    __name_generator__ = _INTERVAL_VARIABLE_ID_ALLOCATOR
-
-    def __init__(self, start, end, length, size, intensity, granularity, presence, name):
+    def __init__(self, start, end, length, size, intensity, granularity, presence, name=None):
         # Private constructor
         super(CpoIntervalVar, self).__init__(Type_IntervalVar, name)
         self.start   = start
@@ -698,7 +738,6 @@ class CpoIntervalVar(CpoVariable):
         self.granularity = granularity
         self.intensity = intensity
         if intensity is not None:
-            intensity.reference_count += 1
             self.children = (intensity,)
 
     def set_start(self, intv):
@@ -876,7 +915,6 @@ class CpoIntervalVar(CpoVariable):
         if intensity is None:
             self.children = ()
         else:
-            intensity.reference_count += 1
             self.children = (intensity,)
 
     def get_intensity(self):
@@ -936,9 +974,6 @@ class CpoSequenceVar(CpoVariable):
     __slots__ = ('types',  # Variable types
                 )
     
-    # Expression name generator
-    __name_generator__ = _SEQUENCE_VARIABLE_ID_ALLOCATOR
-
     def __init__(self, vars, types=None, name=None):
         """ Creates a new sequence variable.
 
@@ -1134,9 +1169,6 @@ class CpoStateFunction(CpoVariable):
     __slots__ = ('trmtx',  # Transition matrix
                 )
 
-    # Expression name generator
-    __name_generator__ = _STATE_FUNCTION_ID_ALLOCATOR
-
     def __init__(self, trmtx=None, name=None):
         """ Creates a new state function.
 
@@ -1167,7 +1199,6 @@ class CpoStateFunction(CpoVariable):
             trmtx =  build_cpo_transition_matrix(trmtx)
             self.trmtx = trmtx
             assert isinstance(trmtx, CpoTransitionMatrix), "Argument 'trmtx' should be a CpoTransitionMatrix"
-            trmtx.reference_count += 1
             self.children = (trmtx,)
 
     def get_transition_matrix(self):
@@ -1249,18 +1280,21 @@ def integer_var_list(size, min=None, max=None, name=None, domain=None):
         size:   Size of the list of variables
         min:    Domain min value. Optional if domain is given extensively.
         max:    Domain max value. Optional if domain is given extensively.
-        name:   Optional variable name prefix. If not given, a name is automatically generated.
+        name:   Optional variable name prefix.
         domain: Variable domain expressed as extensive list of values and/or intervals expressed as tuples of integers.
                 Unused if min and max are provided.
     Returns:
         List of integer variables.
     """
-    if name is None:
-        name = CpoIntVar._generate_name() + "_"
     dom = _build_int_var_domain(min, max, domain)
     res = []
-    for i in range(size):
-        res.append(CpoIntVar(dom, name + str(i)))
+    if name is None:
+        for i in range(size):
+            res.append(CpoIntVar(dom))
+    else:
+        name = name + "_"
+        for i in range(size):
+            res.append(CpoIntVar(dom, name + str(i)))
     return res
 
 
@@ -1287,20 +1321,19 @@ def integer_var_dict(keys, min=None, max=None, name=None, domain=None):
     Returns:
         Dictionary of CpoIntVar objects.
     """
-    if name is None:
-        name = CpoIntVar._generate_name() + "_"
     dom = _build_int_var_domain(min, max, domain)
 
     res = {}
-    i = 0
-    isnamestr = is_string(name)
-    for k in keys:
-        if isnamestr:
-            vname = name + str(i)
-        else:
-            vname = name(k)
-        res[k] = CpoIntVar(dom, vname)
-        i += 1
+    if name is None:
+        for k in keys:
+            res[k] = CpoIntVar(dom)
+    elif is_string(name):
+        name = name + "_"
+        for i, k in enumerate(keys):
+            res[k] = CpoIntVar(dom, name + str(i))
+    else:
+        for k in keys:
+            res[k] = CpoIntVar(dom, name=name(k))
     return res
 
 
@@ -1314,7 +1347,7 @@ def binary_var(name=None):
     Returns:
         CpoIntVar expression
     """
-    return CpoIntVar(_BINARY_DOMAIN, name)
+    return CpoIntVar(BINARY_DOMAIN, name)
 
 
 def binary_var_list(size, name=None):
@@ -1331,7 +1364,7 @@ def binary_var_list(size, name=None):
     Returns:
         List of binary integer variables.
     """
-    return integer_var_list(size, _BINARY_DOMAIN, name=name)
+    return integer_var_list(size, BINARY_DOMAIN, name=name)
 
 
 def binary_var_dict(keys, name=None):
@@ -1351,7 +1384,7 @@ def binary_var_dict(keys, name=None):
     Returns:
         Dictionary of CpoIntVar objects (OrderedDict).
     """
-    return integer_var_dict(keys, _BINARY_DOMAIN, name=name)
+    return integer_var_dict(keys, BINARY_DOMAIN, name=name)
 
 
 def interval_var(start=None, end=None, length=None, size=None,
@@ -1433,11 +1466,14 @@ def interval_var_list(asize, start=None, end=None, length=None, size=None,
     _check_arg_intensity(intensity, granularity)
     presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional")) else _PRES_PRESENT
 
-    if name is None:
-        name = CpoIntervalVar._generate_name() + "_"
     res = []
-    for i in range(asize):
-        res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name + str(i)))
+    if name is None:
+        for i in range(asize):
+            res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence))
+    else:
+        name = name + "_"
+        for i in range(asize):
+            res.append(CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name + str(i)))
     return res
 
 
@@ -1473,19 +1509,17 @@ def interval_var_dict(keys, start=None, end=None, length=None, size=None,
     _check_arg_intensity(intensity, granularity)
     presence = _PRES_OPTIONAL if (_check_arg_boolean(optional, "optional")) else _PRES_PRESENT
 
-    if name is None:
-        name = CpoIntervalVar._generate_name() + "_"
-
     res = {}
-    i = 0
-    isnamestr = is_string(name)
-    for k in keys:
-        if isnamestr:
-            vname = name + str(i)
-        else:
-            vname = name(k)
-        res[k] = CpoIntervalVar(start, end, length, size, intensity, granularity, presence, vname)
-        i += 1
+    if name is None:
+        for k in keys:
+            res[k] = CpoIntervalVar(start, end, length, size, intensity, granularity, presence)
+    elif is_string(name):
+        name = name + "_"
+        for i, k in enumerate(keys):
+            res[k] = CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name + str(i))
+    else:
+        for k in keys:
+            res[k] = CpoIntervalVar(start, end, length, size, intensity, granularity, presence, name(k))
     return res
 
 
@@ -1617,11 +1651,21 @@ _CACHE_ACTIVE = _CACHE_CONTEXT.active
 # Lock to protect the map
 _CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
 
+
+class _CacheKeyTuple(tuple):
+    """ Tuple that is used as a key of the expression cache """
+    def __eq__(self, other):
+        return isinstance(other, tuple) and len(other) == len(self) and all(x1 is x2 for x1, x2 in zip(self, other))
+    def __hash__(self):
+        return super(_CacheKeyTuple, self).__hash__()
+
+
 def _convert_to_tuple_if_possible(val):
     try:
         return tuple(val)
     except TypeError:
         return val
+
 
 def build_cpo_expr(val):
     """ Builds an expression from a given Python value.
@@ -1651,7 +1695,7 @@ def build_cpo_expr(val):
 
     # Value is any type of array. Force it as a tuple
     try:
-        val = tuple(val)
+        val = _CacheKeyTuple(val)
     except TypeError:
        raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
 
@@ -1662,7 +1706,7 @@ def build_cpo_expr(val):
                 cpval = _CPO_VALUES_FROM_PYTHON.get(val)
             except TypeError:
                 # Convert to tuple every member of the tuple
-                val = tuple(_convert_to_tuple_if_possible(x) for x in val)
+                val = _CacheKeyTuple(_convert_to_tuple_if_possible(x) for x in val)
                 try:
                     cpval = _CPO_VALUES_FROM_PYTHON.get(val)
                 except TypeError:
@@ -1670,6 +1714,7 @@ def build_cpo_expr(val):
             if cpval is None:
                 cpval = _create_cpo_array_expr(val)
                 _CPO_VALUES_FROM_PYTHON.set(val, cpval)
+
     else:
         cpval = _create_cpo_array_expr(val)
 
@@ -1759,6 +1804,38 @@ def build_cpo_transition_matrix(val):
 
     return cpval
 
+
+_VAR_TYPE_ORDER = (Type_Bool, Type_Int, Type_Float, Type_IntArray, Type_FloatArray, Type_TupleSet,
+                   Type_SegmentedFunction, Type_StepFunction, Type_TransitionMatrix,
+                   Type_IntVar, Type_FloatVar, Type_StateFunction, Type_IntervalVar, Type_SequenceVar)
+def compare_expressions(x1, x2):
+    """ Compare two expressions for declaration order
+
+    Args:
+        x1: Expression 1
+        x2: Expression 2
+    Returns:
+        Integer value that is negative if v1 < v2, zero if v1 == v2 and positive if v1 > v2.
+    """
+    # First sort by expression type
+    if x1.type != x2.type:
+        return _VAR_TYPE_ORDER.index(x1.type) - _VAR_TYPE_ORDER.index(x2.type)
+    # Check object type
+    tx1 = type(x1)
+    tx2 = type(x2)
+    if tx1 is not tx2:
+        # Alias always lost
+        if tx1 is CpoAlias:
+            return 1
+        if tx2 is CpoAlias:
+            return -1
+    # Compare by name in natural order
+    return compare_natural(x1.get_name(), x2.get_name())
+
+
+###############################################################################
+## Private utility functions
+###############################################################################
 
 def _create_cpo_array_expr(val):
     """ Create a new CP expression from a given array Python value
@@ -2154,7 +2231,7 @@ def _is_matching_arguments(sgn, args):
         True if the arguments are matching signature
     """
     for a, p in zip_longest(args, sgn.parameters):
-        if a:
+        if a is not None:
             # Accepted if there is a parameter descriptor that is compatible with argument type
             if not (p and a.type.is_kind_of(p.type)):
                 return False
@@ -2188,15 +2265,22 @@ def _is_equal_expressions(v1, v2):
         # Get expressions to compare
         edscr = estack[-1]
         v1, v2, cx = edscr
+        #print("Compare {} (type {}) with {} (type {})".format(v1, type(v1), v2, type(v2)))
 
-        # Check same object type
-        if type(v1) != type(v2):
-            return False
+        # Skip aliases
+        while isinstance(v1, CpoAlias):
+            v1 = v1.expr
+        while isinstance(v2, CpoAlias):
+            v2 = v2.expr
 
         # Check physical equality
         if v1 is v2:
             estack.pop()
             continue
+
+        # Check same object type
+        if type(v1) != type(v2):
+            return False
 
         # Check if expression is a CPO expression
         if isinstance(v1, CpoExpr):
@@ -2224,7 +2308,6 @@ def _is_equal_expressions(v1, v2):
             if not _is_equal_values(v1, v2):
                 return False
             estack.pop()
-
 
     # Expressions identical
     return True
@@ -2285,13 +2368,18 @@ def _domain_iterator(d):
         yield d
 
 
+def _reset_cache():
+    """ Reset expression cache (for testing purpose).
+    """
+    _CPO_VALUES_FROM_PYTHON.clear()
+
+
 import docplex.cp.cpo_compiler as compiler
 def _to_string(expr):
     """ Build a string representing an expression.
-
     Args:
         expr:  Expression to convert into string
     Returns:
         String representing this expression
     """
-    return compiler.CpoCompiler(None)._compile_expression(expr)
+    return compiler.expr_to_string(expr)

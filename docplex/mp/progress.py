@@ -1,14 +1,18 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2017
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
 
 from docplex.mp.solution import SolveSolution
-from six import iteritems
+from six import iteritems, string_types
+from enum import Enum
+
+from docplex.mp.context import auto_publising_kpis_table_names
 from docplex.util.environment import get_environment
+from docplex.mp.utils import write_kpis_table
 
 
 class ProgressData(object):
@@ -24,6 +28,7 @@ class ProgressData(object):
         self.best_bound = bignum
         self.mip_gap = bignum
         self.current_nb_nodes = 0
+        self.current_nb_iterations = 0
         self.remaining_nb_nodes = 0
         self.time = -1
         self.det_time = -1
@@ -96,7 +101,7 @@ class ProgressListener(object):
     def notify_jobid(self, jobid):
         """ The method called when a model is solved on the cloud and the job
         has been submitted.
-        
+
         This method is not called when solve is using a local engine.
         """
         pass  # pragma: no cover
@@ -136,6 +141,7 @@ class ProgressListener(object):
     def reset(self):
         pass
 
+
 class _IProgressFilter(object):
     def accept(self, pdata):
         raise NotImplementedError  # pragma: no cover
@@ -146,15 +152,19 @@ class _IProgressFilter(object):
 
 class _ProgressFilterAcceptAll(_IProgressFilter):
     def accept(self, pdata):
-        return True
+        return pdata.has_incumbent
+
     def has_significant_objective_change(self, pdata):
-        return True
+        return pdata.has_incumbent
 
 
 class _ProgressFilter(object):
     # INTERNAL: used to filter calls from CPLEX
 
-    def __init__(self, wait_first_incumbent=True, node_diff=1e+20, relative_diff=1e-2, abs_diff=0.1):
+    def __init__(self, wait_first_incumbent=True,
+                 node_diff=1e+20,
+                 relative_diff=1e-2,
+                 abs_diff=0.1):
         """ Builds a filter for progress listeners.
 
         A filter accepts calls from the callback according to the parameters below:
@@ -211,12 +221,11 @@ class _ProgressFilter(object):
                 self._last_node = pdata.current_nb_nodes
                 accept = True
 
-        if self._last_bound is None or self._is_significant_change(self._last_bound, pdata.best_bound):
-            self._last_bound = pdata.best_bound
-            self._last_node = pdata.current_nb_nodes
-            if pdata.has_incumbent:
+            if self._last_bound is None or self._is_significant_change(self._last_bound, pdata.best_bound):
+                self._last_bound = pdata.best_bound
+                self._last_node = pdata.current_nb_nodes
                 self._last_incumbent_obj = pdata.current_objective
-            accept = True
+                accept = True
 
         # nodes
         if self._node_diff > 1:
@@ -228,6 +237,17 @@ class _ProgressFilter(object):
                 accept = True
 
         return accept
+
+    def _detect_change(self, last_value_attr_name, current_attr_name, pdata):
+        last_attr_value = getattr(self, last_value_attr_name)
+        if pdata.has_incumbent:
+            if (last_attr_value is None) or self._is_significant_change(last_value_attr_name,
+                                                                        getattr(pdata, current_attr_name)):
+                self._last_incumbent_obj = pdata.current_objective
+                self._last_bound = pdata.best_bound
+                self._last_node = pdata.current_nb_nodes
+                return True
+        return False
 
     def has_significant_objective_change(self, pdata):
         if pdata.has_incumbent:
@@ -346,7 +366,7 @@ class SolutionListener(ProgressListener):
     def __init__(self, model):
         ProgressListener.__init__(self)
         self._model = model
-        self._engine_name = model.get_engine()._location()
+        self._engine_name = model.solve_with
         self._current_solution = None
         self._current_objective = ProgressData.BIGNUM
 
@@ -393,45 +413,98 @@ class SolutionHookListener(SolutionListener):
         self._hook_fn(sol)
 
 
-class KpiRecorder(SolutionListener):
+class KpiFilterLevel(Enum):
+    # what kind of filtering do we want for kpis?
+    Unfiltered = 0
+    FilterObjectiveAndBound = 1
+    FilterObjective = 2
 
-    # used to publish kpis on workera
-    def __init__(self, model, require_improve=True, publish_hook=None,
-                 kpi_publish_format=None):
+    def listen_to_bound(self):
+        return self is KpiFilterLevel.FilterObjectiveAndBound
+
+    def is_filtered(self):
+        return self is not KpiFilterLevel.Unfiltered
+
+    @classmethod
+    def parse(cls, arg):
+        if isinstance(arg, KpiFilterLevel):
+            return arg
+        else:
+            # None
+            if arg is None:
+                return KpiFilterLevel.Unfiltered
+            # String value
+            if isinstance(arg, string_types):
+                try:
+                    return KpiFilterLevel['arg']
+                except KeyError:
+                    raise ValueError('not a filter level: %s' % arg)
+            # int value
+            for fl in cls:
+                if arg == fl.value:
+                    return fl
+            else:
+                raise ValueError('not a filter level: {0!r}'.format(arg))
+
+
+class KpiRecorder(SolutionListener):
+    def __init__(self, model, filter_level=KpiFilterLevel.FilterObjectiveAndBound,
+                 publish_hook=None,
+                 kpi_publish_format=None,
+                 listen_to_bound=False):
         super(KpiRecorder, self).__init__(model)
         self.publish_hook = publish_hook
         self.kpi_publish_format = kpi_publish_format or 'KPI.%s'
 
         # all data below are attached to a solve (must be reset when starting a new solve...)
         self._kpis = []
-        self._filter = _ProgressFilter() if require_improve else _ProgressFilterAcceptAll()
+        self._filter_level = KpiFilterLevel.parse(filter_level)  # = filtered
+        self._listen_to_bound = listen_to_bound
         self._last_accept = True
         self._last_time = -1
+        self._report_count = 0
+        self.publish_name_fn = lambda kn: self.kpi_publish_format % kn
+        self._filter = _ProgressFilter() if self._filter_level.is_filtered() else _ProgressFilterAcceptAll()
 
     def reset(self):
         self._kpis = []
         self._last_accept = True
         self._last_time = -1
         self._filter.reset()
+        self._report_count = 0
+
+    @property
+    def kpis(self):
+        return self._kpis
+
+    @property
+    def nb_reported(self):
+        return self._report_count
 
     def notify_progress(self, pdata):
         super(KpiRecorder, self).notify_progress(pdata)
-        #
-        self._last_accept = self._filter.has_significant_objective_change(pdata)
+        # ---
+        filter_level = self._filter_level
+        if filter_level == KpiFilterLevel.FilterObjective:
+            self._last_accept = self._filter.has_significant_objective_change(pdata)
+        else:
+            self._last_accept = self._filter.accept(pdata)
+        # ---
         self._last_time = pdata.time
 
     def notify_solution(self, incumbents):
         super(KpiRecorder, self).notify_solution(incumbents)
-        publish_name_fn = lambda kn: self.kpi_publish_format % kn
+        publish_name_fn = self.publish_name_fn
         if self._last_accept:
+            self._report_count += 1
             # build a name/value dictionary with builtin values
-            k = self._model.kpis_as_dict(self.current_solution)
-            name_values = {publish_name_fn(u.name): v for u, v in iteritems(k)}
+            k = self._model.kpis_as_dict(self.current_solution, use_names=True)
+            name_values = {publish_name_fn(kn): kv for kn, kv in iteritems(k)}
 
             # This must be this value for the current objective
             name_values['PROGRESS_CURRENT_OBJECTIVE'] = self.current_solution.objective_value
             # predefined keys, not KPIs
-            #name_values[publish_name_fn('_objective')] = self.current_solution.objective_value
+            # name_values[publish_name_fn('_objective')] = self.current_solution.objective_value
             name_values[publish_name_fn('_time')] = self._last_time
 
             self._kpis.append(name_values)
@@ -439,6 +512,14 @@ class KpiRecorder(SolutionListener):
             # usually publish kpis in environment...
             if self.publish_hook is not None:
                 self.publish_hook(name_values)
+
+            # save kpis.csv table
+            context = self._model.context
+            if auto_publising_kpis_table_names(context) is not None:
+                write_kpis_table(env=get_environment(),
+                                 context=context,
+                                 model=self._model,
+                                 solution=self.current_solution)
 
     def iter_kpis(self):
         return iter(self._kpis)

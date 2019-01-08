@@ -262,7 +262,9 @@ Detailed description
 from docplex.cp.catalog import *
 from docplex.cp.expression import CpoExpr, CpoFunctionCall, build_cpo_expr, build_cpo_tupleset, \
                                   build_cpo_transition_matrix, INTERVAL_MAX
+import docplex.cp.expression as expression
 from docplex.cp.utils import *
+from docplex.cp.config import context
 import collections
 
 
@@ -287,10 +289,8 @@ def _is_int_couple(x):
 def _is_cpo_array(val):
     """ Check if argument could be mapped into CPO array """
     if isinstance(val, CpoExpr):
-        return True
-    if not is_array(val):
-        return False
-    return builtin_any(isinstance(x, CpoExpr) for x in val)
+        return val.type.is_array
+    return is_array(val) and builtin_any(isinstance(x, CpoExpr) for x in val)
 
 
 # Map of type names
@@ -565,23 +565,35 @@ def sum_of(x):
     """
     # Build model expression
     arr = build_cpo_expr(x)
+
     if arr.is_kind_of(Type_IntExprArray):
+        # alen = len(arr.value)
+        # if alen == 1:
+        #     return arr.value[0]
+        # if alen == 2:
+        #     return arr.value[0] + arr.value[1]
         return CpoFunctionCall(Oper_sum, Type_IntExpr, (arr,))
     if arr.is_kind_of(Type_FloatExprArray):
         return CpoFunctionCall(Oper_sum, Type_FloatExpr, (arr,))
 
-    # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
     assert arr.is_kind_of(Type_CumulExprArray), "Argument should be an array of integer, float or cumul expressions"
+
+    # Check generation version
+    cpver = context.model.version
+    if cpver and cpver >= "12.8":
+        return CpoFunctionCall(Oper_sum, Type_CumulExpr, (arr,))
+
+    # Build sum of cumul expressions as list of additions (waiting for function available in the layer)
     values = arr.children
+    if not values:
+        return 0
     res = values[0]
     for v in values[1:]:
         res = res + v
-    # Garbage the array because unused (remove links on children)
-    arr._garbage()
     return res
 
 
-def sum(x, *args):
+def sum(arr, *args):
     """ Returns the sum of all expressions in an array of expressions.
 
     The function *sum* computes the sum of all expressions in array *x*.
@@ -592,106 +604,148 @@ def sum(x, *args):
     It recalls the builtin sum() function if no model expression is found in the parameters.
 
     Args:
-        x: An array of integer or floating-point expressions.
+        arr: An array of integer or floating-point expressions.
     Returns:
         An integer or float expression depending on the type of argument.
     """
     # Check calls to builtin sum()
     if args:
-        return builtin_sum(x, *args)
+        return builtin_sum(arr, *args)
     # Check array of model expressions
-    x = _expand(x)
-    if _is_cpo_array(x):
-        return sum_of(x)
-    return builtin_sum(x)
+    arr = _expand(arr)
+    return sum_of(arr) if _is_cpo_array(arr) else builtin_sum(arr)
 
 
-def min_of(x):
-    """ Computes the minimum of an array of integer or floating-point expressions.
+def min_of(arr, *args):
+    """ Computes the minimum of an array or a list of integer or floating-point expressions.
 
     The *min_of* function returns an expression which has the same value as the
     minimum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
+    List of expressions can be given extensively, or as a single iterable of expressions.
+
     Args:
-        x: An array of integer or floating-point expressions.
+        arr: Array of integer or floating-point expressions, or first expression of the list
+        *args: Other expressions if first argument is not already an iterable
     Returns:
         An integer or float expression according to the type of parameters.
     """
-    # Call with array of expressions
-    arr = build_cpo_expr(x)
-    if arr.is_kind_of(Type_IntExprArray):
-        return CpoFunctionCall(Oper_min, Type_IntExpr, (arr,))
+    # Build array of arguments
+    if args:
+        arr = [arr]
+        arr.extend(args)
+    arr = build_cpo_expr(arr)
+
+    # Check if single argument that is not an array
+    if not arr.type.is_array:
+        return arr
+
+    # Determine array and element/result type
     assert arr.is_kind_of(Type_FloatExprArray), "Argument should be an array of integer or float expressions"
-    return CpoFunctionCall(Oper_min, Type_FloatExpr, (arr,))
+    rtype = Type_IntExpr if arr.type.is_kind_of(Type_IntExprArray) else Type_FloatExpr
+
+    # Check single and pair of expressions
+    vals = arr.value
+    if len(vals) == 1:
+        return vals[0]
+    if len(vals) == 2:
+        return CpoFunctionCall(Oper_min, rtype, (build_cpo_expr(vals[0]), build_cpo_expr(vals[1])))
+    return CpoFunctionCall(Oper_min, rtype, (arr,))
 
 
-def min(x, *args):
+def min(arr, *args, **kwargs):
     """ Computes the minimum of an array of integer or floating-point expressions.
 
     The *min* function returns an expression which has the same value as the
     minimum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
+    List of expressions can be given extensively, or as a single iterable of expressions.
+
     Implementation of this method is proof to import all functions of this module at root level.
     It recalls the builtin min() function if no model expression is found in the parameters.
 
     Args:
-        x: An array of integer or floating-point expressions.
+        arr: Array of integer or floating-point expressions, or first expression of the list
+        *args: Other expressions if first argument is not already an iterable
     Returns:
         An integer or float expression according to the type of parameters.
     """
     # Check calls to builtin min()
+    if kwargs:
+        return builtin_min(arr, *args, **kwargs)
     if args:
-        return builtin_min(x, *args)
-    x = _expand(x)
-    if _is_cpo_array(x):
-        return min_of(x)
-    return builtin_min(x)
+        arr = [arr]
+        arr.extend(args)
+    arr = _expand(arr)
+    return min_of(arr) if _is_cpo_array(arr) else builtin_min(arr)
 
 
-def max_of(x):
-    """ Computes the maximum of an array of integer or floating-point expressions.
+def max_of(arr, *args):
+    """ Computes the maximum of an array or a list of integer or floating-point expressions.
 
     The *max_of* function returns an expression which has the same value as the
-    minimum of the supplied arguments.
+    maximum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
+    List of expressions can be given extensively, or as a single iterable of expressions.
+
     Args:
-        x: An array of integer or floating-point expressions.
+        arr: Array of integer or floating-point expressions, or first expression of the list
+        *args: Other expressions if first argument is not already an iterable
     Returns:
         An integer or float expression according to the type of parameters.
     """
-    # Call with array of expressions
-    arr = build_cpo_expr(x)
-    if arr.is_kind_of(Type_IntExprArray):
-        return CpoFunctionCall(Oper_max, Type_IntExpr, (arr,))
+    # Build array of arguments
+    if args:
+        arr = [arr]
+        arr.extend(args)
+    arr = build_cpo_expr(arr)
+
+    # Check if single argument that is not an array
+    if not arr.type.is_array:
+        return arr
+
+    # Determine array and element/result type
     assert arr.is_kind_of(Type_FloatExprArray), "Argument should be an array of integer or float expressions"
-    return CpoFunctionCall(Oper_max, Type_FloatExpr, (arr,))
+    rtype = Type_IntExpr if arr.type.is_kind_of(Type_IntExprArray) else Type_FloatExpr
+
+    # Check single and pair of expressions
+    vals = arr.value
+    if len(vals) == 1:
+        return vals[0]
+    if len(vals) == 2:
+        return CpoFunctionCall(Oper_max, rtype, (build_cpo_expr(vals[0]), build_cpo_expr(vals[1])))
+    return CpoFunctionCall(Oper_max, rtype, (arr,))
 
 
-def max(x, *args):
-    """ Computes the maximum of a pair or array of integer or floating-point expressions.
+def max(arr, *args, **kwargs):
+    """ Computes the maximum of an array of integer or floating-point expressions.
 
     The *max* function returns an expression which has the same value as the
     maximum of the supplied arguments.
     The return type corresponds to the type of arguments supplied.
 
+    List of expressions can be given extensively, or as a single iterable of expressions.
+
     Implementation of this method is proof to import all functions of this module at root level.
     It recalls the builtin max() function if no model expression is found in the parameters.
 
     Args:
-        x: An array of integer or floating-point expressions.
+        arr: Array of integer or floating-point expressions, or first expression of the list
+        *args: Other expressions if first argument is not already an iterable
     Returns:
         An integer or float expression according to the type of parameters.
     """
     # Check calls to builtin max()
-    if len(args) > 1:
-        return builtin_max(x, *args)
-    x = _expand(x)
-    if _is_cpo_array(x):
-        return max_of(x)
-    return builtin_max(x)
+    if kwargs:
+        return builtin_max(arr, *args, **kwargs)
+    if args:
+        arr = [arr]
+        arr.extend(args)
+    arr = _expand(arr)
+    return max_of(arr) if _is_cpo_array(arr) else builtin_max(arr)
 
 
 #==============================================================================
@@ -734,9 +788,7 @@ def all(lexpr):
     """
     # Build and of expressions as list of logical and
     lexpr = _expand(lexpr)
-    if _is_cpo_array(lexpr):
-        return all_of(lexpr)
-    return builtin_all(lexpr)
+    return all_of(lexpr) if _is_cpo_array(lexpr) else builtin_all(lexpr)
 
 
 def any_of(lexpr):
@@ -774,9 +826,7 @@ def any(lexpr):
     """
     # Build and of expressions as list of logical and
     lexpr = _expand(lexpr)
-    if _is_cpo_array(lexpr):
-        return any_of(lexpr)
-    return builtin_any(lexpr)
+    return any_of(lexpr) if _is_cpo_array(lexpr) else builtin_any(lexpr)
 
 
 def logical_and(e1, e2=None):
@@ -970,14 +1020,18 @@ def false():
 #==============================================================================
 
 
-def all_diff(arr):
+def all_diff(arr, *args):
     """ Returns a constraint stating that multiple expressions must be all different.
 
     Args:
-        arr: Array (list or tuple) of integer expressions.
+        arr: Array (list, tuple or iterable) of expressions, or first element of the list
+        *args: Other expressions if first argument is a single expression
     Returns:
         New constraint expression.
     """
+    if args:
+        arr = [arr]
+        arr.extend(args)
     return CpoFunctionCall(Oper_all_diff, Type_Constraint, (_convert_arg(arr, "arr", Type_IntExprArray),))
 
 

@@ -1,12 +1,12 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016, 2017
+# (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-Tokenizer for reading CPO file format
+Tokenizer for reading FlatZinc FZN file format
 """
 
 from docplex.cp.utils import to_internal_string, is_string
@@ -16,7 +16,7 @@ from docplex.cp.utils import to_internal_string, is_string
 ## Utility classes
 ###############################################################################
 
-class CpoToken(object):
+class FznToken(object):
     """ Token returned by tokenizer  """
     __slots__ = ('type',  # Token type
                  'value',  # Token string value (with quotes for strings)
@@ -28,7 +28,7 @@ class CpoToken(object):
             type:  Token type
             value: Token value
         """
-        super(CpoToken, self).__init__()
+        super(FznToken, self).__init__()
         self.type = type
         self.value = value
 
@@ -53,10 +53,15 @@ class CpoToken(object):
         Returns:
             True if 'other' is a token with the same value then this one, False otherwise
         """
-        return isinstance(other, CpoToken) and (other.type == self.type) and (other.value == self.value)
+        return other is self or (isinstance(other, FznToken) and (other.type == self.type) and (other.value == self.value))
 
     def __ne__(self, other):
-        """ Overwrite inequality comparison """
+        """ Check if this token is different than another object
+        Args:
+            other:  Object to compare with
+        Returns:
+            True if 'other' is not a token or a different token than this one, False otherwise
+        """
         return not self.__eq__(other)
 
 
@@ -65,72 +70,47 @@ class CpoToken(object):
 ###############################################################################
 
 # Token types
-TOKEN_NONE        = 0
-TOKEN_INTEGER     = 1
-TOKEN_FLOAT       = 2
+TOKEN_NONE = 0
+TOKEN_INTEGER = 1
+TOKEN_FLOAT = 2
 TOKEN_PUNCTUATION = 3
-TOKEN_OPERATOR    = 4
-TOKEN_SYMBOL      = 5
-TOKEN_STRING      = 6
-TOKEN_VERSION     = 7
+TOKEN_OPERATOR = 4
+TOKEN_SYMBOL = 5
+TOKEN_STRING = 6
+TOKEN_VERSION = 7
 
-# Miscellaneous directly used tokens
-TOKEN_EOF = CpoToken(TOKEN_NONE, "EOF")
+# Predefined tokens
+TOKEN_EOF = FznToken(TOKEN_NONE, "EOF")
+TOKEN_INTERVAL = FznToken(TOKEN_OPERATOR, "..")
 
-# Punctuation tokens
-TOKEN_COMMA        = CpoToken(TOKEN_PUNCTUATION, ',')
-TOKEN_COLON        = CpoToken(TOKEN_PUNCTUATION, ':')
-TOKEN_SEMICOLON    = CpoToken(TOKEN_PUNCTUATION, ';')
-TOKEN_BRACE_OPEN   = CpoToken(TOKEN_PUNCTUATION, '{')
-TOKEN_BRACE_CLOSE  = CpoToken(TOKEN_PUNCTUATION, '}')
-TOKEN_HOOK_OPEN    = CpoToken(TOKEN_PUNCTUATION, '[')
-TOKEN_HOOK_CLOSE   = CpoToken(TOKEN_PUNCTUATION, ']')
-TOKEN_PARENT_OPEN  = CpoToken(TOKEN_PUNCTUATION, '(')
-TOKEN_PARENT_CLOSE = CpoToken(TOKEN_PUNCTUATION, ')')
-TOKEN_HASH         = CpoToken(TOKEN_PUNCTUATION, '#')
+TOKEN_COMMA       = FznToken(TOKEN_PUNCTUATION, ",")
+TOKEN_COLON       = FznToken(TOKEN_PUNCTUATION, ":")
+TOKEN_DOUBLECOLON = FznToken(TOKEN_PUNCTUATION, "::")
+TOKEN_SEMICOLON   = FznToken(TOKEN_PUNCTUATION, ";")
+TOKEN_EQUAL       = FznToken(TOKEN_PUNCTUATION, "=")
 
-# Operator tokens
-TOKEN_EQUAL         = CpoToken(TOKEN_OPERATOR, '=')
-TOKEN_SLASH         = CpoToken(TOKEN_OPERATOR, '/')
-TOKEN_GREATER       = CpoToken(TOKEN_OPERATOR, '>')
-TOKEN_GREATER_EQUAL = CpoToken(TOKEN_OPERATOR, '>=')
-TOKEN_LOWER         = CpoToken(TOKEN_OPERATOR, '<')
-TOKEN_LOWER_EQUAL   = CpoToken(TOKEN_OPERATOR, '<=')
-TOKEN_EQUAL         = CpoToken(TOKEN_OPERATOR, '==')
-TOKEN_DIFFERENT     = CpoToken(TOKEN_OPERATOR, '!=')
-TOKEN_ASSIGN        = CpoToken(TOKEN_OPERATOR, '=')
-TOKEN_IMPLY         = CpoToken(TOKEN_OPERATOR, '=>')
-TOKEN_AND           = CpoToken(TOKEN_OPERATOR, '&&')
-TOKEN_OR            = CpoToken(TOKEN_OPERATOR, '||')
-TOKEN_NOT           = CpoToken(TOKEN_OPERATOR, '!')
-TOKEN_INTERVAL      = CpoToken(TOKEN_OPERATOR, '..')
+TOKEN_HOOK_OPEN    = FznToken(TOKEN_PUNCTUATION, "[")
+TOKEN_HOOK_CLOSE   = FznToken(TOKEN_PUNCTUATION, "]")
+TOKEN_BRACE_OPEN   = FznToken(TOKEN_PUNCTUATION, "{")
+TOKEN_BRACE_CLOSE  = FznToken(TOKEN_PUNCTUATION, "}")
+TOKEN_PARENT_OPEN  = FznToken(TOKEN_PUNCTUATION, "(")
+TOKEN_PARENT_CLOSE = FznToken(TOKEN_PUNCTUATION, ")")
 
+TOKEN_INTEGER_ONE  = FznToken(TOKEN_INTEGER, "1")
 
-# Array of single character tokens
-_CHAR_TOKENS = [None] * 127
-_CHAR_TOKENS[ord(',')] = TOKEN_COMMA
-_CHAR_TOKENS[ord(':')] = TOKEN_COLON
-_CHAR_TOKENS[ord(';')] = TOKEN_SEMICOLON
-_CHAR_TOKENS[ord('#')] = TOKEN_HASH
-_CHAR_TOKENS[ord('(')] = TOKEN_PARENT_OPEN
-_CHAR_TOKENS[ord(')')] = TOKEN_PARENT_CLOSE
-_CHAR_TOKENS[ord('[')] = TOKEN_HOOK_OPEN
-_CHAR_TOKENS[ord(']')] = TOKEN_HOOK_CLOSE
-_CHAR_TOKENS[ord('{')] = TOKEN_BRACE_OPEN
-_CHAR_TOKENS[ord('}')] = TOKEN_BRACE_CLOSE
-
-for c in "+-*%^":
-    _CHAR_TOKENS[ord(c)] = CpoToken(TOKEN_OPERATOR, c)
-_CHAR_TOKENS[ord('/')] = TOKEN_SLASH
-
-_CHAR_TOKENS = tuple(_CHAR_TOKENS)
+TOKEN_SYMBOL_ARRAY      = FznToken(TOKEN_SYMBOL,  "array")
+TOKEN_SYMBOL_VAR        = FznToken(TOKEN_SYMBOL,  "var")
+TOKEN_SYMBOL_CONSTRAINT = FznToken(TOKEN_SYMBOL,  "constraint")
+TOKEN_SYMBOL_OF         = FznToken(TOKEN_SYMBOL,  "of")
+TOKEN_SYMBOL_INT        = FznToken(TOKEN_SYMBOL,  "int")
+TOKEN_SYMBOL_SOLVE      = FznToken(TOKEN_SYMBOL,  "solve")
 
 
 ###############################################################################
 ## Public classes
 ###############################################################################
 
-class CpoTokenizer(object):
+class FznTokenizer(object):
     """ Tokenizer for CPO file format """
     __slots__ = ('name',         # Input name (for error string build)
                  'input',        # Input stream
@@ -146,7 +126,7 @@ class CpoTokenizer(object):
         Args:
             input: Input stream or string
         """
-        super(CpoTokenizer, self).__init__()
+        super(FznTokenizer, self).__init__()
         self.name = name
         if is_string(input):
             self.input = None
@@ -164,7 +144,7 @@ class CpoTokenizer(object):
         """ Get the next token
 
         Returns:
-            Next available token (type CpoToken), TOKEN_NONE if end of input
+            Next available token (type FznToken), TOKEN_NONE if end of input
         """
         # Skip separators and comments
         while (True):
@@ -175,88 +155,38 @@ class CpoTokenizer(object):
                 return TOKEN_EOF
 
             # Check start comment
-            if c == '/':
-                c = self._peek_char()
-                if c == '/':
-                    # Skip characters until end of line
-                    self.get_line_reminder()
-                elif c == '*':
-                    # Search end of comment
-                    self._skip_char()
-                    pc = ""
-                    c = self._next_char()
-                    while c and ((c != '/') or (pc != '*')):
-                        pc = c
-                        c = self._next_char()
-                else:
-                    return TOKEN_SLASH
+            if c == '%':
+                self.get_line_reminder()
             else:
                 break
 
         # Reset current token
         self.token_start = self.read_index - 1
 
-        # Check single character tokens
-        t = _CHAR_TOKENS[ord(c)]
-        if t:
-            return t
+        # Punctuation
+        if   c == ',': return TOKEN_COMMA
+        elif c == ';': return TOKEN_SEMICOLON
+        elif c == '=': return TOKEN_EQUAL
 
-        # Double character operators
-        elif c == '>':
-            if self._peek_char() == '=':
-                self._next_char()
-                return TOKEN_GREATER_EQUAL
-            return TOKEN_GREATER
-
-        elif c == '<':
-            if self._peek_char() == '=':
-                self._next_char()
-                return TOKEN_LOWER_EQUAL
-            return TOKEN_LOWER
-
-        elif c == '=':
-            c = self._peek_char()
-            if c == '=':
-                self._next_char()
-                return TOKEN_EQUAL
-            if c == '>':
-                self._next_char()
-                return TOKEN_IMPLY
-            return TOKEN_ASSIGN
-
-        elif c == '!':
-            if self._peek_char() == '=':
-                self._next_char()
-                return TOKEN_DIFFERENT
-            return TOKEN_NOT
-
-        elif c == '&':
-            if self._next_char() != '&':
-                raise SyntaxError(self.build_error_string("Unknown operator '&'"))
-            return TOKEN_AND
-
-        elif c == '|':
-            if self._next_char() != '|':
-                raise SyntaxError(self.build_error_string("Unknown operator '|'"))
-            return TOKEN_OR
+        elif c == '[': return TOKEN_HOOK_OPEN
+        elif c == ']': return TOKEN_HOOK_CLOSE
+        elif c == '{': return TOKEN_BRACE_OPEN
+        elif c == '}': return TOKEN_BRACE_CLOSE
+        elif c == '(': return TOKEN_PARENT_OPEN
+        elif c == ')': return TOKEN_PARENT_CLOSE
 
         elif c == '.':
-            if self._next_char() != '.':
-                raise SyntaxError(self.build_error_string("Unknown operator '.'"))
+            c = self._next_char()
+            if c != '.':
+                raise SyntaxError(self.build_error_string("Unknown token '.'"))
             return TOKEN_INTERVAL
 
-        # Check string
-        elif c == '"':
-            c = ''
-            # Read character sequence
-            while (c is not None) and (c != '"'):
-                c = self._next_char()
-                if c == '\\':
-                    self._next_char()
-                    c = ''
-            if c is None:
-                raise SyntaxError(self.build_error_string("String not ended before end of stream"))
-            return CpoToken(TOKEN_STRING, self._get_token())
+        elif c == ':':
+            c = self._peek_char()
+            if c == ':':
+                self._skip_char()
+                return TOKEN_DOUBLECOLON
+            return TOKEN_COLON
 
         # Check symbol
         elif ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or (c == '_'):
@@ -265,10 +195,10 @@ class CpoTokenizer(object):
             while c and (((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')):
                 c = self._skip_char()
             s = self._get_token()
-            return CpoToken(TOKEN_OPERATOR if s == 'div' else TOKEN_SYMBOL, s)
+            return FznToken(TOKEN_OPERATOR if s == 'div' else TOKEN_SYMBOL, s)
 
         # Check number
-        elif (c >= '0') and (c <= '9'):
+        elif ((c >= '0') and (c <= '9')) or (c == '-') or (c == '+'):
             # Read number
             typ = TOKEN_INTEGER
             c = self._peek_char()
@@ -279,7 +209,7 @@ class CpoTokenizer(object):
                 if c == '.':
                     # Case of '..' used to specify intervals
                     self.read_index -= 1
-                    return CpoToken(typ, self._get_token())
+                    return FznToken(typ, self._get_token())
                 typ = TOKEN_FLOAT
                 while c and (c >= '0') and (c <= '9'):
                     c = self._skip_char()
@@ -300,10 +230,23 @@ class CpoTokenizer(object):
                     c = self._skip_char()
                 while c and (c >= '0') and (c <= '9'):
                     c = self._skip_char()
-            return CpoToken(typ, self._get_token())
+            return FznToken(typ, self._get_token())
 
-        # Unknown token
-        raise SyntaxError(self.build_error_string("Unknown token starting by '{}'".format(c)))
+        # Check string
+        elif c == '"':
+            c = ''
+            # Read character sequence
+            while (c is not None) and (c != '"'):
+                c = self._next_char()
+                if c == '\\':
+                    self._next_char()
+                    c = ''
+            if c is None:
+                raise SyntaxError(self.build_error_string("String not ended before end of stream"))
+            return FznToken(TOKEN_STRING, self._get_token())
+
+        else:
+            raise SyntaxError(self.build_error_string("Unknown token starting by '{}'".format(c)))
 
 
     def get_line_reminder(self):
@@ -387,4 +330,3 @@ class CpoTokenizer(object):
         """
         return "Error in '" + self.name + "' at line " + str(self.line_number) + " index " + str(
             self.read_index) + ": " + msg
-

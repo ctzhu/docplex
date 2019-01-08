@@ -77,6 +77,9 @@ import inspect
 import sys
 import time
 import copy
+import types
+from collections import namedtuple
+from collections import OrderedDict
 
 
 ###############################################################################
@@ -92,6 +95,85 @@ _MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler, ('maximize', '
 ##  Public classes
 ###############################################################################
 
+# Model statistics
+class CpoModelStatistics(object):
+    """ This class represents model statistics informations.
+    """
+
+    def __init__(self, model):
+        """ Initialize statisrtics
+
+        Args:
+            model: Source model
+        """
+        self.nb_root_exprs = len(model.expr_list) + len(model.search_phases) + 0 if model.objective is None else 1
+        self.nb_integer_var   = 0     # Number of integer variables
+        self.nb_interval_var  = 0     # Number of interval variables
+        self.nb_expr_nodes    = 0     # Number of expression nodes
+        self.operation_usage  = {}    # Map of operation usage count.
+                                      # Key is the CPO name of the operation, value is the number of times it is used.
+
+    def _add_expression(self, expr):
+        """ Update statistics with an expression node.
+
+        Args:
+            expr:  Expression
+        """
+        self.nb_expr_nodes += 1
+        if isinstance(expr, CpoIntVar):
+            self.nb_integer_var += 1
+        elif isinstance(expr, CpoIntervalVar):
+            self.nb_interval_var += 1
+        elif isinstance(expr, CpoFunctionCall):
+            opname = expr.operation.cpo_name
+            self.operation_usage[opname] = self.operation_usage.get(opname, 0) + 1
+
+    def write(self, out=None, prefix=""):
+        """ Write the solution
+
+        Args:
+            out (Optional):    Target output, as stream or file name. sys.stdout if not given
+            prefix (Optional): Prefix added at the beginning of each line
+        """
+        # Check file
+        if is_string(out):
+            with open(os.path.abspath(out), mode='w') as f:
+                self.write(f)
+            return
+
+        if out is None:
+            out = sys.stdout
+
+        # Write normal attributes
+        out.write("{}number of integer variables:  {}\n".format(prefix, self.nb_integer_var))
+        out.write("{}number of interval variables: {}\n".format(prefix, self.nb_interval_var))
+        out.write("{}number of expressions:        {}\n".format(prefix, self.nb_root_exprs))
+        out.write("{}number of expression nodes:   {}\n".format(prefix, self.nb_expr_nodes))
+        out.write("{}operations:                   ".format(prefix))
+        if self.operation_usage:
+            for i, k in enumerate(sorted(self.operation_usage.keys())):
+                if (i > 0):
+                    out.write(", ")
+                out.write("{}: {}".format(k, self.operation_usage[k]))
+        else:
+            out.write("None")
+        out.write("\n")
+
+    def __eq__(self, other):
+        """ Overwrite equality comparison
+
+        Args:
+            other: Other object to compare with
+        Returns:
+            True if this object is equal to the other, False otherwise
+        """
+        return utils.equals(self, other)
+
+    def __ne__(self, other):
+        """ Overwrite inequality comparison """
+        return not self.__eq__(other)
+
+
 class CpoModel(object):
     """ This class is the Python container of a CPO model.
     """
@@ -105,20 +187,19 @@ class CpoModel(object):
         """
         ctx = config.get_default()
         super(CpoModel, self).__init__()
-        self.format_version   = None     # Version of the CPO format
-        self.expr_list        = []       # List of model root expressions as tuples (expression, location)
-        self.parameters       = None     # Solving parameters
-        self.search_phases    = []       # List of search phases
-        self.starting_point   = None     # Starting point
-        self.objective        = None     # Objective function
-        self.map_expr         = {}       # Dictionary of expressions. Key is expression name.
-        self.kpis             = {}       # Dictionary of KPIs. Key is publish name.
-        self.listeners        = []       # Solver listeners
+        self.expr_list        = []            # List of model root expressions as tuples (expression, location)
+        self.parameters       = None          # Solving parameters
+        self.search_phases    = []            # List of search phases
+        self.starting_point   = None          # Starting point
+        self.objective        = None          # Objective function
+        self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name.
+        self.listeners        = []            # Solver listeners
 
-        # Indicate to set in the model information of source location
+        # Set version of the CPO format (default)
+        self.format_version   = None
+
+        # Indicate to set source location in the model information
         self.source_loc       = ctx.get_by_path("model.add_source_location", True)
-        # Indicate to always name added constraints (for conflict refiner)
-        self.name_constraints = ctx.get_by_path("model.name_all_constraints", False)
 
         # Initialize times to compute modeling time
         self.create_time      = time.time()        # Model creation absolute time
@@ -132,9 +213,6 @@ class CpoModel(object):
         self.source_file = sfile
 
         # Store model name
-        if name is None:
-            if sfile:
-                name = utils.get_file_name_only(sfile)
         self.name = name
 
         # Duplicate constructor functions to make them callable from the model
@@ -189,13 +267,15 @@ class CpoModel(object):
         Raises:
             CpoException in case of error.
         """
+
         # Check simple boolean expressions
         if is_bool(expr):
-            assert expr, "Try to add an expression which is already false"
-            return
+            # assert expr, "Try to add an expression which is already false"
+            # return
+            expr = build_cpo_expr(expr)
 
         # Check expression
-        assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of " + str(type(expr))
+        assert isinstance(expr, CpoExpr), "Argument 'expr' should be a CpoExpr instead of {} (type {})".format(expr, str(type(expr)))
 
         # Determine calling location
         if self.source_loc:
@@ -206,26 +286,16 @@ class CpoModel(object):
 
         # Check type of expression
         etyp = expr.type
-        etyp = expr.type
-        if etyp in (Type_Constraint, Type_BoolExpr):
-            # Check if expression is named
-            if self.name_constraints and not expr.name:
-                expr.set_name(expression._CONSTRAINT_ID_ALLOCATOR.allocate())
-            self.expr_list.append((expr, loc))
-        elif etyp is Type_SearchPhase:
+        if etyp is Type_SearchPhase:
             self.search_phases.append((expr, loc))
         elif etyp is Type_Objective:
             if self.objective is not None:
-                # if self.objective is not expr:
-                #     raise CpoException("Only one objective function can be added to the model.")
+                # Remove previous objective from the model
                 self.remove(self.objective)
             self.objective = expr
             self.expr_list.append((expr, loc))
         else:
             self.expr_list.append((expr, loc))
-
-        # Add to the map of named expressions
-        self._add_named_expr(expr)
 
         # Update last add time
         self.last_add_time = time.time()
@@ -396,28 +466,48 @@ class CpoModel(object):
         return self.starting_point
 
 
-    def add_kpi(self, var, name=None):
-        # """ Add a a Key Performance Indicator to the model.
+    def add_kpi(self, expr, name=None):
+        # """ Add a Key Performance Indicator to the model.
         #
-        # A KPI is a model variable whose value is considered as representative of the global solution.
-        # If the model is solved in a cloud context, these KPIs can be associated to the objective value in the
+        # A KPI is an expression whose value is considered as representative of the global solution.
+        #
+        # The KPI expression can be:
+        #
+        #  * an integer model variable,
+        #  * a Python lambda expression that computes the value of the KPI from the solve result given as parameter.
+        #
+        # Example of lambda expression used as KPI:
+        # ::
+        #
+        #     mdl = CpoModel()
+        #     a = integer_var(0, 3)
+        #     b = integer_var(0, 3)
+        #     mdl.add(a < b)
+        #     mdl.add_kpi(lambda res: (res[a] + res[b]) / 2, "Average")
+        #
+        # If the model is solved in a cloud context, these KPIs are associated to the objective value in the
         # solve details that are sent periodically to the client.
         #
         # Args:
-        #     var:              Model variable to be used as KPI(s).
-        #     name (optional):  Name used to publish this KPI. If absent, variable name is used.
+        #     expr:             Model variable to be used as KPI(s).
+        #     name (optional):  Name used to publish this KPI. If absent anf if expression is a variable,
+        #                       the variable name is used.
         # """
-        assert isinstance(var, CpoVariable), "Argument 'var' should be a model variable"
+        assert isinstance(expr, (CpoVariable, types.FunctionType)), "Argument 'expr' should be a model variable or a lambda expression"
         if name is None:
-            name = var.get_name()
-        self.kpis[name] = var
+            if isinstance(expr, CpoVariable):
+                name = expr.get_name()
+        assert name, "A KPI name is mandatory"
+        assert not name in self.kpis, "Name '{}' is already used for another KPI.".format(name)
+        self.kpis[name] = expr
 
 
     def get_kpis(self):
         # """ Returns the dictionary of this model KPIs.
         #
         # Returns:
-        #     Dictionary of KPIs. Key is publish name, value is model variable.
+        #     Ordered dictionary of KPIs. Key is publish name, value is kpi expression.
+        #     Keys are sorted in the order the KPIs have been defined.
         # """
         return self.kpis
 
@@ -432,19 +522,8 @@ class CpoModel(object):
         return self.expr_list
 
 
-    def get_expression(self, name):
-        """ Gets an expression from its name (expression or variable).
-
-        Args:
-            name: Name of the expression.
-        Returns:
-            Expression, None if not found.
-        """
-        return self.map_expr.get(name)
-
-
     def get_all_variables(self):
-        """ Gets the list of all model variables (for debugging purpose only).
+        """ Gets the list of all model variables.
 
         This method goes across all model expressions to identify all variables that are pointed by them.
         Calling this method on a big model may be slow.
@@ -452,11 +531,12 @@ class CpoModel(object):
         Returns:
             List of model variables.
         """
-        # Initialize stack of expresssions to parse
+        # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
         estack.extend([x for x, l in self.search_phases])
-        if self.objective:
+        if self.objective is not None:
             estack.append(self.objective)
+
         # Loop while expression stack is not empty
         varlist = []     # Result list
         doneset = set()  # Set of expressions already processed
@@ -469,20 +549,120 @@ class CpoModel(object):
                     varlist.append(e)
                 # Stack children expressions
                 estack.extend(e.children)
+
         return varlist
+
+
+    def get_named_expressions_dict(self):
+        """ Gets a dictionary of all named expressions.
+
+        This method goes across all model expressions to identify all named expressions.
+        Calling this method on a big model may be slow.
+
+        Returns:
+            Dictionary of all named expressions. Key is expression name, value is expression.
+        """
+        # Initialize stack of expressions to parse
+        estack = [x for x, l in self.expr_list]
+        estack.extend([x for x, l in self.search_phases])
+        if self.objective is not None:
+            estack.append(self.objective)
+        # Loop while expression stack is not empty
+        result = {}      # Result dictionary
+        doneset = set()  # Set of expressions already processed
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                doneset.add(eid)
+                if e.name:
+                    result[e.name] = e
+                # Stack children expressions
+                estack.extend(e.children)
+        return result
+
+
+    def get_objective_expression(self):
+        """ Gets the objective expression (maximization or minimization).
+
+        Returns:
+            Objective expression, None if satisfaction problem.
+        """
+        return self.objective
+
+
+    def is_minimization(self):
+        """ Check if this model represents a minimization problem.
+
+        Returns:
+            True if this model represents a minimization problem.
+        """
+        return self.objective is not None and "min" in self.objective.operation.cpo_name
+
+
+    def is_maximization(self):
+        """ Check if this model represents a maximization problem.
+
+        Returns:
+            True if this model represents a maximization problem.
+        """
+        return self.objective is not None and "max" in self.objective.operation.cpo_name
+
+
+    def is_satisfaction(self):
+        """ Check if this model represents a satisfaction problem.
+
+        Returns:
+            True if this model represents a satisfaction problem.
+        """
+        return self.objective is None
 
 
     def get_optimization_expression(self):
         """ Gets the optimization expression (maximization or minimization).
 
+        DEPRECATED. Use :meth:`~CpoModel.get_objective_expression` instead.
+
         Returns:
             Optimization expression, None if satisfaction problem.
         """
-        # Search last optimization expression
-        for x, l in reversed(self.get_all_expressions()):
-            if isinstance(x, CpoFunctionCall) and x.operation.is_optim:
-                return x
-        return None
+        return self.get_objective_expression()
+
+
+    def replace_expression(self, oexpr, nexpr):
+        """ In all model expressions, replace an expression by another.
+
+        This method goes across all model expressions tree and replace each occurrence of the expression to
+        replace by the new expression.
+        The comparison of the expression to replace is done by reference (it must be the same object)
+
+        Args:
+            oexpr: Expression to replace
+            nexpr: Expression to put instead
+        Returns:
+            Number of replacements done in the model
+        """
+        # Scan all expressions
+        doneset = set()  # Set of expressions already processed
+        nbrepl = 0
+        for i, (x, l) in enumerate(self.expr_list):
+            if x is oexpr:
+                self.expr_list[i] = (nexpr, l)
+                nbrepl += 1
+            elif id(x) not in doneset:
+                estack = [x]
+                while estack:
+                    e = estack.pop()
+                    eid = id(e)
+                    if eid not in doneset:
+                        doneset.add(eid)
+                        for cx, c in enumerate(e.children):
+                            if c is oexpr:
+                                e.children = replace_in_tuple(e.children, cx, nexpr)
+                                nbrepl += 1
+                            else:
+                                estack.append(c)
+        return nbrepl
 
 
     def get_name(self):
@@ -494,11 +674,26 @@ class CpoModel(object):
         Returns:
             Name of the model, None if undefined.
         """
+        if self.name is None and self.source_file:
+            return utils.get_file_name_only(self.source_file)
         return self.name
 
 
+    def set_format_version(self, ver):
+        """ Set the expected version of the CPO format.
+
+        Args:
+            ver:  CPO format version
+        """
+        self.format_version = ver
+
+
     def get_format_version(self):
-        """ Gets the version of the CPO format
+        """ Gets the version of the CPO format.
+
+        This information is set only when parsing an existing CPO model that contains an explitly a version of the format.
+        It is not set when creating a new model.
+        It can be set explicitely using :meth:`set_format_version` if a specific CPO format is expected.
 
         Returns:
             String containing the version of the CPO format. None for default.
@@ -518,7 +713,7 @@ class CpoModel(object):
     def get_modeling_duration(self):
         """ Get the time spent in modeling.
 
-        This time is computes as difference between the last time an expression has been added
+        The time is computes as difference between the last time an expression has been added
         and the model object creation time.
 
         Returns:
@@ -527,36 +722,73 @@ class CpoModel(object):
         return self.last_add_time - self.create_time
 
 
+    def get_statistics(self):
+        """ Get statistics on the model
+
+        This methods compute statistics on the model.
+
+        Returns:
+            Model statistics, object of class class :class:`CpoModelStatistics`.
+        """
+        # Initialize stack of expressions to parse
+        estack = [x for x, l in self.expr_list]
+        estack.extend([x for x, l in self.search_phases])
+        if self.objective is not None:
+            estack.append(self.objective)
+        result = CpoModelStatistics(self)
+
+         # Loop while expression stack is not empty
+        doneset = set()  # Set of ids of expressions already processed
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                doneset.add(eid)
+                result._add_expression(e)
+                # Stack children expressions
+                estack.extend(e.children)
+
+        return result
+
+
     def print_information(self, out=None):
         """ Prints model information.
+
+        DEPRECATED. Use :meth:`write_information` instead.
 
         Args:
             out: Output stream or file name, default is sys.stdout.
         """
-        if out is None:
-            out = sys.stdout
-        if is_string(out):
-            make_directories(os.path.dirname(out))
-            with open(out, 'w') as f:
-                self._write_information(f)
-        else:
-            self._write_information(out)
+        self.write_information(out)
 
 
-    def _write_information(self, out):
-        """ Write model information on a output stream
+    def write_information(self, out=None):
+        """ Write various information about the model.
+
+        This method calls the method :meth:`get_statistics` to retrieve information on the model, and then
+        print it with source file name and modeling time.
 
         Args:
-            out: Output stream
+            out: Output stream or file name, default is sys.stdout.
         """
+        # Check output
+        if is_string(out):
+            with open(os.path.abspath(out), mode='w') as f:
+                self.write_information(f)
+            return
+
+        if out is None:
+            out = sys.stdout
+
+        # Print information
         name = self.get_name()
         out.write("Model: {}\n".format(name if name else "Anonymous"))
         sfile = self.get_source_file()
         if sfile:
             out.write(" - source file: {}\n".format(sfile))
-        lexpr = self.get_all_expressions()
-        out.write(" - expressions: {}\n".format(len(lexpr)))
         out.write(" - modeling time: {0:.2f} sec\n".format(self.get_modeling_duration()))
+        stats = self.get_statistics()
+        stats.write(out, " - ")
 
 
     def solve(self, **kwargs):
@@ -612,7 +844,7 @@ class CpoModel(object):
 
            lsols = mdl.start_search()
            for sol in lsols:
-               sol.print_solution()
+               sol.write()
 
         A such solution iteration can be interrupted at any time by calling :meth:`~docplex.cp.solver.solver.CpoSolver.end_search`
         that returns a fail solution including the last solve status.
@@ -826,6 +1058,17 @@ class CpoModel(object):
     def export_model(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
+        Note that calling this method disables automatically all the settings that are set in the default configuration
+        to change the format of the model:
+
+         * *context.model.length_for_alias* that rename variables if name is too long,
+         * *context.model.name_all_constraints* that force a name for each constraint.
+
+        These options are however possible if explicitly given as parameter of this method, as in:
+        ::
+
+           mdl.export_model(length_for_alias=10)
+
         Args:
             out (Optional):     Target output, stream or file name. Default is sys.stdout.
             context (Optional): Complete solving context.
@@ -837,18 +1080,34 @@ class CpoModel(object):
             length_for_alias (Optional): Minimum name length to use shorter alias instead
             (others) (Optional): Any leaf attribute with the same name in the solving context
         """
-        CpoCompiler(self, **kwargs).print_model(out)
+        # Remove all code transformations but respect those provided explicitly
+        kwargs.setdefault('length_for_alias', None)
+        kwargs.setdefault('name_all_constraints', False)
+
+        CpoCompiler(self, **kwargs).write(out)
 
 
     def import_model(self, file):
-        """ Import a model from a file containing a model expressed in CPO file format.
+        """ Import a model from a file containing a model expressed in CPO or FZN format.
+
+        FZN format is sipported with restrictions to integer expressions.
+        The full list of supported predicates is given in the documentation of module :mod:`~docplex.cp.fzn_parser`.
 
         Args:
-            file:   Input file
+            file: Input file, with extension ".cpo" of ".fzn".
         """
-        import docplex.cp.cpo_parser as cpo_parser
-        prs = cpo_parser.CpoParser(self)
-        prs.parse(file)
+        ext = os.path.splitext(file)[1].lower()
+        if ext == ".cpo":
+            import docplex.cp.cpo_parser as cpo_parser
+            prs = cpo_parser.CpoParser(self)
+            prs.parse(file)
+        elif ext == ".fzn":
+            import docplex.cp.fzn_parser as fzn_parser
+            prs = fzn_parser.FznParser(self)
+            prs.parse(file)
+            prs.get_model()
+        else:
+            raise CpoException("Unknown {} file format. Only .cpo and .fzn are supported.")
 
 
     def export_as_cpo(self, out=None, **kwargs):
@@ -860,6 +1119,17 @@ class CpoModel(object):
     def get_cpo_string(self, **kwargs):
         """ Compiles the model in CPO file format into a string.
 
+        Note that calling this method disables automatically all the settings that are set in the default configuration
+        to change the format of the model:
+
+         * *context.model.length_for_alias* that rename variables if name is too long,
+         * *context.model.name_all_constraints* that force a name for each constraint.
+
+        These options are however possible if explicitly given as parameter of this method, as in:
+        ::
+
+           mstr = mdl.get_cpo_string(length_for_alias=10)
+
         Args:
             context:             Global solving context. If not given, context is the default context that is set in config.py.
             params:              Solving parameters (CpoParameters) that overwrites those in solving context
@@ -869,6 +1139,10 @@ class CpoModel(object):
         Returns:
             String containing the model.
         """
+        # Remove all code transformations but respect those provided explicitly
+        kwargs.setdefault('length_for_alias', None)
+        kwargs.setdefault('name_all_constraints', False)
+
         return CpoCompiler(self, **kwargs).get_as_string()
 
 
@@ -888,27 +1162,25 @@ class CpoModel(object):
             raise CpoException("Other model is not an object of class CpoModel")
 
         # Compare expressions that are not variables
-        lx1 = [x for x, l in self.expr_list if not isinstance(x, CpoVariable)]
-        #print("Expressions of 1:")
-        #for x in lx1: print("   {}".format(x))
-        lx2 = [x for x, l in other.expr_list if not isinstance(x, CpoVariable)]
-        #print("Expressions of 2:")
-        #for x in lx2: print("   {}".format(x))
+        lx1 = [x for x, l in self.expr_list if not isinstance(x, (CpoVariable, CpoValue, CpoAlias, CpoFunction))]
+        lx2 = [x for x, l in other.expr_list if not isinstance(x, (CpoVariable, CpoValue, CpoAlias, CpoFunction))]
         if len(lx1) != len(lx2):
             raise CpoException("Different number of expressions, {} vs {}.".format(len(lx1), len(lx2)))
-        for i in range(len(lx1)):
-            #print("Check expression {}\n   and\n{}".format(lx1[i][0], lx2[i][0]))
-            if not lx1[i].equals(lx2[i]):
-                raise CpoException("The expression {} differs: {} vs {}".format(i, lx1[i][0], lx2[i][0]))
+        for i, (x1, x2) in enumerate(zip(lx1, lx2)):
+            #print("Check expression {}\n   and\n{}".format(lx1[i], lx2[i]))
+            if not x1.equals(x2):
+                print("X1 = {}".format(x1))
+                print("X2 = {}".format(x2))
+                raise CpoException("The expression {} differs: {} vs {}".format(i, x1, x2))
 
         # Compare search phases
         lx1 = self.search_phases
         lx2 = other.search_phases
         if len(lx1) != len(lx2):
             raise CpoException("Different number of search phases, {} vs {}.".format(len(lx1), len(lx2)))
-        for i in range(len(lx1)):
-            if not lx1[i][0].equals(lx2[i][0]):
-                raise CpoException("The search phase {} differs: {} vs {}".format(i, lx1[i][0], lx2[i][0]))
+        for i, (x1, x2) in enumerate(zip(lx1, lx2)):
+            if not x1[0].equals(x2[0]):
+                raise CpoException("The search phase {} differs: {} vs {}".format(i, x1[0], x2[0]))
 
 
     def equals(self, other):
@@ -940,7 +1212,6 @@ class CpoModel(object):
         if self.parameters is not None:
             res.parameters = self.parameters.copy()
         res.search_phases = list(self.search_phases)
-        res.map_expr = dict(self.map_expr)
         return res
 
 
@@ -979,43 +1250,6 @@ class CpoModel(object):
         return solver
 
 
-    def _add_named_expr(self, expr):
-        """ If named, add an expression to the map of named expressions.
-
-        Args:
-            expr: Expression
-        Raises:
-            CpoException if name already used for another expression
-        """
-        name = expr.name
-        if name:
-            if (self.map_expr.setdefault(name, expr) is not expr):
-                raise CpoException("An expression named '{}' already exists: {}".format(name, self.map_expr[name]))
-
-
-    def _ensure_all_root_constraints_named(self):
-        """ Check if all top-level constraints have a name.
-
-        If not all constraints have a name, this method assign a name to them and returns False.
-
-        If all are already named, this method returns True.
-
-        Return:
-            True if all constraints are already named, False otherwise.
-        """
-        # Check if constraints already named
-        if self.name_constraints:
-            return True
-        # Loop on each top-level constraints
-        for (expr, l) in self.expr_list:
-            if expr.type in (Type_Constraint, Type_BoolExpr) and (not expr.name):
-                name = expression._CONSTRAINT_ID_ALLOCATOR.allocate()
-                expr.set_name(name)
-                self._add_named_expr(expr)
-        self.name_constraints = True
-        return False
-
-
     def _remove_from_expr_list(self, expr, elist):
         """ Remove an expression from a list of expressions (and map of names)
         Args:
@@ -1027,10 +1261,39 @@ class CpoModel(object):
         for ix, (x, l) in enumerate(elist):
             if x is expr:
                 del elist[ix]
-                if expr.name:
-                    del self.map_expr[expr.name]
                 return True
         return False
+
+
+    def _search_named_expression(self, name):
+        """ Search in the model the first expression whose name is the given one.
+
+        This method goes across all model expressions to search for named expression.
+        Calling this method on a big model may be slow.
+
+        Args:
+            name:  Name of the expression to search
+        Returns:
+            Expression, None if not found
+        """
+        # Initialize stack of expressions to parse
+        estack = [x for x, l in self.expr_list]
+        estack.extend([x for x, l in self.search_phases])
+        if self.objective is not None:
+            estack.append(self.objective)
+        # Loop while expression stack is not empty
+        doneset = set()  # Set of expressions already processed
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                if e.name == name:
+                    return e
+                # Stack children expressions
+                doneset.add(eid)
+                estack.extend(e.children)
+        return None
+
 
 
 ###############################################################################

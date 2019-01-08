@@ -17,10 +17,10 @@ from docplex.cp.catalog_elements import *
 
 Type_Unknown               = CpoType("Unknown")
 Type_FloatExpr             = CpoType("FloatExpr")
-Type_Float                 = CpoType("Float", iscst=True, htyps=(Type_FloatExpr,))
+Type_Float                 = CpoType("Float", iscst=True, isatm=True, htyps=(Type_FloatExpr,))
 Type_IntExpr               = CpoType("IntExpr", htyps=(Type_FloatExpr,))
 Type_IntVar                = CpoType("IntVar", isvar=True, htyps=(Type_IntExpr, Type_FloatExpr,))
-Type_Int                   = CpoType("Int", iscst=True, htyps=(Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,))
+Type_Int                   = CpoType("Int", iscst=True, isatm=True, htyps=(Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,))
 Type_FloatVar              = CpoType("FloatVar", isvar=True, htyps=(Type_FloatExpr,))
 Type_CumulExpr             = CpoType("CumulExpr")
 Type_CumulAtom             = CpoType("CumulAtom", htyps=(Type_CumulExpr,))
@@ -60,7 +60,7 @@ Type_BoolInt               = CpoType("BoolInt", htyps=(Type_Int, Type_IntVar, Ty
 Type_Python                = CpoType("Python")
 Type_Identifier            = CpoType("Identifier", isvar=True)
 Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
-Type_Bool                  = CpoType("Bool", iscst=True, htyps=(Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_Bool                  = CpoType("Bool", iscst=True, isatm=True, htyps=(Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
 
 ALL_TYPES = (Type_Bool, Type_BoolExpr, Type_BoolExprArray, Type_BoolInt, Type_Constraint, Type_CumulAtom, Type_CumulAtomArray, Type_CumulExprArray, Type_CumulExpr, Type_CumulFunction, Type_Float, Type_FloatArray, Type_FloatExpr, Type_FloatExprArray, Type_FloatVar, Type_Identifier, Type_Int, Type_IntArray, Type_IntExpr, Type_IntExprArray, Type_IntValueChooser, Type_IntValueEval, Type_IntValueSelector, Type_IntValueSelectorArray, Type_IntVar, Type_IntVarArray, Type_IntVarChooser, Type_IntVarEval, Type_IntVarSelector, Type_IntVarSelectorArray, Type_IntervalArray, Type_IntervalVar, Type_IntervalVarArray, Type_Objective, Type_PositiveInt, Type_Python, Type_SearchPhase, Type_SegmentedFunction, Type_SequenceVar, Type_SequenceVarArray, Type_StateFunction, Type_StepFunction, Type_TimeInt, Type_TransitionMatrix, Type_TupleSet, Type_Unknown)
 compute_all_type_links(ALL_TYPES)
@@ -377,7 +377,8 @@ Oper_step_function               = CpoOperation("stepFunction", "step_function",
 Oper_strong                      = CpoOperation("strong", "strong", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray,)),) )
 Oper_strong_constraint           = CpoOperation("StrongConstraint", "strong_constraint", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray,)),) )
 Oper_sum                         = CpoOperation("sum", "sum", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExprArray,)),
-                                                                          CpoSignature(Type_FloatExpr, (Type_FloatExprArray,))) )
+                                                                          CpoSignature(Type_FloatExpr, (Type_FloatExprArray,)),
+                                                                          CpoSignature(Type_CumulExpr, (Type_CumulExprArray,))) )
 Oper_synchronize                 = CpoOperation("synchronize", "synchronize", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVarArray)),) )
 Oper_table_element               = CpoOperation("tableElement", "table_element", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExpr, Type_IntArray, Type_IntExpr)),) )
 Oper_times                       = CpoOperation("times", "times", "*", 3, ( CpoSignature(Type_IntExpr, (Type_IntExpr, Type_IntExpr)),

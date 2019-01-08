@@ -28,11 +28,12 @@ def get_name_if_debug(name):
 class _IAdvancedExpr(Expr, LinearOperand):
     # INTERNAL class
     # parent class for all nonlinear expressions.
-    __slots__ = ('_f_var',)
+    __slots__ = ('_f_var', '_resolved')
 
     def __init__(self, model, name=None):
         Expr.__init__(self, model, name)
         self._f_var = None
+        self._resolved = False
 
     def to_linear_expr(self):
         return self._get_resolved_f_var()
@@ -51,18 +52,19 @@ class _IAdvancedExpr(Expr, LinearOperand):
 
     def _new_generated_free_continuous_var(self, name=None):
         # INTERNAL
-        self_model = self._model
-        inf = self_model.infinity
+        inf = self._model.infinity
         return self._new_generated_continuous_var(lb=-inf, ub=inf, name=name)
 
     def _new_generated_continuous_var(self, lb=None, ub=None, name=None):
         # INTERNAL
-        var = self.model.continuous_var(lb=lb, ub=ub, name=name)
+        m = self._model
+        var = m._lfactory.new_var(m.continuous_vartype, lb=lb, ub=ub, varname=name)
         var.notify_origin(self)
         return var
 
     def _new_generated_binary_var(self, name=None):
-        bvar = self.model.binary_var(name=name)
+        m = self._model
+        bvar = m._lfactory.new_var(m.binary_vartype, varname=name)
         bvar.notify_origin(self)
         return bvar
 
@@ -83,16 +85,13 @@ class _IAdvancedExpr(Expr, LinearOperand):
         self._model.add(ind)
         return ind
 
-    def _post_generated_ct(self, ct):
+    def _new_generated_binary_ct(self, lhs, rhs, sense='EQ'):
         # posts a constraint and marks it as generated.
-        self._model._post_constraint(ct)
+        m = self._model
+        ct = m._lfactory.new_binary_constraint(lhs=lhs, sense=sense, rhs=rhs)
+        m._post_constraint(ct)
         ct.notify_origin(self)
         return ct
-
-    def _post_generated_cts_args(self, *args):
-        # takes a variable list of args
-        cts = args
-        return self._post_generated_cts(cts)
 
     def _post_generated_cts(self, cts):
         # takes a sequence of constraints
@@ -103,30 +102,40 @@ class _IAdvancedExpr(Expr, LinearOperand):
         return cts
 
     def _get_resolved_f_var(self):
-        self._ensure_resolved_f_var()
+        self._ensure_resolved()
+        return self._f_var
+
+    def _get_allocated_f_var(self):
+        if self._f_var is None:
+            self._f_var = self._create_functional_var()
         return self._f_var
 
     def resolve(self):
-        self._ensure_resolved_f_var()
+        self._ensure_resolved()
 
-    def _ensure_resolved_f_var(self):
+    def _ensure_resolved(self):
         if self._f_var is None:
             # 1. create the var (once!)
             self._f_var = self._create_functional_var()
             # 2. post the link between the fvar and the argument expr
+        if not self._resolved:
             self._resolve()
+            self._resolved = True
 
     def _is_resolved(self):
-        return self._f_var is not None
+        return self._resolved and self._f_var is not None
 
-    def _create_functional_var(self):
-        # add a unique counter suffix cf. RTC
-        unique_counter = self._model._new_unique_counter()
-        if unique_counter == 0:
-            # the first time, we use the the raw name, else we suffix #<unique>
-            fname = self.to_string()
+    def _create_functional_var(self, named=True):
+        if named:
+            # add a unique counter suffix cf. RTC
+            unique_counter = self._model._new_unique_counter()
+            if unique_counter == 0:
+                # the first time, we use the the raw name, else we suffix #<unique>
+                fname = self.to_string()
+            else:
+                fname = "%s#%d" % (self.to_string(), unique_counter)
         else:
-            fname = "%s#%d" % (self.to_string(), unique_counter)
+            fname = None
         return self._new_generated_free_continuous_var(name=fname)
 
     @property
@@ -201,7 +210,7 @@ class _IAdvancedExpr(Expr, LinearOperand):
 
         if arg_var is None:
             arg_var = self._new_generated_free_continuous_var()
-            self._post_generated_ct(arg_var == arg_expr)
+            self._new_generated_binary_ct(arg_var, arg_expr)
         return arg_var
 
 
@@ -209,7 +218,7 @@ class _IAdvancedExpr(Expr, LinearOperand):
 class FunctionalExpr(_IAdvancedExpr):
     def __init__(self, model, argument_expr, name=None):
         _IAdvancedExpr.__init__(self, model, name)
-        self._argument_expr = model._to_linear_expr(argument_expr)
+        self._argument_expr = model._lfactory._to_linear_operand(argument_expr)
         self._x_var = self._allocate_arg_var_if_necessary(argument_expr)
 
     @property
@@ -244,6 +253,7 @@ class AbsExpr(FunctionalExpr):
     # noinspection PyArgumentEqualDefault,PyArgumentEqualDefault
     def _resolve(self):
         self_f_var = self._f_var
+        assert self_f_var
         m = self.model
         abs_index = m._new_unique_counter()
         abs_names = ["_abs_pp_%d" % abs_index, "_abs_np_%d" % abs_index] if use_debug_names else [None, None]
@@ -258,7 +268,7 @@ class AbsExpr(FunctionalExpr):
         # # x = p-n
         ct2 = (self._argument_expr == positive_var - negative_var)
 
-        self._post_generated_cts_args(ct1, ct2)
+        self._post_generated_cts([ct1, ct2])
         # store
         self.positive_var = positive_var
         self.negative_var = negative_var
@@ -356,13 +366,14 @@ class MinimumExpr(_SequenceExpr):
         return "docplex.mp.MinExpr({0!s})".format(str_args)
 
     def _resolve(self):
-        self_min_var = self.functional_var
+        self_min_var = self._f_var
+        assert self_min_var
         self_x_vars = self._xvars
         nb_args = len(self_x_vars)
         if 0 == nb_args:
             self._f_var.set_bounds(0, 0)
         elif 1 == nb_args:
-            self._post_generated_ct(self_min_var == self._xvars[0])
+            self._new_generated_binary_ct(self_min_var, self._xvars[0])
         else:
             cts = []
             for xv in self_x_vars:
@@ -409,14 +420,14 @@ class MaximumExpr(_SequenceExpr):
         if 0 == nb_args:
             self._f_var.set_bounds(0, 0)  # what else ??
         elif 1 == nb_args:
-            self._post_generated_ct(self_max_var == self._xvars[0])
+            self._new_generated_binary_ct(self_max_var, self._xvars[0])
         else:
             for xv in self_x_vars:
-                self._post_generated_ct(self_max_var >= xv)
+                self._new_generated_binary_ct(self_max_var, xv, 'GE')
             # allocate N binaries
             z_vars = self._new_generated_binary_varlist(keys=nb_args)
             # sos?
-            self._post_generated_ct(self.model.sum(z_vars) == 1)
+            self._new_generated_binary_ct(self.model.sum(z_vars), 1)
             # indicators
             for i in range(nb_args):
                 z = z_vars[i]
@@ -501,13 +512,16 @@ class LogicalOrExpr(_LogicalSequenceExpr):
             m = self._model
             cts.append(self_or_var <= m._aggregator._sum_with_seq(self._xvars))
             self._post_generated_cts(cts)
+        self._resolved = True
 
 
 class PwlExpr(FunctionalExpr):
-    def __init__(self, model, pwl_func, argument_expr, usage_counter, add_counter_suffix=True, resolve=True):
+
+    def __init__(self, model, pwl_func, argument_expr, usage_counter, y_var=None,  add_counter_suffix=True, resolve=True):
         FunctionalExpr.__init__(self, model, argument_expr)
         self._pwl_func = pwl_func
         self._usage_counter = usage_counter
+        self._f_var = y_var
         if pwl_func.name:
             # ?
             if add_counter_suffix:
@@ -515,7 +529,7 @@ class PwlExpr(FunctionalExpr):
             else:
                 self.name = self._pwl_func.name
         if resolve:
-            self._ensure_resolved_f_var()
+            self._ensure_resolved()
 
     def _get_function_symbol(self):
         pwl_name = self._pwl_func.get_name()
@@ -534,6 +548,7 @@ class PwlExpr(FunctionalExpr):
         mdl = self._model
         pwl_constraint = mdl._lfactory.new_pwl_constraint(self, self.get_name())
         mdl._add_pwl_constraint_internal(pwl_constraint)
+
 
     @property
     def pwl_func(self):

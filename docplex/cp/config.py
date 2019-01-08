@@ -73,17 +73,6 @@ General parameters
 
     By default, the value is 15. A value of None would indicate to always keep original variable names.
 
-*context.model.length_for_rename = None*
-
-    This parameter allows to replace the names of the variables when it is longer than the given length.
-    A shorter name is generated and is used everywhere in the generated model CPO format in place of the original name.
-    This allows to drastically reduce the size of the model generated in the CPO format.
-
-    In the returned solution, the value of such variables can be retrieved thanks to a mapping between previous and
-    new names, that is maintained in the client Python program.
-
-    By default, the value is None, indicating to keep original variable names.
-
 *context.model.name_all_constraints = False*
 
     This parameter enables the naming of all constraints when the model is generated in CPO format.
@@ -227,7 +216,7 @@ Obviously, this performance is won at the cost of the loss of some features that
 
     context.verbose = 0
     context.model.add_source_location = False
-    context.model.length_for_rename = 10
+    context.model.length_for_alias = 10
     context.model.name_all_constraints = False
     context.model.dump_directory = None
     context.solver.trace_cpo = False
@@ -239,18 +228,18 @@ Detailed description
 --------------------
 """
 
-from docplex.cp.utils import Context, CpoException, search_file_in_path, IS_IN_NOTEBOOK, is_string
+from docplex.cp.utils import *
 from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
-import sys, socket, os, platform, traceback
+import sys, socket, os, traceback
 
 try:
     import docplex.util.environment as runenv
-    ENVIRONMENT_PRESENT = True
+    IS_IN_WORKER = isinstance(runenv.get_environment(), runenv.WorkerEnvironment)
 except:
-    ENVIRONMENT_PRESENT = False
+    IS_IN_WORKER = False
 
-EXE_EXTENSION = ".exe" if platform.system() == 'Windows' else ""
+EXE_EXTENSION = ".exe" if IS_WINDOWS else ""
 
 
 ##############################################################################
@@ -261,10 +250,7 @@ EXE_EXTENSION = ".exe" if platform.system() == 'Windows' else ""
 # Global context
 
 # Create default context infrastructure
-DOCLOUD_CONTEXT = Context(model=Context(),
-                          params=CpoParameters(),
-                          solver=Context())
-context = DOCLOUD_CONTEXT
+context = Context()
 
 # Default log output
 context.log_output = sys.stdout
@@ -279,17 +265,19 @@ context.visu_enabled = True
 #-----------------------------------------------------------------------------
 # Modeling context
 
+context.model = Context()
+
 # Indicate to add source location in model
 context.model.add_source_location = True
 
 # Minimal variable name length that trigger use of shorter alias. None for no alias.
 context.model.length_for_alias = 15
 
-# Minimal variable name length that trigger renaming variable with a shorter name. None for no rename.
-context.model.length_for_rename = None
-
 # Automatically add a name to every top-level constraint
 context.model.name_all_constraints = False
+
+# Model format generation version (12.8 to be set when deployed on docloud)
+context.model.version = '12.7.0.0'
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
@@ -301,7 +289,18 @@ context.model.cache.active = True
 
 
 #-----------------------------------------------------------------------------
+# Parsing context
+
+context.parser = Context()
+
+# Indicate to FZN parser to reduce model when possible
+context.parser.fzn_reduce = False
+
+
+#-----------------------------------------------------------------------------
 # Solving parameters
+
+context.params = CpoParameters()
 
 # Default time limit
 context.params.TimeLimit = 100
@@ -312,6 +311,8 @@ context.params.Workers = 4
 
 #-----------------------------------------------------------------------------
 # Solving context
+
+context.solver = Context()
 
 # Indicate to trace CPO model before solving
 context.solver.trace_cpo = False
@@ -324,14 +325,9 @@ context.solver.enable_undocumented_params = False
 
 # Max number of threads allowed for model solving
 context.solver.max_threads = None
-if ENVIRONMENT_PRESENT:
-    context.solver.max_threads = runenv.get_environment().get_available_core_count()
 
 # Indicate to add solver log to the solution
 context.solver.add_log_to_solution = True
-
-# Indicate to auto-publish solve details and results in environment
-context.solver.auto_publish = True
 
 # Indicate to replace simple solve by a start/next loop
 context.solver.solve_with_start_next = False
@@ -341,6 +337,18 @@ context.solver.log_prefix = "[Solver] "
 
 # Name of the agent to be used for solving. Value is name of one of this context child context (i.e. 'docloud').
 context.solver.agent = 'docloud'
+
+# Auto-publish parameters
+context.solver.auto_publish = Context()
+
+# Indicate to auto-publish solve details in environment
+context.solver.auto_publish.solve_details = True
+
+# Indicate to auto-publish results in environment
+context.solver.auto_publish.result_output = "solution.json"
+
+# Indicate to auto-publish kpis in environment
+context.solver.auto_publish.kpis_output = "kpis.csv"
 
 
 #-----------------------------------------------------------------------------
@@ -393,20 +401,42 @@ context.solver.local = Context(class_name = "docplex.cp.solver.solver_local.CpoS
                                parameters = ['-angel'],
                                log_prefix = "[Local] ")
 
+# Split local and docloud contexts
+DOCLOUD_CONTEXT = context
 LOCAL_CONTEXT = context.clone()
 
+# Unlimit local parameters
 LOCAL_CONTEXT.params.pop('TimeLimit')
 LOCAL_CONTEXT.params.pop('Workers')
 
 LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
 LOCAL_CONTEXT.solver.agent = 'local'
 LOCAL_CONTEXT.solver.max_threads = None
+LOCAL_CONTEXT.model.length_for_alias = None
 
-# Select local context if exec file is visible in the path
-cpfile = search_file_in_path(LOCAL_CONTEXT.solver.local.execfile)
-if cpfile:
-    LOCAL_CONTEXT.solver.local.execpath = cpfile
-    context = LOCAL_CONTEXT
+# Select local context if execfile is given extensively (with a parent directory)
+if not os.path.dirname(LOCAL_CONTEXT.solver.local.execfile):
+    # Search exec file in the path
+    python_home = os.path.dirname(os.path.abspath(sys.executable))
+    if IS_WINDOWS:
+        pext = [os.path.join(python_home, "Scripts")]
+        appdata = os.environ.get('APPDATA')
+        if appdata is not None:
+            pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
+    else:
+        pext = ["~/.local/bin", os.path.join(python_home, "bin")]
+    cpfile = search_file_in_path(LOCAL_CONTEXT.solver.local.execfile, pext)
+    # Select local context if exec file is visible in the path
+    if cpfile:
+        LOCAL_CONTEXT.solver.local.execpath = cpfile
+        context = LOCAL_CONTEXT
+
+
+#-----------------------------------------------------------------------------
+# Apply special changes if running in a worker
+
+if IS_IN_WORKER:
+    context.solver.max_threads = runenv.get_environment().get_available_core_count()
 
 
 ##############################################################################
@@ -455,7 +485,7 @@ def _get_effective_context(**kwargs):
         Updated (cloned) context
     """
     # If 'url' and 'key' are defined, force agent to be docloud
-    if ('agent' not in kwargs) and not ENVIRONMENT_PRESENT:
+    if ('agent' not in kwargs) and not IS_IN_WORKER:
         url = kwargs.get('url')
         key = kwargs.get('key')
         if url and key and is_string(url) and is_string(key) and url.startswith('http'):
@@ -467,7 +497,7 @@ def _get_effective_context(**kwargs):
         ctx = context
     ctx = ctx.clone()
     # print("\n*** Source context");
-    # ctx.print_context()
+    # ctx.write()
 
     # First set parameters if given
     prms = kwargs.get('params')
@@ -494,8 +524,6 @@ def _get_effective_context(**kwargs):
                 setattr(params, k, v)
 
     # Return
-    # print("\n*** Result context");
-    # ctx.print_context()
     return ctx
 
 
@@ -531,4 +559,4 @@ for f in FILE_LIST:
 ##############################################################################
 
 if __name__ == "__main__":
-    context.print_context()
+    context.write()

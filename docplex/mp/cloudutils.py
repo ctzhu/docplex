@@ -9,19 +9,20 @@
 
 import six
 import warnings
+import json
+
+from enum import Enum
 
 from docplex.mp.context import check_credentials
 
 
 def is_in_docplex_worker():
     try:
-        import docplex.worker.solvehook as worker_env
-        hook = worker_env.get_solve_hook()
-        if hook:
-            return True
-    except ImportError:
-        pass
-    return False
+            import docplex.util.environment as runenv
+            is_in_worker = isinstance(runenv.get_environment(), runenv.WorkerEnvironment)
+    except:
+        is_in_worker = False
+    return is_in_worker
 
 
 def context_must_use_docloud(__context, **kwargs):
@@ -68,3 +69,13 @@ def context_has_docloud_credentials(context, do_warn=True):
         if error_message is not None and do_warn:
             warnings.warn(error_message, stacklevel=2)
     return have_credentials
+
+
+def make_new_kpis_dict(allkpis, int_vars, continuous_vars, linear_constraints, bin_vars):
+    kpis_name= [ kpi.name for kpi in allkpis ]
+    kpis = {'MODEL_DETAIL_INTEGER_VARS' : int_vars,
+        'MODEL_DETAIL_CONTINUOUS_VARS' : continuous_vars,
+        'MODEL_DETAIL_CONSTRAINTS' : linear_constraints,
+        'MODEL_DETAIL_BOOLEAN_VARS' : bin_vars,
+        'MODEL_DETAIL_KPIS' : json.dumps(kpis_name)}
+    return kpis

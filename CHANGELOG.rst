@@ -1,8 +1,37 @@
 Changelog
 ---------
 
+Changed in 2.5.92:
+``````````````````
+* ``docplex.cli`` gains new features:
+   * option ``--details`` will display solve details as they are publihsed on
+     DOcplexcloud.
+   * options ``--url`` and ``-key`` allow specification of credentials without
+     using a config file.
+
+* In ``docplex.cp``:
+   * Fix problem with min() and max() that did not support optional key.
+   * Add a Flatzinc parser capable of reading Minizinc Challenge problems.
+   * Move expression dependencies analysis from model to compiler side.
+   * No more constraint to have a unique name for model expressions. Compiler reallocate private names when needed.
+   * Multiple variables or expressions with the same public name is now allowed.
+   * Replace method CpoModel.get_expression() by CpoModel.get_named_expressions_dict().
+   * Make SolverProgressPanelListener work properly with Python 2
+   * Solve is automatically set to start/next loop when SolverProgressPanelListener is used.
+   * In CpoModel, add a method that allows to substitute a function by another in the whole model.
+   * Overwrite method __bool__ to avoid accidental use of CPO expressions as Python booleans.
+   * Add special cases to search for the local CP Optmizer Interactive executable.
+   * Allow methods min(), max(), min_of() and max_of() to support variable number of arguments.
+   * Allow method all_diff() to support variable number of arguments.
+   * Context parameter 'length_for_rename' is deprecated. Only length_for_alias is used.
+   * Add a method add_var() in CpoModelSolution as a shortcut to add_integer_var_solution() and add_interval_var_solution()
+   * Overwrite method __contains__() in CpoModelSolution to easily verify that a solution to a given variable is in the solution.
+   * When called on a model, export_model() and get_cpo_string() disable all model optimization options.
+
+
 Changed in 2.4.61:
 ``````````````````
+
 * Both ``docplex.mp`` & ``docplex.cp``:
    * Support for CPLEX engines 12.8. Some features of docplex2.4 are available only with engines >= 12.8.
    * Adding new ports (AIX, plinux).
@@ -10,10 +39,13 @@ Changed in 2.4.61:
 
 * In ``docplex.mp``:
    * Express a linear problem as a scikit-learn tranformer by providing a numpy, a pandas or scipy matrix.
-   * Logical constraints: constratins equivalence, if-then & rshift operator.
+   * Logical constraints: constraint equivalence, if-then & rshift operator.
+   * Meta-constraints: allow the use of discrete
+     linear constraints in expressions, using their truth value.
    * Solve hook to add a method to be called at each intermediate solution.
    * KPIS automatically published at each intermediate solution if running on docplexcloud python worker.
    * Support for scipy coo & csr matrixes.
+   * Fixed a bug in Model.add_constraints() when passing a string instead of a list of strings.
 
 * In ``docplex.cp``:
    * add new method run_seeds() to execute a model multiple times, available with local solver 12.8.

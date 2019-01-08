@@ -32,11 +32,40 @@ from docplex.mp.utils import CyclicLoop
 
 from docplex.mp.context import has_credentials
 
+
 def key_as_string(key):
     """For keys, we don't want the key to appear in INFO log outputs.
     Instead, we display the first 4 chars and the last 4 chars.
     """
     return (key[:4] + "*******" + key[-4:]) if isinstance(key, string_types) else str(key)
+
+
+def get_cplex_version(context):
+    '''Submits a minimal job on DOCplexcloud and get the CPLEX version from
+    logs
+    Args:
+        context: The context to use to connect
+    Returns:
+        A tuple (major, minor, micro), for instance (12, 7, 1)
+    '''
+    import re
+    from docplex.mp.compat23 import StringIO
+    from docplex.mp.model import Model
+    logs = StringIO()
+    model = Model()
+    model.solve(url=context.solver.docloud.url,
+                key=context.solver.docloud.key,
+                log_output=logs)
+    v = re.search('CPLEX version ([0-9][0-9])([0-9][0-9])([0-9][0-9])([0-9][0-9])', logs.getvalue())
+    try:
+        major = int(v.group(1))
+        minor = int(v.group(2))
+        micro = int(v.group(3))
+        return (major, minor, micro)
+    except IndexError:
+        raise RuntimeError('Could not find CPLEX version in resulting logs')
+    except:
+        raise ValueError('Could not determine version from %s' % v.group(0))
 
 
 class DOcloudConnectorException(Exception):

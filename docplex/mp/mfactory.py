@@ -15,10 +15,15 @@ from docplex.mp.constr import LinearConstraint, RangeConstraint, \
     IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr
 from docplex.mp.pwl import PwlFunction
-from docplex.mp.compat23 import fast_range
+from docplex.mp.compat23 import fast_range, izip_longest
 from docplex.mp.utils import *
 from docplex.mp.kpi import KPI
 from docplex.mp.solution import SolveSolution
+
+from itertools import product
+
+from collections import OrderedDict
+
 
 
 def fix_format_string(fmt, dimen=1, key_format='_%s'):
@@ -45,7 +50,11 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
     return fmt + nb_missing * (key_format % '%s')
 
 
-def compile_naming_function(keys, user_name, arity=1, key_format=None, _default_key_format='_%s'):
+def str_flatten_tuple(tpl, sep="_"):
+    return sep.join(str(f) for f in tpl)
+
+
+def compile_naming_function(keys, user_name, dimension=1, key_format=None, _default_key_format='_%s'):
     # INTERNAL
     # builds a naming rule from an input , a dimension, and an optional meta-format
     # Makes sure the format string does contain the right number of format slots
@@ -63,8 +72,8 @@ def compile_naming_function(keys, user_name, arity=1, key_format=None, _default_
         else:  # pragma: no cover
             raise DOcplexException("key format expects string format or None, got: {0!r}".format(key_format))
 
-        fixed_format_string = fix_format_string(user_name, arity, used_key_format)
-        if 1 == arity:
+        fixed_format_string = fix_format_string(user_name, dimension, used_key_format)
+        if 1 == dimension:
             return lambda k: fixed_format_string % str(k)
         else:
             # here keys are tuples of size >= 2
@@ -78,7 +87,7 @@ def compile_naming_function(keys, user_name, arity=1, key_format=None, _default_
         # otherwise thereis no more default naming and None cannot appear in CPLEX name arrays
         list_names = list(user_name)
         if len(list_names) < len(keys):
-            raise DOcplexException("An aray of names should have same len as keys, expecting: {0}, go: {1}"
+            raise DOcplexException("An array of names should have same len as keys, expecting: {0}, go: {1}"
                                    .format(len(keys), len(list_names)))
         key_to_names_dict = {k: nm for k, nm in izip(keys, list_names)}
         # use a closure
@@ -96,15 +105,12 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(_AbstractModelFactory):
+
+    status_var_fmt = '[{0:s}]'
+
     @staticmethod
     def float_or_default(bound, default_bound):
         return default_bound if bound is None else float(bound)
-
-    def is_free_lb(self, var_lb):
-        return var_lb <= - self.infinity
-
-    def is_free_ub(self, var_ub):
-        return var_ub >= self.infinity
 
     def __init__(self, model, engine, ordered, term_dict_type):
         _AbstractModelFactory.__init__(self, model)
@@ -112,10 +118,21 @@ class ModelFactory(_AbstractModelFactory):
         self._var_container_counter = 0
         self.number_validation_fn = model._checker.get_number_validation_fn()
         self._engine = engine
-        self.infinity = engine.get_infinity()
         self.one_expr = None
         self.ordered = ordered
         self.term_dict_type = term_dict_type
+
+    @property
+    def _has_cplex(self):
+        try:
+            cpx = self._engine.get_cplex()
+            return cpx is not None
+        except DOcplexException:
+            return False
+
+    @property
+    def infinity(self):
+        return self._engine.get_infinity()
 
     def set_ordering(self, ordered, dict_type):
         self.ordered = ordered
@@ -141,7 +158,6 @@ class ModelFactory(_AbstractModelFactory):
     def update_engine(self, engine):
         # the model has already disposed the old engine, if any
         self._engine = engine
-        self.infinity = engine.get_infinity()
 
     def new_var(self, vartype, lb=None, ub=None, varname=None):
         self_model = self._model
@@ -160,11 +176,12 @@ class ModelFactory(_AbstractModelFactory):
         # INTERNAL
         model = self._model
         binary_vartype = model.binary_vartype
-        if model.ignore_names:
+        status_var_fmt = self.status_var_fmt
+        if model.ignore_names or status_var_fmt is None:
             varname = None
         else:
             # use name if any else use truncated ct string representation
-            base_varname = '[{0:s}]'.format(ct.name or str_holo(ct, maxlen=20))
+            base_varname = self.status_var_fmt.format(ct.name or str_holo(ct, maxlen=20))
             # if name is already taken, use unique index at end to disambiguate
             varname = model._get_non_ambiguous_varname(base_varname)
 
@@ -193,7 +210,7 @@ class ModelFactory(_AbstractModelFactory):
                            keys)  # pragma: no cover
 
         elif is_int(keys) and keys >= 0:
-            # if name is str and we have a size, trigger automatic names
+            # if name is str and we have a size, disable automatic names
             used_name = None if name is str else name
             used_keys = range(keys)
             check_keys = False
@@ -204,13 +221,13 @@ class ModelFactory(_AbstractModelFactory):
             self._checker.typecheck_key_seq(used_keys)
         return used_name, used_keys
 
-    def _expand_names(self, keys, user_name, arity, key_format):
+    def _expand_names(self, keys, user_name, dimension, key_format):
         if user_name is None or self._model.ignore_names:
             # no automatic names, ever
             return []
         else:
             # default_naming_fn = self._model._create_automatic_varname
-            actual_naming_fn = compile_naming_function(keys, user_name, arity, key_format)
+            actual_naming_fn = compile_naming_function(keys, user_name, dimension, key_format)
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
@@ -317,7 +334,7 @@ class ModelFactory(_AbstractModelFactory):
                      key_seq, vartype,
                      lb=None, ub=None,
                      name=str,
-                     arity=1, key_format=None):
+                     dimension=1, key_format=None):
         number_of_vars = len(key_seq)
         if 0 == number_of_vars:
             return []
@@ -330,11 +347,12 @@ class ModelFactory(_AbstractModelFactory):
         xubs = self._expand_bounds(key_seq, ub, default_ub, number_of_vars, true_if_lb=False)
         # at this point both list are either [] or have size numberOfVars
 
-        all_names = self._expand_names(key_seq, name, arity, key_format)
+        all_names = self._expand_names(key_seq, name, dimension, key_format)
 
-        self._checker.check_vars_domain(xlbs, xubs, all_names)
         safe_lbs = not xlbs
         safe_ubs = not xubs
+        if xlbs and xubs:
+            self._checker.check_vars_domain(xlbs, xubs, all_names)
 
         mdl = self._model
         allvars = [Var(mdl, vartype,
@@ -350,7 +368,56 @@ class ModelFactory(_AbstractModelFactory):
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
-    def constant_expr(self, cst, safe_number=False, context=None, force_clone=False):
+    def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
+        actual_name, key_seq = self.make_key_seq(keys, name)
+        ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
+        var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
+        _dict_type = OrderedDict if ordered else dict
+        return _dict_type(izip(key_seq, var_list))
+
+    def new_var_multidict(self, seq_of_key_seqs, vartype, lb, ub, name, key_format=None, ordered=False):
+        # ---
+        fixed_keys = [self.make_key_seq(ks, name)[1] for ks in seq_of_key_seqs]
+        # the sequence of keysets should answer to len(no generators here)
+        dimension = len(fixed_keys)
+        if dimension < 1:
+            self.fatal("len of key sequence must be >= 1, got: {0}", dimension)  # pragma: no cover
+
+        # create cartesian product of keys...
+        all_key_tuples = list(product(*fixed_keys))
+        # check empty list
+        if not all_key_tuples:
+            self.fatal('multidict has no keys to index the variables')
+
+        ctn = self._new_var_container(vartype, key_list=all_key_tuples, lb=lb, ub=ub, name=name)
+        cube_vars = self.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
+
+        _dict_type = OrderedDict if ordered else dict
+        var_dict = _dict_type(izip(all_key_tuples, cube_vars))
+        return var_dict
+
+    def new_var_df(self, keys1, keys2, vartype, lb=None, ub=None, name=None):
+        try:
+            from pandas import DataFrame
+        except ImportError:
+            DataFrame = None
+            self.fatal('make_var_df() requires pandas module - not found')
+
+        _, row_keys = self.make_key_seq(keys1, name)
+        _, col_keys = self.make_key_seq(keys2, name)
+        matrix_keys = [(k1, k2) for k1 in row_keys for k2 in col_keys]
+        ctn = self._new_var_container(vartype, key_list=matrix_keys, lb=lb, ub=ub, name=name)
+        lvars = self.new_var_list(ctn, matrix_keys, vartype, lb, ub, name, dimension=2, key_format=None)
+        # TODO: see how to do without this temp dict
+        dd = dict(izip(matrix_keys, lvars))
+        # row-oriented dict
+        rowd = {row_k: [dd[row_k, col_k] for col_k in col_keys] for row_k in row_keys}
+        vdtf = DataFrame.from_dict(rowd, orient='index', dtype='object')
+        # convert to string or not?
+        vdtf.columns = col_keys
+        return vdtf
+
+    def constant_expr(self, cst, safe_number=False, force_clone=False):
         if 0 == cst:
             return self.new_zero_expr()
         elif 1 == cst:
@@ -385,7 +452,7 @@ class ModelFactory(_AbstractModelFactory):
             else:
                 return e
         elif is_number(e):
-            return self.constant_expr(cst=e, context=context, force_clone=force_clone, safe_number=False)
+            return self.constant_expr(cst=e, force_clone=force_clone, safe_number=False)
         else:
             try:
                 return e.to_linear_expr()
@@ -393,7 +460,7 @@ class ModelFactory(_AbstractModelFactory):
                 # delegate to the factory
                 return self.linear_expr(e)
 
-    def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False, context=None):
+    def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False):
         # TODO: replace by to_linear_operand
         if isinstance(e, linexpr_class):
             if force_clone:
@@ -403,7 +470,7 @@ class ModelFactory(_AbstractModelFactory):
         elif isinstance(e, self._operand_types):
             return e.to_linear_expr()
         elif is_number(e):
-            return self.constant_expr(cst=e, context=context, force_clone=force_clone, safe_number=False)
+            return self.constant_expr(cst=e, force_clone=force_clone, safe_number=False)
         else:
             try:
                 return e.to_linear_expr()
@@ -501,14 +568,34 @@ class ModelFactory(_AbstractModelFactory):
     def update_indicator_constraint_expr(self, ind, expr, event):
         self._engine.update_logical_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
 
+    @classmethod
+    def check_is_discrete(cls, arg):
+        try:
+            # try an operand
+            return arg.is_discrete()
+        except AttributeError:
+            # should be a number ??
+            return is_int(arg)
+
+    def check_expr_discrete_lock(self, expr, arg):
+        if expr.is_discrete_locked():
+            self.fatal('Expression: {0} is used in equivalence, cannot be modified', expr)
+            # else:
+            #     if not self.check_is_discrete(arg):
+            #         self.fatal(self._cannot_modify_expr_non_discrete_msg, expr, arg)
+
+    _cannot_modify_linearct_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified.'
+
+    _cannot_modify_linearct_non_discrete_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified with non-discrete expr: {1}'
+    _cannot_modify_expr_non_discrete_msg = 'Expression: {0} is used in equivalence, cannot be modified with non-discrete item: {1}'
+
+
     def _check_logical_ct_edited(self, linct, new_expr):
         log_ct = linct.get_super_logical_ct()
         if log_ct is not None:
             # check that expression is discrete
             if log_ct.is_equivalence() and not new_expr.is_discrete():
-                self.fatal(
-                    'Linear constraint: {0} is used in equivalence, cannot be modified with non-integer expr: {1}',
-                    linct, new_expr)
+                self.fatal(self._cannot_modify_linearct_non_discrete_msg, linct, new_expr)
             self._engine.update_logical_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
 
     def set_linear_constraint_expr_from_pos(self, lct, pos, new_expr, update_subscribers=True):
@@ -653,18 +740,16 @@ class ModelFactory(_AbstractModelFactory):
         pwl = PwlFunction(self_model, pwl_def=pwl_def, name=name)
         return pwl
 
-    def new_pwl_expr(self, pwl_func, e, usage_counter, add_counter_suffix=True, resolve=True):
-        self_model = self._model
-        if is_number(e):
-            return PwlExpr(self_model, pwl_func, e, usage_counter, add_counter_suffix=add_counter_suffix,
-                           resolve=resolve)
-        else:
-            return PwlExpr(self_model, pwl_func, self._to_linear_operand(e), usage_counter,
-                           add_counter_suffix=add_counter_suffix, resolve=resolve)
+    def new_pwl_expr(self, pwl_func, e, usage_counter, y_var=None, add_counter_suffix=True, resolve=True):
+        return PwlExpr(self._model, pwl_func, e,
+                       usage_counter,
+                       add_counter_suffix=add_counter_suffix,
+                       y_var=y_var,
+                       resolve=resolve)
 
-    def new_pwl_constraint(self, pwl_expr, ctname=None):
+    def new_pwl_constraint(self, pwl_expr, name=None):
         self_model = self._model
-        return PwlConstraint(self_model, pwl_expr, ctname)
+        return PwlConstraint(self_model, pwl_expr, name)
 
     def default_objective_sense(self):
         return ObjectiveSense.Minimize
@@ -680,12 +765,6 @@ class ModelFactory(_AbstractModelFactory):
         new_kpi = KPI.new_kpi(self._model, kpi_arg, publish_name)
         return new_kpi
 
-    def new_constraint_block(self, cts, names):
-        # INTERNAL
-        if names is not None and not self._model.ignore_names:
-            return self._new_constraint_block2(cts, names)
-        else:
-            return self._new_constraint_block1(cts)
 
     def _new_constraint_block2(self, cts, ctnames):
         posted_cts = []
@@ -693,8 +772,18 @@ class ModelFactory(_AbstractModelFactory):
         checker = self._checker
         check_trivials = checker.check_trivial_constraints()
 
-        for ct, ctname in izip(cts, ctnames):
+        if is_string(ctnames):
+            from docplex.mp.utils import _AutomaticSymbolGenerator
+            # no separator added, use a terminal "_" if need be
+            ctnames =_AutomaticSymbolGenerator(ctnames)
+
+
+        for ct, ctname in izip_longest(cts, ctnames):  # use izip_longest so as not to forget any ct
+            if ct is None:  # izip stops
+                break
+
             checker.typecheck_linear_constraint(ct, accept_ranges=False)
+            checker.typecheck_string(ctname, accept_none=True, accept_empty=False, header="Model.add_constraints()")
             if prepfn(ct, ctname, check_for_trivial_ct=check_trivials):
                 posted_cts.append(ct)
         self._post_constraint_block(posted_cts)

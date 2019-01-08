@@ -216,6 +216,7 @@ class AutoStopListener(CpoSolverListener):
                 self.time_active = False
                 self.condition.notify()
 
+
 ###############################################################################
 ## Implementation of a solve listener that slow down solutions flow by waiting
 ## a given delay.
@@ -250,12 +251,14 @@ _UNIT_MULTIPLIER = {'k': 1000, 'K': 1000, 'M': 1000000, 'm': 1000000, 'G': 10000
 
 TK_INTER_AVAILABLE = True
 try:
+    # Python 2 version
     import Tkinter as TK
-    from Tkinter import messagebox
+    import tkMessageBox as messagebox
 except:
     try:
+        # Python 3 version
         import tkinter as TK
-        from tkinter import messagebox
+        from tkinter import messagebox as messagebox
     except:
         TK_INTER_AVAILABLE = False
 
@@ -332,7 +335,6 @@ else:
             # Initialize processing of possible additional infos
             self.infos_texts = {}  # Dictionary of info texts per name
             self.last_row = row
-
 
         def notify_solution(self, msol):
             """ Notify progress panel about a new solution
@@ -450,7 +452,7 @@ else:
 
         def on_closing(self):
             """ Procedure called when closing the window """
-            if TK.messagebox.askokcancel("Quit", "Do you really want to terminate solving of model '{}' ?".format(self.model.get_name())):
+            if messagebox.askokcancel("Quit", "Do you really want to terminate solving of model '{}' ?".format(self.model.get_name())):
                 self._stop_requested_by_user()
 
         def _poll_updates(self):
@@ -489,6 +491,11 @@ else:
         def __init__(self, parse_log=False):
             super(SolverProgressPanelListener, self).__init__()
             self.parse_log = parse_log
+
+        def solver_created(self, solver):
+            # Force solve with start/next
+            solver.context.solver.solve_with_start_next = True
+
 
         def start_solve(self, solver):
             """ Notify that the solve is started. """

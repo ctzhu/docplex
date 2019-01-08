@@ -12,7 +12,7 @@ from docplex.mp.params.parameters import *
 # generating code for group: Barrier_Limits
 def _group_barrier_limits_params(pgroup):
     return dict(corrections=IntParameter(pgroup, "corrections", "CPX_PARAM_BARMAXCOR", 3013, "maximum correction limit", default_value=-1, min_value=-1.0, max_value=9223372036800000000),
-                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1000000000000.0, min_value=1.0, max_value=1e+75),
+                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1e+12, min_value=1.0, max_value=1e+75),
                 iteration=IntParameter(pgroup, "iteration", "CPX_PARAM_BARITLIM", 3012, "barrier iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
                 objrange=NumParameter(pgroup, "objrange", "CPX_PARAM_BAROBJRNG", 3004, "barrier objective range (above and below zero)", default_value=1e+20, min_value=0.0, max_value=1e+75)
                 )
@@ -170,7 +170,6 @@ def _group_mip_limits_params(pgroup):
                 solutions=IntParameter(pgroup, "solutions", "CPX_PARAM_INTSOLLIM", 2015, "mixed integer solutions limit", default_value=9223372036800000000, min_value=1.0, max_value=9223372036800000000),
                 strongcand=IntParameter(pgroup, "strongcand", "CPX_PARAM_STRONGCANDLIM", 2045, "strong branching candidate limit", default_value=10, min_value=1.0, max_value=2100000000),
                 strongit=IntParameter(pgroup, "strongit", "CPX_PARAM_STRONGITLIM", 2046, "strong branching iteration limit", default_value=0, min_value=0.0, max_value=9223372036800000000),
-                submipnodelim=IntParameter(pgroup, "submipnodelim", "CPX_PARAM_SUBMIPNODELIM", 2062, "sub-MIP node limit", default_value=500, min_value=1.0, max_value=9223372036800000000),
                 treememory=NumParameter(pgroup, "treememory", "CPX_PARAM_TRELIM", 2027, "upper limit on size of tree in megabytes", default_value=1e+75, min_value=0.0, max_value=1e+75)
                 )
 
@@ -208,6 +207,19 @@ def _group_mip_pool_make(pgroup):
     return ParameterGroup.make("pool", _group_mip_pool_params, None, pgroup)
 
 
+# generating code for group: MIP_SubMIP
+def _group_mip_submip_params(pgroup):
+    return dict(startalg=IntParameter(pgroup, "startalg", "CPX_PARAM_SUBMIPSTARTALG", 2205, "algorithm to solve initial relaxation for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                subalg=IntParameter(pgroup, "subalg", "CPX_PARAM_SUBMIPSUBALG", 2206, "algorithm to solve subproblems for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                nodelimit=IntParameter(pgroup, "nodelimit", "CPX_PARAM_SUBMIPNODELIMIT", 2212, "sub-MIP node limit", default_value=500, min_value=1.0, max_value=9223372036800000000),
+                scale=IntParameter(pgroup, "scale", "CPX_PARAM_SUBMIPSCAIND", 2207, "type of scaling used for sub-MIPs", default_value=0, min_value=-1.0, max_value=1.0)
+                )
+
+
+def _group_mip_submip_make(pgroup):
+    return ParameterGroup.make("submip", _group_mip_submip_params, None, pgroup)
+
+
 # generating code for group: MIP_Strategy
 def _group_mip_strategy_params(pgroup):
     return dict(backtrack=NumParameter(pgroup, "backtrack", "CPX_PARAM_BTTOL", 2002, "factor for backtracking, lower values give more", default_value=0.9999, min_value=0.0, max_value=1.0),
@@ -228,10 +240,7 @@ def _group_mip_strategy_params(pgroup):
                 search=IntParameter(pgroup, "search", "CPX_PARAM_MIPSEARCH", 2109, "indicator for search method", default_value=0, min_value=0.0, max_value=2.0),
                 startalgorithm=IntParameter(pgroup, "startalgorithm", "CPX_PARAM_STARTALG", 2025, "algorithm to solve initial relaxation", default_value=0, min_value=0.0, max_value=6.0),
                 subalgorithm=IntParameter(pgroup, "subalgorithm", "CPX_PARAM_SUBALG", 2026, "algorithm to solve subproblems", default_value=0, min_value=0.0, max_value=5.0),
-                variableselect=IntParameter(pgroup, "variableselect", "CPX_PARAM_VARSEL", 2028, "variable selection strategy", default_value=0, min_value=-1.0, max_value=4.0),
-                submipstartalg=IntParameter(pgroup, "submipstartalg", "CPX_PARAM_SUBMIPSTARTALG", 2205, "algorithm to solve initial relaxation for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
-                submipsubalg=IntParameter(pgroup, "submipsubalg", "CPX_PARAM_SUBMIPSUBALG", 2206, "algorithm to solve subproblems for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
-                submipscale=IntParameter(pgroup, "submipscale", "CPX_PARAM_SUBMIPSCAIND", 2207, "type of scaling used for sub-MIPs", default_value=0, min_value=-1.0, max_value=1.0)
+                variableselect=IntParameter(pgroup, "variableselect", "CPX_PARAM_VARSEL", 2028, "variable selection strategy", default_value=0, min_value=-1.0, max_value=4.0)
                 )
 
 
@@ -268,12 +277,41 @@ def _group_mip_subgroups():
                 limits=_group_mip_limits_make,
                 polishafter=_group_mip_polishafter_make,
                 pool=_group_mip_pool_make,
+                submip=_group_mip_submip_make,
                 strategy=_group_mip_strategy_make,
                 tolerances=_group_mip_tolerances_make)
 
 
 def _group_mip_make(pgroup):
     return ParameterGroup.make("mip", _group_mip_params, _group_mip_subgroups, pgroup)
+
+
+# generating code for group: Network_Tolerances
+def _group_network_tolerances_params(pgroup):
+    return dict(feasibility=NumParameter(pgroup, "feasibility", "CPX_PARAM_NETEPRHS", 5003, "feasibility tolerance", default_value=1e-06, min_value=1e-11, max_value=0.1),
+                optimality=NumParameter(pgroup, "optimality", "CPX_PARAM_NETEPOPT", 5002, "reduced cost optimality tolerance", default_value=1e-06, min_value=1e-11, max_value=0.1)
+                )
+
+
+def _group_network_tolerances_make(pgroup):
+    return ParameterGroup.make("tolerances", _group_network_tolerances_params, None, pgroup)
+
+
+# generating code for group: Network
+def _group_network_params(pgroup):
+    return dict(display=IntParameter(pgroup, "display", "CPX_PARAM_NETDISPLAY", 5005, "level of the network iteration display", default_value=2, min_value=0.0, max_value=2.0),
+                iterations=IntParameter(pgroup, "iterations", "CPX_PARAM_NETITLIM", 5001, "network simplex iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
+                netfind=IntParameter(pgroup, "netfind", "CPX_PARAM_NETFIND", 1022, "level of network extraction", default_value=2, min_value=1.0, max_value=3.0),
+                pricing=IntParameter(pgroup, "pricing", "CPX_PARAM_NETPPRIIND", 5004, "pricing strategy index", default_value=0, min_value=0.0, max_value=3.0)
+                )
+
+
+def _group_network_subgroups():
+    return dict(tolerances=_group_network_tolerances_make)
+
+
+def _group_network_make(pgroup):
+    return ParameterGroup.make("network", _group_network_params, _group_network_subgroups, pgroup)
 
 
 # generating code for group: Output
@@ -384,6 +422,7 @@ def _group_simplex_params(pgroup):
     return dict(crash=IntParameter(pgroup, "crash", "CPX_PARAM_CRAIND", 1007, "type of crash used", default_value=1, min_value=-1.0, max_value=1),
                 dgradient=IntParameter(pgroup, "dgradient", "CPX_PARAM_DPRIIND", 1009, "type of dual gradient used in pricing", default_value=0, min_value=0.0, max_value=5),
                 display=IntParameter(pgroup, "display", "CPX_PARAM_SIMDISPLAY", 1019, "level of the iteration display", default_value=1, min_value=0.0, max_value=2),
+                dynamicrows=IntParameter(pgroup, "dynamicrows", "CPX_PARAM_DYNAMICROWS", 1161, "indicator for dynamic management of rows", default_value=-1, min_value=-1.0, max_value=1.0),
                 pgradient=IntParameter(pgroup, "pgradient", "CPX_PARAM_PPRIIND", 1029, "type of primal gradient used in pricing", default_value=0, min_value=-1.0, max_value=4),
                 pricing=IntParameter(pgroup, "pricing", "CPX_PARAM_PRICELIM", 1010, "size of the pricing candidate list", default_value=0, min_value=0.0, max_value=2100000000),
                 refactor=IntParameter(pgroup, "refactor", "CPX_PARAM_REINV", 1031, "refactorization interval", default_value=0, min_value=0.0, max_value=10000.0)
@@ -422,8 +461,10 @@ def _group_cpxparam_params(pgroup):
                 lpmethod=IntParameter(pgroup, "lpmethod", "CPX_PARAM_LPMETHOD", 1062, "method for linear optimization", default_value=0, min_value=0.0, max_value=6.0),
                 optimalitytarget=IntParameter(pgroup, "optimalitytarget", "CPX_PARAM_OPTIMALITYTARGET", 1131, "type of solution CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=3.0),
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
+                paramdisplay=BoolParameter(pgroup, "paramdisplay", "CPX_PARAM_PARAMDISPLAY", 1163, "whether to display changed parameters before optimization", default_value=1),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201703173, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201709013, min_value=0.0, max_value=2100000000),
+                record=BoolParameter(pgroup, "record", "CPX_PARAM_RECORD", 1162, "record calls to C API", default_value=0),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
                 timelimit=NumParameter(pgroup, "timelimit", "CPX_PARAM_TILIM", 1039, "time limit in seconds", default_value=1e+75, min_value=0.0, max_value=1e+75),
@@ -440,6 +481,7 @@ def _group_cpxparam_subgroups():
                 emphasis=_group_emphasis_make,
                 feasopt=_group_feasopt_make,
                 mip=_group_mip_make,
+                network=_group_network_make,
                 output=_group_output_make,
                 preprocessing=_group_preprocessing_make,
                 read=_group_read_make,

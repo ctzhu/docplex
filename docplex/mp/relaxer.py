@@ -432,7 +432,7 @@ class Relaxer(object):
 
         # save this for restore later
         saved_context_log_output = mdl.context.solver.log_output
-        saved_log_output_stream = mdl.get_log_output()
+        saved_log_output_stream = mdl.log_output
         saved_context = mdl.context
 
         # take into account local argument overrides
@@ -528,7 +528,7 @@ class Relaxer(object):
 
         finally:
             # --- restore context, log_output if set.
-            if saved_log_output_stream != mdl.get_log_output():
+            if saved_log_output_stream != mdl.log_output:
                 mdl.set_log_output_as_stream(saved_log_output_stream)
             if saved_context_log_output != mdl.context.solver.log_output:
                 mdl.context.solver.log_output = saved_context_log_output

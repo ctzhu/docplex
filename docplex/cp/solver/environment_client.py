@@ -22,11 +22,12 @@ can not be imported.
 from docplex.cp.solution import *
 from docplex.cp.solver.solver_listener import CpoSolverListener
 import os
+
 try:
     import docplex.util.environment as runenv
-    ENVIRONMENT_PRESENT = True
+    IS_IN_WORKER = isinstance(runenv.get_environment(), runenv.WorkerEnvironment)
 except:
-    ENVIRONMENT_PRESENT = False
+    IS_IN_WORKER = False
 
 
 ###############################################################################
@@ -67,13 +68,12 @@ class EnvSolverListener(CpoSolverListener):
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
         """
         # Check if calling environment is DODS (Decision Optimization for Data Science)
-        env = _get_environment(solver, "solve_details")
-        if env is None:
-            return
-        value = os.environ.get("IS_DODS")
-        if str(value).lower() == "true":
-            # Force solve to be transformed in start/next
-            solver.context.solver.solve_with_start_next = True
+        env = _get_environment()
+        if env is not None:
+            # Check if solve must be transformed in start/next
+            value = os.environ.get("IS_DODS")
+            if str(value).lower() == "true":
+                solver.context.solver.solve_with_start_next = True
 
 
     def start_solve(self, solver):
@@ -116,7 +116,7 @@ def get_environment():
         Environment descriptor, None if none.
     """
     # Check if environment available
-    if not ENVIRONMENT_PRESENT:
+    if not IS_IN_WORKER:
         return None
     return runenv.get_environment()
 
@@ -132,12 +132,17 @@ def _notify_start_solve(solver):
        solver: Source CPO solver
     """
     # Get environment to be called
-    env = _get_environment(solver, "solve_details")
+    env = _get_environment()
     if env is None:
         return
 
-    # Notify start solve, with no details
-    env.notify_start_solve({})
+    if _get_property(solver, "solve_details", True):
+        # Set ordered list of KPIs in solve details
+        kpis = solver.get_model().get_kpis()
+        if kpis:
+            # Add ordered list of kpi names
+            sdetails = {'MODEL_DETAIL_KPIS': json.dumps(list(kpis.keys()))}
+            env.notify_start_solve(sdetails)
 
 
 def _update_solve_details(solver):
@@ -147,9 +152,12 @@ def _update_solve_details(solver):
        solver: Source CPO solver
     """
     # Get environment to be called
-    env = _get_environment(solver, "solve_details")
+    env = _get_environment()
     if env is None:
         return
+
+    if not _get_property(solver, "solve_details", True):
+       return
 
     # Get last solver solution
     msol = solver.get_last_result()
@@ -184,8 +192,12 @@ def _update_solve_details(solver):
 
     # Set KPIs if any
     kpis = msol.get_kpis()
-    for k, v in kpis.items():
-        sdetails["KPI." + k] = v
+    if kpis:
+        # Add ordered list of kpi names
+        sdetails["MODEL_DETAIL_KPIS"] = json.dumps(list(kpis.keys()))
+        # Add KPIs
+        for k, v in kpis.items():
+            sdetails["KPI." + k] = v
 
     # Submit details to environment
     env.update_solve_details(sdetails)
@@ -198,15 +210,29 @@ def _publish_solution(solver):
        solver: Source CPO solver
     """
     # Get environment to be called
-    env = _get_environment(solver, "json_solution")
+    env = _get_environment()
     if env is None:
         return
 
     # Write JSON solution as output
-    json = solver.agent._get_last_json_result_string()
-    if json is not None:
-        with env.get_output_stream("solution.json") as fp:
-            fp.write(json.encode('utf-8'))
+    resout = _get_property(solver, "result_output", 'solution.json')
+    if resout:
+        json = solver.agent._get_last_json_result_string()
+        if json is not None:
+            with env.get_output_stream(resout) as fp:
+                fp.write(json.encode('utf-8'))
+
+    # Publish kpis
+    kpiout = _get_property(solver, "kpis_output", 'kpis.csv')
+    if kpiout:
+        sres = solver.get_last_result()
+        if sres:
+            kpis = sres.get_kpis()
+            if kpis:
+                with env.get_output_stream(kpiout) as fp:
+                    fp.write('"NAME","VALUE"\n'.encode('utf-8'))
+                    for k, v in kpis.items():
+                        fp.write('{},{}\n'.format(encode_csv_string(k), v).encode('utf-8'))
 
 
 def _notify_end_solve(solver):
@@ -216,29 +242,27 @@ def _notify_end_solve(solver):
        solver: Source CPO solver
     """
     # Get environment to be called
-    env = _get_environment(solver, "solve_details")
+    env = _get_environment()
     if env is None:
         return
 
     # Set solve status
-    res = solver.get_last_result()
-    if res is None:
-        status = _STATUS_UNKNOWN
-    else:
-        status = _SOLVE_STATUS_MAP.get(res.get_solve_status(), _STATUS_UNKNOWN)
-    env.notify_end_solve(status)
+    if _get_property(solver, "solve_details", True):
+        res = solver.get_last_result()
+        if res is None:
+            status = _STATUS_UNKNOWN
+        else:
+            status = _SOLVE_STATUS_MAP.get(res.get_solve_status(), _STATUS_UNKNOWN)
+        env.notify_end_solve(status)
 
 
-def _get_environment(solver, prop):
+def _get_environment():
     """ Get the environment to call, checking if auto-publish is required.
-    Args:
-        solver: Source CPO solver
-        prop:   Auto_publish specific property that should be checked
     Returns:
         Environment to call, None if none
     """
     # Check if environment available
-    if not ENVIRONMENT_PRESENT:
+    if not IS_IN_WORKER:
         return None
 
     # Skip if environment is local
@@ -246,11 +270,28 @@ def _get_environment(solver, prop):
     if isinstance(env, runenv.LocalEnvironment):
         return None
 
-    # Check auto_publish config
-    pblsh = solver.context.solver.auto_publish
-    if (pblsh is None) or not((pblsh is True) or (isinstance(pblsh, Context) and pblsh.get_attribute(prop))):
-        return None
-
-    # Return
     return env
 
+
+def _get_property(solver, prop, default):
+    """ Get the value of an auto-publish property.
+    Args:
+        solver:  Source CPO solver
+        prop:    Auto_publish specific property that should be checked
+        default: Default property value
+    Returns:
+        Environment to call, None if none
+    """
+    # Check auto_publish config
+    publish = solver.context.solver.auto_publish
+    if (publish is None) or (publish is False):
+        return None
+    if publish is True:
+        return default
+
+    if isinstance(publish, Context):
+        pval = publish.get_attribute(prop)
+        return pval if pval else None
+
+    # Not found
+    return None

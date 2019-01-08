@@ -194,7 +194,7 @@ class DOcloudEngine(IndexerEngine):
         pass
 
     def get_cplex(self):
-        raise DOcplexException("{0} engine contains no instance of CPLEX".format(self.name()))
+        raise DOcplexException("{0} engine contains no instance of CPLEX".format(self.name))
 
     def __init__(self, mdl, exchange_format=None, **kwargs):
         IndexerEngine.__init__(self)
@@ -233,11 +233,11 @@ class DOcloudEngine(IndexerEngine):
         # <-> is supposed to be supported in LP?
         return True, None
 
+    @property
     def name(self):
-        return 'docloud'
+        return self.get_name()
 
-    def _location(self):
-        # INTERNAL
+    def get_name(self):
         return 'cplex_cloud'
 
     def can_solve(self):
@@ -251,7 +251,7 @@ class DOcloudEngine(IndexerEngine):
             self._model.warning("Progress listeners are not supported on DOcplexcloud.")
 
     def register_callback(self, cb):
-        self._model._warning('Callbacks are not available on DOcplexcloud')
+        self._model.error('Callbacks are not available on DOcplexcloud')
 
 
     @staticmethod
@@ -669,8 +669,9 @@ class DOcloudEngine(IndexerEngine):
         sol = SolveSolution.make_engine_solution(model=mdl,
                                                  obj=docloud_obj,
                                                  var_value_map=docloud_values_by_vars,
-                                                 location=self._location(),
-                                                 solve_status=self.get_solve_status())
+                                                 solved_by=self.get_name(),
+                                                 solve_details=self._solve_details,
+                                                 job_solve_status=self.get_solve_status())
 
         # attributes
         docloud_ct_duals, docloud_ct_slacks = solution_handler.constraint_results()

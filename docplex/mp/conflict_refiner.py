@@ -200,7 +200,7 @@ class ConflictRefiner(object):
 
         # log stuff
         saved_context_log_output = mdl.context.solver.log_output
-        saved_log_output_stream = mdl.get_log_output()
+        saved_log_output_stream = mdl.log_output
 
         try:
             mdl.set_log_output(context.solver.log_output)
@@ -229,7 +229,7 @@ class ConflictRefiner(object):
                 # no way to solve.. really
                 return mdl.fatal("CPLEX DLL not found: please provide DOcplexcloud credentials")
         finally:
-            if saved_log_output_stream != mdl.get_log_output():
+            if saved_log_output_stream != mdl.log_output:
                 mdl.set_log_output_as_stream(saved_log_output_stream)
             if saved_context_log_output != mdl.context.solver.log_output:
                 mdl.context.solver.log_output = saved_context_log_output

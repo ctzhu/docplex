@@ -12,7 +12,7 @@ import re
 
 from docplex.mp.linear import *
 from docplex.mp.constants import ComparisonType
-from docplex.mp.constr import LinearConstraint, RangeConstraint, IndicatorConstraint, QuadraticConstraint, PwlConstraint
+from docplex.mp.constr import LinearConstraint, RangeConstraint, QuadraticConstraint, PwlConstraint
 from docplex.mp.environment import env_is_64_bit
 from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper, _NumPrinter
 
@@ -206,16 +206,16 @@ class LPModelPrinter(TextModelPrinter):
         pass
 
     def fix_name(self, mobj, prefix, local_index_map, hide_names):
-        raw_name = mobj.name
+        raw_name = mobj.get_name()
 
         # anonymous constraints must be named in a LP (we follow CPLEX here)
         if hide_names or not raw_name or mobj.is_generated():
             return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
-        elif not self._is_lp_compliant(raw_name):
+        elif not self.is_lp_compliant(raw_name):
             if raw_name[0] in 'eE':
                 # fixing eE non-LP names
                 fixed_name = '_' + raw_name
-                if  self._is_lp_compliant(fixed_name):
+                if  self.is_lp_compliant(fixed_name):
                     return fixed_name
             # -- stats
             self._nb_noncompliant_ids += 1
@@ -235,7 +235,7 @@ class LPModelPrinter(TextModelPrinter):
         if model.name:
             # make sure model name is ascii
             encoded = model.name.encode('ascii', 'backslashreplace')
-            if sys.version_info[0] == 3:
+            if sys.version_info[0] == 3:  # pragma: no cover
                 # in python 3, encoded is a bytes at this point. Make it a string again
                 encoded = encoded.decode('ascii')
             model_name = encoded.replace('\\\\', '_').replace('\\', '_')
@@ -243,11 +243,10 @@ class LPModelPrinter(TextModelPrinter):
         out.write("\\Problem name: %s\n" % printed_name)
 
     @staticmethod
-    def _is_lp_compliant(name, _lpname_regexp=_lp_re):
+    def is_lp_compliant(name, fix_whitespace=True, _lpname_regexp=_lp_re):
         if name is None:
             return True  # pragma: no cover
-        # PUT THIS SOMEWHERE ELSE
-        fixed_name = LPModelPrinter.fix_whitespace(name)
+        fixed_name = LPModelPrinter.fix_whitespace(name) if fix_whitespace else name
         lp_match = _lpname_regexp.match(fixed_name)
         return lp_match and lp_match.start() == 0 and lp_match.end() == len(fixed_name)
 
@@ -258,72 +257,11 @@ class LPModelPrinter(TextModelPrinter):
         return nb_different_names == nb_keys
 
     @staticmethod
-    def _update_variables_set(expr_iter, unreferenced_variables):   # pragma: no cover
-        for (v, coeff) in expr_iter:
-            if not coeff:
-                continue  # pragma: no cover
-            unreferenced_variables.discard(v)
-
-    @staticmethod
-    def _add_to_variables_set(expr_iter, var_set):
-        for (v, coeff) in expr_iter:
-            var_set.add(v)
-
-
-    def _get_forced_predeclared_variables(self, model):
-        # compute predeclared variables
-        predeclared_variables = set()
-        for sos in model.iter_sos():
-            for sos_var in sos.iter_variables():
-                predeclared_variables.add(sos_var)
-        for pwl in model.iter_pwl_constraints():
-            predeclared_variables.add(pwl.y)
-            for pwv in pwl.expr.iter_variables():
-                predeclared_variables.add(pwv)
-        return predeclared_variables
-
-    def _get_all_referenced_variables(self, model, objlin):
-        referenced_variables = set()
-        for ct in model.iter_constraints():
-            if isinstance(ct, LinearConstraint):
-                if not ct.is_trivial_feasible():
-                    iter_diff_coeffs = ct.iter_net_linear_coefs()
-                    self._add_to_variables_set(iter_diff_coeffs, referenced_variables)
-            elif isinstance(ct, RangeConstraint):
-                term_iter = ct.expr.iter_sorted_terms()
-                self._add_to_variables_set(term_iter, referenced_variables)
-            elif isinstance(ct, IndicatorConstraint):
-                binary_var = ct.binary_var
-                referenced_variables.add(binary_var)
-                iter_diff_coeffs = ct.linear_constraint.iter_net_linear_coefs()
-                self._add_to_variables_set(iter_diff_coeffs, referenced_variables)
-            elif isinstance(ct, QuadraticConstraint):
-                iter_quads = ct.iter_net_quads()
-                for vp, _ in iter_quads:
-                    referenced_variables.add(vp.first)
-                    referenced_variables.add(vp.second)
-                iter_diff_coeffs = ct.iter_net_linear_coefs()
-                self._add_to_variables_set(iter_diff_coeffs, referenced_variables)
-            elif isinstance(ct, PwlConstraint):
-                # Pwl constraints are not handled later on
-                pass
-            else:
-                ct.error("ERROR: unexpected constraint not handled: {0!s}".format(ct))  # pragma: no cover
-        # Second: add variables that occur in SOS and PWL constraints
-        for sos in model.iter_sos():
-            for sos_var in sos.iter_variables():
-                referenced_variables.add(sos_var)
-        for pwl in model.iter_pwl_constraints():
-            referenced_variables.add(pwl.y)
-            referenced_variables.add(pwl.expr)
-        return referenced_variables
-
-    @staticmethod
     def _has_sos_or_pwl_constraints(model):
         return model.number_of_sos > 0 or model.number_of_pwl_constraints > 0
 
     def _iter_completed_linear_obj_terms(self, model, objlin):
-        obj_variables = set(v for v, _ in objlin.iter_terms()) # unsorted
+        obj_variables = set(v for v, _ in objlin.iter_terms())  # not sorted
         predeclared_variables = self._get_forced_predeclared_variables(model)
         variables_to_display = predeclared_variables | obj_variables
         # sort by index
@@ -337,15 +275,27 @@ class LPModelPrinter(TextModelPrinter):
         for v in model.iter_variables():
             yield v, objlin.unchecked_get_coef(v)
 
+    def _get_forced_predeclared_variables(self, model):
+        # compute predeclared variables
+        predeclared_variables = set()
+        for sos in model.iter_sos():
+            for sos_var in sos.iter_variables():
+                predeclared_variables.add(sos_var)
+        for pwl in model.iter_pwl_constraints():
+            predeclared_variables.add(pwl.y)
+            for pwv in pwl.expr.iter_variables():
+                predeclared_variables.add(pwv)
+        return predeclared_variables
+
     def post_print_hook(self, model):
         nb_non_compliants = self._nb_noncompliant_ids
         if nb_non_compliants:
             try:
                 model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
                                    nb_non_compliants, self._noncompliant_justifier)
-            except UnicodeEncodeError:
+            except UnicodeEncodeError:  # pragma: no cover
                 model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
-                                   nb_non_compliants, self._noncompliant_justifier.encode('utf-8'))
+                              nb_non_compliants, self._noncompliant_justifier.encode('utf-8'))
 
     #  @profile
     def print_model_to_stream(self, out, model):
@@ -441,12 +391,10 @@ class LPModelPrinter(TextModelPrinter):
                 if free_lb and free_ub:
                     print_var_bounds_fn(out, self_num_printer, lp_varname, lb=None, ub=None)
                 elif free_ub:
-                    # avoid zero lb
-                    if 0 != var_lb:
+                    # print only nonzero lbs
+                    if var_lb:
                         print_var_bounds_fn(out, symbolic_num_printer, lp_varname, var_lb, ub=None)
-                    else:
-                        # lb is zero, ub is infinity, we dont print anything
-                        pass
+
                 else:
                     # save the lb if is zero
                     printed_lb = None if 0 == var_lb else var_lb

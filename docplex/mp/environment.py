@@ -142,13 +142,19 @@ class Environment(object):
         try:
             import cplex
             self._found_cplex = True
-            cpx = cplex.Cplex()
-            # format: MM.mm.rr.ff e.g.e 12.6.2.0
-            self._cplex_version = cpx.get_version()
             cplex_module_file  = cplex.__file__
             if cplex_module_file:
                 self._cplex_location = os.path.dirname(os.path.dirname(cplex_module_file))
-            del cpx
+            try:
+                self._cplex_version = cplex.__version__
+            except AttributeError:
+                # older version: use an instance
+                cpx = cplex.Cplex()
+                # format: MM.mm.rr.ff e.g.e 12.6.2.0
+                self._cplex_version = cpx.get_version()
+                # terminate the dummy instance...
+                del cpx
+
         except ImportError:
             self._found_cplex = False
 

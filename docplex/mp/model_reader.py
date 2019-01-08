@@ -449,7 +449,7 @@ class ModelReader(object):
                     pwl_func = mdl.piecewise(preslope, breakxy, postslope, name=pwl_name)
                     pwl_expr = mdl._lfactory.new_pwl_expr(pwl_func, varx, 0, add_counter_suffix=False, resolve=False)
                     pwl_expr._f_var = vary
-                    pwl_expr._resolve()
+                    pwl_expr._ensure_resolved()
 
             except AttributeError:  # pragma: no cover
                 pass    # Do not check for PWLs if Cplex version does not support them

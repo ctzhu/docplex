@@ -21,13 +21,12 @@ from docplex.mp.quad import QuadExpr, VarPair
 class ModelAggregator(object):
     # what type to use for merging dicts
 
-    def __init__(self, linear_factory, quad_factory, ordered, counter_type):
+    def __init__(self, linear_factory, quad_factory, counter_type):
         self._linear_factory = linear_factory
         self._checker = linear_factory._checker
         self._quad_factory = quad_factory
         self._model = linear_factory._model
         self._generate_transients = True
-        self._ordered = ordered
         self.counter_type = counter_type
 
     def new_zero_expr(self):
@@ -46,7 +45,6 @@ class ModelAggregator(object):
             return linear_expr
         else:
             return self.new_zero_expr()
-
 
     def scal_prod(self, terms, coefs=1.0):
         # Testing anumpy array for its logical value will not work:
@@ -183,8 +181,8 @@ class ModelAggregator(object):
             varsum_terms = linear_term_dict_type()
             linear_terms_setitem = linear_term_dict_type.__setitem__
             for v in var_list:
-                if not isinstance(v, Var):
-                    print('bingo')
+                # if not isinstance(v, Var):
+                #     print('bingo')
                 linear_terms_setitem(varsum_terms, v, 1)
         else:
             # there are repeated variables.
@@ -295,24 +293,25 @@ class ModelAggregator(object):
         cts = [lfactory._new_binary_constraint(exprs[r], sense=op, rhs=srhs[r]) for r in range_cts]
         return cts
 
-    def _generate_rows(self, coef_mat):
+    @classmethod
+    def generate_rows(cls, coef_mat):
         if is_pandas_dataframe(coef_mat):
-            row_gen = self.generate_df_rows(coef_mat)
+            row_gen = cls.generate_df_rows(coef_mat)
         elif is_numpy_matrix(coef_mat):
-            row_gen = self.generate_np_matrix_rows(coef_mat)
+            row_gen = cls.generate_np_matrix_rows(coef_mat)
         else:
             row_gen = iter(coef_mat)
         return row_gen
 
     def _matrix_constraints(self, coef_mat, svars, srhs, op):
-        row_gen = self._generate_rows(coef_mat)
+        row_gen = self.generate_rows(coef_mat)
         lfactory = self._linear_factory
 
         return [lfactory._new_binary_constraint(lhs=self._scal_prod(svars, row), sense=op, rhs=rhs)
                 for row, rhs in izip(row_gen, srhs)]
 
     def _matrix_ranges(self, coef_mat, svars, lbs, ubs):
-        row_gen = self._generate_rows(coef_mat)
+        row_gen = self.generate_rows(coef_mat)
         lfactory = self._linear_factory
 
         return [lfactory.new_range_constraint(expr=self._scal_prod(svars, row), lb=lb, ub=ub)

@@ -15,6 +15,7 @@ from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _Subscrip
 from docplex.mp.operand import LinearOperand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
+from docplex.mp.sttck import StaticTypeChecker
 
 
 class DOCplexQuadraticArithException(Exception):
@@ -52,7 +53,8 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         else:
             self._ub = vartype.compute_ub(ub, model)
 
-    def cplex_scope(self):
+    @staticmethod
+    def cplex_scope():
         return CplexScope.VAR_SCOPE
 
     # noinspection PyUnusedLocal
@@ -259,7 +261,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def _get_solution_value(self, s=None):
         sol = s or self._get_model()._get_solution()
-        return sol[self]
+        return sol._get_var_value(self)
 
     def get_container_index(self):
         ctn = self.get_container()
@@ -292,7 +294,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def times(self, e):
         if is_number(e):
             if e:
-                return MonomialExpr(self._model, self, e, checked_num=True)
+                return MonomialExpr(self._model, self, e)
             else:
                 return self._model._lfactory.new_zero_expr()
         elif isinstance(e, ZeroExpr):
@@ -375,7 +377,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def __neg__(self):
         # the "-e" unary minus returns a linear expression
-        return MonomialExpr(self._model, dvar=self, coeff=-1, checked_num=True)
+        return MonomialExpr(self._model, dvar=self, coeff=-1, safe=True)
 
     def __pow__(self, power):
         # INTERNAL
@@ -486,13 +488,19 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         # INTERNAL
         return self._name or self._model._var_scope.new_obj_symbol(self)
 
+    def _must_print_lb(self):
+        self_vartype = self._vartype
+        return self_vartype.get_cplex_typecode() not in 'SN'\
+               and self._lb == self_vartype.get_default_lb()
+
     def __repr__(self):
         self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
-        if self_vartype.is_default_lb(self_lb):
+        # print lb for semi-xx
+        if self._must_print_lb():
             repr_lb = ''
         else:
             repr_lb = ',lb={0:g}'.format(self_lb)
-        if self_vartype.is_default_ub(self_ub):
+        if self_vartype.get_default_ub() == self_ub:
             repr_ub = ''
         else:
             repr_ub = ',ub={0:g}'.format(self_ub)
@@ -534,10 +542,22 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def benders_annotation(self, new_anno):
         self.set_benders_annotation(new_anno)
 
+    def iter_constraints(self):
+        """ Returns an iterator traversing all constraints in which the variable is used.
+
+        :return:
+            An iterator.
+        """
+        for ct in self._model.iter_constraints():
+            for ctv in ct.iter_variables():
+                if ctv is self:
+                    yield ct
+                    break
+
 
 # noinspection PyAbstractClass
 class AbstractLinearExpr(Expr, LinearOperand):
-    __slots__ = ('_discrete_locked')
+    __slots__ = ('_discrete_locked',)
 
     def get_coef(self, dvar):
         """ Returns the coefficient of a variable in the expression.
@@ -569,14 +589,8 @@ class AbstractLinearExpr(Expr, LinearOperand):
     def is_discrete_locked(self):
         return getattr(self, '_discrete_locked', False)
 
-    def check_discrete_lock_frozen(self, op=None):
-        # an expression involved i n an equivalence cannot be modified
-        if self.is_discrete_locked():
-            self.fatal('Expression: {0} is used in equivalence, cannot be modified', self)
-
-    def _discrete_locked_noninteger_attr_error(self, coeff, attr_name):
-        self.fatal('Expression: {0} is used in equivalence, cannot be modified with non-integer {2}: {1}',
-                   self, coeff, attr_name)
+    def check_discrete_lock_frozen(self, item=None):
+        self.get_linear_factory().check_expr_discrete_lock(self, item)
 
 
 class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
@@ -590,12 +604,11 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     __slots__ = ('_dvar', '_coef', '_subscribers')
 
     # noinspection PyMissingConstructor
-    def __init__(self, model, dvar, coeff, checked_num=False, safe=False):
+    def __init__(self, model, dvar, coeff, safe=False):
         self._model = model  # faster than to call recursively init methods...
         self._name = None
         self._dvar = dvar
         self._subscribers = []
-        # check perf on that
         if safe:
             self._coef = coeff
         else:
@@ -677,7 +690,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
                 return self.get_linear_factory().new_zero_expr()
             else:
                 # return a fresh instance
-                return MonomialExpr(self._model, self._dvar, self._coef * e, checked_num=True)
+                return MonomialExpr(self._model, self._dvar, self._coef * e, safe=True)
         elif isinstance(e, LinearExpr):
             return e.times(self)
         elif isinstance(e, Var):
@@ -695,7 +708,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         # returns a new instance
         self._model.typecheck_as_denominator(e, self)
         inverse = 1.0 / float(e)
-        return MonomialExpr(self._model, self._dvar, self._coef * inverse, checked_num=True)
+        return MonomialExpr(self._model, self._dvar, self._coef * inverse, safe=True)
 
     def __add__(self, e):
         return self.plus(e)
@@ -745,7 +758,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self._set_coefficient(dvar, coef)
 
     def _set_coefficient(self, dvar, coef):
-        self.check_discrete_lock_frozen()
+        self.check_discrete_lock_frozen(item=coef)
         if dvar is self._dvar:
             self._coef = coef
             self.notify_modified(event=UpdateEvent.LinExprCoef)
@@ -760,7 +773,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     # -- arithmetic to self
     def __iadd__(self, other):
-        self.check_discrete_lock_frozen(op='+')
+        self.check_discrete_lock_frozen(item=other)
         if isinstance(other, LinearOperand) or is_number(other):
             added = self.to_linear_expr().add(other)
         else:
@@ -769,7 +782,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         return added
 
     def __isub__(self, other):
-        self.check_discrete_lock_frozen(op='-=')
+        self.check_discrete_lock_frozen(item=other)
         if isinstance(other, LinearOperand) or is_number(other):
             expr = self.to_linear_expr()
             expr.subtract(other)
@@ -783,7 +796,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self.multiply(e)
 
     def multiply(self, e):
-        self.check_discrete_lock_frozen(op='*=')
+        self.check_discrete_lock_frozen(e)
         if is_number(e):
             if 0 == e:
                 product = self.get_linear_factory().new_zero_expr()
@@ -799,8 +812,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
             product = self.model._qfactory.new_monomial_product(self, e)
         elif isinstance(e, Expr) and e.is_quad_expr():
             if e.has_quadratic_term():
-                self.fatal('Cannot multiply non-constant expression {0!s} with quadratic expression {1!s}',
-                           self, e)
+                StaticTypeChecker.mul_quad_lin_error(self._model, self, e)
             else:
                 product = self.model._qfactory.new_monomial_product(self, e.linear_part)
         else:
@@ -816,23 +828,18 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self.divide(other)
 
     def divide(self, other):
-        self.check_discrete_lock_frozen(op='/=')
-        self.model.typecheck_as_denominator(other, self)
+        self._model.typecheck_as_denominator(other, self)
         inverse = 1.0 / float(other)
+        self.check_discrete_lock_frozen(inverse)
         self._coef *= inverse
         self.notify_modified(event=UpdateEvent.LinExprCoef)
         return self
 
-    def equals_expr(self, other):
-        if isinstance(other, MonomialExpr):
-            return self.var is other.var and self.coef == other.coef
-        elif isinstance(other, LinearExpr):
-            expr = other
-            if expr.constant == 0 and expr.number_of_variables() == 1:
-                (v, k) = next(other.iter_terms())
-                return self.var is v and self.coef == k
-        else:
-            return False
+    def equals(self, other):
+        return isinstance(other, LinearOperand) and \
+               other.get_constant() == 0 and\
+               other.number_of_terms() == 1 and\
+               other.unchecked_get_coef(self._dvar) == self._coef
 
     # conversion
     def to_linear_expr(self):
@@ -866,7 +873,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _new_terms_dict(self, model, *args, **kwargs):
         return model._term_dict_type(*args, **kwargs)
 
-    def _new_empty_terms_dict(self, model):
+    @staticmethod
+    def _new_empty_terms_dict(model):
         return model._term_dict_type()
 
     def to_linear_expr(self):
@@ -945,7 +953,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             self.__terms[v] = k
 
         else:
-            self.fatal("Cannot convert this to docplex.mp.LinearExpr, {0!r}", e)
+            self.fatal("Cannot convert {0!r} to docplex.mp.LinearExpr, type is {1}", e, type(e))
 
     def keep(self):
         self._transient = False
@@ -1036,9 +1044,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def is_zero(self):
         return self.equals_constant(0)
 
-    def is_one(self):
-        return self.equals_constant(1)
-
     def is_constant(self):
         """
         Checks if the expression is a constant.
@@ -1113,14 +1118,12 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _add_term(self, dvar, coef=1):
         # INTERNAL
         self_terms = self.__terms
-        #if coef or dvar in self_terms:
         self_terms[dvar] = self_terms.get(dvar, 0) + coef
 
     def set_coefficient(self, dvar, coeff):
         self._model.typecheck_var(dvar)
         self._model.typecheck_num(coeff)
         self._set_coefficient(dvar, coeff)
-
 
     def _set_coefficient_internal(self, dvar, coeff):
         self_terms = self.__terms
@@ -1131,7 +1134,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             return False
 
     def _set_coefficient(self, dvar, coeff):
-        self.check_discrete_lock_frozen()
+        self.check_discrete_lock_frozen(coeff)
         if self._set_coefficient_internal(dvar, coeff):
             self.notify_modified(event=UpdateEvent.LinExprCoef)
 
@@ -1174,9 +1177,13 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def get_constant(self):
         return self._constant
 
+    def set_constant(self, new_constant):
+        self._model._checker.typecheck_num(new_constant)
+        self._set_constant(new_constant)
+
     def _set_constant(self, new_constant):
         if new_constant != self._constant:
-            self.check_discrete_lock_frozen()
+            self.check_discrete_lock_frozen(new_constant)
             self._constant = new_constant
             self.notify_modified(event=UpdateEvent.ExprConstant)
 
@@ -1191,21 +1198,21 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         return dvar in self.__terms
 
-    def equals_expr(self, other):
+    def equals(self, other):
         if is_number(other):
             return self.is_constant() and other == self.constant
-        elif isinstance(other, LinearExpr):
-            if self.constant != other.constant:
+        else:
+            if not isinstance(other, LinearOperand):
                 return False
-            if self.number_of_variables() != other.number_of_variables():
+            if self.constant != other.get_constant():
+                return False
+            if self.number_of_terms() != other.number_of_terms():
                 return False
             for dv, k in self.iter_terms():
-                if k != other[dv]:
+                if k != other.unchecked_get_coef(dv):
                     return False
             else:
                 return True
-        else:
-            return False
 
     # noinspection PyPep8
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.print_name()):
@@ -1424,10 +1431,10 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             if not e.number_of_quadratic_terms:
                 return self.multiply(e.linear_part)
             else:
-                self.fatal("Multiply expects variable, expr or number, got: {0!s}", e)
+                StaticTypeChecker.mul_quad_lin_error(self._model, self, e)
 
         else:
-            self.fatal("Multiply expects variable, expr or number, got: {0!s}", e)
+            self.fatal("Multiply expects variable, expr or number, {0!r} was passed (type is {1})", e, type(e))
 
         self.notify_modified(event=event)
 
@@ -1587,8 +1594,9 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _get_solution_value(self, s=None):
         # INTERNAL: no checks
         val = self._constant
+        sol = s or self._model.solution
         for var, koef in self.iter_terms():
-            val += koef * var._get_solution_value(s)
+            val += koef * sol._get_var_value(var)
         return self._round_if_discrete(val)
 
     def is_discrete(self):
@@ -1603,6 +1611,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         self_cst = self._constant
         if self_cst != int(self_cst):
+            # a float constant with integer value is OK
             return False
 
         for v, k in self.iter_terms():
@@ -1638,7 +1647,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         return True
 
     # INTERNAL
-    __slots__ = ('_subscribers')
+    __slots__ = ('_subscribers',)
 
     def __hash__(self):
         return id(self)
@@ -1740,7 +1749,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
     def __repr__(self):
         return "docplex.mp.ZeroExpr()"
 
-    def equals_expr(self, other):
+    def equals(self, other):
         return isinstance(other, ZeroExpr)
 
     def square(self):

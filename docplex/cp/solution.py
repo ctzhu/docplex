@@ -43,8 +43,12 @@ Detailed description
 
 import docplex.cp.utils as utils
 from docplex.cp.utils import *
-from docplex.cp.expression import CpoExpr, INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, _domain_iterator
+from docplex.cp.expression import CpoVariable, CpoIntVar, CpoIntervalVar, CpoSequenceVar, CpoStateFunction, \
+    INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, _domain_iterator, compare_expressions
 from docplex.cp.parameters import CpoParameters
+import types
+from collections import OrderedDict
+import functools
 
 
 ###############################################################################
@@ -151,34 +155,36 @@ ALL_STOP_CAUSES = (STOP_CAUSE_NOT_STOPPED, STOP_CAUSE_LIMIT, STOP_CAUSE_EXIT, ST
 class CpoVarSolution(object):
     """ This class is a super class of all classes representing a solution to a variable.
     """
-    __slots__ = ('name',  # Variable name
+    __slots__ = ('expr',  # Variable expression
                  )
     
-    def __init__(self, name):
+    def __init__(self, expr):
         """ Constructor:
 
         Args:
-            name: Variable name, or object providing a name with a function get_name() or an attribute 'name'.
+            expr: Variable expression, object of class :class:`~docplex.cp.expression.CpoVariable` or extending class.
         """
-        # Determine name
-        if not is_string(name):
-            try:
-                name = name.get_name()
-            except:
-                try:
-                    name = name.name
-                except:
-                    raise AssertionError("Argument 'name' should be a string, or an object with a method get_name() or an attribute 'name'")
-        self.name = name
+        # Checking already done by extending classes
+        # assert isinstance(expr, CpoVariable), "Expression 'expr' should be a CPO variable expression"
+        self.expr = expr
+
+
+    def get_expr(self):
+        """ Gets the expression of the variable.
+
+        Returns:
+            Model expression of the variable.
+        """
+        return self.expr
 
 
     def get_name(self):
         """ Gets the name of the variable.
 
         Returns:
-            Name of the variable.
+            Name of the variable, None if anonymous.
         """
-        return self.name
+        return self.expr.get_name()
 
 
     def get_value(self):
@@ -200,6 +206,11 @@ class CpoVarSolution(object):
             True if this object is equal to the other, False otherwise
         """
         return utils.equals(self, other)
+
+
+    def __ne__(self, other):
+        """ Overwrite inequality comparison """
+        return not self.__eq__(other)
 
 
     def __hash__(self):
@@ -224,14 +235,15 @@ class CpoIntVarSolution(CpoVarSolution):
     __slots__ = ('value',  # Variable value / domain
                 )
     
-    def __init__(self, name, value):
+    def __init__(self, expr, value):
         """ Constructor:
 
         Args:
-            name:  Variable name
+            expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoIntVar`.
             value: Variable value, or domain if not completely instantiated
         """
-        super(CpoIntVarSolution, self).__init__(name)
+        assert isinstance(expr, CpoIntVar), "Expression 'expr' should be a CpoIntVar expression"
+        super(CpoIntVarSolution, self).__init__(expr)
         self.value = _check_arg_domain(value, 'value')
 
     def domain_iterator(self):
@@ -268,17 +280,18 @@ class CpoIntervalVarSolution(CpoVarSolution):
                  'presence', # Presence indicator
                 )
     
-    def __init__(self, name, presence=None, start=None, end=None, size=None):
-        # """ Constructor:
-        #
-        # Args:
-        #     name:     Name of the variable.
-        #     presence: Presence indicator (True for present, False for absent, None for undetermined). Default is None.
-        #     start:    Value of start, or tuple representing the start range. Default is None.
-        #     end:      Value of end, or tuple representing the end range. Default is None.
-        #     size:     Value of size, or tuple representing the size range. Default is None.
-        # """
-        super(CpoIntervalVarSolution, self).__init__(name)
+    def __init__(self, expr, presence=None, start=None, end=None, size=None):
+        """ Constructor:
+
+        Args:
+            expr:     Variable expression, object of class :class:`~docplex.cp.expression.CpoIntervalVar`.
+            presence: Presence indicator (True for present, False for absent, None for undetermined). Default is None.
+            start:    Value of start, or tuple representing the start range. Default is None.
+            end:      Value of end, or tuple representing the end range. Default is None.
+            size:     Value of size, or tuple representing the size range. Default is None.
+        """
+        assert isinstance(expr, CpoIntervalVar), "Expression 'expr' should be a CpoIntervalVar expression"
+        super(CpoIntervalVarSolution, self).__init__(expr)
         self.presence = presence
         self.start    = start
         self.end      = end
@@ -406,13 +419,15 @@ class CpoSequenceVarSolution(CpoVarSolution):
     __slots__ = ('lvars',  # List of interval variable solutions
                 )
     
-    def __init__(self, name, lvars):
+    def __init__(self, expr, lvars):
         """ Constructor:
 
         Args:
+            expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoSequenceVar`.
             lvars: List of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
         """
-        super(CpoSequenceVarSolution, self).__init__(name)
+        assert isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
+        super(CpoSequenceVarSolution, self).__init__(expr)
         self.lvars = lvars
 
 
@@ -448,13 +463,15 @@ class CpoStateFunctionSolution(CpoVarSolution):
     __slots__ = ('steps',  # List of function steps
                 )
     
-    def __init__(self, name, steps):
+    def __init__(self, expr, steps):
         """ Constructor:
 
         Args:
+            expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoStateFunction`.
             steps: List of function steps represented as tuples (start, end, value).
         """
-        super(CpoStateFunctionSolution, self).__init__(name)
+        assert isinstance(expr, CpoStateFunction), "Expression 'expr' should be a CpoStateFunction expression"
+        super(CpoStateFunctionSolution, self).__init__(expr)
         self.steps = steps
 
 
@@ -498,20 +515,22 @@ class CpoModelSolution(object):
     that can be passed to the model to optimize its solve
     (see :meth:`docplex.cp.model.CpoModel.set_starting_point` for details).
     """
-    __slots__ = ('var_solutions',     # Map of variable solutions
-                 'objective_values',  # Objective values
-                 'objective_bounds',  # Objective bound values
-                 'objective_gaps',    # Objective gap values
-                 'kpi_values',        # Values of the KPIs
+    __slots__ = ('var_solutions_dict',  # Map of variable solutions. Key is expression id or variable name, value depends on variable
+                 'var_solutions_list',  # List of variable solutions. Value depends on variable
+                 'objective_values',    # Objective values
+                 'objective_bounds',    # Objective bound values
+                 'objective_gaps',      # Objective gap values
+                 'kpi_values',          # Values of the KPIs
                  )
 
     def __init__(self):
         super(CpoModelSolution, self).__init__()
-        self.var_solutions = {}
+        self.var_solutions_dict = {}
+        self.var_solutions_list = []
         self.objective_values = None
         self.objective_bounds = None
         self.objective_gaps = None
-        self.kpi_values = {}
+        self.kpi_values = OrderedDict()
 
 
     def get_objective_values(self):
@@ -565,51 +584,80 @@ class CpoModelSolution(object):
         Args:
             vsol: Variable solution (object of a class extending :class:`CpoVarSolution`)
         """
-        assert isinstance(vsol, CpoVarSolution)
-        self.var_solutions[vsol.get_name()] = vsol
+        assert isinstance(vsol, CpoVarSolution), "Parameter 'vsol' should be an instance of CpoVarSolution"
+        self.var_solutions_list.append(vsol)
+
+        # Add to the dictionary with 2 keys
+        var = vsol.expr
+        self.var_solutions_dict[id(var)] = vsol
+        vname = var.get_name()
+        if vname:
+            self.var_solutions_dict[vname] = vsol
 
 
-    def add_integer_var_solution(self, name, value):
-        """ Add a new integer variable solution from its name and value.
+    def add_var(self, var, value=None, presence=None, start=None, end=None, size=None):
+        """ Add a solution to a integer or interval variable.
+
+        Args:
+            var:                 CPO variable (object of a class extending :class:`~docplex.cp.expression.CpoVariable`)
+            value (Optional):    Value of the variable if the variable is a integer variable.
+                                 Can be a domain if variable is not completely instantiated.
+            presence (Optional): Presence indicator (true for present, false for absent, None for undetermined),
+                                 if the variable is an interval variable.
+            start (Optional):    Value of start, or tuple representing the start range,
+                                 if the variable is an interval variable.
+            end (Optional):      Value of end, or tuple representing the end range,
+                                 if the variable is an interval variable.
+            size (Optional):     Value of size, or tuple representing the size range,
+                                 if the variable is an interval variable.
+        """
+        if isinstance(var, CpoIntVar):
+            self.add_var_solution(CpoIntVarSolution(var, value))
+        elif isinstance(var, CpoIntervalVar):
+            self.add_var_solution(CpoIntervalVarSolution(var, presence, start, end, size))
+        else:
+            raise AssertionError("Argument 'var' should be an instance of CpoIntVar or CpoIntervalVar")
+
+
+    def add_integer_var_solution(self, var, value):
+        """ Add a new integer variable solution.
 
         The solution can be complete if the value is a single integer, or partial if the value
         is a domain, given as a list of integers or intervals expressed as tuples.
 
         Args:
-            name:  Variable name
+            var:   Variable expression, object of class :class:`~docplex.cp.expression.CpoIntVar`.
             value: Variable value, or domain if not completely instantiated
         """
-        self.add_var_solution(CpoIntVarSolution(name, value))
+        self.add_var_solution(CpoIntVarSolution(var, value))
 
 
-    def add_interval_var_solution(self, name, presence=None, start=None, end=None, size=None):
+    def add_interval_var_solution(self, var, presence=None, start=None, end=None, size=None):
         """ Add a new interval variable solution.
 
         The solution can be complete if all attribute values are integers, or partial if at least one
         of them is an interval expressed as a tuple.
 
         Args:
-            name:     Name of the variable.
+            var:      Variable expression, object of class :class:`~docplex.cp.expression.CpoIntervalVar`.
             presence: Presence indicator (true for present, false for absent, None for undetermined). Default is None.
             start:    Value of start, or tuple representing the start range
             end:      Value of end, or tuple representing the end range
             size:     Value of size, or tuple representing the size range
         """
-        self.add_var_solution(CpoIntervalVarSolution(name, presence, start, end, size))
+        self.add_var_solution(CpoIntervalVarSolution(var, presence, start, end, size))
 
 
-    def get_var_solution(self, name):
+    def get_var_solution(self, expr):
         """ Gets a variable solution from this model solution.
 
         Args:
-            name: Variable name or variable expression.
+            expr: Variable expression or variable name if any
         Returns:
             Variable solution (class extending :class:`CpoVarSolution`),
-            None if variable not found
+            None if variable is not found
         """
-        if isinstance(name, CpoExpr):
-            name = name.name
-        return self.var_solutions.get(name)
+        return self.var_solutions_dict.get(expr) if is_string(expr) else self.var_solutions_dict.get(id(expr))
 
 
     def get_all_var_solutions(self):
@@ -618,10 +666,10 @@ class CpoModelSolution(object):
         Returns:
             List of all variable solutions (class extending :class:`CpoVarSolution`).
         """
-        return list(self.var_solutions.values())
+        return self.var_solutions_list
 
 
-    def get_value(self, name):
+    def get_value(self, expr):
         """ Gets the value of a variable.
 
         This method first find the variable with :meth:`get_var_solution` and, if exists,
@@ -635,30 +683,31 @@ class CpoModelSolution(object):
          * :meth:`CpoStateFunctionSolution.get_value`
 
         Args:
-            name: Variable name, or model variable descriptor.
+            expr: Variable expression
         Returns:
             Variable value, None if variable is not found.
         """
-        var = self.get_var_solution(name)
+        var = self.get_var_solution(expr)
         return None if var is None else var.get_value()
 
 
-    def add_kpi(self, name, var):
-        """ Add a KPI to this solution
+    def add_kpi(self, name, value):
+        """ Add a KPI value to this solution
 
         Args:
             name:  Name of the KPI
             var:   Model variable representing this KPI
         """
-        self.kpi_values[name] = self.get_value(var)
+        self.kpi_values[name] = value
 
 
     def get_kpis(self):
         """ Get the solution kpis
 
         Returns:
-            Dictionary containing value of the KPIs that have been defined in the model.
+            Ordered dictionary containing value of the KPIs that have been defined in the model.
             Key is KPI publish name, value is expression value.
+            Keys are sorted in the order the KPIs have been defined.
         """
         return self.kpi_values
 
@@ -669,15 +718,17 @@ class CpoModelSolution(object):
         Returns:
             True if there is no objective value and no variable
         """
-        return (self.objective_values is None) and (not self.var_solutions)
+        return (self.objective_values is None) and (not self.var_solutions_dict)
 
 
-    def _add_json_solution(self, jsol, prms):
+    def _add_json_solution(self, jsol, expr_map, model, prms):
         """ Add a json solution to this solution descriptor
 
         Args:
-            jsol: JSON document representing solution.
-            prms: Solving parameters
+            jsol:     JSON document representing solution.
+            expr_map: Map of model expressions. Key is name in JSON document, value is corresponding model expression.
+            model:    Source model
+            prms:     Solving parameters
         """
         # Add objectives
         ovals = jsol.get('objectives')
@@ -711,47 +762,83 @@ class CpoModelSolution(object):
         # Add integer variables
         vars = jsol.get('intVars', ())
         for vname in vars:
-            self.add_var_solution(CpoIntVarSolution(vname, _get_domain(vars[vname])))
+            var = _get_expr_from_map(expr_map, vname)
+            self.add_var_solution(CpoIntVarSolution(var, _get_domain(vars[vname])))
 
         # Add interval variables
         vars = jsol.get('intervalVars', ())
         for vname in vars:
+            var = _get_expr_from_map(expr_map, vname)
             v = vars[vname]
             if 'start' in v:
                 # Check partially instanciated
                 if 'presence' in v:
-                    vsol = CpoIntervalVarSolution(vname,  True if v['presence'] == 1 else None,
+                    vsol = CpoIntervalVarSolution(var,  True if v['presence'] == 1 else None,
                                                   _get_domain(v['start']), _get_domain(v['end']), _get_domain(v['size']))
                     vsol.length = _get_domain(v['length'])
                 else:
-                    vsol = CpoIntervalVarSolution(vname, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
+                    vsol = CpoIntervalVarSolution(var, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
             else:
-                vsol = CpoIntervalVarSolution(vname, False)
+                vsol = CpoIntervalVarSolution(var, False)
             self.add_var_solution(vsol)
 
-        # Add sequence variables
+        # Add sequence variables (MUST be done after single variables)
         vars = jsol.get('sequenceVars', ())
         for vname in vars:
+            var = _get_expr_from_map(expr_map, vname)
             vnlist = [v for v in vars[vname]]
             ivres = [self.get_var_solution(vn) for vn in vnlist]
-            self.add_var_solution(CpoSequenceVarSolution(vname, ivres))
+            self.add_var_solution(CpoSequenceVarSolution(var, ivres))
 
         # Add state functions
         funs = jsol.get('stateFunctions', ())
         for fname in funs:
+            fun = _get_expr_from_map(expr_map, fname)
             lpts = [( _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['value'])) for v in funs[fname]]
-            self.add_var_solution(CpoStateFunctionSolution(fname, lpts))
+            self.add_var_solution(CpoStateFunctionSolution(fun, lpts))
+
+        # Set kpis
+        kpis = model.get_kpis()
+        for name, expr in kpis.items():
+            self.add_kpi(name, self._eval_kpi(expr))
 
 
-    def __getitem__(self, name):
+    def _eval_kpi(self, expr):
+        """ Evaluate a KPI expression
+
+        Args:
+            expr: KPI expression
+        Returns
+            Value of the KPI
+        """
+        # Check if expression is a lambda
+        if isinstance(expr, types.FunctionType):
+            return expr(self)
+
+        # Expression is a variable
+        return self.get_value(expr)
+
+
+    def __getitem__(self, expr):
         """ Overloading of [] to get a variable solution from this model solution
 
         Args:
-            name: Variable name or CPO variable expression
+            expr: Variable expression or variable name if any
         Returns:
             Variable solution (class CpoVarSolution)
         """
-        return(self.get_value(name))
+        return self.get_value(expr)
+
+
+    def __contains__(self, expr):
+        """ Overloading of 'in' to check that a variable solution is in this model solution
+
+        Args:
+            expr: Variable expression or variable name if any
+        Returns:
+            True if this model solution contains a solution for this variable.
+        """
+        return self.get_var_solution(expr) is not None
 
 
     def print_solution(self, out=None):
@@ -760,45 +847,50 @@ class CpoModelSolution(object):
         If the given output is a string, it is considered as a file name that is opened by this method
         using 'utf-8' encoding.
 
+        DEPRECATED. Use :meth:`write` instead.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
-        # Select appropriate output
-        if out is None:
-            out = sys.stdout
+        self.write(out)
 
+
+    def write(self, out=None):
+        """ Write the solution.
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        Args:
+            out (Optional): Target output stream or file name. If not given, default value is sys.stdout.
+        """
         # Check file
         if is_string(out):
             with open_utf8(os.path.abspath(out), mode='w') as f:
-                self._write_solution(f)
-        else:
-            self._write_solution(out)
+                self.write(f)
+                return
+        # Check default output
+        if out is None:
+            out = sys.stdout
 
-
-    def _write_solution(self, out):
-        """ Write the solution
-
-        Args:
-            out: Target output
-        """
         # Print objective value
         ovals = self.get_objective_values()
         if ovals:
-            out.write("Objective values: {}\n".format(ovals))
+            out.write(u"Objective values: {}\n".format(ovals))
         # Print objective bounds
         bvals = self.get_objective_bounds()
         if bvals:
-            out.write("          bounds: {}\n".format(bvals))
+            out.write(u"          bounds: {}\n".format(bvals))
         # Print objective gaps
         gvals = self.get_objective_gaps()
         if gvals:
-            out.write("          gaps: {}\n".format(gvals))
-        # Print all variables in name order
-        lvars = sorted(self.var_solutions.keys())
+            out.write(u"          gaps: {}\n".format(gvals))
+        # Print all variables in natural name order
+        lvars = [v for v in self.get_all_var_solutions() if v.get_name()]
+        lvars = sorted(lvars, key=functools.cmp_to_key(lambda v1, v2: compare_expressions(v1.expr, v2.expr)))
         for v in lvars:
-            out.write(str(self.get_var_solution(v)))
-            out.write('\n')
-
+            out.write(str(v))
+            out.write(u'\n')
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -809,6 +901,10 @@ class CpoModelSolution(object):
             True if this object is equal to the other, False otherwise
         """
         return utils.equals(self, other)
+
+    def __ne__(self, other):
+        """ Overwrite inequality comparison """
+        return not self.__eq__(other)
 
 
 class CpoRunResult(object):
@@ -1198,11 +1294,12 @@ class CpoSolveResult(CpoRunResult):
         return self.solution.get_value(name)
 
 
-    def _add_json_solution(self, jsol):
+    def _add_json_solution(self, jsol, expr_map):
         """ Add a json solution to this solution descriptor
 
         Args:
-            jsol:   JSON document representing solution.
+            jsol:     JSON document representing solution.
+            expr_map: Map of model expressions. Key is name in JSON document, value is corresponding model expression.
         """
         # Notify run result about JSON document
         self._set_json_doc(jsol)
@@ -1230,13 +1327,7 @@ class CpoSolveResult(CpoRunResult):
             self.solver_infos.update(cpinf)
 
         # Add solution
-        self.solution._add_json_solution(jsol, self.parameters)
-
-        # Set kpis
-        kpis = self.get_model().get_kpis()
-        for k, v in kpis.items():
-            self.solution.add_kpi(k, v)
-
+        self.solution._add_json_solution(jsol, expr_map, self.model, self.parameters)
 
 
     def __getitem__(self, name):
@@ -1256,64 +1347,68 @@ class CpoSolveResult(CpoRunResult):
         If the given output is a string, it is considered as a file name that is opened by this method
         using 'utf-8' encoding.
 
+        DEPRECATED. Use write() instead.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
-        # Select appropriate output
-        if out is None:
-            out = sys.stdout
+        self.write(out)
 
+
+    def write(self, out=None):
+        """ Write the solve result
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        Args:
+            out (Optional): Target output stream or file name. If not given, default value is sys.stdout.
+        """
         # Check file
         if is_string(out):
             with open_utf8(os.path.abspath(out), mode='w') as f:
-                self._write_solution(f)
-        else:
-            self._write_solution(out)
+                self.write(f)
+                return
+        # Check default output
+        if out is None:
+            out = sys.stdout
 
-
-    def _write_solution(self, out):
-        """ Write the solution
-
-        Args:
-            out: Target output
-        """
         # Print model attributes
         sinfos = self.get_solver_infos()
-        out.write("-------------------------------------------------------------------------------\n")
-        out.write("Model constraints: " + str(sinfos.get_number_of_constraints()))
-        out.write(", variables: integer: " + str(sinfos.get_number_of_integer_vars()))
-        out.write(", interval: " + str(sinfos.get_number_of_interval_vars()))
-        out.write(", sequence: " + str(sinfos.get_number_of_sequence_vars()))
-        out.write('\n')
+        out.write(u"-------------------------------------------------------------------------------\n")
+        out.write(u"Model constraints: " + str(sinfos.get_number_of_constraints()))
+        out.write(u", variables: integer: " + str(sinfos.get_number_of_integer_vars()))
+        out.write(u", interval: " + str(sinfos.get_number_of_interval_vars()))
+        out.write(u", sequence: " + str(sinfos.get_number_of_sequence_vars()))
+        out.write(u'\n')
 
         # Print search/solve status
-        #out.write("Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
-        out.write("Solve status: " + str(self.get_solve_status()) + "\n")
+        #out.write(u"Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
+        out.write(u"Solve status: " + str(self.get_solve_status()) + "\n")
         s = self.get_search_status()
         if s:
-            out.write("Search status: " + str(s))
+            out.write(u"Search status: " + str(s))
             s = self.get_stop_cause()
             if s:
-                out.write(", stop cause: " + str(s))
-            out.write("\n")
+                out.write(u", stop cause: " + str(s))
+            out.write(u"\n")
 
             # Print solve time
-        out.write("Solve time: " + str(round(self.get_solve_time(), 2)) + " sec\n")
-        out.write("-------------------------------------------------------------------------------\n")
+        out.write(u"Solve time: " + str(round(self.get_solve_time(), 2)) + " sec\n")
+        out.write(u"-------------------------------------------------------------------------------\n")
 
-        self.solution._write_solution(out)
-
+        self.solution.write(out)
 
     def __str__(self):
         """ Build a string representation of this object.
 
-        The string that is returned is the same than what is printed by calling :meth:`print_solution`.
+        The string that is returned is the same than what is printed by calling :meth:`write`.
 
         Returns:
             String representation of this object.
         """
         out = StringIO()
-        self._write_solution(out)
+        self.write(out)
         res = out.getvalue()
         out.close()
         return res
@@ -1329,6 +1424,9 @@ class CpoSolveResult(CpoRunResult):
         """
         return utils.equals(self, other)
 
+    def __ne__(self, other):
+        """ Overwrite inequality comparison """
+        return not self.__eq__(other)
 
 
 class CpoRefineConflictResult(CpoRunResult):
@@ -1430,11 +1528,12 @@ class CpoRefineConflictResult(CpoRunResult):
         return self.is_conflict()
 
 
-    def _add_json_solution(self, jsol):
+    def _add_json_solution(self, jsol, expr_map):
         """ Add a json solution to this result descriptor
 
         Args:
-            jsol:   JSON document representing result, or string containing its JSON representation.
+            jsol:     JSON document representing solution.
+            expr_map: Map of model expressions. Key is name in JSON document, value is corresponding model expression.
         """
         # Notify run result about JSON document
         self._set_json_doc(jsol)
@@ -1446,9 +1545,7 @@ class CpoRefineConflictResult(CpoRunResult):
 
         # Add constraints
         for name, status in conflict.get('constraints', {}).items():
-            expr = self.model.get_expression(name)
-            if expr is None:
-                raise CpoException("INTERNAL ERROR: Conflict refiner returns a constraint '{}' that is not found in the model".format(name))
+            expr = _get_expr_from_map(expr_map, name)
             if status == 'ConflictMember':
                 self.member_constraints.append(expr)
             else:
@@ -1458,9 +1555,7 @@ class CpoRefineConflictResult(CpoRunResult):
         vars = conflict.get('intVars', {}).copy()
         vars.update(conflict.get('intervalVars', {}))
         for name, status in vars.items():
-            expr = self.model.get_expression(name)
-            if expr is None:
-                raise CpoException("INTERNAL ERROR: Conflict refiner returns a variable '{}' that is not found in the model".format(name))
+            expr = _get_expr_from_map(expr_map, name)
             if status == 'ConflictMember':
                 self.member_variables.append(expr)
             else:
@@ -1473,65 +1568,70 @@ class CpoRefineConflictResult(CpoRunResult):
         If the given output is a string, it is considered as a file name that is opened by this method
         using 'utf-8' encoding.
 
+        DEPRECATED. Use :meth:`write` instead.
+
         Args:
             out: Target output stream or output file, standard output if not given.
         """
-        # Select appropriate output
-        if out is None:
-            out = sys.stdout
+        self.write(out)
 
+
+    def write(self, out=None):
+        """ Write the conflict
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        Args:
+            out (Optional): Target output stream or file name. If not given, default value is sys.stdout.
+        """
         # Check file
         if is_string(out):
             with open_utf8(os.path.abspath(out), mode='w') as f:
-                self._write_conflict(f)
-        else:
-            self._write_conflict(out)
+                self.write(f)
+                return
+        # Check default output
+        if out is None:
+            out = sys.stdout
 
-
-    def _write_conflict(self, out):
-        """ Write the conflict
-
-        Args:
-            out: Target output
-        """
-        out.write("Conflict refiner result:\n")
+        out.write(u"Conflict refiner result:\n")
         if not self.is_conflict():
-            out.write("   No conflict\n")
+            out.write(u"   No conflict\n")
             return
         # Print constraints in the conflict
         lc = self.get_all_member_constraints()
         if lc:
-            out.write("Member constraints:\n")
+            out.write(u"Member constraints:\n")
             for c in lc:
-                out.write("   {}\n".format(_build_conflict_constraint_string(c)))
+                out.write(u"   {}\n".format(_build_conflict_constraint_string(c)))
         lc = self.get_all_possible_constraints()
         if lc:
-            out.write("Possible member constraints:\n")
+            out.write(u"Possible member constraints:\n")
             for c in lc:
-                out.write("   {}\n".format(_build_conflict_constraint_string(c)))
+                out.write(u"   {}\n".format(_build_conflict_constraint_string(c)))
         # Print variables in the conflict
         lc = self.get_all_member_variables()
         if lc:
-            out.write("Member variables:\n")
+            out.write(u"Member variables:\n")
             for c in lc:
-                out.write("   {}\n".format(c))
+                out.write(u"   {}\n".format(c))
         lc = self.get_all_possible_variables()
         if lc:
-            out.write("Possible member variables:\n")
+            out.write(u"Possible member variables:\n")
             for c in lc:
-                out.write("   {}\n".format(c))
+                out.write(u"   {}\n".format(c))
 
 
     def __str__(self):
         """ Build a string representation of this object.
 
-        The string that is returned is the same than what is printed by calling :meth:`print_conflict`.
+        The string that is returned is the same than what is printed by calling :meth:`write`.
 
         Returns:
             String representation of this object.
         """
         out = StringIO()
-        self._write_conflict(out)
+        self.write(out)
         res = out.getvalue()
         out.close()
         return res
@@ -1553,7 +1653,7 @@ class CpoSolverInfos(InfoDict):
 
     This class groups various information returned by the solver at the end of the solve.
     It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
-    the methods such as :meth:`~docplex.cp.utils.InfoDict.print_infos` that allows to easily print
+    the methods such as :meth:`~docplex.cp.utils.InfoDict.write` that allows to easily print
     the full content of the information structure.
     """
 
@@ -1620,13 +1720,12 @@ class CpoSolverInfos(InfoDict):
         return self.get(CpoSolverInfos.SOLVE_TIME, -1)
 
 
-
 class CpoProcessInfos(InfoDict):
-    """ Dictionary of various process informations.
+    """ Dictionary of various process information.
 
     This class groups various information related to the processing of the model by the Python API.
     It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
-    the methods such as :meth:`~docplex.cp.utils.InfoDict.print_infos` that allows to easily print
+    the methods such as :meth:`~docplex.cp.utils.InfoDict.write` that allows to easily print
     the full content of the information structure.
     """
 
@@ -1668,6 +1767,12 @@ class CpoProcessInfos(InfoDict):
 
     # Attribute name for size of the log data
     LOG_DATA_SIZE = "LogDataSize"
+
+    # Total size of data sent to solver
+    TOTAL_SENT_DATA_SIZE = "TotalSentDataSize"
+
+    # Total size of data received from solver
+    TOTAL_RECEIVED_DATA_SIZE = "TotalReceivedDataSize"
 
 
     def __init__(self):
@@ -1829,5 +1934,20 @@ def _is_below_tolerance(val, bnd, rt, at):
        val = -val
        bnd = -bnd
     return (val - at < bnd) or (val * (1 - rt) < bnd)
+
+
+def _get_expr_from_map(expr_map, id):
+    """ Retrieve a model expression from the map of CPO ids for expressions
+    Args:
+        expr_map: Map of model expressions. Key is name in JSON document, value is corresponding model expression.
+    Returns:
+        Model expression
+    Raises:
+        CpoException if expression is not found (should not happen)
+    """
+    expr = expr_map.get(id)
+    if expr is None:
+        raise CpoException("INTERNAL ERROR: Solve result refers to '{}' that is not found in the map of expressions".format(id))
+    return expr
 
 

@@ -19,8 +19,8 @@ from docplex.mp.xcounter import update_dict_from_item_value
 
 
 class AdvAggregator(ModelAggregator):
-    def __init__(self, linear_factory, quad_factory, ordered, counter_type):
-        ModelAggregator.__init__(self, linear_factory, quad_factory, ordered, counter_type)
+    def __init__(self, linear_factory, quad_factory, counter_type):
+        ModelAggregator.__init__(self, linear_factory, quad_factory, counter_type)
 
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
@@ -35,10 +35,13 @@ class AdvAggregator(ModelAggregator):
             number_validation_fn = checker.get_number_validation_fn()
             if number_validation_fn:
                 for dvar, coef in izip(terms, coefs):
-                    lcc_setitem(lcc, dvar, number_validation_fn(coef))
+                    safe_coef = number_validation_fn(coef)
+                    if safe_coef:
+                        lcc_setitem(lcc, dvar, safe_coef)
             else:
                 for dvar, coef in izip(terms, coefs):
-                    lcc_setitem(lcc, dvar, coef)
+                    if coef:  # zero test is much cheaper than a setitem
+                        lcc_setitem(lcc, dvar, coef)
 
             return self._to_expr(qcc=None, lcc=lcc)
 
@@ -141,7 +144,7 @@ class AdvAggregator(ModelAggregator):
         dcc = self._quad_factory.term_dict_type
         qterms = dcc()
 
-        gen_rows = self._generate_rows(matrix)
+        gen_rows = self.generate_rows(matrix)
 
         for i, mrow in enumerate(gen_rows):
             vi = lvars[i]
@@ -160,6 +163,7 @@ class AdvAggregator(ModelAggregator):
 
         return self._to_expr(qcc=qterms)
 
+    # noinspection PyUnusedLocal
     def _sparse_quad_matrix_sum(self, sp_coef_mat, lvars, symmetric=False):
         # assume matrix is a NxN matrix
         # vars is a N-vector of variables
@@ -200,11 +204,32 @@ class AdvModel(Model):
 
         Model.__init__(self, name=name, context=context, **kwargs)
         self._aggregator = AdvAggregator(self._lfactory, self._qfactory,
-                                         ordered=self.keep_ordering,
                                          counter_type=self._term_dict_type)
 
-    def sum_vars(self, terms):
-        return self._aggregator._sum_vars(terms)
+    def _prepare_constraint(self, ct, ctname, check_for_trivial_ct, arg_checker=None):
+        # INTERNAL
+        if ct is True:
+            return False
+
+        elif ct is False:
+            # happens with sum([]) and constant e.g. sum([]) == 2
+            msg = "Adding a trivially infeasible constraint"
+            if ctname:
+                msg += ' with name: {0}'.format(ctname)
+            # analogous to 0 == 1, model is sure to fail
+            self.fatal(msg)
+
+        else:
+            pass
+
+        # --- name management ---
+        if ctname:
+            ct_name_map = self._cts_by_name
+            if ct_name_map is not None:
+                ct_name_map[ctname] = ct
+            ct.name = ctname
+        # ---
+        return True
 
     def sum_vars_all_different(self, terms):
         """

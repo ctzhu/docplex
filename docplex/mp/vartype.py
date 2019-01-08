@@ -28,6 +28,10 @@ class VarType(object):
         return self._cpx_typecode
 
     @property
+    def cplex_typecode(self):
+        return self._cpx_typecode
+
+    @property
     def short_name(self):
         """ This property returns a short name string for the type.
         """
@@ -116,14 +120,6 @@ class VarType(object):
     def __str__(self):
         return self.to_string()
 
-    def is_default_lb(self, domain_lb):
-        return domain_lb == self._lb
-
-    def is_default_ub(self, domain_ub):
-        # INTERNAL
-        # use equality here: output user data whenever different from default
-        return domain_ub == self._ub
-
     def one_letter_symbol(self):
         # INTERNAL: returns B,I,C
         return self.get_cplex_typecode()
@@ -194,7 +190,7 @@ class ContinuousVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="float", lb=0, ub=plus_infinity, cplex_typecode='C')
+        VarType.__init__(self, short_name="continuous", lb=0, ub=plus_infinity, cplex_typecode='C')
         self._plus_infinity = plus_infinity
         self._minus_infinity = - plus_infinity
 
@@ -237,7 +233,7 @@ class IntegerVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="int", lb=0, ub=plus_infinity, cplex_typecode='I')
+        VarType.__init__(self, short_name="integer", lb=0, ub=plus_infinity, cplex_typecode='I')
         self._plus_infinity = plus_infinity
         self._minus_infinity = -plus_infinity
 
@@ -280,7 +276,7 @@ class SemiContinuousVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
+        VarType.__init__(self, short_name="semi-continuous", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
         self._plus_infinity = plus_infinity
 
     def compute_ub(self, candidate_ub, logger):
@@ -291,10 +287,6 @@ class SemiContinuousVarType(VarType):
             logger.fatal(
                 'semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
-
-    def is_default_lb(self, domain_lb):
-        # any lb is nondefault
-        return False
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -332,7 +324,7 @@ class SemiIntegerVarType(VarType):
     """
 
     def __init__(self, plus_infinity=1e+20):
-        VarType.__init__(self, short_name="semi", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
+        VarType.__init__(self, short_name="semi-integer", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
         self._plus_infinity = plus_infinity
 
     def compute_ub(self, candidate_ub, logger):
@@ -342,10 +334,6 @@ class SemiIntegerVarType(VarType):
         if candidate_lb <= 0:
             logger.fatal('semi-integer variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
-
-    def is_default_lb(self, domain_lb):
-        # any lb is nondefault
-        return False
 
     def is_discrete(self):
         """ Checks if this is a discrete type.

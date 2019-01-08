@@ -32,4 +32,11 @@ class StaticTypeChecker(object):
     @classmethod
     def typecheck_discrete_constraint(cls, logger, ct, msg):
         if not ct.is_discrete():
-            logger.fatal('{0}, not {1!s}', msg, ct)
+            logger.fatal('{0}, {1!s} is not discrete', msg, ct)
+
+
+    @classmethod
+    def mul_quad_lin_error(cls, logger, f1, f2):
+        logger.fatal(
+            "Cannot multiply {0!s} by {1!s}, some terms would have degree > 3. Maximum polynomial degree is 2.",
+            f1, f2)

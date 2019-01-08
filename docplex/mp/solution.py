@@ -9,6 +9,7 @@ from __future__ import print_function
 import json
 import math
 import sys
+import copy
 
 import six
 
@@ -19,7 +20,7 @@ except ImportError:  # pragma: no cover
 
 from six import iteritems, iterkeys
 
-from docplex.mp.compat23 import StringIO
+from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import SolveAttribute
 from docplex.mp.utils import is_iterable, is_number, is_string, str_holo, OutputStreamAdapter
 from docplex.mp.utils import make_output_path2, DOcplexException
@@ -79,26 +80,41 @@ class SolveSolution(object):
         self.__round_discrete = rounding
         self._solve_status = None
         self._keep_zeros = keep_zeros
+        self._solve_details = None
 
         if var_value_map is not None:
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
     @staticmethod
-    def make_engine_solution(model, var_value_map=None, obj=None, location=None, solve_status=None):
+    def make_engine_solution(model, var_value_map, obj, solved_by, solve_details, job_solve_status=None):
         # INTERNAL
         sol = SolveSolution(model,
                             var_value_map=None,
                             obj=obj,
-                            solved_by=location,
+                            solved_by=solved_by,
                             rounding=True,
                             keep_zeros=False)
+        sol._solve_details = copy.copy(solve_details)
         # trust engines
         for var, value in iteritems(var_value_map):
-            if 0 != value:
+            if value:
                 sol._set_var_value_internal(var=var, value=value, rounding=True, do_warn_on_non_discrete=False, )
-        if solve_status is not None:
-            sol._set_solve_status(solve_status)
+        if job_solve_status is not None:
+            sol._set_solve_status(job_solve_status)
         return sol
+
+    @classmethod
+    def make_solution_from_values_objective(cls, mdl, values, objective, name=None, rounding=True, keep_zeros=False):
+        # values is a list of var values one for each variables
+        if len(values) != mdl.number_of_variables:
+            mdl.fatal("Sequence of variable values must have len {0}, a sequence of len {1} as passed"
+                      .format(mdl.number_of_variables, len(values)))
+        else:
+            sol = SolveSolution(mdl, var_value_map={}, obj=objective,
+                                rounding=rounding, keep_zeros=keep_zeros, name=name)
+            for dvar, val in izip(mdl.iter_variables(), values):
+                sol._set_var_value_internal(dvar, val, rounding=rounding, do_warn_on_non_discrete=False)
+            return sol
 
     def _get_var_by_name(self, varname):
         return self.__model.get_var_by_name(varname)
@@ -210,20 +226,19 @@ class SolveSolution(object):
 
     def _set_var_value_internal(self, var, value, rounding, do_warn_on_non_discrete):
         # INTERNAL, no check
-        stored_value = value
-        if var.is_discrete():
-            if not self._is_discrete_value(value):
-                if rounding:
-                    stored_value = self.model.round_nearest(value)
-                if do_warn_on_non_discrete:
-                    if rounding:
-                        self.error_handler.warning(
-                            "Trying to assign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
-                            (var, value, stored_value))
-                    else:
-                        self.error_handler.warning(
-                            "Discrete variable {0!r} has been assigned non-discrete value: {1}",
-                            (var, value))
+        if var.is_discrete() and rounding and not self._is_discrete_value(value):
+            stored_value = self.model.round_nearest(value)
+        else:
+            stored_value = value
+            # if do_warn_on_non_discrete:
+            #     if rounding:
+            #         self.error_handler.warning(
+            #             "Trying to assign non-discrete value: {1} to discrete variable {0} - rounded to {2}",
+            #             (var, value, stored_value))
+            #     else:
+            #         self.error_handler.warning(
+            #             "Discrete variable {0!r} has been assigned non-discrete value: {1}",
+            #             (var, value))
         # ---
         self.__var_value_map[var] = stored_value
 
@@ -239,10 +254,20 @@ class SolveSolution(object):
 
     @property
     def solve_details(self):
+        """ This property returns the solve_details associated with the solution,if any.
+
+        Note:
+            This property returns an instance of solve details if the solution is the result
+            of a solve operation. If the solution has been created by API, this property returns None
+
+        See Also:
+            :class:`docplex.mp.sdetails.SolveDetails`
+
+        Returns:
+            an instance of SolveDetails, or None.
+
         """
-        This property returns the solve_details associated with the solution.
-        """
-        return self.__model.solve_details
+        return self._solve_details
 
     @property
     def error_handler(self):
@@ -363,22 +388,35 @@ class SolveSolution(object):
     def __contains__(self, dvar):
         return self.contains(dvar)
 
-    def get_value(self, dvar_arg):
+    def get_value(self, arg):
         """
-        Gets the value of a solution variable in a solution.
+        Gets the value of a variable or an expression in a solution.
         If the variable is not mentioned in the solution,
         the method returns 0 and does not raise an exception.
-        Note that this method can also be used as :func:`solution[dvar]`
+        Note that this method can also be used as :func:`solution[arg]`
         because the :func:`__getitem__` method has been overloaded.
 
         Args:
-            dvar_arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
+            arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string),
+                 or an expression.
 
         Returns:
             float: The value of the variable in the solution.
         """
-        dvar = self._resolve_var(dvar_arg, do_raise=True)
-        return self.__var_value_map.get(dvar, 0)
+        if is_string(arg):
+            var = self._get_var_by_name(arg)
+            if var is None:
+                self.model.fatal("No variable with name: {0}", arg)
+            else:
+                return self._get_var_value(var)
+        elif isinstance(arg, Var):
+            return self._get_var_value(arg)
+        else:
+            try:
+                v = arg._get_solution_value(self)
+                return v
+            except AttributeError:
+                self.__model.fatal("Expecting variable, variable name or expression, {0!r} was passed", arg)
 
     def get_var_value(self, dvar):
         self._checker.typecheck_var(dvar)
@@ -412,6 +450,12 @@ class SolveSolution(object):
         self_value_map = self.__var_value_map
         return [self_value_map.get(dv, 0) for dv in dvars]
 
+    def get_all_values(self):
+        # internal: no checks are done.
+        self_value_map = self.__var_value_map
+        m = self.__model
+        return [self_value_map.get(dv, 0) for dv in m.iter_variables()]
+
     def get_value_dict(self, var_dict, keep_zeros=True, precision=1e-6):
         # assume var_dict is a key-> variable dictionary
         if keep_zeros:
@@ -431,8 +475,8 @@ class SolveSolution(object):
         """
         return len(self.__var_value_map)
 
-    def __getitem__(self, dvar):
-        return self.get_value(dvar)
+    def __getitem__(self, arg):
+        return self.get_value(arg)
 
     def get_status(self, ct):
         """ Returns the status of a linear constraint in the solution.
@@ -477,16 +521,16 @@ class SolveSolution(object):
         for dvar, val in self.iter_var_values():
             if check_explicit and not other.contains(dvar):
                 return False
-            this_val = self.get_value(dvar)
-            other_val = other.get_value(dvar)
+            this_val = self._get_var_value(dvar)
+            other_val = other._get_var_value(dvar)
             if math.fabs(this_val - other_val) >= var_precision:
                 return False
 
         for other_dvar, other_val in other.iter_var_values():
             if check_explicit and not self.contains(other_dvar):
                 return False
-            this_val = self.get_value(other_dvar)
-            other_val = other.get_value(other_dvar)
+            this_val = self._get_var_value(other_dvar)
+            other_val = other._get_var_value(other_dvar)
             if math.fabs(this_val - other_val) >= var_precision:
                 return False
 
@@ -537,8 +581,8 @@ class SolveSolution(object):
         print_counter = 0
         for dvar in iter_vars:
             if print_generated or not dvar.is_generated():
-                var_value = self.get_value(dvar)
-                if print_zeros or var_value != 0:
+                var_value = self._get_var_value(dvar)
+                if print_zeros or var_value:
                     print_counter += 1
                     varname = dvar.to_string()
                     if type(value_fmt) != type(varname):
@@ -586,7 +630,7 @@ class SolveSolution(object):
         value_fmt = "{var:s}={value:.{prec}f}"
         for dvar, val in self.iter_var_values():
             if not dvar.is_generated():
-                var_value = self.get_value(dvar)
+                var_value = self._get_var_value(dvar)
                 if print_zeros or var_value != 0:
                     oss.write(value_fmt.format(var=str(dvar), value=var_value, prec=dvar.float_precision))
                     oss.write("\n")
@@ -718,7 +762,7 @@ class SolveSolution(object):
         count_values = 0
         count_errors = 0
         for dv in discrete_vars:
-            sol_value = self.get_value(dv)
+            sol_value = self._get_var_value(dv)
             if not dv.accept_initial_value(sol_value):
                 count_errors += 1
                 docplex_fatal("Wrong initial value for variable {0!r}: {1}, type: {2!s}",  # pragma: no cover
@@ -731,10 +775,10 @@ class SolveSolution(object):
 
     def _to_tuple_list(self, model):
         if self._keep_zeros:
-            l = [(dv.get_index(), val) for dv, val in self.iter_var_values()]
+            vv_tuples = [(dv.get_index(), val) for dv, val in self.iter_var_values()]
         else:
-            l = [(dv.get_index(), self[dv]) for dv in model.iter_variables()]
-        return l
+            vv_tuples = [(dv.get_index(), self[dv]) for dv in model.iter_variables()]
+        return vv_tuples
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}

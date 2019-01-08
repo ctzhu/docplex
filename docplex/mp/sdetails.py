@@ -4,7 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 from docplex.mp.compat23 import StringIO
-
+from docplex.mp.utils import _ToleranceScheme
 from math import isnan
 
 from six import PY2 as SIX_PY2
@@ -40,17 +40,34 @@ class SolveDetails(object):
         self._ncolumns = ncolumns
         self._linear_nonzeros = nonzeros
         # --
-        self._solution_method = -1
-        # --
         self._miprelgap = self._NO_GAP if miprelgap is None else miprelgap
         self._best_bound = self._NO_BEST_BOUND if best_bound is None else best_bound
         # -- progress
         self._n_iterations = n_iterations
         self._n_nodes_processed = n_nodes_processed
 
-        self._md5 = self._unknown_label
-
         self._quality_metrics = {}
+
+    def equals(self, other, relative=1e-3, absolute=1e-5, compare_times=True):
+        if not isinstance(other, SolveDetails):
+            return False
+
+        tol = _ToleranceScheme(relative=relative, absolute=absolute)
+        if compare_times and not tol.equals(self.time, other.time):
+            return False
+        elif self.status_code != other.status_code:
+            return False
+        elif self.problem_type != other.problem_type:
+            return False
+        elif self.columns != other.columns:
+            return False
+        elif self.nb_linear_nonzeros != other.nb_linear_nonzeros:
+            return False
+        elif not tol.equals(self.mip_relative_gap, other.mip_relative_gap):
+            return False
+
+        else:
+            return True
 
     def as_worker_dict(self):
         # INTERNAL
@@ -159,7 +176,6 @@ class SolveDetails(object):
     def status_code(self):
         return self._solve_status_code
 
-
     # status string
     # CPX_STAT_ABORT_DETTIME_LIM =  25
     # CPX_STAT_ABORT_DUAL_OBJ_LIM =  22
@@ -206,7 +222,6 @@ class SolveDetails(object):
         """
         return self._solve_status
 
-
     @property
     def problem_type(self):
         """  This property returns the problem type as a string.
@@ -236,7 +251,6 @@ class SolveDetails(object):
             * The gap is returned as a floating-point value, not as a percentage.
         """
         return self._miprelgap
-
 
     @property
     def best_bound(self):
@@ -277,7 +291,6 @@ class SolveDetails(object):
         if self._miprelgap >= 0:
             print("gap     = {0:g}%".format(100 * self._miprelgap))
 
-
     def to_string(self):
         oss = StringIO()
         oss.write("status  = {0}\n".format(self._solve_status))
@@ -303,7 +316,6 @@ class SolveDetails(object):
 
         """
         return self._solve_status_code in self._limit_statuses
-
 
     @property
     def quality_metrics(self):

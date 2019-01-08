@@ -92,6 +92,7 @@ import os
 import tempfile
 import threading
 import warnings
+import shutil
 
 try:
     import pandas
@@ -147,6 +148,9 @@ def default_solution_storage_handler(env, solution):
             with env.get_output_stream(name) as fp:
                 json.dump(value, fp)
 
+# The global output lock
+global_output_lock = threading.Lock()
+
 
 class Environment(object):
     ''' Methods for interacting with the execution environment.
@@ -180,12 +184,34 @@ class Environment(object):
         is_dods: True if the environment is Decision Optimization for Data Science.
     '''
     def __init__(self):
-        self.output_lock = threading.Lock()
+        self.output_lock = global_output_lock
         self.solution_storage_handler = default_solution_storage_handler
         self.abort_callbacks = []
         self.is_dods = False
+        self.update_solve_details_dict = True
 
     def store_solution(self, solution):
+        '''Stores the specified solution.
+
+        This method guarantees that the solution is fully saved if the model
+        is running on DOcplexcloud python worker and an abort of the job is
+        triggered.
+
+        For each (key, value) pairs of the solution, the default solution
+        storage handler does the following depending of the type of `value`, in
+        the following order:
+
+        * If `value` is a `pandas.DataFrame`, then the data frame is saved
+          as an output with the specified `name`. Note that `name` must include
+          an extension file for the serialization. See
+          :meth:`Environment.write_df` for supported formats.
+        * If `value` is a `bytes`, it is saved as binary data with `name`.
+        * The `value` is saved as an output with the `name`, after it has been
+          converted to JSON.
+
+        Args:
+            solution: a dict containing the solution.
+        '''
         with self.output_lock:
             self.solution_storage_handler(self, solution)
 
@@ -279,6 +305,25 @@ class Environment(object):
             raise ValueError('no default writer defined for files with extension: \'%s\'' % ext)
         with self.get_output_stream(name) as ost:
             writer(ost, **kwargs)
+
+    def set_output_attachment(self, name, filename):
+        '''Attach the file which filename is specified as an output of the
+        program.
+
+        The file is recorded as being part of the program output.
+        This method can be called multiple times if the program contains
+        multiple output objects.
+
+        When run on premise, ``filename`` is copied to the the working
+        directory (if not already there) under the name ``name``.
+
+        When run on DOcplexcloud, the file is attached as output attachment.
+
+        Args:
+            name: Name of the output object.
+            filename: The name of the file to attach.
+        '''
+        pass
 
     def get_output_stream(self, name):
         ''' Get a file-like object to write the output of the program.
@@ -425,6 +470,15 @@ class LocalEnvironment(Environment):
     def get_output_stream(self, name):
         return open(name, "wb")
 
+    def set_output_attachment(self, name, filename):
+        # check that name leads to a file in cwd
+        attachment_abs_path = os.path.dirname(os.path.abspath(name))
+        if attachment_abs_path != os.getcwd():
+            raise ValueError('Illegal attachment name')
+
+        if os.path.dirname(os.path.abspath(filename)) != os.getcwd():
+            shutil.copyfile(filename, name)  # copy to current
+
 
 class OutputFileWrapper(object):
     # Wraps a file object so that on __exit__() and on close(), the wrapped file is closed and
@@ -472,6 +526,7 @@ class WorkerEnvironment(Environment):
         super(WorkerEnvironment, self).__init__()
         self.solve_hook = solve_hook
         self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
+        self.last_solve_details = {}
 
     def get_available_core_count(self):
         return self.solve_hook.get_available_core_count()
@@ -485,11 +540,22 @@ class WorkerEnvironment(Environment):
         f = tempfile.NamedTemporaryFile(mode="w+b", delete=False)
         return OutputFileWrapper(f, self.solve_hook, name)
 
+    def set_output_attachment(self, name, filename):
+        self.solve_hook.set_output_attachments({name: filename})
+
     def get_parameter(self, name):
         return self.solve_hook.get_parameter_value(name)
 
     def update_solve_details(self, details):
-        self.solve_hook.update_solve_details(details)
+        if self.update_solve_details_dict:
+            previous = self.last_solve_details
+            self.last_solve_details = {}
+            if details:
+                self.last_solve_details.update(previous)
+                self.last_solve_details.update(details)
+                self.solve_hook.update_solve_details(self.last_solve_details)
+        else:
+            self.solve_hook.update_solve_details(details)
 
     def notify_start_solve(self, solve_details):
         self.solve_hook.notify_start_solve(None,  # model
@@ -498,7 +564,7 @@ class WorkerEnvironment(Environment):
     def notify_end_solve(self, status):
         try:
             from docloud.status import JobSolveStatus
-            engine_status = JobSolveStatus(status)
+            engine_status = JobSolveStatus(status) if status else JobSolveStatus.UNKNOWN
             self.solve_hook.notify_end_solve(None,  # model, unused
                                              None,  # has_solution, unused
                                              engine_status,
@@ -515,6 +581,30 @@ class WorkerEnvironment(Environment):
     def get_stop_callback(self):
         warnings.warn('get_stop_callback() is deprecated since 2.4 - Use the abort_callbacks property instead')
         return self.abort_callbacks[1] if self.abort_callbacks else None
+
+
+class OverrideEnvironment(object):
+    '''Allows to temporarily replace the default environment.
+
+    If the override environment is None, nothing happens and the default
+    environment is not replaced
+    '''
+    def __init__(self, new_env=None):
+        self.set_env = new_env
+        self.saved_env = None
+
+    def __enter__(self):
+        if self.set_env:
+            global default_environment
+            self.saved_env = default_environment
+            default_environment = self.set_env
+        else:
+            self.saved_env = None
+
+    def __exit__(self, type, value, traceback):
+        if self.saved_env:
+            global default_environment
+            default_environment = self.saved_env
 
 
 def _get_default_environment():
@@ -560,6 +650,26 @@ def get_input_stream(name):
         A file object to read the input from.
     '''
     return default_environment.get_input_stream(name)
+
+
+def set_output_attachment(name, filename):
+    ''' Attach the file which filename is specified as an output of the
+    program.
+
+    The file is recorded as being part of the program output.
+    This method can be called multiple times if the program contains
+    multiple output objects.
+
+    When run on premise, ``filename`` is copied to the the working
+    directory (if not already there) under the name ``name``.
+
+    When run on DOcplexcloud, the file is attached as output attachment.
+
+    Args:
+        name: Name of the output object.
+        filename: The name of the file to attach.
+    '''
+    return default_environment.set_output_attachment(name, filename)
 
 
 def get_output_stream(name):

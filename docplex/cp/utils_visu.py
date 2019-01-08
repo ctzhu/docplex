@@ -6,9 +6,12 @@
 # Author: Philippe Laborie, IBM Analytics, France Lab Gentilly
 
 """
-An add-on to matplotlib for easy display of CP Optimizer scheduling solutions and structures.
+An add-on to *matplotlib* for easy display of CP Optimizer scheduling solutions and structures.
 
-Requires external libraries numpy and matplotlib
+It requires to have external libraries *numpy* and *matplotlib* already installed in the Python environment.
+
+Detailed description
+--------------------
 """
 
 import heapq

@@ -57,7 +57,7 @@ class QuadFactory(IQuadFactory):
         return QuadExpr(self._model, quads=quads, linexpr=linexpr, name=name, safe=safe)
 
     def new_linear_expr(self, e=0, cst=0):
-        return self._model._linear_expr(e, cst)
+        return self._lfactory.linear_expr(e, cst)
 
     def new_var_square(self, var):
         return self.new_quad(quads=(var, var, 1), safe=True)
@@ -152,7 +152,7 @@ class QuadFactory(IQuadFactory):
         if isinstance(e, (AbstractLinearExpr, QuadExpr)):
             return e
         elif is_number(e):
-            return self._lfactory.constant_expr(cst=e, context=context)
+            return self._lfactory.constant_expr(cst=e)
         else:
             try:
                 return e.to_linear_expr()

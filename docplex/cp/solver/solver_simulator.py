@@ -210,7 +210,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
 
         # Generate objective
         x = self.model.get_optimization_expression()
-        if x:
+        if x is not None:
             # Determine number of values
             x = x.children[0]
             if x.type.is_array:
@@ -224,10 +224,11 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
 
         # Generate a solution for each variable
         allvars = self.model.get_all_variables()
+        names_map = {}
         seqvars = []
         for var in allvars:
             if isinstance(var, CpoIntVar):
-                vsol = CpoIntVarSolution(var.name, _random_value_in_complex_domain(var.get_domain()))
+                vsol = CpoIntVarSolution(var, _random_value_in_complex_domain(var.get_domain()))
                 msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoIntervalVar):
@@ -250,7 +251,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                 # Generate size
                 size = _random_value_in_interval_domain(var.get_size())
                 # Add variable to solution
-                vsol = CpoIntervalVarSolution(var.name, present, start, end, size)
+                vsol = CpoIntervalVarSolution(var, present, start, end, size)
                 msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoStateFunction):
@@ -261,20 +262,20 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
                     size = random.randint(1, MAX_SIMULATED_VALUE / 10)
                     lsteps.append((cstart, cstart + size, random.randint(0, 10)))
                     cstart += size
-                vsol = CpoStateFunctionSolution(var.name, lsteps)
+                vsol = CpoStateFunctionSolution(var, lsteps)
                 msol.add_var_solution(vsol)
 
             elif isinstance(var, CpoSequenceVar):
                 seqvars.append(var)
 
-        # Generate a solution for sequence variables
+        # Generate a solution for sequence variables (done after all vars to access their solutions)
         for var in seqvars:
             # Build sequence or results
             lvres = []
             for v in var.get_interval_variables():
-                lvres.append(msol.get_var_solution(v.name))
+                lvres.append(msol.get_var_solution(v))
             random.shuffle(lvres)
-            vsol = CpoSequenceVarSolution(var.name, lvres)
+            vsol = CpoSequenceVarSolution(var, lvres)
             msol.add_var_solution(vsol)
 
         # Return

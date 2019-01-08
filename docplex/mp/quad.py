@@ -11,6 +11,7 @@ from docplex.mp.basic import _SubscriptionMixin
 from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
 from docplex.mp.utils import *
 from docplex.mp.xcounter import update_dict_from_item_value
+from docplex.mp.sttck import StaticTypeChecker
 
 
 def _compare_vars(v1, v2):
@@ -165,9 +166,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
             self.fatal("unexpected argument for QuadExpr: {0!r}", quads)  # pragma: no cover
 
         if linexpr is None:
-            self._linexpr = model._linear_expr()
+            self._linexpr = model._lfactory.linear_expr()
         else:
-            self._linexpr = model._to_linear_expr(linexpr)
+            self._linexpr = model._lfactory._to_linear_expr(linexpr)
 
     def clone_if_necessary(self):
         #  INTERNAL
@@ -360,7 +361,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         for qvp, qk in self.iter_quads():
             if other._get_quadratic_coefficient_from_var_pair(qvp) != qk:
                 return False
-        return self._linexpr.equals_expr(other._linexpr)
+        return self._linexpr.equals(other._linexpr)
 
     def is_constant(self):
         return not self.has_quadratic_term() and self._linexpr.is_constant()
@@ -510,10 +511,10 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
         elif self.is_constant():
             k = self.constant
-            if 0 == k:
+            if not k:
                 return self.zero_expr()
             elif 1 == k:
-                return self._model._to_linear_expr(other)
+                return self._model._lfactory._to_linear_expr(other)
             else:
                 return other * k
         else:
@@ -607,10 +608,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
         self.notify_modified(event=UpdateEvent.QuadExprGlobal)
         return self
 
-    def _multiply_error(self, f1, f2):
-        self.fatal(
-            "Cannot multiply {0!s} by {1!s}, exponent would be greater than 2. A variable's exponent can be at most 2",
-            f1, f2)
 
     def multiply(self, other):
         event = UpdateEvent.QuadExprGlobal
@@ -626,13 +623,13 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 self._assign_scaled(other, this_constant)
 
         elif self.has_quadratic_term():
-            self._multiply_error(self, other)
+            StaticTypeChecker.mul_quad_lin_error(self.model, self, other)
 
         else:
             # self is actually a linear expression
             if other.is_quad_expr():
                 if other.has_quadratic_term():
-                    self._multiply_error(self, other)
+                    StaticTypeChecker.mul_quad_lin_error(self.model, self, other)
                 else:
                     return self.multiply(other._linexpr)
             else:
@@ -686,7 +683,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
     def _assign_scaled(self, other, factor):
         # INTERNAL
         if isinstance(other, (AbstractLinearExpr, Var)):
-            scaled = self._model._to_linear_expr(other, force_clone=True)
+            scaled = self._model._lfactory._to_linear_expr(other, force_clone=True)
             scaled *= factor
             self._linexpr = scaled
         elif isinstance(other, QuadExpr):

@@ -55,8 +55,6 @@ _ARRAY_TYPES = {'intArray': Type_IntArray, 'floatArray': Type_FloatArray,
 # Fake operator '..' to read intervals properly
 _OPER_INTERVAL = CpoOperation("_interval", "_interval", "..", 9, (CpoSignature(Type_IntExprArray, (Type_IntExpr, Type_IntExpr)),))
 _ALL_OPERATORS[".."] = _OPER_INTERVAL
-#for kwd in _ALL_OPERATORS:
-#    print("Operator '{}': {}".format(kwd, _ALL_OPERATORS[kwd]))
 
 
 ###############################################################################
@@ -89,6 +87,7 @@ class CpoUnsupportedFormatVersionException(CpoParserException):
 class CpoParser(object):
     """ Reader of CPO file format """
     __slots__ = ('model',          # Read model
+                 'expr_dict',      # Dictionary of expressions. Key is name, value is CPO expression
                  'source_file',    # Source file
                  'tokenizer',      # Reading tokenizer
                  'token',          # Last read token
@@ -103,6 +102,7 @@ class CpoParser(object):
         """
         super(CpoParser, self).__init__()
         self.model = mdl if mdl is not None else CpoModel()
+        self.expr_dict = {}
         self.source_file = None
         self.tokenizer = None
         self.token = None
@@ -113,19 +113,23 @@ class CpoParser(object):
 
         # TODO: parse and include source information
 
+
     def get_model(self):
         """ Get the model that have been parsed
 
         Return:
-            CpoModel result of the parsing
+            Model result of the parsing, object of class :class:`~docplex.cp.model.CpoModel`
         """
         return self.model
-            
+
+
     def parse(self, cfile):
-        """ Parse a CPO file
+        """ Parse a CPO file.
 
         Args:
             cfile: CPO file to read
+        Return:
+            Model result of the parsing, object of class :class:`~docplex.cp.model.CpoModel`
         Raises:
             CpoParserException: Parsing exception
             CpoVersionMismatchException: Read CPO format is under MIN_CPO_VERSION_NUMBER
@@ -136,20 +140,43 @@ class CpoParser(object):
             self.model.source_file = cfile
         with open_utf8(cfile, mode='r') as f:
             self.tokenizer = CpoTokenizer(cfile, f)
-            while self._read_statement():
-                pass
+            self._read_statement_list()
             self.tokenizer = None
+        return self.model
+
 
     def parse_string(self, str):
-        """ Parse a string
+        """ Parse a string.
+
+        Result of the parsing is added to the current result model.
 
         Args:
             str: String to parse
+        Return:
+            Model result of the parsing, object of class :class:`~docplex.cp.model.CpoModel`
         """
         self.tokenizer = CpoTokenizer("String", str)
-        while self._read_statement():
-            pass
+        self._read_statement_list()
         self.tokenizer = None
+        return self.model
+
+
+    def _read_statement_list(self):
+        """ Read a list of statements
+
+        This functions reads all statements up to end of input.
+        """
+        try:
+            while self._read_statement():
+                pass
+        except Exception as e:
+            #if isinstance(e, CpoParserException):
+            #    raise e
+            import traceback
+            traceback.print_exc()
+            self._raise_exception(str(e))
+        return True
+
 
     def _read_statement(self):
         """ Read a statement or a section
@@ -160,37 +187,41 @@ class CpoParser(object):
         Returns:
             True if something has been read, False if end of input
         """
-        try:
-            tok1 = self._next_token()
-            if tok1 is TOKEN_EOF:
-                return False
-            tok2 = self._next_token()
-            if tok1 is TOKEN_HASH:
-                self._read_directive(tok2.value)
-            elif tok2 is TOKEN_EQUAL:
-                self._read_assignment(tok1.get_string())
-            elif tok2 is TOKEN_SEMICOLON:
-                # Get existing expression and re-add it to the model
-                expr = self.model.get_expression(tok1.get_string())
-                if expr is None:
-                    self._raise_exception("Expression '{}' not found in the model".format(tok1.get_string()))
-                self.model.add(expr)
-            elif tok2 is TOKEN_BRACE_OPEN:
-                self._read_section(tok1.value)
-            else:
-                # Read expression
-                self._push_token(tok1)
-                expr = self._read_expression()
-                # print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
-                self.model.add(expr)
-                self._check_token(self.token, TOKEN_SEMICOLON)
-        except Exception as e:
-            #if isinstance(e, CpoParserException):
-            #    raise e
-            import traceback
-            traceback.print_exc()
-            self._raise_exception(str(e))
+        tok1 = self._next_token()
+        if tok1 is TOKEN_EOF:
+            return False
+        tok2 = self._next_token()
+
+        if tok1 is TOKEN_HASH:
+            self._read_directive(tok2.value)
+
+        elif tok2 is TOKEN_ASSIGN:
+            self._read_assignment(tok1.get_string())
+
+        elif tok2 is TOKEN_SEMICOLON:
+            # Get existing expression and re-add it to the model
+            expr = self.expr_dict.get(tok1.get_string())
+            if expr is None:
+                self._raise_exception("Expression '{}' not found in the model".format(tok1.get_string()))
+            self.model.add(expr)
+
+        elif tok2 is TOKEN_COLON:
+            expr = self._read_assignment(tok1.get_string())
+            self.model.add(expr)
+
+        elif tok2 is TOKEN_BRACE_OPEN:
+            self._read_section(tok1.value)
+
+        else:
+            # Read expression
+            self._push_token(tok1)
+            expr = self._read_expression()
+            # print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
+            self.model.add(expr)
+            self._check_token(self.token, TOKEN_SEMICOLON)
+
         return True
+
 
     def _read_directive(self, name):
         """ Read a directive
@@ -215,29 +246,54 @@ class CpoParser(object):
             self.tokenizer.get_line_reminder()
         else:
             self._raise_exception("Unknown directive '" + name + "'")
-        
+
+
     def _read_assignment(self, name):
         """ Read an assignment
 
         Args:
             name:  Assignment name
+        Returns:
+            Read expression
         """
         tok = self._next_token()
         if tok.value in ("intVar", "_intVar"):
-            v = self._read_int_var(name)
-            self.model.add(v)
+            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
+            expr = CpoIntVar(tuple(args), name)
+            self.model.add(expr)
 
         elif tok.value == "intervalVar":
-            v = self._read_interval_var(name)
-            self.model.add(v)
+            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+            self._next_token()
+            expr = self._read_interval_var_params(name, TOKEN_PARENT_CLOSE)
+            self.model.add(expr)
 
         elif tok.value == "sequenceVar":
-            v = self._read_sequence_var(name)
-            self.model.add(v)
+            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
+            if (len(args) == 1):
+                lvars = args[0]
+                ltypes = None
+            else:
+                if (len(args) != 2):
+                    self._raise_exception("'sequenceVar' should have 1 or 2 arguments")
+                lvars = args[0]
+                ltypes = args[1]
+            expr = CpoSequenceVar(lvars, ltypes, name)
+            self.model.add(expr)
 
         elif tok.value == "stateFunction":
-            v = self._read_state_function(name)
-            self.model.add(v)
+            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
+            nbargs = len(args)
+            if (nbargs == 0):
+                trmx = None
+            elif (nbargs == 1):
+                trmx = args[0]
+            else:
+                self._raise_exception("'stateFunction' should have 0 or 1 argument")
+            expr = CpoStateFunction(trmx, name)
 
         else:
             # Read expression
@@ -245,34 +301,21 @@ class CpoParser(object):
             self._push_token('')
             # Build CPO expression if needed
             expr = build_cpo_expr(expr)
-            # Add expression to model
-            expr.set_name(name)
-            self.model._add_named_expr(expr)
-        self._check_token(self._next_token(), TOKEN_SEMICOLON)
-            
-    def _read_int_var(self, name):
-        """ Read a int_var declaration
+            # Add name to the expression
+            if expr.name:
+                # Create an alias if needed
+                if name != expr.name:
+                    expr = CpoAlias(expr, name)
+            else:
+                expr.set_name(name)
 
-        Args:
-            name:  Variable name
-        Returns:
-            CpoIntVar variable expression
-        """
-        # Read arguments
-        self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-        args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-        return CpoIntVar(tuple(args), name)
-            
-    def _read_interval_var(self, name):
-        """ Read a interval_var declaration
-        Args:
-            name:  Variable name
-        Returns:
-            CpoIntervalVar variable expression
-        """
-        self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-        self._next_token()
-        return self._read_interval_var_params(name, TOKEN_PARENT_CLOSE)
+        # Add expression to expressions dictionary
+        self.expr_dict[name] = expr
+
+        self._check_token(self._next_token(), TOKEN_SEMICOLON)
+
+        return expr
+
 
     def _read_interval_var_params(self, name, etok):
         """ Read a interval_var declaration
@@ -298,7 +341,7 @@ class CpoParser(object):
                 res.set_optional()
                 self._next_token()
             else:
-                self._check_token(self._next_token(), TOKEN_EQUAL)
+                self._check_token(self._next_token(), TOKEN_ASSIGN)
                 if (aname in ("start", "end", "length", "size")):
                     # Read interval
                     self._next_token()
@@ -324,42 +367,6 @@ class CpoParser(object):
                 tok = self._next_token()
         return res
 
-    def _read_sequence_var(self, name):
-        """ Read a sequence_var declaration
-        Args:
-            name:  Variable name
-        Returns:
-            CpoSequenceVar variable expression
-        """
-        self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-        args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-        if (len(args) == 1):
-            lvars = args[0]
-            ltypes = None
-        else:
-            if (len(args) != 2):
-                self._raise_exception("'sequenceVar' should have 1 or 2 arguments")
-            lvars = args[0]
-            ltypes = args[1]
-        return CpoSequenceVar(lvars, ltypes, name)
-
-    def _read_state_function(self, name):
-        """ Read a state function declaration
-        Args:
-            name:  Variable name
-        Returns:
-            CpoStateFunction variable expression
-        """
-        self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-        args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-        nbargs = len(args)
-        if (nbargs == 0):
-            trmx = None
-        elif (nbargs == 1):
-            trmx = args[0]
-        else:
-            self._raise_exception("'stateFunction' should have 0 or 1 argument")
-        return CpoStateFunction(trmx, name)
 
     def _read_expression(self):
         """ Read an expression
@@ -399,6 +406,7 @@ class CpoParser(object):
             op = stack.pop()
             expr = self._create_operation_expression(op, (stack.pop(), expr))
         return expr
+
 
     def _read_sub_expression(self):
         """ Read a sub-expression
@@ -516,7 +524,8 @@ class CpoParser(object):
                 
         # Unknown expression
         self._raise_exception("Invalid start of expression: '" + str(tok) + "'")
-            
+
+
     def _read_expression_list(self, etok):
         """ Read a list of expressions
 
@@ -534,7 +543,8 @@ class CpoParser(object):
             if self.token is TOKEN_COMMA:
                 self._next_token()
         return tuple(lxpr)
-        
+
+
     def _read_arguments_list(self, etok):
         """ Read a list of arguments that are possibly named
 
@@ -550,7 +560,7 @@ class CpoParser(object):
         while self.token is not etok:
             if self.token.type is TOKEN_SYMBOL:
                 name = self.token
-                if self._next_token() is TOKEN_EQUAL:
+                if self._next_token() is TOKEN_ASSIGN:
                     self._next_token()
                 else:
                     self._push_token(name)
@@ -561,6 +571,7 @@ class CpoParser(object):
             if self.token is TOKEN_COMMA:
                 self._next_token()
         return lxpr
+
 
     def _read_section(self, name):
         """ Read a section.
@@ -578,7 +589,8 @@ class CpoParser(object):
             self._read_section_starting_point()
         else:
             self._raise_exception("Unknown section '" + name + "'")
-            
+
+
     def _read_section_parameters(self):
         """ Read a parameters section
         """
@@ -586,7 +598,7 @@ class CpoParser(object):
         tok = self._next_token()
         while not tok.value == '}':
             vname = self._check_token_string(tok)
-            self._check_token(self._next_token(), TOKEN_EQUAL)
+            self._check_token(self._next_token(), TOKEN_ASSIGN)
             value = self._next_token()
             self._check_token(self._next_token(), TOKEN_SEMICOLON)
             params.set_attribute(vname, value.get_string())
@@ -603,8 +615,8 @@ class CpoParser(object):
         while (tok is not TOKEN_EOF) and (tok.value != '}'):
             if self.token.value == "version":
                 self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-                ver = self.tokenizer.get_up_to(')')
-                self.model.format_version = ver
+                ver = self._next_token()
+                self.model.set_format_version(ver.get_string())
                 # if ver < MIN_CPO_VERSION_NUMBER:
                 #     raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
                 #                                                .format(ver, MIN_CPO_VERSION_NUMBER))
@@ -632,10 +644,10 @@ class CpoParser(object):
         while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
             # Get and check the variable that is concerned
             vname = self._check_token_string(tok)
-            var = self.model.get_expression(vname)
+            var = self.expr_dict.get(vname)
             if var is None:
                 self._raise_exception("There is no variable named '{}' in this model".format(vname))
-            self._check_token(self._next_token(), TOKEN_EQUAL)
+            self._check_token(self._next_token(), TOKEN_ASSIGN)
             tok = self._next_token()
             is_parent = False
 
@@ -649,11 +661,11 @@ class CpoParser(object):
                 # Read domain
                 dom = self._read_expression()
                 # Add solution to starting point
-                vsol = CpoIntVarSolution(vname, (dom, ))
+                vsol = CpoIntVarSolution(var, (dom, ))
 
             elif var.type == Type_IntervalVar:
                 if tok.value == "absent":
-                    vsol = CpoIntervalVarSolution(vname, presence=False)
+                    vsol = CpoIntervalVarSolution(var, presence=False)
                     self._check_token(self._next_token(), TOKEN_SEMICOLON)
                 else:
                     if tok.value == "intervalVar":
@@ -662,7 +674,7 @@ class CpoParser(object):
                     if is_parent:
                         self._next_token()
                     ivar = self._read_interval_var_params(vname, TOKEN_PARENT_CLOSE if is_parent else TOKEN_SEMICOLON)
-                    vsol = CpoIntervalVarSolution(vname,
+                    vsol = CpoIntervalVarSolution(ivar,
                                                   presence=True if ivar.is_present() else False if ivar.is_absent() else None,
                                                   start=ivar.get_start() if ivar.get_start() != DEFAULT_INTERVAL else None,
                                                   end=ivar.get_end() if ivar.get_end() != DEFAULT_INTERVAL else None,
@@ -742,11 +754,14 @@ class CpoParser(object):
         """ Get an expression associated to an identifier
         Args:
             eid:  Expression identifier
+        Returns:
+            Expression corresponding to this identifier
         """
-        expr = self.model.get_expression(eid)
-        if expr is None:
-            self._raise_exception("Unknown identifier '" + str(eid) + "'")
-        return(expr)
+        expr = self.expr_dict.get(eid)
+        return eid if expr is None else expr
+        # if expr is None:
+        #     self._raise_exception("Unknown identifier '" + str(eid) + "'")
+        # return expr
 
 
     def _create_operation_expression(self, op, args):

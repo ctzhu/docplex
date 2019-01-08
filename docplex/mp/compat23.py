@@ -53,3 +53,8 @@ if sys.version_info[0] == 3:  # pragma: no cover
     unitext = str
 else:
     unitext = unicode
+
+try:  # pragma: no cover
+    from itertools import zip_longest as izip_longest
+except ImportError:  # pragma: no cover
+    from itertools import izip_longest

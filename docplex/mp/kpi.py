@@ -4,9 +4,8 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from docplex.mp.linear import Var
-from docplex.mp.basic import Expr
 from docplex.mp.operand import Operand
+from docplex.mp.error_handler import docplex_fatal, DOcplexException
 
 from docplex.mp.utils import is_number, is_string, is_function, str_holo
 
@@ -74,12 +73,7 @@ class KPI(object):
     @staticmethod
     def new_kpi(model, kpi_arg, kpi_name):
         # static factory method to build a new concrete instance of KPI
-
-        if isinstance(kpi_arg, Expr):
-            return DecisionKPI(kpi_arg, kpi_name)
-        elif isinstance(kpi_arg, Var):
-            return DecisionKPI(kpi_arg, kpi_name)
-        elif isinstance(kpi_arg, KPI):
+        if isinstance(kpi_arg, KPI):
             if not kpi_name:
                 return kpi_arg
             else:
@@ -88,14 +82,17 @@ class KPI(object):
                 return cloned
         elif is_function(kpi_arg):
             return FunctionalKPI(kpi_arg, model, kpi_name)
-        elif is_number(kpi_arg):
-            kpi_fn = lambda _: kpi_arg
-            return FunctionalKPI(kpi_fn, model, kpi_name)
         else:
-            model.fatal("Cannot interpret this as a KPI: {0!r}. expecting expression, variable or function", kpi_arg)
+            # try a linear expr conversion
+            try:
+                expr = model._lfactory._to_expr(kpi_arg)
+                return DecisionKPI(expr, kpi_name)
+            except DOcplexException:
+                model.fatal("Cannot interpret this as a KPI: {0!r}. expecting expression, variable or function", kpi_arg)
 
     def notify_removed(self):
         pass
+
 
 class DecisionKPI(KPI):
     """ Specialized class of Key Performance Indicator, based on expressions.
@@ -116,7 +113,6 @@ class DecisionKPI(KPI):
             self._expr.notify_used(self)  # kpi is a subscriber
             self._name = name or kpi_op.name
         self._check_name(self._name)
-
 
     def notify_expr_modified(self, expr, event):
         # do nothing
@@ -203,3 +199,6 @@ class FunctionalKPI(KPI):
 
     def clone(self):
         return FunctionalKPI(fn=self._function, model=self._model, name=self._name)
+
+    def to_expr(self):
+        docplex_fatal("This KPI cannot be used as an expression: {0!r}".format(self))

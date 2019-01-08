@@ -330,7 +330,11 @@ class Parameter(object):
         return self.get_qualified_name(sep='.', include_root=True)
 
     def get_qualified_name(self, sep='.', include_root=True):
-        return "%s.%s" % (self._parent.qualified_name(sep=sep, include_root=include_root), self.short_name)
+        parent_qname = self._parent.qualified_name(sep=sep, include_root=include_root)
+        if parent_qname:
+            return "%s.%s" % (parent_qname, self.short_name)
+        else:
+            return self.short_name
 
     @property
     def cpx_name(self):
@@ -385,7 +389,7 @@ class Parameter(object):
         self._current_value = new_default  # pragma: no cover
 
     @property
-    def current_value(self):
+    def value(self):
         return self._current_value
 
     def accept_value(self, new_value):
@@ -579,10 +583,7 @@ class IntParameter(Parameter):
         return "{0}({1},{2!s})".format(self._repr_classname(), self.qualified_name, self._current_value)
 
     def transform_value(self, new_value):
-        if is_int(new_value):
-            return new_value
-        else:
-            return int(new_value)
+        return int(new_value)
 
 
 class PositiveIntParameter(IntParameter):
@@ -621,10 +622,7 @@ class NumParameter(Parameter):
         return self._is_in_range(fvalue, self._min_value, self._max_value)
 
     def transform_value(self, new_value):
-        if is_number(new_value):
-            return new_value
-        else:
-            return float(new_value)
+        return float(new_value)
 
     def type_name(self):
         return "num"
@@ -823,7 +821,7 @@ class RootParameterGroup(ParameterGroup):
             pred = lambda p: p.cpx_id == key
         elif is_string(key):
             # eliminate initial '.'
-            pred = lambda p: p.get_qualified_name(include_root=False).endswith(key)
+            pred = lambda p: p.get_qualified_name(include_root=False) == key
         else:
             docplex_fatal('Parameters.find() accepts either integer code or path-like name, got: {0!r}'.format(key))
         for p in self:

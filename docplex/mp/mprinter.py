@@ -205,37 +205,38 @@ class TextModelPrinter(ModelPrinter):
         for _ in range(nb_lines):
             out.write("\n")
 
-    def _disambiguate(self, candidate_name, names, try_max=1000):
+    disambiguate_try_max = 1000
+
+    def _disambiguate(self, candidate_name, names, mobj, prefix, local_idx, try_max=disambiguate_try_max):
         # candidate_name is already in names
         # we coin successive names with index until the suffixed name is no longer in names
         k = 1
-        disambiguate_fmt = '%s#%d'
-        while True:
-            cur_name = disambiguate_fmt % (candidate_name, k)
-            if cur_name not in names:
-                return cur_name
-            k += 1
+        disambiguate_fmt = '%s##%d'
+        cur_name = candidate_name
+
+        while cur_name in names:
             if k >= try_max:
-                raise _DisambiguateError
+                # giving up
+                return self._make_prefix_name(mobj, prefix, local_idx)
+            cur_name = disambiguate_fmt % (candidate_name, k)
+            k+= 1
+        # --
+        return cur_name
 
     def _precompute_name_dict(self, mobj_seq, prefix):
         fixed_name_dir = {}
         all_names = set()
         hide_names = self.mangle_names()
 
-        try:
-            for local_index, mobj in enumerate(mobj_seq):
-                # local_index = local_index_map[mobj] if local_index_map is not None else mobj.unchecked_index
-                fixed_name = self.fix_name(mobj, prefix, local_index, hide_names)
-                if fixed_name:
-                    if fixed_name in all_names:  # pragma: no cover
-                        fixed_name = self._disambiguate(fixed_name, all_names)
-                    # fixed_name_dir[mobj] = fixed_name
-                    fixed_name_dir[mobj._index] = fixed_name  # Use _index attribute as key, which improves performance
-                    all_names.add(fixed_name)
-        except _DisambiguateError:
-            # something wrong occured, we reindex everything
-            return {mo: self._make_prefix_name(mo, prefix, local_index) for local_index, mo in enumerate(mobj_seq)}
+        for local_index, mobj in enumerate(mobj_seq):
+            fixed_name = self.fix_name(mobj, prefix, local_index, hide_names)
+            if fixed_name:
+                if fixed_name in all_names:
+                    # to disambiguate, start with name#index, then add ##1,2,3,
+                    seed_name = '%s#%d' % (fixed_name, mobj._index)
+                    fixed_name = self._disambiguate(seed_name, all_names, mobj, prefix, local_index)
+                fixed_name_dir[mobj._index] = fixed_name
+                all_names.add(fixed_name)
 
         return fixed_name_dir
 

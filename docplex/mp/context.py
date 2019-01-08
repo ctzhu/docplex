@@ -91,15 +91,8 @@ class open_filename_universal(object):
         return False
 
 
-def is_auto_publishing(context):
-    try:
-        return context.solver.auto_publish == True
-    except AttributeError:
-        return False
-
-
 def is_auto_publishing_solve_details(context):
-    if get_solve_hook == None:
+    if get_solve_hook is None:
         return False  # not in a worker
     try:
         auto_publish_details = context.solver.auto_publish.solve_details
@@ -111,27 +104,52 @@ def is_auto_publishing_solve_details(context):
     return auto_publish_details
 
 
-def is_auto_publishing_json_solution(context):
-    if get_solve_hook == None:
-        return False  # not in a worker
-    try:
-        auto_publish = context.solver.auto_publish.json_solution
-    except AttributeError:
-        try:
-            auto_publish = context.solver.auto_publish
-        except AttributeError:
-            auto_publish = False
-    return auto_publish
+def get_auto_publish_names(context, prop_name, default_name):
+    if get_solve_hook is None:
+        return None  # not in a worker
+    # comparing auto_publish to boolean values because it can be a non-boolean
+    if context.solver.auto_publish is True:
+        return [default_name]
+    elif context.solver.auto_publish is False:
+        return None
+    name = context.solver.auto_publish[prop_name]
+    if isinstance(name, six.string_types):
+        # only one string value: make this the name of the table
+        # in a list with one object
+        name = [name]
+    elif name is True:
+        # if true, then use default name:
+        name = [default_name]
+    elif name is False:
+        # Need to compare explicitely to False
+        name = None
+    else:
+        # otherwise the kpi_table_name can be a collection-like of names,
+        # just return it
+        pass
+    return name
+
+
+def auto_publishing_result_output_names(context):
+    '''Return the list of result output names for saving
+    '''
+    return get_auto_publish_names(context, 'result_output', 'solution.json')
+
+
+def auto_publising_kpis_table_names(context):
+    '''Return the list of kpi table names for saving
+    '''
+    return get_auto_publish_names(context, 'kpis_output', 'kpis.csv')
 
 
 def check_credentials(context):
     #     Checks if the context has syntactically valid credentials. The context
     #     has valid credentials when it has an `url` and a `key` fields and that
     #     both fields are string.
-    # 
+    #
     #     If the credentials are not defined, `message` contains a message describing
     #     the cause.
-    # 
+    #
     #     Returns:
     #         (has_credentials, message): has_credentials` - True if the context contains syntactical credentials.
     #            and `message`  - contains a message if applicable.
@@ -206,7 +224,10 @@ class SolverContext(BaseContext):
         super(SolverContext, self).__init__(**kwargs)
         self.log_output = False
         self.max_threads = get_environment().get_available_core_count()
-        self.auto_publish = True
+        self.auto_publish = create_default_auto_publish_context()
+        self.kpi_reporting = BaseContext()
+        from docplex.mp.progress import KpiFilterLevel
+        self.kpi_reporting.filter_level = KpiFilterLevel.FilterObjectiveAndBound
 
     def __deepcopy__(self, memo):
         # We override deepcopy here just to make sure that we don't deepcopy
@@ -265,13 +286,27 @@ class Context(BaseContext):
            CPLEX parameters.
         solver.auto_publish: If ``True``, a model being solved will automatically
             publish all publishable items (``solve_details``,
-            ``json_solution``).
+            ``result_output``, ``kpis_output``).
+        solver.auto_publish.solve_details: if ``True``, solve details are
+            published automatically.
+        solver.auto_publish.result_output: if not None, the filename where
+            solution is saved. This can be a list of filenames if multiple
+            solutions are to be published. If True, ``solution.json`` is used.
+        solver.auto_publish.kpis_output: if not None, the filename where KPIs
+            are saved as a table with KPI name and values. Currently only
+            csv files are supported. This can be a list of filenames if
+            multiple KPIs files are to be published.
         solver.log_output: This attribute can have the following values:
 
             * True: When True, logs are printed to sys.out.
             * False: When False, logs are not printed.
             * A file-type object: Logs are printed to that file-type object.
 
+        solver.kpi_reporting.filter_level: Specify the filtering level for kpi reporting.
+            If None, no filtering is done. Can take values of
+            docplex.mp.progress.KpiFilterLevel or a string representation of
+            one of the values of this enum (Unfiltered, FilterObjectiveAndBound,
+            FilterObjective)
         solver.docloud: The parent node for attributes controlling the solve on Decision Optimization on Cloud.
         solver.docloud.url: The DOcplexcloud service URL.
         solver.docloud.key: The DOcplexcloud service API key.
@@ -437,6 +472,8 @@ class Context(BaseContext):
                 self.update_key_value(k, value,
                                       create_missing_nodes=create_missing_nodes)
 
+    cplex_parameters_key = "cplex_parameters"
+
     def update_cplex_parameters(self, arg_params):
         # INTERNAL
         if isinstance(arg_params, RootParameterGroup):
@@ -562,6 +599,21 @@ class Context(BaseContext):
                 context = self
                 exec(f.read())
         return self
+
+
+def create_default_auto_publish_context(defaults=True):
+    auto_publish = BaseContext()
+    # in a future version, we might want to be able to set individual
+    # default values with a dict => that's why we compare to True and False
+    if defaults is True:
+        auto_publish.solve_details = True
+        auto_publish.result_output = 'solution.json'
+        auto_publish.kpis_output = 'kpis.csv'
+    else:
+        auto_publish.solve_details = False
+        auto_publish.result_output = None
+        auto_publish.kpis_output = None
+    return auto_publish
 
 
 def CreateDefaultDOcloudContext():

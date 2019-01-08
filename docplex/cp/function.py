@@ -498,7 +498,7 @@ class CpoSegmentedFunction(CpoFunction):
                 x.append(seg[0])
                 v.append(seg[1])
                 s.append(seg[2])
-        super(CpoSegmentedFunction, self).__init__(typ=Type_SegmentedFunction, s0=s0, v0=v0, x=x, v=v, s=s, name=name)
+        super(CpoSegmentedFunction, self).__init__(Type_SegmentedFunction, s0=s0, v0=v0, x=x, v=v, s=s, name=name)
 
     def get_segment_list(self):
         """ Returns the list of segments of the function.
@@ -533,7 +533,7 @@ class CpoStepFunction(CpoFunction):
             name: Function name
         """
         if steps is None or len(steps) == 0:
-            super(CpoStepFunction, self).__init__(typ=Type_StepFunction, name=name)
+            super(CpoStepFunction, self).__init__(Type_StepFunction, name=name)
         else:
             x = []
             v = []

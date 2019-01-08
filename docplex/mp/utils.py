@@ -6,6 +6,7 @@
 
 
 # gendoc: ignore
+import csv
 import logging
 import os
 import sched
@@ -16,6 +17,7 @@ import sys
 
 from six import PY2 as SIX_PY2
 from six import itervalues
+
 
 from docplex.mp.compat23 import Queue
 from docplex.mp.compat23 import izip
@@ -282,10 +284,11 @@ class DOcplexException(Exception):
         return self.__edited_message or self.__msg
 
 
-class DOCplexSolutionValueError(DOcplexException):
-    def __init__(self, vartype, raw_value, tolerance):
-        msg = "Cannot process value: {0:s} to type: {1!s}, tolerance: {2:g}".format(raw_value, vartype, tolerance)
-        DOcplexException.__init__(self, msg)
+class DOcplexLimitsExceeded(DOcplexException):
+    cplexce_limits_exceeded_msg = "**** Promotional version. Problem size limits exceeded, CPLEX code=1016"
+
+    def __init__(self):
+        DOcplexException.__init__(self, self.cplexce_limits_exceeded_msg)
 
 
 def normalize_basename(s, force_lowercase=True, maxlen=255):
@@ -470,6 +473,76 @@ def open_universal_newline(filename, mode):
         else:
             # for other errors, just raise them
             raise
+
+
+def encode_csv_string(str):
+    """ Encode a string to be used in CSV file
+
+    Args:
+        str:  String to encode
+    Returns:
+        Encoded string, including starting and ending double quote
+    """
+    res = ['"']
+    for c in str:
+        res.append(c)
+        if c == '"':
+            res.append('"')
+    res.append('"')
+    return ''.join(res)
+
+
+def write_csv_line(output, line, encoding):
+    l = ','.join([encode_csv_string('%s' % c) for c in line])
+    output.write(l.encode(encoding))
+    output.write('\n'.encode(encoding))
+
+
+def write_kpis(env, kpis_table, name):
+    '''Writes a kpis dataframe as file which name is specified.
+    The data type depends of extension of name.
+
+    This uses the specfied env to write data as attachments
+    '''
+    _, ext = os.path.splitext(name)
+    ext = ext.lower()
+    if ext == '.csv':
+        encoding = 'utf-8'
+        with env.get_output_stream(name) as ostr:
+            write_csv_line(ostr, ['NAME', 'VALUE'], encoding)
+            for line in kpis_table:
+                write_csv_line(ostr, line, encoding)
+    else:
+        # right now, only csv is supported
+        raise ValueError('file format not supported for KPIs file: %s' % ext)
+
+
+def write_solution(env, solution, name):
+    with env.get_output_stream(name) as output:
+        output.write(solution.export_as_string(format="json").encode('utf-8'))
+
+
+def write_result_output(env, context, model, solution):
+    # import from context here otherwise we have cyclic inclusions between
+    # context and utils
+    from docplex.mp.context import auto_publishing_result_output_names
+
+    names = auto_publishing_result_output_names(context)
+    for name in names:
+        write_solution(env, solution, name)
+
+
+def write_kpis_table(env, context, model, solution):
+    # import from context here otherwise we have cyclic inclusions between
+    # context and utils
+    from docplex.mp.context import auto_publising_kpis_table_names
+
+    names = auto_publising_kpis_table_names(context)
+    kpis_table = []
+    for k in model.iter_kpis():
+        kpis_table.append([k.name, k.compute(solution)])
+    for name in names:
+        write_kpis(env, kpis_table, name)
 
 
 class CyclicLoop(object):
@@ -722,6 +795,9 @@ class _AutomaticSymbolGenerator(_SymbolGenerator):
         self._last_index = guessed_index
         return coined_symbol
 
+    def __iter__(self):
+        while True:
+            yield self.new_symbol()
 
 class _IndexScope(_AutomaticSymbolGenerator):
     # INTERNAL: full scope of indices.
@@ -748,7 +824,6 @@ class _IndexScope(_AutomaticSymbolGenerator):
         _AutomaticSymbolGenerator.reset(self)
         self._index_map = None
 
-
     def notify_obj_index(self, obj, index):
         _AutomaticSymbolGenerator.notify_new_index(self, index)
         if self._index_map is not None:
@@ -770,6 +845,13 @@ class _IndexScope(_AutomaticSymbolGenerator):
     def reindex_all(self, indexer):
         for ix, obj in enumerate(self._obj_iter()):
             obj.set_index(ix)
+
+    def notify_deleted(self, oldidx):
+        if self._index_map:
+            try:
+                del self._index_map[oldidx]
+            except KeyError:
+                pass
 
 
 def apply_thread_limitations(context, solver_context):
@@ -809,6 +891,9 @@ class _ToleranceScheme(object):
     def compute_tolerance(self, obj):
         abs_obj = abs(obj)
         return max(self._absolute_tolerance, self._relative_tolerance * abs_obj)
+
+    def equals(self, num1, num2):
+        return abs(num1 - num2) <= self.compute_tolerance(num1)
 
     def to_string(self):
         return "tolerance(abs={0:.2f},rel={1:.3f})".format(self._absolute_tolerance, self._relative_tolerance)

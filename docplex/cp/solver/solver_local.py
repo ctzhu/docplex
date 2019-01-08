@@ -102,7 +102,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         #    raise CpoException("Executable file '" + str(context.execfile) + "' does not exists")
 
         # Create solving process
-        cmd = [context.execfile]
+        cmd = [context.execpath if context.execpath else context.execfile]
         if context.parameters is not None:
             cmd.extend(context.parameters)
         context.log(2, "Solver exec command: '", ' '.join(cmd), "'")
@@ -223,9 +223,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             Conflict result,
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
-        # Ensure cpo model string has been generated with all constraints named
-        if not self.model._ensure_all_root_constraints_named():
-            # Build and send new CPO model string
+        # Ensure cpo model is generated with all constraints named
+        if not self.context.model.name_all_constraints:
             self.context.model.name_all_constraints = True
             cpostr = self._get_cpo_model_string()
             # Encode model
@@ -435,6 +434,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         self.pout.write(frame)
         self.pout.flush()
 
+        # Update statistics
+        self.process_infos.incr(CpoProcessInfos.TOTAL_SENT_DATA_SIZE, len(frame))
+
 
     def _read_message(self):
         """ Read a message from the solver process
@@ -465,6 +467,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             evt = data[0:ename].decode('utf-8')
             data = data[ename+1:]
         self.context.log(5, "Read message: ", evt, ", data: '", data, "'")
+
+        # Update statistics
+        self.process_infos.incr(CpoProcessInfos.TOTAL_RECEIVED_DATA_SIZE, tsize + 6)
+
         return evt, data
 
 
@@ -479,9 +485,17 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         data = self.pin.read(nbb)
         if len(data) != nbb:
             if len(data) == 0:
-                raise LocalSolverException("Nothing to read from local solver process. Possibly stopped because cplex dll is not accessible.")
+                # Check if first read of data
+                if self.process_infos.get(CpoProcessInfos.TOTAL_RECEIVED_DATA_SIZE, 0) == 0:
+                    if IS_WINDOWS:
+                        raise LocalSolverException("Nothing to read from local solver process. Possibly not started because cplex dll is not accessible.")
+                    else:
+                        raise LocalSolverException("Nothing to read from local solver process. Check its availability.")
+                else:
+                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped.")
             else:
                 raise LocalSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
+
         # Return
         if IS_PYTHON_2:
             return bytearray(data)

@@ -46,7 +46,7 @@ the :class:`CpoSolver` object acts as an iterator. All solutions are retrieved u
 
    solver = CpoSolver(mdl)
    for sol in solver:
-       sol.print_solution()
+       sol.write()
 
 A such solution iteration can be interrupted at any time by calling end_search() that returns
 a fail solution including the last solve status.
@@ -253,7 +253,7 @@ class CpoSolverAgent(object):
         stime = time.time()
         cplr = CpoCompiler(self.model, params=self.params, context=self.context.get_root())
         cpostr = cplr.get_as_string()
-        self.rename_map = cplr.get_rename_map()
+        self.expr_map = cplr.get_expr_map()
         self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
         self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
 
@@ -264,7 +264,7 @@ class CpoSolverAgent(object):
             lout.write("Model '" + str(self.model.get_name()) + "' in CPO format:\n")
             lout.write(cpostr)
             lout.write("\n")
-            self.model.print_information(lout)
+            self.model.write_information(lout)
             lout.write("\n")
             lout.flush()
             self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
@@ -338,15 +338,15 @@ class CpoSolverAgent(object):
             # Parse JSON
             stime = time.time()
             jsol = parse_json_string(jsol)
-            # Replace variable names if rename was used
-            if self.rename_map:
-                _replace_names_in_json_dict(jsol.get('intVars'),        self.rename_map)
-                _replace_names_in_json_dict(jsol.get('intervalVars'),   self.rename_map)
-                _replace_names_in_json_dict(jsol.get('sequenceVars'),   self.rename_map)
-                _replace_names_in_json_dict(jsol.get('stateFunctions'), self.rename_map)
-                self.context.log(3, "Updated JSON result:\n", jsol)
+            # # Replace variable names if rename was used
+            # if self.rename_map:
+            #     _replace_names_in_json_dict(jsol.get('intVars'),        self.rename_map)
+            #     _replace_names_in_json_dict(jsol.get('intervalVars'),   self.rename_map)
+            #     _replace_names_in_json_dict(jsol.get('sequenceVars'),   self.rename_map)
+            #     _replace_names_in_json_dict(jsol.get('stateFunctions'), self.rename_map)
+            #     self.context.log(3, "Updated JSON result:\n", jsol)
             # Build result structure
-            res._add_json_solution(jsol)
+            res._add_json_solution(jsol, self.expr_map)
             res.process_infos[CpoProcessInfos.RESULT_PARSE_TIME] = time.time() - stime
 
         # Process Log
@@ -369,13 +369,13 @@ class CpoSolver(object):
     It create the appropriate :class:`CpoSolverAgent` that actually implements solving functions, depending
     on the value of the configuration parameter *context.solver.agent*.
     """
-    __slots__ = ('model',  # Model to solve
-                 'context',  # Solving context
-                 'agent',  # Solver agent
-                 'status',  # Current solver status
+    __slots__ = ('model',        # Model to solve
+                 'context',      # Solving context
+                 'agent',        # Solver agent
+                 'status',       # Current solver status
                  'last_result',  # Last returned solution
-                 'listeners',  # List of solve listeners
-                 'status_lock', # Lock protecting status change
+                 'listeners',    # List of solve listeners
+                 'status_lock',  # Lock protecting status change
                 )
 
     def __init__(self, model, **kwargs):
@@ -535,8 +535,7 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution,
-            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+            Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
@@ -753,7 +752,7 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution (object of class :class:`~docplex.cp.solution.CpoModelSolution`)
+            Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
         # Get next solution
         msol = self.search_next()
@@ -769,7 +768,7 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Next model solution (object of class CpoModelSolution)
+            Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
         return self.next()
 
@@ -923,7 +922,7 @@ class CpoSolver(object):
             raise CpoException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
         if sctx.is_log_enabled(3):
             sctx.log(3, "Context for solving agent '", aname, "':")
-            sctx.print_context(out=sctx.get_log_output())
+            sctx.write(out=sctx.get_log_output())
         cpath = sctx.class_name
         if cpath is None:
             raise CpoException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")

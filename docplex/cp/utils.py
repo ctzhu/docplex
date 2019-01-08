@@ -19,6 +19,7 @@ import io
 import inspect
 from collections import deque
 import json
+import platform
 
 try:
     from StringIO import StringIO
@@ -61,6 +62,10 @@ DEFAULT = "default"
 POSITIVE_INFINITY = float('inf')
 NEGATIVE_INFINITY = float('-inf')
 
+# Platform type
+IS_WINDOWS = platform.system() == 'Windows'
+
+
 ###############################################################################
 ## Public classes
 ###############################################################################
@@ -74,7 +79,7 @@ class CpoException(Exception):
         Args:
             msg: Error message
         """
-        super(Exception, self).__init__(msg)
+        super(CpoException, self).__init__(msg)
 
 
 class CpoNotSupportedException(CpoException):
@@ -86,7 +91,7 @@ class CpoNotSupportedException(CpoException):
         Args:
             msg: Error message
         """
-        super(CpoException, self).__init__(msg)
+        super(CpoNotSupportedException, self).__init__(msg)
 
 
 class Context(dict):
@@ -337,12 +342,36 @@ class Context(dict):
 
         At each level, atomic values are printed first, then sub-contexts, in alphabetical order.
 
+        DEPRECATED. Use :meth:`write` instead.
+
         Args:
-            out:    Print output. stdout by default.
-            indent: Start line indentation. Default is empty
+            out (Optional):    Target output stream or file name. If not given, default value is sys.stdout.
+            indent (Optional): Start line indentation. Default is empty
         """
+        self.write(out, indent)
+
+
+    def write(self, out=None, indent=""):
+        """ Write this context.
+
+        At each level, atomic values are printed first, then sub-contexts, in alphabetical order.
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        Args:
+            out (Optional):    Target output stream or file name. If not given, default value is sys.stdout.
+            indent (Optional): Start line indentation. Default is empty
+        """
+        # Check file
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
+                self.write(f)
+                return
+        # Check default output
         if out is None:
             out = sys.stdout
+
         sctxs = []  # List of subcontexts
         # Print atomic values
         for k in sorted(self.keys()):
@@ -361,7 +390,7 @@ class Context(dict):
         # Print sub-contexts
         for (k, v) in sctxs:
             out.write(indent + str(k) + ' =\n')
-            v.print_context(out, indent + " : ")
+            v.write(out, indent + " : ")
         out.flush()
 
 
@@ -481,6 +510,11 @@ class SafeIdAllocator(object):
         res.reverse()
         return(self.prefix + ''.join(res))
 
+    def reset(self):
+        """ Reset the allocator
+        """
+        self.count = 0
+
 
 class KeyIdDict(object):
     """ Dictionary using id of the key objects as key.
@@ -567,7 +601,7 @@ class ObjectCache(object):
             self.obj_dict[key] = value
         else:
             # Remove older object if max size is reached
-            if len(self.key_list) == self.max_size:
+            if len(self.key_list) >= self.max_size:
                 self.obj_dict.pop(self.key_list.popleft())
             # Store new object
             self.obj_dict[key] = value
@@ -590,6 +624,10 @@ class ObjectCache(object):
     def values(self):
         """ Get the list of all values """
         return list(self.obj_dict.values())
+
+    def size(self):
+        """ Get the current size of the cache """
+        return len(self.key_list)
 
     def clear(self):
         """ Clear all dictionary content """
@@ -802,10 +840,6 @@ class InfoDict(dict):
     """ Dictionary of various informations.
     """
 
-    def __init__(self):
-        super(dict, self).__init__()
-
-
     def incr(self, key, val):
         """ Increment the value of an attribute by a given value
 
@@ -833,10 +867,36 @@ class InfoDict(dict):
 
         Attributes are sorted in alphabetical order
 
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        DEPRECATED. Use :meth:`write` instead.
+
         Args:
-            out:    Print output. stdout by default.
-            indent: Start line indentation. Default is empty
+            out (Optional):    Target output stream or file name. If not given, default value is sys.stdout.
+            indent (Optional): Start line indentation. Default is empty
         """
+        self.write(out, indent)
+
+
+    def write(self, out=None, indent=""):
+        """ Write this information structure.
+
+        Attributes are sorted in alphabetical order
+
+        If the given output is a string, it is considered as a file name that is opened by this method
+        using 'utf-8' encoding.
+
+        Args:
+            out (Optional):    Target output stream or file name. If not given, default value is sys.stdout.
+            indent (Optional): Start line indentation. Default is empty
+        """
+        # Check file
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
+                self.write(f)
+                return
+        # Check default output
         if out is None:
             out = sys.stdout
 
@@ -850,6 +910,27 @@ class InfoDict(dict):
         else:
             out.write(indent + "none\n")
         out.flush()
+
+
+class ListDict(dict):
+    """ Dictionary of lists of things.
+
+    This class is a dictionary that enables to associate to each key a list of values.
+    When adding a value, key and list are created if not present, otherwise element is added to the existing list.
+    """
+
+    def append(self, key, val):
+        """ append a value to the list associated to a key.
+
+        Args:
+            key:  Attribute key
+            val:  Value to add to this key list
+        """
+        l = self.get(key)
+        if l is None:
+            self[key] = [val]
+        else:
+            l.append(val)
 
 
 
@@ -871,6 +952,23 @@ def check_default(val, default):
         val if val is different from DEFAULT, default otherwise
     """
     return default if (val is DEFAULT) else val
+
+
+def replace_in_tuple(tpl, ndx, val):
+    """ Replace a value in a tuple.
+
+    A new tuple is created with one value changed by another.
+
+    Args:
+        tpl:     Source tuple
+        ndx:  Index of the tuple value to change
+        val:  new value
+    Returns:
+        New tuple with value at position 'ndx' replaced by 'val'
+    """
+    lst = list(tpl)
+    lst[ndx] = val
+    return tuple(lst)
 
 
 def assert_arg_int_interval(val, mn, mx, name=None):
@@ -976,8 +1074,9 @@ def equals(v1, v2):
     # Check dictionary
     if isinstance(v1, dict):
         # Compare keys
-        k1 = sorted(tuple(v1.keys()))
-        if not _equals_lists(k1, sorted(tuple(v2.keys()))):
+        k1 = sorted(tuple(v1.keys()), key=lambda x: str(x))
+        k2 = sorted(tuple(v2.keys()), key=lambda x: str(x))
+        if not _equals_lists(k1, k2):
             return False
         # Compare values
         for k in k1:
@@ -1325,6 +1424,20 @@ def is_array_of_type(val, typ):
     return is_array(val) and (all(isinstance(x, typ) for x in val))
 
 
+def is_in(val, lvals):
+    """ Replace the standard 'in' operator but uses 'is' to check membership.
+
+    This method is mandatory if element to check overloads operator '=='.
+
+    Args:
+        val:   Value to check
+        lvals: List of candidate values
+    Returns:
+        True if value is in the list of values (presence checked with 'is')
+    """
+    return any(val is v for v in lvals)
+
+
 #-----------------------------------------------------------------------------
 # String conversion functions
 #-----------------------------------------------------------------------------
@@ -1355,7 +1468,7 @@ def is_symbol_char(c):
     return (c in _SYMBOL_CHARS)
 
 
-def to_printable_symbol(id):
+def to_printable_string(id):
     """ Build a printable string from raw string (add escape sequences and quotes if necessary)
 
     Args:
@@ -1366,7 +1479,7 @@ def to_printable_symbol(id):
     # Check empty string
     if len(id) == 0:
         return u'""'
-    # Check is string can be used as it is
+    # Check if string can be used as it is
     if (all((c in _SYMBOL_CHARS) for c in id)) and not id[0] in _DIGIT_CHARS:
         return make_unicode(id)
     # Build result string
@@ -1450,19 +1563,38 @@ def int_to_base(val, bdgts):
     return ''.join(res)
 
 
-def search_file_in_path(f):
-    """ Search a given file in system path
+def is_exe_file(f):
+    """ Check that a file exists and is executable.
 
     Args:
         f:  File name
     Returns:
+        True if file exists and is executable
+    """
+    return os.path.isfile(f) and os.access(f, os.X_OK)
+
+
+def search_file_in_path(f, pext=None):
+    """ Search a given file in system path
+
+    Args:
+        f:  File name
+        pext (Optional): Extension to the path, expressed as a list of folders.
+    Returns:
         First file found with full path, None if not found
     """
-    if os.path.isfile(f):
+    # Check if given file is directly executable
+    if is_exe_file(f):
         return f
-    for d in os.getenv('PATH').split(os.pathsep):
+
+    # Search first executable in the path
+    path = os.getenv('PATH');
+    path = path.split(os.pathsep) if path else []
+    if pext is not None:
+        path.extend(pext)
+    for d in path:
         nf = os.path.join(d, f)
-        if os.path.isfile(nf):
+        if is_exe_file(nf):
             return nf
     return None
 
@@ -1478,6 +1610,77 @@ def parse_json_string(jstr):
     return json.loads(jstr, parse_constant=True)
 
 
+def encode_csv_string(str):
+    """ Encode a string to be used in CSV file
+
+    Args:
+        str:  String to encode
+    Returns:
+        Encoded string, including starting and ending double quote
+    """
+    res = ['"']
+    for c in str:
+        res.append(c)
+        if c == '"':
+            res.append('"')
+    res.append('"')
+    return ''.join(res)
+
+
+def compare_natural(s1, s2):
+    """ Compare two strings in natural order (for numbers that are inside)
+
+    Args:
+        s1:  First string
+        s2:  Second string
+    Returns:
+        integer <0 if s1 < s2, 0 if s1 == s2, >0 if s1 > s2
+    """
+    # Check null strings
+    if s1 is None:
+        return 0 if s2 is None else -1
+    if s2 is None:
+        return 1
+
+
+    # Skip all identical characters
+    len1 = len(s1)
+    len2 = len(s2)
+    i = 0
+    while i < len1 and i < len2 and s1[i] == s2[i]:
+        i += 1
+
+    # Check end of string
+    if i == len1 or i == len2:
+        return len1 - len2
+
+    # Check digit in first string
+    c1 = s1[i]
+    c2 = s2[i]
+    if c1.isdigit():
+        # Check digit in first string only
+        if not c2.isdigit():
+            return 1 if i > 0 and s1[i - 1].isdigit() else ord(c1) - ord(c2)
+
+        # Scan all integer digits
+        x1 = i + 1
+        while x1 < len1 and s1[x1].isdigit():
+            x1 += 1
+        x2 = i + 1
+        while x2 < len2 and s2[x2].isdigit():
+            x2 += 1
+
+        # Longer integer wins, first digit otherwise
+        return ord(c1) - ord(c2) if x1 == x2 else x1 - x2
+
+    # Check digit in second string only
+    if c2.isdigit():
+        return -1 if i > 0 and s2[i - 1].isdigit() else ord(c1) - ord(c2)
+
+    # No digits
+    return ord(c1) - ord(c2)
+
+
 #-----------------------------------------------------------------------------
 # Zip iterator functions to scan lists simultaneously
 #-----------------------------------------------------------------------------
@@ -1490,6 +1693,21 @@ else:
     # For Python 3.
     zip = zip
     zip_longest = itertools.zip_longest
+
+
+#-----------------------------------------------------------------------------
+# Reload function
+#-----------------------------------------------------------------------------
+
+if IS_PYTHON_2:
+    pass # reload is builtin
+else:
+    if sys.version_info  < (3, 4):
+        import imp
+        reload = imp.reload
+    else:
+        import importlib
+        reload = importlib.reload
 
 
 #-----------------------------------------------------------------------------

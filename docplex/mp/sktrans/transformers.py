@@ -5,99 +5,95 @@
 # --------------------------------------------------------------------------
 
 
-
 from sklearn.base import TransformerMixin, BaseEstimator
-from docplex.mp.constants import ObjectiveSense
-from docplex.mp.advmodel import AdvModel
-from docplex.mp.utils import *
 
-import numpy as np
-from pandas import DataFrame
+from docplex.mp.constants import ObjectiveSense
+from docplex.mp.sktrans.modeler import make_modeler
+from docplex.mp.utils import *
 
 
 class CplexTransformerBase(BaseEstimator, TransformerMixin):
     """ Root class for CPLEX transformers
     """
 
-    def __init__(self, sense="min", keep_zeros=False):
-        self.sense = ObjectiveSense.parse(sense)  # fail if error
-        self.keep_zeros = keep_zeros
+    def __init__(self, sense="min", modeler="cplex"):
+        self.objsense = ObjectiveSense.parse(sense)  # fail if error
+        self.modeler = make_modeler(modeler)
 
     def fit(self, *_):
         return self
 
-    def transform(self, X, y=None, **transform_params):
+    def transform(self, X, y=None, **params):
         """ Main method to solve Linear Programming problemss.
 
         :param X: the matrix describing the  constraints of the problem.
             Accepts numpy matrices, pandas dataframes, or sciPy sparse matrices
         :param y: an optional sequence of scalars descrining the cost vector
-        :param transform_params: optional keyword arguments to pass additional parameters.
+        :param params: optional keyword arguments to pass additional parameters.
 
         :return: a pandas dataframe with two columns: name and value containing the values
         of the columns.
         """
         # look for upper, lower bound columns in keyword args
-        var_lbs = transform_params.get("lbs", None)
-        var_ubs = transform_params.get("ubs", None)
+        var_lbs = params.get("lbs", None)
+        var_ubs = params.get("ubs", None)
+        var_types = params.get("types", None)
         if is_pandas_dataframe(X):
-            return self._transform_from_pandas(X, y, var_lbs, var_ubs, **transform_params)
+            return self._transform_from_pandas(X, y, var_lbs, var_ubs, var_types, **params)
         elif is_numpy_matrix(X):
-            return self._transform_from_numpy(X, y, var_lbs, var_ubs, **transform_params)
+            return self._transform_from_numpy(X, y, var_lbs, var_ubs, var_types, **params)
         elif is_scipy_sparse(X):
-            return self._transform_from_scsparse(X, y, var_lbs, var_ubs, **transform_params)
+            return self._transform_from_sparse(X, y, var_lbs, var_ubs, var_types, **params)
         elif isinstance(X, list):
-            return self._transform_from_sequence(X, y, var_lbs, var_ubs, **transform_params)
+            return self._transform_from_sequence(X, y, var_lbs, var_ubs, var_types, **params)
         else:
             raise ValueError(
                 'transformer expects pandas dataframe, numpy matrix or python list, {0} was passed'.format(X))
 
-    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_sequence(self, X, y, var_lbs, var_ubs, var_types, **params):
         raise NotImplemented
 
-    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, var_types, **params):
         raise NotImplemented
 
-    def _transform_from_scsparse(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         raise NotImplemented
 
-    def _transform_from_sequence(self, X, y, var_lbs, var_ubs, **transform_params):
-        # by default, convert X to a numpy matrix
-        return self._transform_from_numpy(np.matrix(X), y, var_lbs, var_ubs, **transform_params)
+    def _transform_from_sparse(self, X, y, var_lbs, var_ubs, var_types, **params):
+        raise NotImplemented
 
-    def _solve_model(self, mdl, cols, colnames, costs, **params):
-        if costs is not None:
-            mdl.set_objective(sense=self.sense, expr=mdl.scal_prod_vars_all_different(cols, costs))
+    def build_matrix_linear_model_and_solve(self, var_count, var_lbs, var_ubs, var_types, var_names,
+                                            cts_mat, rhs,
+                                            objsense, costs,
+                                            **params):
+        return self.modeler.build_matrix_linear_model_and_solve(var_count, var_lbs, var_ubs,
+                                                                var_types, var_names,
+                                                                cts_mat, rhs,
+                                                                objsense, costs, **params)
 
-        # --- lp export
-        lp_export = params.pop('lp_export', False)
-        lp_base = params.pop('lp_basename', None)
-        lp_path = params.pop('lp_path', None)
-        if lp_export:
-            mdl.export_as_lp(basename=lp_base, path=lp_path)
-        # ---
+    def build_matrix_range_model_and_solve(self, var_count, var_lbs, var_ubs,
+                                           var_types, var_names,
+                                           cts_mat, range_mins, range_maxs,
+                                           objsense, costs,
+                                           **params):
+        return self.modeler.build_matrix_range_model_and_solve(var_count, var_lbs, var_ubs,
+                                                               var_types, var_names,
+                                                               cts_mat, range_mins, range_maxs,
+                                                               objsense, costs,
+                                                               **params)
 
-        s = mdl.solve()
-        if s:
-            dd = {'value': s.get_values(cols)}
-            if colnames is not None:
-                dd['name'] = colnames
-            ret = DataFrame(dd)
-            if not self.keep_zeros:
-                ret = ret[ret['value'] != 0]
-                ret = ret.reset_index(drop=True)
-
-            return ret
-
-        else:
-            return self.new_empty_dataframe()
-
-    @classmethod
-    def new_empty_dataframe(cls):
-        return DataFrame([])
+    def build_sparse_linear_model_and_solve(self, nb_vars, var_lbs, var_ubs, var_types, var_names,
+                                            nb_rows, cts_sparse_coefs,
+                                            objsense, costs,
+                                            **params):
+        return self.modeler.build_sparse_linear_model_and_solve(nb_vars, var_lbs, var_ubs,
+                                                                var_types, var_names,
+                                                                nb_rows, cts_sparse_coefs,
+                                                                objsense, costs,
+                                                                **params)
 
 
-class LPTransformer(CplexTransformerBase):
+class CplexTransformer(CplexTransformerBase):
     """ A Scikit-learn transformer class to solve linear problems.
 
     This transformer class solves LP problems of
@@ -107,7 +103,7 @@ class LPTransformer(CplexTransformerBase):
 
     """
 
-    def __init__(self, sense="min"):
+    def __init__(self, sense="min", modeler="cplex"):
         """
         Creates an instance of LPTransformer to solve linear problems.
 
@@ -128,72 +124,75 @@ class LPTransformer(CplexTransformerBase):
                         1x + 2y <= 3
                         4x + 5y <= 6
         """
-        super(LPTransformer, self).__init__(sense)
+        super(CplexTransformer, self).__init__(sense, modeler)
 
-    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, var_types, **params):
         assert is_pandas_dataframe(X)
 
         X_new = X.copy()
         # save min, max per nutrients in lists, drop them
         rhs = X["rhs"].tolist()
         X_new.drop(labels=["rhs"], inplace=True, axis=1)
+        _, x_cols = X.shape
+        nb_vars = x_cols - 1
+        return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,
+                                                        var_names=X_new.columns,
+                                                        cts_mat=X_new, rhs=rhs,
+                                                        objsense=self.objsense, costs=y,
+                                                        **params)
 
-        with AdvModel(name='lp_transformer') as mdl:
-            x_rows, x_cols = X.shape
-            nb_vars = x_cols - 1
+    def _transform_from_sequence(self, X, y, var_lbs, var_ubs, var_types, **params):
+        # matrix is a list of lists nr x [nc+1]
+        # last two columns are lbs, ubs in that order
+        assert X
+        xc = len(X[0])
+        for r in X:
+            assert xc == len(r)
 
-            varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs)
-            senses = transform_params.get('sense', 'le')
-            mdl.add(mdl.matrix_constraints(X_new, varlist, rhs, sense=senses))
-            return self._solve_model(mdl, varlist, colnames=X_new.columns, costs=y, **transform_params)
+        colnames = params.pop("colnames", None)
 
-    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, **transform_params):
+        nb_vars = xc - 1
+        X_cts = [r[:-1] for r in X]
+        rhs = [r[-1] for r in X]
+        return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,
+                                                        colnames,
+                                                        X_cts, rhs,
+                                                        objsense=self.objsense, costs=y, **params)
+
+    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         # matrix is nrows x (ncols + 2)
         # last two columns are lbs, ubs in that order
         assert is_numpy_matrix(X)
 
-        colnames = transform_params.get("colnames", None)
-        mshape = X.shape
-        xr, xc = mshape
-        assert xc >= 2
-        nb_vars = xc - 1
-        X_cts = X[:, :-1]
-        rhs = X[:, -1].A1
-        with AdvModel(name='lp_transformer') as mdl:
-            varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs, name=colnames)
-            senses = transform_params.get('sense', 'le')
-            mdl.add(mdl.matrix_constraints(X_cts, varlist, rhs, sense=senses))
-            return self._solve_model(mdl, varlist, colnames, costs=y, **transform_params)
-
-    def _transform_from_scsparse(self, X, y, var_lbs, var_ubs, **transform_params):
-        assert is_scipy_sparse(X)
-
-        colnames = transform_params.get("colnames", None)
+        colnames = params.pop("colnames", None)
         mshape = X.shape
         nr, nc = mshape
-        assert nc == nr + 1
+
+        assert nc >= 2
         nb_vars = nc - 1
-        with AdvModel(name='lp_transformer') as mdl:
-            varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs)
-            lfactory = mdl._lfactory
-            r_rows = range(nr)
-            exprs = [lfactory.linear_expr() for _ in r_rows]
-            rhss = [0] * nr
-            #  convert to coo before iterate()
-            x_coo = X.tocoo()
-            for coef, row, col in izip(x_coo.data, x_coo.row, x_coo.col):
-                if col < nr:
-                    exprs[row]._add_term(varlist[col], coef)
-                else:
-                    rhss[row] = coef
-            senses = transform_params.get('sense', 'le')
-            cts = [lfactory.new_binary_constraint(exprs[r], rhs=rhss[r], sense=senses) for r in r_rows]
-            lfactory._post_constraint_block(cts)
-            return self._solve_model(mdl, varlist, colnames, costs=y, **transform_params)
+        X_cts = X[:, :-1]
+        rhs = X[:, -1].A1
+        return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,colnames,
+                                                        X_cts, rhs,
+                                                        objsense=self.objsense, costs=y, **params)
+
+    def _transform_from_sparse(self, X, y, var_lbs, var_ubs, var_types, **params):
+        assert is_scipy_sparse(X)
+
+        colnames = params.pop("colnames", None)
+        mshape = X.shape
+        nr, nc = mshape
+        nb_vars = nc - 1
+        #  convert to coo before iterate()
+        x_coo = X.tocoo()
+        cts_sparse_coefs = izip(x_coo.data, x_coo.row, x_coo.col)
+        return self.build_sparse_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,colnames,
+                                                        nr, cts_sparse_coefs,
+                                                        objsense=self.objsense, costs=y, **params)
 
 
-class LPRangeTransformer(CplexTransformerBase):
-    def __init__(self, sense="min"):
+class CplexRangeTransformer(CplexTransformerBase):
+    def __init__(self, sense="min", modeler="cplex"):
         """
         Creates an instance of LPRangeTransformer to solve range-based linear problems.
 
@@ -217,9 +216,30 @@ class LPRangeTransformer(CplexTransformerBase):
                         3 <= 1x + 2y <= 30
                         6 <= 4x + 5y <= 60
         """
-        super(LPRangeTransformer, self).__init__(sense)
+        super(CplexRangeTransformer, self).__init__(sense, modeler)
 
-    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_sequence(self, X, y, var_lbs, var_ubs, **params):
+        # matrix is a list of lists nr x [nc+1]
+        # last two columns are lbs, ubs in that order
+        assert X
+        xc = len(X[0])
+        assert xc >= 3  # one var plus min max
+        for r in X:
+            assert xc == len(r)
+
+        colnames = params.get("colnames", None)
+
+        nb_vars = xc - 2
+        X_cts = [r[:-2] for r in X]
+        row_maxs = [r[-1] for r in X]
+        row_mins = [r[-2] for r in X]
+        return self.build_matrix_range_model_and_solve(nb_vars, var_lbs, var_ubs, colnames,
+                                                       cts_mat=X_cts,
+                                                       range_mins=row_mins, range_maxs=row_maxs,
+                                                       objsense=self.objsense, costs=y,
+                                                       **params)
+
+    def _transform_from_pandas(self, X, y, var_lbs, var_ubs, var_types, **params):
         assert is_pandas_dataframe(X)
 
         x_rows, x_cols = X.shape
@@ -228,19 +248,20 @@ class LPRangeTransformer(CplexTransformerBase):
         row_mins = X["min"].tolist()
         row_maxs = X["max"].tolist()
         X_new.drop(labels=["min", "max"], inplace=True, axis=1)
+        nb_vars = x_cols - 2
+        return self.build_matrix_range_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,
+                                                       X_new.columns,
+                                                       cts_mat=X_new,
+                                                       range_mins=row_mins, range_maxs=row_maxs,
+                                                       objsense=self.objsense, costs=y,
+                                                       **params)
 
-        with AdvModel(name='lp_range_trasnformer') as mdl:
-            nb_vars = x_cols - 2
-            varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs)
-            mdl.add(mdl.matrix_ranges(X_new, varlist, row_mins, row_maxs))
-            return self._solve_model(mdl, varlist, colnames=X_new.columns, costs=y, **transform_params)
-
-    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, **transform_params):
+    def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         # matrix is nrows x (ncols + 2)
         # last two columns are lbs, ubs in that order
         assert is_numpy_matrix(X)
 
-        colnames = transform_params.pop("colnames", None)
+        colnames = params.pop("colnames", None)
         mshape = X.shape
         xr, xc = mshape
         assert xc >= 3
@@ -248,7 +269,9 @@ class LPRangeTransformer(CplexTransformerBase):
         X_cts = X[:, :-2]
         row_mins = X[:, -2]
         row_maxs = X[:, -1]
-        with AdvModel(name='lp_range_transformer') as mdl:
-            varlist = mdl.continuous_var_list(nb_vars, lb=var_lbs, ub=var_ubs, name=colnames)
-            mdl.add(mdl.matrix_ranges(X_cts, varlist, row_mins, row_maxs))
-            return self._solve_model(mdl, varlist, colnames, costs=y, **transform_params)
+        return self.build_matrix_range_model_and_solve(nb_vars, var_lbs, var_ubs,
+                                                       var_types, colnames,
+                                                       cts_mat=X_cts,
+                                                       range_mins=row_mins, range_maxs=row_maxs,
+                                                       objsense=self.objsense, costs=y,
+                                                       **params)

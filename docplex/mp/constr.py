@@ -13,21 +13,21 @@ import warnings
 
 
 class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
-    __slots__ = ('_priority',)
+    __slots__ = ()
 
     def __init__(self, model, name=None):
         ModelingObject.__init__(self, model, name)
 
     @property
     def priority(self):
-        return getattr(self, '_priority', None)
+        return self._model.get_constraint_priority(self)
 
     @priority.setter
     def priority(self, newprio):
         self.set_priority(newprio)
 
     def set_priority(self, newprio):
-        self._priority = Priority.parse(newprio, logger=self.error_handler, accept_none=True)
+        self._model.set_constraint_priority(self, Priority.parse(newprio, logger=self.error_handler, accept_none=True))
 
     def set_mandatory(self):
         ''' Sets the constraint as mandatory.
@@ -35,10 +35,10 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
         This prevents relaxation from relaxing this constraint.
         To revert this, set the priority to any non-mandatory priprity, or None.
         '''
-        self._priority = Priority.MANDATORY
+        self.priority = Priority.MANDATORY
 
     def is_mandatory(self):
-        return Priority.MANDATORY == self._priority
+        return Priority.MANDATORY == self.priority
 
     def _unsupported_relational_op(self, op_string, other):
         self.fatal("Relational operator: {1} is unavailable with constraint: {0!s}", self, op_string)
@@ -74,6 +74,9 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
 
     def iter_exprs(self):
         raise NotImplementedError  # pragma: no cover
+
+    def get_var_coef(self, dvar):  # pragma: no cover
+        raise NotImplementedError
 
     def size(self):
         return sum(x.size() for x in self.iter_exprs())
@@ -132,6 +135,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
         # lock sub expressions
         for expr in self.iter_exprs():
             expr.lock_discrete()
+
 
 # noinspection PyAbstractClass
 class BinaryConstraint(AbstractConstraint):
@@ -436,6 +440,14 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     lhs = left_expr
     rhs = right_expr
 
+    def _no_linear_ct_in_logical_test_error(self):
+        if self.sense == ComparisonType.EQ:
+            # for equality testing there -is- a workaround
+            msg = "Cannot use == to test expression equality, try using Python is: {0!s}".format(self)
+        else:
+            msg = "Cannot convert a linear constraint to boolean: {0!s}".format(self)
+        raise TypeError(msg)
+
     def _cannot_promote_from_linear_to_quadratic(self, old_expr, new_expr):
         msg = 'Cannot change linear constraint expr from linear to quadratic'
         if new_expr is None:
@@ -555,64 +567,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     iter_sorted_terms = iter_terms
 
-    # def __le__(self, e):
-    #     # INTERNAL: define ranges with operators.
-    #     # Beware one must use parentheses as in r = (1 <= x) <= 2
-    #     # Chained comparisons like: 1 <= x <= 2 will fail as Python
-    #     # generates an "and" of two constraints (1<=x) and (x<=2) but
-    #     # constraints _cannot_ be converted to booleans.
-    #     if not is_number(e):
-    #         self.fatal("operator <= on constraint requires numeric argument, got: {0!s}", e)
-    #     if self.sense is ComparisonType.GE:
-    #         rhs = self.right_expr
-    #         if rhs.is_constant():
-    #             range_min = rhs.constant
-    #             range_max = float(e)
-    #             return self.model.range_constraint(range_min, self.left_expr, range_max)
-    #         else:
-    #             self.fatal("operator <= requires a constraint with numeric RHS, rhs is: {0!s}", rhs)
-    #     else:
-    #         self.fatal("operator <= is only allowed for LE constraints, type is: {0!s}", self.sense)
-    #
-    # def __ge__(self, e):
-    #     # INTERNAL: define ranges with operators.
-    #     # Beware one must use parentheses as in r = (1 <= x) <= 2
-    #     # Chained comparisons like: 1 <= x <= 2 will fail as Python
-    #     # generates an "and" of two constraints (1<=x) and (x<=2) but
-    #     # constraints _cannot_ be converted to booleans.
-    #     if not is_number(e):
-    #         self.fatal("operator >= on constraints requires number argument, got: {0!s}", e)
-    #     if self.sense is ComparisonType.LE:
-    #         rhs = self.right_expr
-    #         if rhs.is_constant():
-    #             range_max = rhs.constant
-    #             range_min = float(e)
-    #             return self.model.range_constraint(range_min, self.left_expr, range_max)
-    #         else:
-    #             self.fatal("operator >= requires a constraint with numeric RHS, got: {0!s}", rhs)
-    #     else:
-    #         self.fatal("operator >= is only allowed for GE constraints, not {0!s}", self.sense)
-
-    def iter_variables(self):
-        """  Iterates over all variables mentioned in the constraint.
-
-        *Note:* This includes variables that are mentioned with a zero coefficient. For example,
-        the iterator on the following constraint:
-
-         X <= X+Y + 1
-
-        will return X and Y, although X is mentioned with a zero coefficient.
-
-        Returns:
-            An iterator object.
-        """
-        if self._right_expr.is_constant():
-            return self._left_expr.iter_variables()
-        elif self._left_expr.is_constant():
-            return self._right_expr.iter_variables()
-        else:
-            return self.generate_ordered_vars()
-
     @property
     def dual_value(self):
         """ This property returns the dual value of the constraint.
@@ -653,7 +607,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
             if rv not in left_expr:
                 yield rv
 
-    def fast_get_coef(self, dvar):
+    def get_var_coef(self, dvar):
         return self._left_expr.unchecked_get_coef(dvar) - self._right_expr.unchecked_get_coef(dvar)
 
     def iter_net_linear_coefs(self):
@@ -861,7 +815,7 @@ class RangeConstraint(AbstractConstraint):
         # compatible with cplex...
         return -slack
 
-    def fast_get_coef(self, dvar):
+    def get_var_coef(self, dvar):
         return self._expr.unchecked_get_coef(dvar)
 
     def is_satisfied(self, solution, tolerance=1e-6):
@@ -917,7 +871,7 @@ class RangeConstraint(AbstractConstraint):
             self._model.typecheck_num(new_ub)
             self.get_linear_factory().set_range_constraint_bounds(self, new_lb, new_ub)
         except ValueError:
-            self.fatal('RangeConstraint.bounds expects a 2-tuple of numbers')
+            self.fatal('RangeConstraint.bounds expects a 2-tuple of numbers, {0!r} was passed', new_bounds)
 
     def _internal_set_lb(self, new_lb):
         self._lb = new_lb
@@ -997,8 +951,8 @@ class RangeConstraint(AbstractConstraint):
 
     def __repr__(self):
         printable_name = self._get_safe_name()
-        return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".format(printable_name, self.lb, self._expr,
-                                                                              self.ub)
+        return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".\
+            format(printable_name, self.lb, self._expr, self.ub)
 
     def cplex_scope(self):
         return CplexScope.LINEAR_CT_SCOPE
@@ -1018,8 +972,6 @@ class RangeConstraint(AbstractConstraint):
     @benders_annotation.setter
     def benders_annotation(self, new_anno):
         self.set_benders_annotation(new_anno)
-
-
 
 
 class LogicalConstraint(AbstractConstraint):
@@ -1116,6 +1068,12 @@ class LogicalConstraint(AbstractConstraint):
         for v in self._linear_ct.iter_variables():
             yield v
 
+    def get_var_coef(self, dvar):
+        if dvar is self._binary_var:
+            return 1
+        else:
+            return self._linear_ct.get_var_coef(dvar)
+
     def __str__(self):
         return self.to_string()
 
@@ -1150,6 +1108,7 @@ class LogicalConstraint(AbstractConstraint):
         s_active_value = '' if self._active_value else '=0'
         s_symbol = self._symbol()
         return "{0}{1}{2} {4} [{3!s}]".format(name_part, varname, s_active_value, self.linear_constraint, s_symbol)
+
 
 class IndicatorConstraint(LogicalConstraint):
     """ This class models indicator constraints.
@@ -1395,13 +1354,14 @@ class PwlConstraint(AbstractConstraint):
 
     """
 
+    __slots__ = ('_pwl_expr', '_pwl_func', '_expr', '_y')
+
     def __init__(self, model, pwl_expr, name=None):
         AbstractConstraint.__init__(self, model, name)
         self._pwl_expr = pwl_expr
         self._pwl_func = pwl_expr.pwl_func
         self._expr = pwl_expr._x_var
         self._y = None
-        self.__usage_counter = pwl_expr.usage_counter
 
     def resolve(self):
         self._pwl_expr.resolve()
@@ -1433,7 +1393,7 @@ class PwlConstraint(AbstractConstraint):
         """ This property returns the output variable associated with the piecewise linear constraint.
         """
         if self._y is None:
-            self._y = self._pwl_expr.functional_var
+            self._y = self._pwl_expr._get_allocated_f_var()
         return self._y
 
     @property
@@ -1441,7 +1401,7 @@ class PwlConstraint(AbstractConstraint):
         """ This property returns the usage counter of the piecewise linear function associated with the
         piecewise linear constraint.
         """
-        return self.__usage_counter
+        return self._pwl_expr.usage_counter
 
     def _get_index_scope(self):
         return self._model._pwl_scope
@@ -1458,14 +1418,15 @@ class PwlConstraint(AbstractConstraint):
             if v is not y:
                 yield v
 
+    def get_var_coef(self, dvar):
+        if dvar is self.y:
+            return 1
+        else:
+            return self.expr.unchecked_get_coef(dvar)
+
     def copy(self, target_model, var_map):
         # Internal: copy must not be invoked on PwlConstraint.
         raise NotImplementedError  # pragma: no cover
-
-    def notify_deleted(self):
-        # INTERNAL
-        super(PwlConstraint, self).notify_deleted()
-        self.model._allpwl.remove(self)
 
     def to_string(self):
         return "{0} == {1!s}({2!s})".format(self.y, self.pwl_func.get_name(), self.expr)
@@ -1485,5 +1446,5 @@ class PwlConstraint(AbstractConstraint):
 
     def __repr__(self):
         printable_name = self._get_safe_name()
-        return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})".format(printable_name, self.y,
-                                                                            self.pwl_func, self.expr)
+        return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})".\
+            format(printable_name, self.y, self.pwl_func, self.expr)

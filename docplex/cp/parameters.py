@@ -769,7 +769,7 @@ class CpoParameters(Context):
 
         The value is a positive float. Default value is 1e-09.
         """
-        return self.get_attribute('OptimalityTolerance')
+        return self.get_attribute('OptimalityTolerance', 1e-09)
 
     def set_OptimalityTolerance(self, val):
         self._set_value_float('OptimalityTolerance', val)
@@ -852,7 +852,7 @@ class CpoParameters(Context):
 
         The value is a non-negative float. Default value is 0.0001.
         """
-        return self.get_attribute('RelativeOptimalityTolerance')
+        return self.get_attribute('RelativeOptimalityTolerance', 0.0001)
 
     def set_RelativeOptimalityTolerance(self, val):
         self._set_value_float('RelativeOptimalityTolerance', val)
@@ -869,7 +869,7 @@ class CpoParameters(Context):
 
         The value is an integer greater than 0. Default value is 100.
         """
-        return self.get_attribute('RestartFailLimit')
+        return self.get_attribute('RestartFailLimit', 100)
 
     def set_RestartFailLimit(self, val):
         self._set_value_integer('RestartFailLimit', val, 1)

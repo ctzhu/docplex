@@ -152,7 +152,7 @@ def _update_solve_details(solver):
         return
 
     # Get last solver solution
-    msol = solver.get_last_solution()
+    msol = solver.get_last_result()
     if msol is None:
         return
 
@@ -221,7 +221,7 @@ def _notify_end_solve(solver):
         return
 
     # Set solve status
-    res = solver.get_last_solution()
+    res = solver.get_last_result()
     if res is None:
         status = _STATUS_UNKNOWN
     else:

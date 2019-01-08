@@ -57,6 +57,9 @@ IS_IN_NOTEBOOK = 'ipykernel' in sys.modules
 # Useful if default value is not static
 DEFAULT = "default"
 
+# Infinity
+POSITIVE_INFINITY = float('inf')
+NEGATIVE_INFINITY = float('-inf')
 
 ###############################################################################
 ## Public classes
@@ -99,6 +102,7 @@ class Context(dict):
         for k, v in kwargs.items():
             self.set_attribute(k, v)
 
+
     def __setattr__(self, name, value):
         """ Set a context parameter.
 
@@ -107,6 +111,7 @@ class Context(dict):
             value: Parameter value
         """
         self.set_attribute(name, value)
+
 
     def __getattr__(self, name):
         """ Get a context parameter.
@@ -117,6 +122,7 @@ class Context(dict):
             Parameter value, None if not set
         """
         return self.get_attribute(name)
+
 
     def set_attribute(self, name, value):
         """ Set a context attribute.
@@ -129,6 +135,7 @@ class Context(dict):
         if isinstance(value, Context):
             vars(value)['parent'] = self
 
+
     def get_attribute(self, name, default=None):
         """ Get a context attribute.
 
@@ -137,7 +144,7 @@ class Context(dict):
 
         Args:
             name:    Attribute name
-            default: Optional, default value if attribute is not found
+            default: Optional, default value if attribute is absent
         Return:
             Attribute value, default value if not found
         """
@@ -145,12 +152,30 @@ class Context(dict):
             raise AttributeError
         ctx = self
         while True:
-            res = ctx.get(name)
-            if res is not None:
-                return res
+            if name in ctx:
+               return(ctx.get(name))
             ctx = ctx.get_parent()
             if ctx is None:
                 return default
+
+
+    def del_attribute(self, name):
+        """ Remove a context attribute.
+
+        Args:
+            name:    Attribute name
+        Return:
+            True if attribute has been removed, False if it was not present
+        """
+        if name in self:
+            value = self.get(name)
+            if isinstance(value, Context):
+                vars(value)['parent'] = None
+            del(self[name])
+            return True
+        else:
+            return False
+
 
     def get_by_path(self, path, default=None):
         """ Get a context attribute using its path.
@@ -170,6 +195,7 @@ class Context(dict):
                 if res is None:
                     return default
         return res
+
 
     def search_and_replace_attribute(self, name, value, path=""):
         """ Replace an existing attribute.
@@ -207,6 +233,7 @@ class Context(dict):
                 return apth
         return None
 
+
     def get_parent(self):
         """ Get the parent context.
 
@@ -216,6 +243,7 @@ class Context(dict):
             Parent context, None if this context is root
         """
         return vars(self)['parent']
+
 
     def get_root(self):
         """ Get the root context (last parent with no parent).
@@ -230,6 +258,7 @@ class Context(dict):
             pp = pp.get_parent()
         return res
 
+
     def clone(self):
         """ Clone this context and all sub-contexts recursively.
 
@@ -242,6 +271,7 @@ class Context(dict):
                 v = v.clone()
             res.set_attribute(k, v)
         return res
+
 
     def add(self, ctx):
         """ Add another context to this one.
@@ -257,6 +287,7 @@ class Context(dict):
                 v = v.clone()
             self.set_attribute(k, v)
 
+
     def is_log_enabled(self, vrb):
         """ Check if log is enabled for a given verbosity
 
@@ -267,6 +298,7 @@ class Context(dict):
             vrb:  Required verbosity level, None for always
         """
         return self.log_output and ((vrb is None) or (self.verbose and (self.verbose >= vrb)))
+
 
     def get_log_output(self):
         """ Get this context log output
@@ -279,6 +311,7 @@ class Context(dict):
         """
         out = self.log_output
         return sys.stdout if out == True else out
+
 
     def log(self, vrb, *msg):
         """ Log a message if log is enabled with enough verbosity
@@ -297,6 +330,7 @@ class Context(dict):
                 out.write(str(prfx))
             out.write(''.join([str(m) for m in msg]) + "\n")
             out.flush()
+
 
     def print_context(self, out=None, indent=""):
         """ Print this context.

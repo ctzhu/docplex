@@ -41,7 +41,7 @@ setup(
                'docplex.mp.sktrans',
                'docplex.mp.worker',
                'docplex.util'],
-    version = '2.4.56',  # replaced at build time
+    version = '2.4.61',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

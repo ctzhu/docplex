@@ -74,8 +74,26 @@ class CpoSolverListener(object):
         pass
 
 
+    def result_found(self, solver, sres):
+        """ Signal that a result has been found.
+
+        This method is called every time a result is provided by the solver. The result, in particular the last one,
+        may not contain any solution. This should be checked calling method sres.is_solution().
+
+        This method replaces deprecated method solution_found() that is confusing as result may possibly
+        not contain a solution to the model.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            sres:   Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`
+        """
+        self.solution_found(solver, sres)
+
+
     def solution_found(self, solver, msol):
         """ Signal that a solution has been found.
+
+        Deprecated. Use :meth:`result_found` instead.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
@@ -142,7 +160,7 @@ class AutoStopListener(CpoSolverListener):
         # Stop time control thread if any
         self._stop_waiting_loop()
 
-    def solution_found(self, solver, msol):
+    def result_found(self, solver, msol):
         self.nb_sols += 1
         self.last_sol_time = time.time()
         # Check if minimal number of solutions not reached
@@ -215,7 +233,7 @@ class DelayListener(CpoSolverListener):
         """
         self.delay = delay
 
-    def solution_found(self, solver, msol):
+    def result_found(self, solver, msol):
         time.sleep(self.delay)
 
 
@@ -244,7 +262,7 @@ except:
 if not TK_INTER_AVAILABLE:
 
     class SolverProgressPanelListener(CpoSolverListener):
-        def __init__(self):
+        def __init__(self, parse_log=False):
             raise CpoNotSupportedException("Tkinter is not available in this Python environment")
 
 else:
@@ -482,7 +500,7 @@ else:
             """ Notify that the solve is ended. """
             self.progress_panel.stop()
 
-        def solution_found(self, solver, msol):
+        def result_found(self, solver, msol):
             """ Signal that a solution has been found. """
             self.progress_panel.notify_solution(msol)
 

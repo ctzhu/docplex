@@ -393,17 +393,14 @@ class SolutionHookListener(SolutionListener):
         self._hook_fn(sol)
 
 
-def pname(n):
-    # return the name under wich kpi are published
-    return 'KPI.%s' % n
-
-
 class KpiRecorder(SolutionListener):
 
     # used to publish kpis on workera
-    def __init__(self, model, require_improve=True, publish_hook=None):
+    def __init__(self, model, require_improve=True, publish_hook=None,
+                 kpi_publish_format=None):
         super(KpiRecorder, self).__init__(model)
         self.publish_hook = publish_hook
+        self.kpi_publish_format = kpi_publish_format or 'KPI.%s'
 
         # all data below are attached to a solve (must be reset when starting a new solve...)
         self._kpis = []
@@ -425,19 +422,23 @@ class KpiRecorder(SolutionListener):
 
     def notify_solution(self, incumbents):
         super(KpiRecorder, self).notify_solution(incumbents)
+        publish_name_fn = lambda kn: self.kpi_publish_format % kn
         if self._last_accept:
             # build a name/value dictionary with builtin values
             k = self._model.kpis_as_dict(self.current_solution)
-            name_values = {pname(u.name): v for u, v in iteritems(k)}
+            name_values = {publish_name_fn(u.name): v for u, v in iteritems(k)}
 
-            name_values[pname('_objective')] = self.current_solution.objective_value
-            name_values[pname('_time')] = self._last_time
+            # This must be this value for the current objective
+            name_values['PROGRESS_CURRENT_OBJECTIVE'] = self.current_solution.objective_value
+            # predefined keys, not KPIs
+            #name_values[publish_name_fn('_objective')] = self.current_solution.objective_value
+            name_values[publish_name_fn('_time')] = self._last_time
+
+            self._kpis.append(name_values)
 
             # usually publish kpis in environment...
             if self.publish_hook is not None:
                 self.publish_hook(name_values)
-
-            self._kpis.append(name_values)
 
     def iter_kpis(self):
         return iter(self._kpis)

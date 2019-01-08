@@ -1,7 +1,7 @@
 Changelog
 ---------
 
-Changed in 2.4.56:
+Changed in 2.4.61:
 ``````````````````
 * Both ``docplex.mp`` & ``docplex.cp``:
    * Support for CPLEX engines 12.8. Some features of docplex2.4 are available only with engines >= 12.8.
@@ -31,6 +31,9 @@ Changed in 2.4.56:
    * Using parameter *context.solver.solve_with_start_next*, enable solve() method to execute a start/next loop instead
      of standard solve. This enables, for optimization problems, usage of SolveListeners with a greater progress accuracy.
    * Completely remove deprecated 'angel' to identify local solver.
+   * Deprecate usage of methods ``minimize()`` and ``maximize()`` on ``docplex.cp.CpoModel``. 
+   * Add methods ``get_objective_bounds()`` and ``get_objective_gaps()`` in solution objects.
+
   
   
 Changed in 2.3.44 (2017.09):

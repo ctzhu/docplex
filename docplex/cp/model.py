@@ -85,6 +85,7 @@ import copy
 
 # List of all modeler public functions
 _MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler, ('maximize', 'minimize'))
+#_MODELER_PUBLIC_FUNCTIONS = list_module_public_functions(modeler)
 
 
 ###############################################################################
@@ -214,10 +215,10 @@ class CpoModel(object):
         elif etyp is Type_SearchPhase:
             self.search_phases.append((expr, loc))
         elif etyp is Type_Objective:
-            if self.objective:
-                if self.objective is expr:
-                    return
-                raise CpoException("Only one objective function can be added to the model.")
+            if self.objective is not None:
+                # if self.objective is not expr:
+                #     raise CpoException("Only one objective function can be added to the model.")
+                self.remove(self.objective)
             self.objective = expr
             self.expr_list.append((expr, loc))
         else:
@@ -258,6 +259,8 @@ class CpoModel(object):
     def minimize(self, expr):
         """ Add an objective expression to minimize.
 
+        DEPRECATED: use add(minimize()) instead.
+
         Calling this method is equivalent to add(minimize(expr)) except that, if exist,
         the previously defined objective expression is removed to be replaced by this new one.
 
@@ -266,20 +269,16 @@ class CpoModel(object):
         Returns:
             Minimization expression that has been added
         """
-
-        # Check if an objective expression is already defined
-        if self.objective is not None:
-            self.remove(self.objective)
-
-        # Add new maximization expression
+        # Add new minimization expression
         res = minimize(expr)
         self.add(res)
-
         return res
 
 
     def maximize(self, expr):
         """ Add an objective expression to maximize.
+
+        DEPRECATED: use add(maximize()) instead.
 
         Calling this method is equivalent to add(maximize(expr)) except that, if exist,
         the previously defined objective expression is removed to be replaced by this new one.
@@ -289,15 +288,9 @@ class CpoModel(object):
         Returns:
             Maximization expression that has been added
         """
-
-        # Check if an objective expression is already defined
-        if self.objective is not None:
-            self.remove(self.objective)
-
         # Add new maximization expression
         res = maximize(expr)
         self.add(res)
-
         return res
 
 
@@ -604,7 +597,9 @@ class CpoModel(object):
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = self._create_solver(**kwargs)
-        return solver.solve()
+        msol = solver.solve()
+        solver.end()
+        return msol
 
 
     def start_search(self, **kwargs):
@@ -701,7 +696,9 @@ class CpoModel(object):
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = self._create_solver(**kwargs)
-        return solver.refine_conflict()
+        rsol = solver.refine_conflict()
+        solver.end()
+        return rsol
 
 
     def propagate(self, cnstr=None, **kwargs):
@@ -758,7 +755,9 @@ class CpoModel(object):
             mdl.add(cnstr)
         # Call propagation
         solver = mdl._create_solver(**kwargs)
-        return solver.propagate()
+        psol = solver.propagate()
+        solver.end()
+        return psol
 
 
     def run_seeds(self, nbrun, **kwargs):
@@ -796,7 +795,9 @@ class CpoModel(object):
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
         solver = self._create_solver(**kwargs)
-        return solver.run_seeds(nbrun)
+        rsol = solver.run_seeds(nbrun)
+        solver.end()
+        return rsol
 
 
     def add_solver_listener(self, lstnr):

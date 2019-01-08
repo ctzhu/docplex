@@ -90,6 +90,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         """
         # Call super
         self.process = None
+        self.active = True
         super(CpoSolverLocal, self).__init__(solver, params, context)
 
         # Check if executable file exists
@@ -307,7 +308,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
     def end(self):
         """ End solver and release all resources.
         """
-        if self.process is not None:
+        if self.active:
+            self.active = False
             try:
                 self._write_message(CMD_EXIT)
             except:

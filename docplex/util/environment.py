@@ -87,6 +87,7 @@ Environment representation can be accessed with different ways:
 
 '''
 import json
+from functools import partial
 import os
 import tempfile
 import threading
@@ -470,7 +471,7 @@ class WorkerEnvironment(Environment):
     def __init__(self, solve_hook):
         super(WorkerEnvironment, self).__init__()
         self.solve_hook = solve_hook
-        self.solve_hook.stop_callback = worker_env_stop_callback
+        self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
 
     def get_available_core_count(self):
         return self.solve_hook.get_available_core_count()

@@ -127,8 +127,7 @@ class CpoSolverAgent(object):
         """ Solve the model
 
         Returns:
-            Model solve result,
-            object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+            Model solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -370,12 +369,12 @@ class CpoSolver(object):
     It create the appropriate :class:`CpoSolverAgent` that actually implements solving functions, depending
     on the value of the configuration parameter *context.solver.agent*.
     """
-    __slots__ = ('model',       # Model to solve
-                 'context',     # Solving context
-                 'agent',       # Solver agent
-                 'status',      # Current solver status
-                 'last_sol',    # Last returned solution
-                 'listeners',   # List of solve listeners
+    __slots__ = ('model',  # Model to solve
+                 'context',  # Solving context
+                 'agent',  # Solver agent
+                 'status',  # Current solver status
+                 'last_result',  # Last returned solution
+                 'listeners',  # List of solve listeners
                  'status_lock', # Lock protecting status change
                 )
 
@@ -407,7 +406,7 @@ class CpoSolver(object):
         """
         super(CpoSolver, self).__init__()
         self.agent = None
-        self.last_sol = None
+        self.last_result = None
         self.status = STATUS_IDLE
         self.status_lock = threading.Lock()
         self.listeners = []
@@ -482,7 +481,7 @@ class CpoSolver(object):
         If a solver listener has been added to the solver, it is warned of all intermediate solutions.
 
         Returns:
-            Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoException: (or derived) if error.
         """
@@ -519,11 +518,11 @@ class CpoSolver(object):
             msol._set_solve_time(stime)
 
         # Store last solution
-        self.last_sol = msol
+        self.last_result = msol
 
         # Notify listeners
         for lstnr in self.listeners:
-            lstnr.solution_found(self, msol)
+            lstnr.result_found(self, msol)
             lstnr.end_solve(self)
 
         # Return solution
@@ -553,7 +552,8 @@ class CpoSolver(object):
             for lstnr in self.listeners:
                 lstnr.end_solve(self)
             self._set_status(STATUS_RELEASED)
-            return self._create_solution_aborted()
+            self.last_result = self._create_solution_aborted()
+            return self.last_result
         else:
             self._check_status(STATUS_SEARCH_WAITING)
 
@@ -569,7 +569,8 @@ class CpoSolver(object):
                 for lstnr in self.listeners:
                     lstnr.end_solve(self)
                 self._set_status(STATUS_RELEASED)
-                return self._create_solution_aborted()
+                self.last_result = self._create_solution_aborted()
+                return self.last_result
             else:
                 #traceback.print_exc()
                 raise e
@@ -582,18 +583,11 @@ class CpoSolver(object):
             msol._set_solve_time(stime)
 
         # Store last solution
-        self.last_sol = msol
+        self.last_result = msol
 
         # Notify listeners
         for lstnr in self.listeners:
-            lstnr.solution_found(self, msol)
-
-        # End search if needed
-        if not msol:
-            self.agent.end_search()
-            self._set_status(STATUS_IDLE)
-            for lstnr in self.listeners:
-                lstnr.end_solve(self)
+            lstnr.result_found(self, msol)
 
         # Return solution
         return msol
@@ -610,9 +604,12 @@ class CpoSolver(object):
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
+        if self.status == STATUS_RELEASED:
+           return self.last_result
         self._check_status(STATUS_SEARCH_WAITING)
         msol = self.agent.end_search()
         self._set_status(STATUS_IDLE)
+        self.last_result = msol
         for lstnr in self.listeners:
             lstnr.end_solve(self)
         return msol
@@ -713,12 +710,23 @@ class CpoSolver(object):
 
 
     def get_last_solution(self):
-        """ Get the last solution returned by this solver
+        """ Get the last result returned by this solver
+
+        DEPRECATED. Use get_last_result instead.
 
         Returns:
-            Last solution returned by this solver (object of class :class:`~docplex.cp.solution.CpoModelSolution`)
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
-        return self.last_sol
+        return self.last_result
+
+
+    def get_last_result(self):
+        """ Get the last result returned by this solver
+
+        Returns:
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        """
+        return self.last_result
 
 
     def abort_search(self):
@@ -747,10 +755,11 @@ class CpoSolver(object):
         Returns:
             Next model solution (object of class :class:`~docplex.cp.solution.CpoModelSolution`)
         """
-        # Return solution
+        # Get next solution
         msol = self.search_next()
         if msol:
             return msol
+        self.end_search()
         raise StopIteration()
 
 

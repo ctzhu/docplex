@@ -500,6 +500,8 @@ class CpoModelSolution(object):
     """
     __slots__ = ('var_solutions',     # Map of variable solutions
                  'objective_values',  # Objective values
+                 'objective_bounds',  # Objective bound values
+                 'objective_gaps',    # Objective gap values
                  'kpi_values',        # Values of the KPIs
                  )
 
@@ -507,6 +509,8 @@ class CpoModelSolution(object):
         super(CpoModelSolution, self).__init__()
         self.var_solutions = {}
         self.objective_values = None
+        self.objective_bounds = None
+        self.objective_gaps = None
         self.kpi_values = {}
 
 
@@ -519,6 +523,40 @@ class CpoModelSolution(object):
             Array of objective values, None if none.
         """
         return self.objective_values
+
+
+    def get_objective_bounds(self):
+        """ Gets the numeric values of all objectives bound.
+
+        Note that when :meth:`~docplex.cp.modeler.minimize_static_lex` or :meth:`~docplex.cp.modeler.maximize_static_lex` is used,
+        the bound values must be taken as a whole, as are the values delivered by :meth:`get_objective_values`.
+        One cannot interpret bound values on each criterion independently.
+        For example, suppose, we have a problem with two criteria specified to minimize_static_lex,
+        a number of workers, and a number of days to complete a job.
+        That is, we always prefer to use less workers, but for equal numbers of workers, we prefer to take less days.
+        Then a solution with 3 workers and 10 days is perfectly compatible with a lower bound of 2 workers and 13 days,
+        even though the lower bound on the number of days is higher than the value in the solution.
+
+        Returns:
+            Array of all objective bound values, None if none.
+        """
+        return self.objective_bounds
+
+
+    def get_objective_gaps(self):
+        """ Gets the numeric values of the gap between objective value and objective bound.
+
+        For a single objective, gap is calculated as gap = |value - bound| / max(1e-10, |value|)
+
+        For multiple objectives, each gap is the gap between corresponding value and bound.
+        However, after the first gap whose value is not within optimality tolerance specified by
+        :attr:`~docplex.cp.CpoParameters.OptimalityTolerance` and :attr:`~docplex.cp.CpoParameters.RelativeOptimalityTolerance`,
+        all returned gap values are positive infinity.
+
+        Returns:
+            Array of all objective gap values, None if none.
+        """
+        return self.objective_gaps
 
 
     def add_var_solution(self, vsol):
@@ -634,16 +672,41 @@ class CpoModelSolution(object):
         return (self.objective_values is None) and (not self.var_solutions)
 
 
-    def _add_json_solution(self, jsol):
+    def _add_json_solution(self, jsol, prms):
         """ Add a json solution to this solution descriptor
 
         Args:
             jsol: JSON document representing solution.
+            prms: Solving parameters
         """
         # Add objectives
-        ovals = jsol.get('objectives', None)
+        ovals = jsol.get('objectives')
         if ovals:
-            self.objective_values = [tuple(v) if isinstance(v, list) else v for v in ovals]
+            self.objective_values = tuple([tuple(v) if isinstance(v, list) else _get_num_value(v) for v in ovals])
+
+        # Add objectives bounds
+        bvals = jsol.get('bounds')
+        if bvals:
+            self.objective_bounds = tuple([_get_num_value(x) for x in bvals])
+
+        # Add objectives gaps
+        gvals = jsol.get('gaps')
+        if gvals:
+            self.objective_gaps = tuple([_get_num_value(x) for x in gvals])
+        elif ovals and bvals:
+            # Gaps not given but bounds present. Recompute gaps
+            gvals = []
+            rt = prms.RelativeOptimalityTolerance
+            at = prms.OptimalityTolerance
+            intol = True
+            for v, b in zip(self.objective_values, self.objective_bounds):
+                if intol:
+                    gap = _compute_gap(v, b)
+                    intol = _is_below_tolerance(v, b, rt, at)
+                else:
+                    gap = POSITIVE_INFINITY
+                gvals.append(gap)
+            self.objective_gaps = tuple(gvals)
 
         # Add integer variables
         vars = jsol.get('intVars', ())
@@ -720,9 +783,16 @@ class CpoModelSolution(object):
         """
         # Print objective value
         ovals = self.get_objective_values()
-        if ovals is not None:
-            out.write("Objective values: " + str(ovals))
-            out.write('\n')
+        if ovals:
+            out.write("Objective values: {}\n".format(ovals))
+        # Print objective bounds
+        bvals = self.get_objective_bounds()
+        if bvals:
+            out.write("          bounds: {}\n".format(bvals))
+        # Print objective gaps
+        gvals = self.get_objective_gaps()
+        if gvals:
+            out.write("          gaps: {}\n".format(gvals))
         # Print all variables in name order
         lvars = sorted(self.var_solutions.keys())
         for v in lvars:
@@ -837,7 +907,7 @@ class CpoSolveResult(CpoRunResult):
         self.search_status = None                  # Search status, with value in SEARCH_STATUS_*
         self.stop_cause = None                     # Stop cause, with values in STOP_CAUSE_*
         self.solveTime = 0                         # Solve time
-        self.parameters = None                     # Solving parameters
+        self.parameters = CpoParameters()          # Solving parameters
         self.solution = CpoModelSolution()         # Solution
         self.solver_infos = CpoSolverInfos()       # Solving information
 
@@ -959,11 +1029,45 @@ class CpoSolveResult(CpoRunResult):
         return self.solution.get_objective_values()
 
 
+    def get_objective_bounds(self):
+        """ Gets the numeric values of all objectives bound.
+
+        Note that when :meth:`~docplex.cp.modeler.minimize_static_lex` or :meth:`~docplex.cp.modeler.maximize_static_lex` is used,
+        the bound values must be taken as a whole, as are the values delivered by :meth:`get_objective_values`.
+        One cannot interpret bound values on each criterion independently.
+        For example, suppose, we have a problem with two criteria specified to minimize_static_lex,
+        a number of workers, and a number of days to complete a job.
+        That is, we always prefer to use less workers, but for equal numbers of workers, we prefer to take less days.
+        Then a solution with 3 workers and 10 days is perfectly compatible with a lower bound of 2 workers and 13 days,
+        even though the lower bound on the number of days is higher than the value in the solution.
+
+        Returns:
+            Array of all objective bound values, None if none.
+        """
+        return self.solution.get_objective_bounds()
+
+
+    def get_objective_gaps(self):
+        """ Gets the numeric values of the gap between objective value and objective bound.
+
+        For a single objective, gap is calculated as gap = |value - bound| / max(1e-10, |value|)
+
+        For multiple objectives, each gap is the gap between corresponding value and bound.
+        However, after the first gap whose value is not within optimality tolerance specified by
+        :attr:`~docplex.cp.CpoParameters.OptimalityTolerance` and :attr:`~docplex.cp.CpoParameters.RelativeOptimalityTolerance`,
+        all returned gap values are positive infinity.
+
+        Returns:
+            Array of all objective gap values, None if none.
+        """
+        return self.solution.objective_gaps
+
+
     def get_parameters(self):
         """ Gets the complete dictionary of solving parameters.
 
         Returns:
-            Solving parameters (object of class CpoParameters), None if undefined.
+            Solving parameters (object of class CpoParameters).
         """
         return self.parameters
 
@@ -985,14 +1089,16 @@ class CpoSolveResult(CpoRunResult):
     def get_infos(self):
         """ Gets the complete dictionary of solver information attributes.
 
+        Deprecated. use :meth:`get_solver_infos` instead.
+
         Returns:
-            Dictionary of information attributes, None if undefined.
+            Object of class :class:`CpoSolverInfos` that contains information on solve.
         """
         return self.solver_infos
 
 
     def get_solver_infos(self):
-        """ Gets the set of informations provided by the solver concerning to the solving of the model.
+        """ Gets the set of information provided by the solver concerning to the solving of the model.
 
         Returns:
             Object of class :class:`CpoSolverInfos` that contains information on solve.
@@ -1103,19 +1209,19 @@ class CpoSolveResult(CpoRunResult):
 
         # Add solver status
         status = jsol.get('solutionStatus', ())
-        self.solve_status  = status.get('solveStatus', self.solve_status)
-        self.fail_status   = status.get('failStatus', self.fail_status)
-        self.search_status = status.get('SearchStatus')
-        self.stop_cause    = status.get('SearchStopCause')
-        nsts = status.get('nextStatus')
-        if nsts is not None:
-            if nsts != 'NextTrue':
-                self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
+        if status:
+            self.solve_status  = status.get('solveStatus', self.solve_status)
+            self.fail_status   = status.get('failStatus', self.fail_status)
+            self.search_status = status.get('SearchStatus')
+            self.stop_cause    = status.get('SearchStopCause')
+            nsts = status.get('nextStatus')
+            if nsts is not None:
+                if nsts != 'NextTrue':
+                    self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
 
         # Add parameters
         prms = jsol.get('parameters', None)
         if prms is not None:
-            self.parameters = CpoParameters()
             self.parameters.update(prms)
 
         # Add information attributes
@@ -1124,7 +1230,7 @@ class CpoSolveResult(CpoRunResult):
             self.solver_infos.update(cpinf)
 
         # Add solution
-        self.solution._add_json_solution(jsol)
+        self.solution._add_json_solution(jsol, self.parameters)
 
         # Set kpis
         kpis = self.get_model().get_kpis()
@@ -1584,9 +1690,14 @@ class CpoProcessInfos(InfoDict):
 ###############################################################################
 
 # Constants conversion
-_CONSTANTS_VALUES = {'intmin': INT_MIN, 'intmax': INT_MAX,
+_NUMERIC_VALUES = {# Numeric value generated by CPO
+                     'intmin': INT_MIN, 'intmax': INT_MAX,
                      'intervalmin': INTERVAL_MIN, 'intervalmax': INTERVAL_MAX,
-                     'NaN': float('nan'), 'Infinity': float('inf'), '-Infinity': -float('inf')}
+                     'infinity': POSITIVE_INFINITY, '-infinity': NEGATIVE_INFINITY,
+                     # Numeric values generated by JSON
+                     'NaN': float('nan'),
+                     'Infinity': POSITIVE_INFINITY, '-Infinity': NEGATIVE_INFINITY}
+
 
 # Marker of interval with holes
 _HOLE_MARKER = "holes"
@@ -1627,7 +1738,7 @@ def _get_num_value(val):
     Returns:
         Converted value, itself if not found
     """
-    return _CONSTANTS_VALUES.get(val, val)
+    return _NUMERIC_VALUES.get(val, val)
 
 
 def _check_arg_domain(val, name):
@@ -1683,5 +1794,40 @@ def _build_conflict_constraint_string(ctr):
         Constraint string
     """
     return str(ctr)
+
+
+def _compute_gap(val, bnd):
+    """ Compute the gap of a value
+    Args:
+        val:  Objective value
+        bnd:  Objective bound
+    Returns:
+        Objective gap
+    """
+    if val in (POSITIVE_INFINITY, NEGATIVE_INFINITY) or bnd in (POSITIVE_INFINITY, NEGATIVE_INFINITY):
+        return POSITIVE_INFINITY
+    if not is_number(val) or not is_number(bnd):
+        return POSITIVE_INFINITY
+    return float(abs(val - bnd)) / max(1e-10, abs(val))
+
+
+def _is_below_tolerance(val, bnd, rt, at):
+    """ Check if an objective value is in the tolerance with given bound.
+    Args:
+        val:  Value to check
+        bnd:  Objective bound
+        rt:   Relative tolerance
+        at:   Absolute tolerance
+    Returns:
+        True if value is below the tolerance, false otherwise
+    """
+    if val in (POSITIVE_INFINITY, NEGATIVE_INFINITY) or bnd in (POSITIVE_INFINITY, NEGATIVE_INFINITY):
+        return False
+    if val == bnd:
+        return True
+    if val < bnd: # Maximization
+       val = -val
+       bnd = -bnd
+    return (val - at < bnd) or (val * (1 - rt) < bnd)
 
 

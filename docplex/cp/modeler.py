@@ -99,9 +99,9 @@ Following functions allow to construct general purpose expressions and constrain
 
 Following functions are used to express what expression(s) is to be minimized or maximized.
 
- * :meth:`minimize`: Specify one or several expressions to minimize.
+ * :meth:`minimize`: Specify one expression to minimize.
  * :meth:`minimize_static_lex`: Specify several expressions to minimize.
- * :meth:`maximize`: Specify one or several expressions to maximize.
+ * :meth:`maximize`: Specify one expression to maximize.
  * :meth:`maximize_static_lex`: Specify several expressions to maximize.
 
 

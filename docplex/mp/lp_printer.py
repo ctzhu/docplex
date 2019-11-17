@@ -13,6 +13,7 @@ from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint, RangeConstraint, QuadraticConstraint, PwlConstraint
 from docplex.mp.environment import env_is_64_bit
 from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper, _NumPrinter
+from docplex.mp.utils import fix_whitespace
 
 from docplex.mp.format import LP_format
 from itertools import chain
@@ -76,7 +77,7 @@ class LPModelPrinter(TextModelPrinter):
         # ensure consistent ordering: left terms then right terms
         iter_diff_coeffs = binary_ct.iter_net_linear_coefs()
         self._print_expr_iter(wrapper, num_printer, var_name_map, iter_diff_coeffs,
-                              allow_empty=True,  # when expr is empty print nothing
+                              allow_empty=True,  # when expr is empty print nothing, otherwise CPLEX crashes...!!!
                               force_first_plus=force_first_sign)
         wrapper.write(_symbol_map.get(binary_ct.sense, " ?? "), separator=False)
         wrapper.write(num_printer.to_string(binary_ct.cplex_num_rhs()), separator=False)
@@ -155,13 +156,13 @@ class LPModelPrinter(TextModelPrinter):
         else:
             ct.error("ERROR: unexpected constraint not printed: {0!s}".format(ct))  # pragma: no cover
 
-        wrapper.flush(print_newline=True, reset=True)
+        wrapper.flush(print_newline=True, restart_from_empty_line=True)
 
     def _print_pwl_constraint(self, wrapper, num_printer, var_name_map, ct):
         wrapper.begin_line()
         self._print_constraint_label(wrapper, ct, name_map=self._pwl_name_map)
         self._print_pwl_ct(wrapper, num_printer, var_name_map, ct)
-        wrapper.flush(print_newline=True, reset=True)
+        wrapper.flush(print_newline=True, restart_from_empty_line=True)
 
     def _print_var_block(self, wrapper, iter_vars, header):
         wrapper.begin_line()
@@ -246,8 +247,8 @@ class LPModelPrinter(TextModelPrinter):
         out.write("\\Problem name: %s\n" % printed_name)
 
     @staticmethod
-    def is_lp_compliant(name, fix_whitespace=True):
-        fixed_name = LPModelPrinter.fix_whitespace(name) if fix_whitespace else name
+    def is_lp_compliant(name, do_fix_whitespace=True):
+        fixed_name = fix_whitespace(name) if do_fix_whitespace else name
         return LP_format.is_lp_compliant(fixed_name)
 
     @staticmethod
@@ -296,6 +297,42 @@ class LPModelPrinter(TextModelPrinter):
                 model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
                               nb_non_compliants, self._noncompliant_justifier.encode('utf-8'))
 
+    def print_single_objective(self, wrapper, model, num_printer, var_name_map):
+        wrapper.write(' obj:')
+        objexpr = model.objective_expr
+
+        if objexpr.is_quad_expr():
+            objlin = objexpr.linear_part
+        else:
+            objlin = objexpr
+
+        if self._print_full_obj:
+            iter_linear_terms = self._iter_full_linear_obj_terms(model, objlin)
+        elif self._has_sos_or_pwl_constraints(model):
+            iter_linear_terms = self._iter_completed_linear_obj_terms(model, objlin)
+        else:
+            # write the linear part first
+            # prints an expr to a stream
+            iter_linear_terms = objlin.iter_sorted_terms()
+
+        printed= self._print_expr_iter(wrapper, num_printer, var_name_map, iter_linear_terms,
+                              allow_empty=True, accept_zero=True)
+
+        if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
+            self._print_qexpr_obj(wrapper, num_printer, var_name_map,
+                                  quad_expr=objexpr,
+                                  force_initial_plus=printed)
+            printed = True
+
+        obj_offset = objexpr.get_constant()
+        if obj_offset:
+            if printed and obj_offset > 0:
+                wrapper.write(u'+')
+            wrapper.write(self._num_to_string(obj_offset))
+        # ---
+        wrapper.flush(print_newline=True)
+
+
     #  @profile
     def print_model_to_stream(self, out, model):
         # reset noncompliant stats
@@ -314,6 +351,7 @@ class LPModelPrinter(TextModelPrinter):
         TextModelPrinter.prepare(self, model)
         self_num_printer = self._lp_num_printer
         var_name_map = self._var_name_map
+        wrapper = _ExportWrapper(out, indent_str=self.__expr_indent)
 
         self._print_signature(out)
         self._print_encoding(out)
@@ -321,47 +359,70 @@ class LPModelPrinter(TextModelPrinter):
         self._newline(out)
 
         # ---  print objective
-        out.write(model.objective_sense.name)
-        self._newline(out)
-        wrapper = _ExportWrapper(out, indent_str=self.__expr_indent)
-        wrapper.write(' obj:')
-        objexpr = model.objective_expr
+        if model.has_multi_objective():
+            out.write(model.objective_sense.name)
+            out.write(' multi-objective')
+            self._newline(out)
+            def make_default_obj_name(o):
+                return 'obj%d' % o if o > 0 else 'obj'
+            wrapper.set_indent(5 * ' ')
+            for o, ot in enumerate(model.iter_multi_objective_tuples()):
+                expr, prio, w, abstol, reltol, oname = ot
+                name = oname or make_default_obj_name(o)
+                obj_label = '%s%s:' % (' ', name)
+                wrapper.write(obj_label)
+                wrapper.write('Priority=%g Weight=%g AbsTol=%g Reltol=%g' % (prio, w, abstol, reltol))
+                wrapper.flush()
+                # print the expression and its constant
+                printed = self._print_expr_iter(wrapper, self_num_printer, var_name_map, expr.iter_terms(),
+                                   allow_empty=True, accept_zero=True)
+                obj_offset = expr.get_constant()
+                if obj_offset:
+                    if printed and obj_offset > 0:
+                        wrapper.write(u'+')
+                    wrapper.write(self_num_printer.to_string(obj_offset))
 
-        if objexpr.is_quad_expr():
-            objlin = objexpr.linear_part
+                wrapper.flush(restart_from_empty_line=True)
+
         else:
-            objlin = objexpr
+            out.write(model.objective_sense.name)
+            self._newline(out)
+            self.print_single_objective(wrapper, model, self_num_printer, var_name_map)
 
-
-        if self._print_full_obj:
-            iter_linear_terms = self._iter_full_linear_obj_terms(model, objlin)
-
-        elif self._has_sos_or_pwl_constraints(model):
-            iter_linear_terms = self._iter_completed_linear_obj_terms(model, objlin)
-
-
-        else:
-            # write the linear part first
-            # prints an expr to a stream
-            iter_linear_terms = objlin.iter_sorted_terms()
-
-        printed= self._print_expr_iter(wrapper, self_num_printer, var_name_map, iter_linear_terms,
-                              allow_empty=True, accept_zero=True)
-
-        if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
-            self._print_qexpr_obj(wrapper, self_num_printer, var_name_map,
-                                  quad_expr=objexpr,
-                                  force_initial_plus=printed)
-            printed = True
-
-        obj_offset = objexpr.get_constant()
-        if obj_offset:
-            if printed and obj_offset > 0:
-                wrapper.write(u'+')
-            wrapper.write(self._num_to_string(obj_offset))
-        # ---
-
-        wrapper.flush(print_newline=True)
+        # wrapper.write(' obj:')
+        # objexpr = model.objective_expr
+        #
+        # if objexpr.is_quad_expr():
+        #     objlin = objexpr.linear_part
+        # else:
+        #     objlin = objexpr
+        #
+        # if self._print_full_obj:
+        #     iter_linear_terms = self._iter_full_linear_obj_terms(model, objlin)
+        # elif self._has_sos_or_pwl_constraints(model):
+        #     iter_linear_terms = self._iter_completed_linear_obj_terms(model, objlin)
+        # else:
+        #     # write the linear part first
+        #     # prints an expr to a stream
+        #     iter_linear_terms = objlin.iter_sorted_terms()
+        #
+        # printed= self._print_expr_iter(wrapper, self_num_printer, var_name_map, iter_linear_terms,
+        #                       allow_empty=True, accept_zero=True)
+        #
+        # if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
+        #     self._print_qexpr_obj(wrapper, self_num_printer, var_name_map,
+        #                           quad_expr=objexpr,
+        #                           force_initial_plus=printed)
+        #     printed = True
+        #
+        # obj_offset = objexpr.get_constant()
+        # if obj_offset:
+        #     if printed and obj_offset > 0:
+        #         wrapper.write(u'+')
+        #     wrapper.write(self._num_to_string(obj_offset))
+        # # ---
+        #
+        # wrapper.flush(print_newline=True)
 
         out.write("Subject To\n")
 
@@ -370,7 +431,15 @@ class LPModelPrinter(TextModelPrinter):
         for lct in model.iter_implicit_equivalence_cts():
             wrapper.begin_line(True)
             self._print_logical_ct(wrapper, self_num_printer, var_name_map, lct, '<->')
-            wrapper.flush(print_newline=True, reset=True)
+            wrapper.flush(restart_from_empty_line=True)
+
+        # lazy constraints
+        self.print_linear_constraint_section(out, wrapper, model.iter_lazy_constraints(),
+                                             "Lazy Constraints", ct_prefix="l", var_name_map=var_name_map,
+                                             ctname_map=self._lzc_name_map)
+        self.print_linear_constraint_section(out, wrapper, model.iter_user_cut_constraints(),
+                                             "User Cuts", ct_prefix="u", var_name_map=var_name_map,
+                                             ctname_map=self._ucc_name_map)
 
         out.write("\nBounds\n")
         symbolic_num_printer = self._num_printer
@@ -411,6 +480,23 @@ class LPModelPrinter(TextModelPrinter):
         self._print_sos_block(wrapper, model)
         self._print_pwl_block(wrapper, model, self_num_printer, var_name_map)
         out.write("End\n")
+
+    def print_linear_constraint_section(self, out, wrapper, ct_iter, section_label, ct_prefix, var_name_map, ctname_map):
+        ct_count = 0
+        self_indent = self._indent_space
+        self_num_printer = self._lp_num_printer
+        for lct in ct_iter:
+            if not ct_count:
+                out.write("\n{0}\n".format(section_label))
+            ct_count += 1
+            ct_name = ctname_map.get(lct) or '%s%d' % (ct_prefix, ct_count)
+            ct_label = '%s%s:' % (self_indent, ct_name)
+            wrapper.set_indent(self._get_indent_from_level(len(ct_label)+1))
+
+            # print a normal linear constraint
+            wrapper.write(ct_label)
+            self._print_binary_ct(wrapper, self_num_printer, var_name_map, lct)
+            wrapper.flush(print_newline=True, restart_from_empty_line=True)
 
     def _print_sos_block(self, wrapper, mdl):
         if mdl.number_of_sos > 0:

@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2019
 # --------------------------------------------------------------------------
 '''Configuration of Mathematical Programming engine.
 
@@ -57,6 +57,11 @@ try:
 except ImportError:
     get_solve_hook = None
 
+
+def init_cplex_parameters(x):
+    return x.init_cplex_parameters()
+
+
 # some utility methods
 def _get_value_as_int(d, option):
     try:
@@ -87,6 +92,7 @@ def _get_value_as_boolean(d, option):
         value = None
     return value
 
+
 _BOOLEAN_STATES = {'1': True, 'yes': True, 'true': True, 'on': True,
                    '0': False, 'no': False, 'false': False, 'off': False}
 
@@ -102,22 +108,22 @@ def _convert_to_bool(value):
     return _BOOLEAN_STATES[svalue]
 
 
-class open_filename_universal(object):
-    def __init__(self, filename, *args, **kwargs):
-        self.closing = kwargs.pop('closing', False)
-        if isinstance(filename, six.string_types):
-            self.fh = open_universal_newline(filename, "r")
-            self.closing = True
-        else:
-            self.fh = filename
-
-    def __enter__(self):
-        return self.fh
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.closing:
-            self.fh.close()
-        return False
+# class open_filename_universal(object):
+#     def __init__(self, filename, *args, **kwargs):
+#         self.closing = kwargs.pop('closing', False)
+#         if isinstance(filename, six.string_types):
+#             self.fh = open_universal_newline(filename, "r")
+#             self.closing = True
+#         else:
+#             self.fh = filename
+#
+#     def __enter__(self):
+#         return self.fh
+#
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         if self.closing:
+#             self.fh.close()
+#         return False
 
 
 class InvalidSettingsFileError(Exception):
@@ -125,11 +131,11 @@ class InvalidSettingsFileError(Exception):
 
     *New in version 2.8*
     '''
+
     def __init__(self, mesg, filename=None, source=None, *args, **kwargs):
         super(InvalidSettingsFileError, self).__init__(mesg)
         self.filename = filename
         self.source = source
-        pass
 
 
 def is_auto_publishing_solve_details(context):
@@ -185,25 +191,28 @@ def has_credentials(context):
     # Returns:
     #    True if the context has valid credentials.
     # ignore message
-    has_credentials, _ = check_credentials(context)
-    return has_credentials
+    has_credentials_, _ = check_credentials(context)
+    return has_credentials_
 
 
 def print_context(context):
     # prints the context.
     def print_r(node, prefix):
         for n in sorted(node):
-            path = ".".join([prefix, n] if prefix else [n])
-            if not n.startswith("_") and isinstance(node.get(n), (dict, SolverContext)):
-                print(path + " %s" % (type(node.get(n))))
-                print_r(node.get(n), path)
-            elif not n.startswith("_"):
-                print(path + " = %s (%s)" % (node.get(n), type(node.get(n))))
+            if not n.startswith('_'):
+                path = ".".join([prefix, n] if prefix else [n])
+                if isinstance(node.get(n), (dict, SolverContext)):
+                    print("%s  # type: %s" % (path, type(node.get(n)).__name__))
+                    print_r(node.get(n), path)
+                else:
+                    print("%s = %s # type: %s" % (path, node.get(n), type(node.get(n)).__name__))
+
     print_r(context, "context")
 
 
 class BaseContext(dict):
     # Class for handling the list of parameters.
+
     def __init__(self, **kwargs):
         """ Create a new context.
 
@@ -232,14 +241,15 @@ class BaseContext(dict):
 
 class SolverContext(BaseContext):
     # for internal use
+
     def __init__(self, **kwargs):
         super(SolverContext, self).__init__(**kwargs)
         self.log_output = False
         self.max_threads = get_environment().get_available_core_count()
         self.auto_publish = create_default_auto_publish_context()
         self.kpi_reporting = BaseContext()
-        from docplex.mp.progress import KpiFilterLevel
-        self.kpi_reporting.filter_level = KpiFilterLevel.FilterObjectiveAndBound
+        from docplex.mp.progress import ProgressClock
+        self.kpi_reporting.filter_level = ProgressClock.Gap
 
     def __deepcopy__(self, memo):
         # We override deepcopy here just to make sure that we don't deepcopy
@@ -278,8 +288,8 @@ class SolverContext(BaseContext):
             if k in ["stderr", "sys.stderr"]:
                 output_stream = sys.stderr
         # if log_output is == to True, just use stdout
-        if log_output == True:
-                output_stream = sys.stdout
+        if log_output is True:
+            output_stream = sys.stdout
         # if it has a write() attribute, just return it
         if hasattr(log_output, "write"):
             output_stream = log_output
@@ -337,15 +347,16 @@ class Context(BaseContext):
             `docplex.mp.format.ExchangeFormat`.
         solver.docloud.job_parameters: dict of job parameters passed to DOCplexcloud.
     """
+
     def __init__(self, **kwargs):
         # store env used for initialization
         self['_env_at_init'] = kwargs.get('_env')
         # map lazy members to f(model) (actually f(self) ) returning the
         # initial value
         self['_lazy_members'] = \
-           {'cplex_parameters': lambda m: m.init_cplex_parameters()}
+            {'cplex_parameters': init_cplex_parameters}
         # initialize fields of this
-        super(Context, self).__init__(solver=SolverContext(docloud=CreateDefaultDOcloudContext()),
+        super(Context, self).__init__(solver=SolverContext(docloud=create_default_docloud_context()),
                                       # cplex_parameters=cplex_parameters,
                                       docplex_tests=BaseContext())
         # update will also ensure compatibility with older kwargs like
@@ -362,7 +373,8 @@ class Context(BaseContext):
         if name not in self:
             lazy_members = self.get('_lazy_members')
             if lazy_members and name in lazy_members:
-                self[name] = lazy_members[name](self)
+                evaluated = lazy_members[name](self)
+                self[name] = evaluated
         return self.get_attribute(name)
 
     def _get_raw_cplex_parameters(self):
@@ -595,7 +607,6 @@ class Context(BaseContext):
                     if f.endswith(".py"):
                         self.read_from_python_file(f)
 
-
     def read_from_python_file(self, filename):
         # Evaluates the content of a Python file containing code to set up a
         # context.
@@ -634,7 +645,7 @@ def create_default_auto_publish_context(defaults=True):
     return auto_publish
 
 
-def CreateDefaultDOcloudContext():
+def create_default_docloud_context():
     # Returns a context to use as the context.solver.docloud member.
     #
     # This is a Context with predefined fields.
@@ -673,4 +684,3 @@ def CreateDefaultDOcloudContext():
     # mangle names into x<...?>
     dctx.mangle_names = False
     return dctx
-

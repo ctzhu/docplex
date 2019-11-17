@@ -105,6 +105,22 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def is_quadratic(self):
         return False
 
+    def is_added(self):
+        """ Returns True if the constraint has been added to its model.
+
+        Example:
+            c = (x+y == 1)
+            m.add(c)
+            c.is_added()
+            >>> True
+            c2 = (x + 2*y) >= 3
+            c2.is_added()
+            >>> False
+
+        """
+        return self.index >= 0
+
+    @property
     def cplex_scope(self):
         return self._get_index_scope().cplex_scope
 
@@ -156,6 +172,10 @@ class BinaryConstraint(AbstractConstraint):
         # noinspection PyPep8
         self._left_expr = left_expr
         self._right_expr = right_expr
+
+    def get_super_logical_ct(self):
+        # INTERNAL
+        return None
 
     @property
     def type(self):
@@ -370,7 +390,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def set_name(self, new_name):
         # INTERNAL
         self.check_name(new_name)
-        if self.has_valid_index():
+        if self.is_added():
             self._model.set_linear_constraint_name(self, new_name)
         else:
             self._set_name(new_name)
@@ -389,6 +409,12 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     def cplex_range_value(self):
         return 0.0
+
+    def is_lazy_constraint(self):
+        return self.model._is_lazy_constraint(self)
+
+    def is_user_cut_constraint(self):
+        return self.model._is_user_cut_constraint(self)
 
     def copy(self, target_model, var_map):
         copied_left = self.left_expr.copy(target_model, var_map)
@@ -478,13 +504,13 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         else:
             self.fatal('{0}: was: {1!s}, new: {2!s}', msg, old_expr, new_expr)
 
-    def notify_expr_modified(self, expr, event):
+    def notify_expr_modified(self, expr, expr_event):
         # INTERNAL
-        if event:
-            if event is UpdateEvent.LinExprPromotedToQuad:
+        if expr_event:
+            if expr_event is UpdateEvent.LinExprPromotedToQuad:
                 self._cannot_promote_from_linear_to_quadratic(old_expr=expr, new_expr=None)
             else:
-                self.get_linear_factory().update_linear_constraint_exprs(ct=self)
+                self.get_linear_factory().update_linear_constraint_exprs(ct=self, expr_event=expr_event)
 
     def notify_expr_replaced(self, old_expr, new_expr):
         # INTERNAL
@@ -621,6 +647,27 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         """
         return self._model._slack_value1(self)
 
+    @property
+    def basis_status(self):
+        """ This property returns the basis status of the slack variable of the constraint, if any.
+
+        Returns:
+            An enumerated value from the enumerated type `docplex.constants.BasisStatus`.
+
+        Note:
+            for the model to hold basis information, the model must have been solved as a LP problem.
+            In some cases, a model which failed to solve may still have a basis available. Use
+            `Model.has_basis()` to check whether the model has basis information or not.
+
+        See Also:
+            :func:`docplex.mp.model.Model.has_basis`
+            :class:`docplex.mp.constants.BasisStatus`
+
+        *New in version 2.10*
+
+        """
+        return self._model._linearct_basis_status([self])[0]
+
     def iter_net_linear_coefs(self):
         # INTERNAL
         left_expr = self._left_expr
@@ -661,7 +708,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         # lazy allocation of a new status variable...:
         lfactory = self.get_linear_factory()
         status_var = lfactory.new_constraint_status_var(self)
-        if self.has_valid_index():
+        if self.is_added():
             # status variable is bound
             status_var.lb = 1
         self._status_var = status_var
@@ -908,6 +955,26 @@ class RangeConstraint(AbstractConstraint):
         """
         return self._model._slack_value1(self)
 
+    @property
+    def basis_status(self):
+        """ This property returns the basis status of the slack variable of the constraint, if any.
+
+        Returns:
+            An enumerated value from the enumerated type `docplex.constants.BasisStatus`.
+
+        Note:
+            for the model to hold basis information, the model must have been solved as a LP problem.
+            In some cases, a model which failed to solve may still have a basis available. Use
+            `Model.has_basis()` to check whether the model has basis information or not.
+
+        See Also:
+            :func:`docplex.mp.model.Model.has_basis`
+            :class:`docplex.mp.constants.BasisStatus`
+
+        *New in version 2.10*
+        """
+        return self._model._linearct_basis_status([self])[0]
+
     def iter_variables(self):
         """Iterates over all the variables of the range constraint.
 
@@ -1049,7 +1116,7 @@ class LogicalConstraint(AbstractConstraint):
         self._linear_ct.resolve()
 
     def _get_index_scope(self):
-        return self._model._indicator_scope
+        return self._model._logical_scope
 
     # def short_typename(self):
     #     return "equivalence"
@@ -1388,6 +1455,20 @@ class QuadraticConstraint(BinaryConstraint):
         # INTERNAL
         self.get_quadratic_factory().update_quadratic_constraint(self, expr, event)
 
+    def notify_expr_replaced(self, old_expr, new_expr):
+        qfact = self.get_quadratic_factory()
+        if old_expr is self._left_expr:
+            qfact.set_quadratic_constraint_expr_from_pos(qct=self, pos=0, new_expr=new_expr,
+                                                                          update_subscribers=False)
+        elif old_expr is self._right_expr:
+            qfact.set_quadratic_constraint_expr_from_pos(qct=self, pos=1, new_expr=new_expr,
+                                                                          update_subscribers=False)
+        else:
+            # should not happen
+            pass
+        # new expr takes al subscribers from old expr
+        new_expr.grab_subscribers(old_expr)
+
 
 class PwlConstraint(AbstractConstraint):
     """ This class models piecewise linear constraints.
@@ -1398,12 +1479,11 @@ class PwlConstraint(AbstractConstraint):
 
     """
 
-    __slots__ = ('_pwl_expr', '_pwl_func', '_input_var', '_y')
+    __slots__ = ('_pwl_expr', '_input_var', '_y')
 
     def __init__(self, model, pwl_expr, name=None):
         AbstractConstraint.__init__(self, model, name)
         self._pwl_expr = pwl_expr
-        self._pwl_func = pwl_expr.pwl_func
         self._input_var = pwl_expr._x_var
         self._y = None
 
@@ -1413,7 +1493,7 @@ class PwlConstraint(AbstractConstraint):
     def is_satisfied(self, solution, tolerance):
         expr_value = self._input_var._get_solution_value(solution)
         y_value = solution._get_var_value(self._y)
-        computed_f_expr_value = self._pwl_func.evaluate(expr_value)
+        computed_f_expr_value = self.pwl_func.evaluate(expr_value)
         return ComparisonType.almost_equal(y_value, computed_f_expr_value, tolerance)
 
     @property
@@ -1426,7 +1506,7 @@ class PwlConstraint(AbstractConstraint):
     def pwl_func(self):
         """ This property returns the piecewise linear function of the piecewise linear constraint.
         """
-        return self._pwl_func
+        return self._pwl_expr.pwl_func
 
     @property
     def y(self):
@@ -1442,6 +1522,9 @@ class PwlConstraint(AbstractConstraint):
 
     def _get_index_scope(self):
         return self._model._pwl_scope
+
+    def iter_exprs(self):
+        yield self._pwl_expr
 
     def iter_variables(self):
         """Iterates over all the variables of the piecewise linear constraint.

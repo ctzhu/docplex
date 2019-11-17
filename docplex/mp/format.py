@@ -155,6 +155,7 @@ class LPFormat(ExchangeFormat):
 LP_format  = LPFormat()
 SAV_format = ExchangeFormat("SAV", "sav", is_binary=True)
 OPL_format = ExchangeFormat("OPL", ".mod")
+MPS_format = ExchangeFormat("MPS", ".mps")
 
 _FORMAT_MAPPER = {"lp": LP_format,
                   "opl": OPL_format

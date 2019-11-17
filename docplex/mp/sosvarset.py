@@ -22,6 +22,7 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         self._sos_type = sos_type
         self._variables = variable_sequence[:]  # copy sequence
 
+    @property
     def cplex_scope(self):
         return CplexScope.SOS_SCOPE
 

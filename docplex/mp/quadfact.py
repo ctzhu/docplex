@@ -11,8 +11,8 @@ from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.utils import is_number
 from docplex.mp.xcounter import update_dict_from_item_value
 from docplex.mp.quad import QuadExpr, VarPair
-from docplex.mp.linear import Var, MonomialExpr, LinearExpr, ZeroExpr, AbstractLinearExpr
-from docplex.mp.functional import FunctionalExpr
+from docplex.mp.operand import LinearOperand
+from docplex.mp.linear import Var, MonomialExpr, ZeroExpr, AbstractLinearExpr
 from docplex.mp.constr import QuadraticConstraint
 
 
@@ -73,15 +73,15 @@ class QuadFactory(IQuadFactory):
             return self.new_quad(quads=(var, mnm_dvar, mnm_coef), safe=True)
         elif isinstance(other, ZeroExpr):
             return other
-        elif isinstance(other, LinearExpr):
-            linexpr = other
-            quad_args = [(var, dv, k) for dv, k in linexpr.iter_terms()]
-            linexpr_k = linexpr.constant
+        elif isinstance(other, LinearOperand):
+            linear_op = other
+            quad_args = [(var, dv, k) for dv, k in linear_op.iter_terms()]
+            linexpr_k = linear_op.get_constant()
             quad_linexpr = linexpr_k * var if linexpr_k else None
             return self.new_quad(quad_args, quad_linexpr, safe=True)
 
-        elif isinstance(other, FunctionalExpr):
-            return self.new_quad(quads=(var, other.as_var, 1), safe=True)
+        # elif isinstance(other, FunctionalExpr):
+        #     return self.new_quad(quads=(var, other.as_var, 1), safe=True)
 
         else:
             self._unexpected_product_error(var, other)
@@ -102,9 +102,9 @@ class QuadFactory(IQuadFactory):
         elif isinstance(other, MonomialExpr):
             return self.new_monomial_product(other, linexpr)
 
-        elif isinstance(other, LinearExpr):
+        elif isinstance(other, LinearOperand):
             cst1 = linexpr.constant
-            cst2 = other.constant
+            cst2 = other.get_constant()
 
             fcc = self.term_dict_type()
             for lv1, lk1 in linexpr.iter_terms():
@@ -164,21 +164,26 @@ class QuadFactory(IQuadFactory):
             except AttributeError:  # pragma: no cover
                 self._model.fatal("cannot convert to expression: {0!r}", e)
 
-    def set_quadratic_constraint_expr_from_pos(self, qct, pos, new_expr):
+    def set_quadratic_constraint_expr_from_pos(self, qct, pos, new_expr, update_subscribers=True):
         old_expr = qct.get_expr_from_pos(pos)
         new_operand = self._to_expr(e=new_expr)
         exprs = [qct._left_expr, qct._right_expr]
         exprs[pos] = new_operand
-        self._engine.update_quadratic_constraint(qct, UpdateEvent.LinearConstraintGlobal, *exprs)
+        self._engine.update_constraint(qct, UpdateEvent.LinearConstraintGlobal, *exprs)
         # discard old_expr
         qct.set_expr_from_pos(pos, new_expr=new_operand)
         old_expr.notify_unsubscribed(qct)
+        if update_subscribers:
+            # -- update  subscribers
+            old_expr.notify_unsubscribed(qct)
+            new_operand.notify_used(qct)
 
     def set_quadratic_constraint_sense(self, qct, arg_newsense):
         new_sense = ComparisonType.parse(arg_newsense)
         if new_sense != qct.sense:
-            self._engine.update_quadratic_constraint(qct, UpdateEvent.LinearConstraintType, new_sense)
+            self._engine.update_constraint(qct, UpdateEvent.LinearConstraintType, new_sense)
             qct._internal_set_sense(new_sense)
 
     def update_quadratic_constraint(self, qct, expr, event):
-        self._engine.update_quadratic_constraint(qct, event, expr)
+        self._engine.update_constraint(qct, event, expr)
+

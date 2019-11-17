@@ -1,8 +1,36 @@
 Changelog
 ---------
 
+Changed in 2.10.150:
+````````````````````
+* In ``docplex.mp``:
+   * fixed a bug in ModelReader when reading SAV files with no names
+   * fixed a bug in mip starts, which prevented mip starts with piecewise
+     functions to work properly.
+   * fixed bug on Model.add_indicators() using comprehensions (len() was called).
+   * Added support for the '!=' (not equals) operator in expressions.
+   * Clarified four types of checker: on, off, numeric and full.
+     Pass checker=<name> at model creation to specify which checker is used.
+   * fixed a bug in solution JSON encoder for nonconvex QP problems.
+   * Add direct support for lazy constraints, see Model.add_lazy_constraints()
+   * Add direct support for user cuts, see Model.add_user_cut_constraints()
+   * Get basis status of variables in LP problems, see `Var.basis_status`
+   * Read MIP start files (MST format)
+   * Allow to set the effort level for a MIP solution.
+   * Read basis status files (in BAS format)
+   * Read variable priority orders (in ORD format)
+   * fixed bug in functional KPIs, solution argument was not passed on.
+   * Enable constraint name dictionary at Model creation time: Model(cts_by_name=True)
+   * Multi-objective is now pickled correctly
+   * Multi-objective is now copied in Model.copy()
+   * Wrote full documentation on progress listeners
+   * Added `Model.set_lp_start_basis()` to provide an initial basis for LP problems.
+
+     
+
 Changed in 2.9.141:
 ```````````````````
+
 * In ``docplex.mp``:
    * Removed links to rawgit.com as this service is going end of life.
    * Model.solve_lexicographic() is deprecated. This method should be used

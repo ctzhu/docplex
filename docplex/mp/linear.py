@@ -51,8 +51,8 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         else:
             self._ub = vartype.compute_ub(ub, model)
 
-    @staticmethod
-    def cplex_scope():
+    @property
+    def cplex_scope(self):
         return CplexScope.VAR_SCOPE
 
     # noinspection PyUnusedLocal
@@ -99,10 +99,6 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def __hash__(self):
         return self._index
 
-    def to_linear_expr(self):
-        # INTERNAL
-        return LinearExpr(model=self._model, e=self, safe=True, transient=True)
-        # return MonomialExpr(self._get_model(), self, coeff=1)
 
     def set_name(self, new_name):
         # INTERNAL
@@ -284,10 +280,6 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         self_container = self.get_container()
         return self_container.get_var_key(self) if self_container else None
 
-    # def __ne__(self, other):
-    #     # INTERNAL: For now, not supported
-    #     self.model.unsupported_neq_error(self, other)
-
     def __mul__(self, e):
         return self.times(e)
 
@@ -322,6 +314,11 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             return e.plus(self)
         else:
             return self.to_linear_expr().add(e)
+
+    def to_linear_expr(self):
+        # INTERNAL
+        return LinearExpr(model=self._model, e=self, safe=True, transient=True)
+        # return MonomialExpr(self._get_model(), self, coeff=1)
 
     def _make_linear_expr(self, constant=0, safe=True):
         return LinearExpr(self._model, self, constant, None, safe, True)
@@ -534,14 +531,11 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     @property
     def basis_status(self):
-        """
-        This property returns the basis status of the variable, if any.
+        """ This property returns the basis status of the variable, if any.
         The variable must be continuous, otherwise an exception is raised.
 
         Returns:
             An enumerated value from the enumerated type `docplex.constants.BasisStatus`.
-            The integer value of this enum is equal to Cplex's basis status value;
-            for example, BasisStatus.Basic has value 1, BasisStatus.AtLower has value 0, etc...
 
         Note:
             for the model to hold basis information, the model must have been solved as a LP problem.
@@ -550,7 +544,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
         See Also:
             :func:`docplex.mp.model.Model.has_basis`
-
+            :class:`docplex.mp.constants.BasisStatus`
 
         """
         if not self.is_continuous():
@@ -1853,3 +1847,215 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         negated = linear_other.negate()
         self.notify_replaced(negated)
         return negated
+
+
+class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
+    __slots__ = ('_constant','_subscribers')
+
+    def __init__(self, model, cst):
+        ModelingObjectBase.__init__(self, model=model, name=None)
+        # assume constant is a number (to be checked upfront)
+        self._constant = cst
+        self._subscribers= []
+
+    def size(self):
+        return 1 if self._constant else 0
+
+    # INTERNAL
+    def _make_new_constant(self, new_value):
+        return ConstantExpr(self._model, new_value)
+
+    def _get_solution_value(self, s=None):
+        return self._constant
+
+    def is_zero(self):
+        return 0 == self._constant
+
+    def clone(self):
+        return self.__class__(self._model, self._constant)
+
+    def copy(self, target_model, var_map):
+        return self.__class__(target_model, self._constant)
+
+    def to_linear_expr(self):
+        return self  # this is a linear expr.
+
+    def number_of_variables(self):
+        return 0
+
+    def iter_variables(self):
+        return iter_emptyset()
+
+    def iter_terms(self):
+        return iter_emptyset()
+
+    def is_constant(self):
+        return True
+
+    def is_discrete(self):
+        return is_int(self._constant)
+
+    def unchecked_get_coef(self, dvar):
+        return 0
+
+    def contains_var(self, dvar):
+        return False
+
+    @property
+    def constant(self):
+        return self._constant
+
+    @constant.setter
+    def constant(self, new_constant):
+        self._set_constant(new_constant)
+
+    def get_constant(self):
+        return self._constant
+
+    def _set_constant(self, new_constant):
+        if new_constant != self._constant:
+            self.check_discrete_lock_frozen(new_constant)
+            self._constant = new_constant
+            self.notify_modified(event=UpdateEvent.ExprConstant)
+
+    def negate(self):
+        return self._make_new_constant(- self._constant)
+
+    def _apply_op(self, pyop, arg):
+        if is_number(arg):
+            return self._make_new_constant(pyop(self.constant, arg))
+        else:
+            return pyop(arg, self._constant)
+
+    # noinspection PyMethodMayBeStatic
+    def plus(self, e):
+        import operator
+        return self._apply_op(operator.add, e)
+
+    def times(self, e):
+        return e * self._constant
+
+    # noinspection PyMethodMayBeStatic
+    def minus(self, e):
+        return self + (-e)
+
+    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
+        return '{0}'.format(self._constant)
+
+    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
+        self._num_to_stringio(oss, self._constant, nb_digits)
+
+    # arithmetic
+    def __sub__(self, e):
+        return self.minus(e)
+
+    def __rsub__(self, e):
+        # e - k = e !
+        return e - self._constant
+
+    def __neg__(self):
+        return self._make_new_constant(- self._constant)
+
+    def __add__(self, other):
+        return self.plus(other)
+
+    def __radd__(self, other):
+        return self.plus(other)
+
+    def __mul__(self, other):
+        return self.times(other)
+
+    def __rmul__(self, other):
+        return self.times(other)
+
+    def __div__(self, other):
+        return self._divide(other)
+
+    def __truediv__(self, e):
+        # for py3
+        # INTERNAL
+        return self.__div__(e)  # pragma: no cover
+
+    def _divide(self, other):
+        self.model.typecheck_as_denominator(numerator=self, denominator=other)
+        return self._make_new_constant(self._constant / other)
+
+    def __repr__(self):
+        return 'docplex.mp.linear.ConstantExpr({0})'.format(self._constant)
+
+    def equals_expr(self, other):
+        return isinstance(other, ConstantExpr) and self._constant == other.constant
+
+    def square(self):
+        return self._make_new_constant(self._constant ** 2)
+
+    # arithmetci to self
+    #add = plus
+    subtract = minus
+    multiply = times
+
+    def _scale(self, factor):
+        return self._make_new_constant(self._constant * factor)
+
+    def equals(self, other):
+        if is_number(other):
+            return self._constant == other
+        else:
+            return isinstance(other, LinearOperand)\
+                    and other.is_constant() and \
+                   self._constant == other.get_constant()
+
+    # arithmetic to self
+    def __iadd__(self, other):
+        return self.add(other)
+
+    def add(self, other):
+        if is_number(other):
+            self._constant += other
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        elif isinstance(other, LinearOperand) and other.is_constant():
+            self._constant += other.get_constant()
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        else:
+            # replace self by other + self.
+            added = other.plus(self._constant)
+            self.notify_replaced(added)
+            return added
+
+    def subtract(self, other):
+        if is_number(other):
+            self._constant -= other
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        elif isinstance(other, LinearOperand) and other.is_constant():
+            self._constant -= other.get_constant()
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        else:
+            # replace self by (-other) + self.K
+            subtracted = other.negate().plus(self._constant)
+            self.notify_replaced(subtracted)
+            return subtracted
+
+    def __isub__(self, other):
+        return self.subtract(other)
+
+    def multiply(self, other):
+        if is_number(other):
+            self._constant *= other
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        elif isinstance(other, LinearOperand) and other.is_constant():
+            self._constant *= other.get_constant()
+            self.notify_modified(UpdateEvent.ExprConstant)
+            return self
+        else:
+            # replace self by (-other) + self.K
+            multiplied = other * (self._constant)
+            self.notify_replaced(multiplied)
+            return multiplied
+
+    def __imul__(self, other):
+        return self.multiply(other)

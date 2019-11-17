@@ -151,7 +151,7 @@ class ModelReader(object):
             A `RootParameterGroup object`, if the read operation succeeds, else None.
         """
         if not Cplex:  # pragma: no cover
-            raise RuntimeError("read_prm() requires CPLEX to run")
+            raise RuntimeError("ModelReader.read_prm() requires CPLEX runtime.")
         with _CplexReaderFileContext(filename, read_method=["parameters", "read_file"]) as cpx:
             if cpx:
                 # raw parameters
@@ -232,7 +232,7 @@ class ModelReader(object):
 
         """
         if not Cplex:  # pragma: no cover
-            raise RuntimeError("read_prm() requires CPLEX to run")
+            raise RuntimeError("ModelReader.read_model() requires CPLEX runtime.")
 
         if not os.path.exists(filename):
             raise IOError("* file not found: {0}".format(filename))
@@ -544,6 +544,12 @@ class ModelReader(object):
                     isostype = int(sostype)
                     sos_vars = [cpx_var_index_to_docplex[var_ix] for var_ix in sos_var_indices]
                     mdl.add_sos(dvars=sos_vars, sos_arg=isostype, name=sos_name)
+
+            # upload lazy constraints
+            cpx_linear_advanced = cpx.linear_constraints.advanced
+            cpx_lazyct_num = cpx_linear_advanced.get_num_lazy_constraints()
+            if cpx_lazyct_num:
+                print("WARNING: found {0} lazy constraints that cannot be uploaded to DOcplex".format(cpx_lazyct_num))
 
             mdl.output_level = final_output_level
             if final_checker:

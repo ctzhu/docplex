@@ -269,6 +269,11 @@ from docplex.cp.utils import *
 import docplex.cp.config as config
 import collections
 
+try:
+   from collections.abc import Iterator
+except:
+    from collections import Iterator
+
 
 ###############################################################################
 ##  Private methods
@@ -276,7 +281,7 @@ import collections
 
 def _expand(arg):
     """ Expand an argument if it is an iterator """
-    if isinstance(arg, collections.Iterator):
+    if isinstance(arg, Iterator):
        return [_expand(x) for x in arg]
     return arg
 
@@ -1479,7 +1484,7 @@ def allowed_assignments(exprs, values):
     Args:
         exprs:  A single integer expression, or an array of integer expressions
         values: An array of integer expressions, or a set of tuples,
-                that specifies the combinations of forbidden values of the expressions exprs.
+                that specifies the combinations of allowed values of the expressions exprs.
     Returns:
         A boolean expression
     """

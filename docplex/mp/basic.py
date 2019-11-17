@@ -21,7 +21,7 @@ class ModelingObjectBase(object):
 
     This class is not intended to be instantiated directly.
     """
-    
+
     __array_priority__ = 100
 
     __slots__ = ("_name", "_model")
@@ -60,15 +60,15 @@ class ModelingObjectBase(object):
         pass  # pragma: no cover
 
     def check_lp_name(self, new_name):
-        #ModelingObject.check_name(self, new_name)
+        # ModelingObject.check_name(self, new_name)
         if not is_string(new_name) or not new_name:
             self.fatal("Variable name accepts only non-empty strings, {0!r} was passed", new_name)
         elif new_name.find(' ') >= 0:
             self.warning("Variable name contains blank space, var: {0!s}, name: \'{1!s}\'", self, new_name)
         elif not LP_format.is_lp_compliant(new_name):
-            self.warning("Candidate variable name is not LP-compliant: '{1}', old_name was: {0} (name will be changed to x<nn>)", self.name, new_name)
-
-
+            self.warning(
+                "Candidate variable name is not LP-compliant: '{1}', old_name was: {0} (name will be changed to x<nn>)",
+                self.name, new_name)
 
     def has_name(self):
         """ Checks whether the object has a name.
@@ -162,7 +162,7 @@ class ModelingObject(ModelingObjectBase):
 
     _invalid_index = -2
 
-    # @profile
+    # noinspection PyMissingConstructor
     def __init__(self, model, name=None, index=_invalid_index):
         #  ModelingObjectBase.__init__(self, model, name)
         self._model = model
@@ -365,22 +365,16 @@ class Priority(Enum):
         return obj
 
     VERY_LOW = 100, 'Very Low'
-    LOW      = 200, 'Low'
-    MEDIUM   = 300, 'Medium'
-    HIGH     = 400, 'High'
+    LOW = 200, 'Low'
+    MEDIUM = 300, 'Medium'
+    HIGH = 400, 'High'
     VERY_HIGH = 500, 'Very High'
     MANDATORY = 999999999, 'Mandatory'
-
-    @staticmethod
-    def default_priority():
-        return Priority.MEDIUM
 
     def __repr__(self):
         return 'Priority<{}>'.format(self.name)
 
-    def print_name(self):
-        return self._print_name
-
+    @property
     def cplex_preference(self):
         return self._get_geometric_preference_factor(base=10.0)
 
@@ -455,14 +449,45 @@ class Priority(Enum):
             return None
         else:
             logger.fatal('Cannot convert to a priority: {0!s}'.format(arg))
+
+
 # ---
+
+
+class UserPriority(object):
+
+    def __init__(self, pref, name=None):
+        assert pref >= 0
+        self._preference = pref
+        self._name = name
+
+    @property
+    def cplex_preference(self):
+        return self._preference
+
+    # noinspection PyMethodMayBeStatic
+    def is_mandatory(self):
+        return False
+
+    @property
+    def name(self):
+        return self._name or '_user_'
+
+    @property
+    def value(self):
+        return self._preference
+
+    def __str__(self):
+        name = self._name
+        sname = '%s: ' % name if name else ''
+        return 'UserPriority({0}{1})'.format(sname, self._preference)
 
 
 # noinspection PyUnusedLocal,PyPropertyAccess
 
 class _SubscriptionMixin(object):
-
     __slots__ = ()
+
     # INTERNAL:
     # This class is absolutely not meant to be directly instantiated
     # but used as a mixin
@@ -488,6 +513,13 @@ class _SubscriptionMixin(object):
 
     def is_in_use(self):
         return bool(self._subscribers)
+
+    def is_shared(self):
+        nb_subscribers = len(self._subscribers)
+        if nb_subscribers >= 2:
+            return True
+        else:
+            return False
 
     def is_used_by(self, obj):
         # lists are not optimal here, but we favor insertion: append is faster than set.add

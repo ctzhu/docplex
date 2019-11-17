@@ -5,7 +5,7 @@ import sys
 
 required = ['requests',
             'six',
-            'docloud>=1.0.315']
+            'docloud>=1.0.369']
 if ((sys.version_info[0]) < 3) or \
    ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
     required.append('futures')
@@ -22,7 +22,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.9'
+    readme = 'DOcplex 2.10'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -45,7 +45,7 @@ setup(
                'docplex.mp.worker',
                'docplex.util',
                'docplex.util.dods'],
-    version = '2.9.141',  # replaced at build time
+    version = '2.10.150',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

@@ -6,7 +6,6 @@
 
 
 # gendoc: ignore
-import csv
 import logging
 import os
 import sched
@@ -18,6 +17,8 @@ import sys
 from six import PY2 as SIX_PY2
 from six import itervalues
 import six
+
+from itertools import chain, repeat
 
 try:
     import pandas
@@ -251,10 +252,13 @@ def is_iterator(e):
     except TypeError:
         return False
 
+import platform
 
 def is_function(e):
-    from collections import Callable
-
+    if platform.python_version() >= '3.7':
+        from collections.abc import Callable
+    else:
+        from collections import Callable
     return isinstance(e, Callable)
 
 
@@ -282,9 +286,23 @@ def _build_ordered_sequence_types():
     else:
         return (list, tuple)
 
-
-def is_ordered_sequence(arg, type_tuple=_build_ordered_sequence_types()):
+def is_ordered_sequence1(arg, type_tuple=_build_ordered_sequence_types()):
     return isinstance(arg, type_tuple)
+
+def is_ordered_sequence2(arg):
+    if isinstance(arg, (dict, str)):
+        return False
+
+    try:
+        # try it
+        l = len(arg)
+        if l:
+            arg[0]
+        return True
+    except:
+        return False
+
+is_ordered_sequence = is_ordered_sequence1
 
 
 class DOcplexException(Exception):
@@ -370,19 +388,25 @@ def normalize_basename(s, force_lowercase=True, maxlen=255):
         n = n[:maxlen-8] + "_"+ h
     return n
 
+def fix_whitespace(s, fix='_'):
+    # replaces whitespaces by a character, default is '_'
+    return s.replace(' ', fix)
 
-def make_output_path2(actual_name, extension, basename_arg, path=None):
+
+def make_output_path2(actual_name, extension, basename_fmt, path=None):
     # INTERNAL
-    raw_basename = resolve_pattern(basename_arg, actual_name) if basename_arg else actual_name
+    raw_basename = resolve_pattern(basename_fmt, actual_name) if basename_fmt else actual_name
+    # fix whitespaces
     if raw_basename.find(" ") > 0:
         actual_basename = raw_basename.replace(" ", "_")
     else:
         actual_basename = raw_basename
+
     output_dir = path or tempfile.gettempdir()
+    # fix extension
     if not actual_basename.endswith(extension):
         actual_basename = actual_basename + extension
-    path = os.path.join(output_dir, actual_basename)
-    return path
+    return os.path.join(output_dir, actual_basename)
 
 
 def make_path(error_handler, basename, extension, output_dir=None, name_transformer=None):
@@ -563,7 +587,7 @@ def write_kpis(env, kpis_table, name):
 
 def write_solution(env, solution, name):
     with env.get_output_stream(name) as output:
-        output.write(solution.export_as_string(format="json").encode('utf-8'))
+        output.write(solution.export_as_json_string().encode('utf-8'))
 
 
 def write_result_output(env, context, model, solution):
@@ -810,9 +834,6 @@ class _SymbolGenerator(object):
 
 
 class _AutomaticSymbolGenerator(_SymbolGenerator):
-    """
-    INTERNAL class
-    """
 
     def __init__(self, pattern, offset=1):
         ''' Initialize the counter and the pattern.
@@ -845,14 +866,16 @@ class _AutomaticSymbolGenerator(_SymbolGenerator):
         while True:
             yield self.new_symbol()
 
-class _IndexScope(_AutomaticSymbolGenerator):
+class _IndexScope(object):
     # INTERNAL: full scope of indices.
 
-    def __init__(self, obj_iter, pattern, cplex_scope=None, offset=1):
-        _AutomaticSymbolGenerator.__init__(self, pattern, offset)
+    def __init__(self, obj_iter, qualifier, cplex_scope=None, offset=1):
+        self._offset = offset
         self._obj_iter = obj_iter
         self._index_map = None
         self.cplex_scope = cplex_scope
+        self.qualifier = qualifier
+        self._last_index = -1
 
     def _make_index_map(self):
         return {m.get_index(): m for m in self._obj_iter()}
@@ -884,18 +907,16 @@ class _IndexScope(_AutomaticSymbolGenerator):
             return self._index_map.get(idx)
 
     def reset(self):
-        _AutomaticSymbolGenerator.reset(self)
         self._index_map = None
+        self._last_index = -1
 
     def notify_obj_index(self, obj, index):
-        _AutomaticSymbolGenerator.notify_new_index(self, index)
         if self._index_map is not None:
             self._index_map[index] = obj
 
     def notify_obj_indices(self, objs, indices):
         # take the last one??
         if indices:
-            _AutomaticSymbolGenerator.notify_new_index(self, max(indices))
             idxmap = self._index_map
             if idxmap is not None:
                 for obj, idx in izip(objs, indices):
@@ -939,30 +960,10 @@ def apply_thread_limitations(context, solver_context):
 
     return parameters
 
-class _ToleranceScheme(object):
-    """
-        INTERNAL
-        """
-
-    def __init__(self, absolute=1e-6, relative=1e-4):
-        assert absolute >= 0
-        assert relative >= 0
-        assert relative <= 1
-        self._absolute_tolerance = absolute
-        self._relative_tolerance = relative
-
-    def compute_tolerance(self, obj):
-        abs_obj = abs(obj)
-        return max(self._absolute_tolerance, self._relative_tolerance * abs_obj)
-
-    def equals(self, num1, num2):
-        return abs(num1 - num2) <= self.compute_tolerance(num1)
-
-    def to_string(self):
-        return "tolerance(abs={0:.2f},rel={1:.3f})".format(self._absolute_tolerance, self._relative_tolerance)
-
-    def __str__(self):
-        return self.to_string()  # pragma: no cover
+def is_almost_equal(x1, x2, reltol, abstol=0):
+    # returns true if x2 equals x1 w.r.t a miax of an absolute tolerance and a relative tolerance
+    prec = max(abstol, reltol* abs(x1))
+    return abs(x2-x1) <= prec
 
 
 class OutputStreamAdapter:
@@ -998,6 +999,7 @@ def get_auto_publish_names(context, prop_name, default_name):
         name = context.solver.auto_publish[prop_name]
     else:
         name = None
+
     if isinstance(name, six.string_types):
         # only one string value: make this the name of the table
         # in a list with one object
@@ -1095,3 +1097,126 @@ class PublishResultAsDf(object):
         names = get_auto_publish_names(context, prop, default_name)
         return names
 
+def izip2_filled(it1, it2, **kwds):
+    # izip_longest('ABCD', 'xy', fillvalue='-') --> Ax By C- D-
+    fillvalue = kwds.get('fillvalue')
+
+    class _ZipExhausted(Exception):
+        pass
+
+    class _sentinel():
+        def __iter__(self):
+            raise _ZipExhausted
+
+    fillers = repeat(fillvalue)
+    iterators = [chain(it1, _sentinel()), chain(it2, fillers)]
+    try:
+        while iterators:
+            tpl = tuple(map(next, iterators))
+            #print(tpl)
+            yield tpl
+    except _ZipExhausted:
+        pass
+
+
+class MultiObjective(object):
+    # a wrapper class to hold all data for multi-objective
+
+    def __init__(self, exprs, priorities, weights=None, abstols=None, reltols=None, names=None):
+        self.exprs = exprs
+        self.priorities = priorities
+        self.weights = weights
+        self.abstols = abstols
+        self.reltols = reltols
+        self.names = names
+
+    @classmethod
+    def new_empty(cls):
+        return MultiObjective([], [])
+
+    def empty(self):
+        return not self.exprs
+
+    @property
+    def number_of_objectives(self):
+        nb_exprs = len(self.exprs)
+        return 0 if nb_exprs <= 1 else nb_exprs
+
+    def clear(self):
+        self.exprs = []
+        self.priorities = []
+        self.weights = []
+        self.abstols = None
+        self.reltols = None
+        self.names = None
+
+    def convert_pseudo_sequence(self, seq, size, default=None, pred=is_number):
+        if pred and pred(seq):
+            return [seq] * size
+        elif is_indexable(seq):
+            return seq
+        elif seq is None:
+            return [default] * size
+        else:
+            raise TypeError
+
+    def iter_exprs(self):
+        multi_obj_exprs = self.exprs
+        if len(multi_obj_exprs) >= 2:
+            return iter(multi_obj_exprs)
+        else:
+            return iter([])
+
+    @staticmethod
+    def as_optional_sequence(opt_seq, size):
+        # converts the argument to None or a list,
+        # special case is plain number, converted to a list of expected size.
+        if is_number(opt_seq):
+            return [opt_seq] * size
+        elif opt_seq is None or is_indexable(opt_seq):
+            # expecting either None or a list.
+            return opt_seq
+        else:
+            raise TypeError('unexpected optional number sequence: {0!r}'.format(opt_seq))
+
+    def abstols_as_sequence(self, size):
+        return self.as_optional_sequence(self.abstols, size)
+
+    def reltols_as_sequence(self, size):
+        return self.as_optional_sequence(self.reltols, size)
+
+    def update(self, new_exprs, new_prios, new_weights, new_abstols, new_reltols, new_names):
+        self.exprs = new_exprs
+        self.priorities = new_prios
+        self.weights = new_weights
+        self.abstols = new_abstols
+        self.reltols = new_reltols
+        self.names = new_names
+
+    def itertuples(self):
+        # iterates on all components
+        # returns tuples of the form (expr, prio, weight, abstol, reltol, name)
+        if self.empty():
+            return iter([])
+
+        # not empty
+        nb_objs = len(self.exprs)
+        assert nb_objs >= 2
+        # default weight
+        lw = self.convert_pseudo_sequence(self.weights, size=nb_objs, default=1)
+        la = self.convert_pseudo_sequence(self.abstols, size=nb_objs, default=0)
+        lr = self.convert_pseudo_sequence(self.reltols, size=nb_objs, default=0)
+        ln = self.convert_pseudo_sequence(self.names, size=nb_objs, default=None, pred=None)
+
+        return iter(zip(self.exprs, self.priorities, lw, la, lr, ln))
+
+
+def resolve_caller_as_string(caller, sep=': '):
+    # resolve caller as a string
+    if caller is None:
+        return ""
+    else:
+        try:
+            return "%s%s" % (caller(), sep)
+        except TypeError:
+            return "%s%s" % (caller, sep)

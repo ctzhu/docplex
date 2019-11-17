@@ -1,9 +1,24 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2019
 # --------------------------------------------------------------------------
+'''Provides utility functions about the runtime environment.
 
+You can display information about your runtime environment using::
+
+    $ python
+    >>> from docplex.mp.environment import Environment
+    >>> Environment().print_information()
+
+or by invoking the `docplex.mp.environment` package on your shell command line::
+
+    $ python -m docplex.mp.environment
+    * system is: Linux 64bit
+    * Python version 3.6.1, located at: /usr/bin/python
+    * docplex is present, version is (2, 9, 0)
+    * CPLEX library is present, version is 12.9.0.0, located at: /usr/local/CPLEX_Studio129/cplex/python/3.6/x86-64_linux
+'''
 import platform
 import os
 import sys
@@ -92,6 +107,14 @@ class Environment(object):
         return self._found_cplex and self._cplex_version >= min_version
 
     @property
+    def cplex_platform(self):
+        sys_platform = self._system
+        if sys_platform == 'Windows':
+            return 'x64_win64'
+        # TODO
+        return ''
+
+    @property
     def cplex_version(self):
         return self._cplex_version
 
@@ -100,19 +123,19 @@ class Environment(object):
         """True if the `matplotlib` libraries are available.
         """
         if self._found_matplotlib is None:
-            self.__check_matplotlib()
+            self.check_matplotlib()
         return self._found_matplotlib
 
     @property
     def has_pandas(self):
         """True if the `pandas` libraries are available.
         """
-        self.__check_pandas()
+        self.check_pandas()
         return self._found_pandas
 
     @property
     def pandas_version(self):
-        self.__check_pandas()
+        self.check_pandas()
         return self._pandas_version
 
     @property
@@ -125,7 +148,7 @@ class Environment(object):
     def has_numpy(self):
         """True if the `numpy` libraries are available.
         """
-        self._check_numpy()
+        self.check_numpy()
         return self._found_numpy
 
     def is_64bit(self):
@@ -134,10 +157,17 @@ class Environment(object):
         return self._is64bit
 
     def auto_configure(self):
-        self._check_cplex()
-        # do not check for numpy, done lazily or on setting a hook
+        self.check_cplex()
+        # check for pandas (watson studio)
+        self.check_pandas()
 
-    def _check_cplex(self):
+    def check_all(self):
+        self.check_cplex()
+        self.check_pandas()
+        self.check_numpy()
+        self.check_matplotlib()
+
+    def check_cplex(self):
         # detecting CPLEX
         try:
             import cplex
@@ -158,7 +188,7 @@ class Environment(object):
         except ImportError:
             self._found_cplex = False
 
-    def _check_numpy(self):
+    def check_numpy(self):
         if self._found_numpy is None:
             try:
                 import numpy.version as npv
@@ -172,10 +202,11 @@ class Environment(object):
 
             except ImportError:
                 self._found_numpy = False
+                self._numpy_version = None
 
         return self._found_numpy
 
-    def __check_matplotlib(self):
+    def check_matplotlib(self):
         try:
             from matplotlib import __version__ as matplotlib_version
             self._found_matplotlib = True
@@ -184,7 +215,7 @@ class Environment(object):
             self._found_matplotlib = False
 
 
-    def __check_pandas(self):
+    def check_pandas(self):
         if self._found_pandas is None:
             try:
                 import pandas
@@ -219,11 +250,14 @@ class Environment(object):
         print("* system is: {0} {1}".format(self._system, self._bitness))
         from sys import version_info
         from docplex.mp import __version_info__
-        self._display_feature(True, "Python", str(version_info[0])+"."+str(version_info[1])+"."+str(version_info[2]))
+
+        python_version = '%s.%s.%s' % (version_info[0], version_info[1], version_info[2])
+        print("* Python version %s, located at: %s" % (python_version, sys.executable))
         self._display_feature(True, "docplex", __version_info__)
-        self._display_feature(self._found_cplex, "CPLEX wrapper", self._cplex_version, self._cplex_location)
-        self._display_feature(self._found_numpy, "Numpy", self._numpy_version)
-        self._display_feature(self._found_matplotlib, "Matplotlib", self._matplotlib_version)
+        self._display_feature(self._found_cplex, "CPLEX library", self._cplex_version, self._cplex_location)
+        self._display_feature(self._found_pandas, "pandas", self._pandas_version)
+        self._display_feature(self._found_numpy, "numpy", self._numpy_version)
+        self._display_feature(self._found_matplotlib, "matplotlib", self._matplotlib_version)
 
 
     @staticmethod
@@ -255,3 +289,7 @@ def get_closed_environment():
     env._found_numpy = False
     env._found_pandas = False
     return env
+
+
+if __name__ == '__main__':
+    Environment().print_information()

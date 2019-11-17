@@ -19,8 +19,6 @@ class KPI(object):
     will attempt to access th emodel's solution. If the model has no attached solution, then an exception
     is raised by `compute`.
 
-    Some KPIs require a valid solution of the model, while others do not. Use :func:`requires_solution` to
-    check whether a given KPI requires a solution.
     """
 
     def __init__(self):
@@ -50,6 +48,19 @@ class KPI(object):
     def _get_solution_value(self, s=None):  # pragma: no cover
         return self.compute(s)
 
+    def _ensure_solution(self, s, do_raise=True):
+        # INTERNAL
+        if s is not None:
+            return s
+        else:
+            ms = self.get_model()._solution
+            if ms is not None:
+                return ms
+            elif do_raise:
+                self.get_model().fatal("KPI.compute() requires a solution, but model is not solved and no solution was passed")
+            else:
+                return None
+
     @property
     def solution_value(self):
         return self._get_solution_value()
@@ -58,12 +69,9 @@ class KPI(object):
         if not is_string(name_arg) or not name_arg:
             self.get_model().fatal("KPI.set_name() expects a non-empty string, got: {0!r}", name_arg)
 
-    def requires_solution(self):
-        """ KPIs based on decision expressions or variables require a successful solution
-        to be computed.
+    def is_decision_expression(self):
+        """ returns True if the KPI is based on a decision expression or variable.
 
-        Returns:
-           Boolean: True if the KPI requires a valid solution.
         """
         raise NotImplementedError   # pragma: no cover
 
@@ -156,9 +164,10 @@ class DecisionKPI(KPI):
         See Also:
             :class:`docplex.mp.solution.SolveSolution`
         """
-        return self._expr._get_solution_value(s)
+        es = self._ensure_solution(s, do_raise=True)
+        return self._expr._get_solution_value(es)
 
-    def requires_solution(self):
+    def is_decision_expression(self):
         return True
 
     def to_expr(self):
@@ -203,9 +212,10 @@ class FunctionalKPI(KPI):
         return self._model
 
     def compute(self, s=None):
-        return self._function(self._model, s)
+        es = self._ensure_solution(s)
+        return self._function(self._model, es)
 
-    def requires_solution(self):
+    def is_decision_expression(self):
         return False
 
     def copy(self, new_model, var_map):

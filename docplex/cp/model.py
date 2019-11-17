@@ -309,11 +309,13 @@ class CpoModel(object):
         if etyp.is_kind_of(Type_Constraint):
             self.expr_list.append((expr, loc))
         elif etyp is Type_Objective:
-            # Remove previous objective from the model
-            if self.objective is not None:
-                self.remove(self.objective)
-            self.objective = expr
-            self.expr_list.append((expr, loc))
+            # Check if already added with model function
+            if self.objective is not expr:
+                # Remove previous objective from the model
+                if self.objective is not None:
+                    raise CpoException("Only one objective function can be added to the model.")
+                self.objective = expr
+                self.expr_list.append((expr, loc))
         elif etyp is Type_SearchPhase:
             self.search_phases.append((expr, loc))
         elif isinstance(expr, CpoVariable):
@@ -356,9 +358,6 @@ class CpoModel(object):
 
         DEPRECATED: use add(minimize()) instead.
 
-        Calling this method is equivalent to add(minimize(expr)) except that, if exist,
-        the previously defined objective expression is removed to be replaced by this new one.
-
         Args:
             expr: Expression to minimize.
         Returns:
@@ -374,9 +373,6 @@ class CpoModel(object):
         """ Add an objective expression to maximize.
 
         DEPRECATED: use add(maximize()) instead.
-
-        Calling this method is equivalent to add(maximize(expr)) except that, if exist,
-        the previously defined objective expression is removed to be replaced by this new one.
 
         Args:
             expr: Expression to maximize.
@@ -554,6 +550,8 @@ class CpoModel(object):
     def create_empty_solution(self):
         """ Create an empty model solution that can be filled to be used as a starting point.
 
+        *New in version 2.9*
+
         Returns:
             New empty model solution, object of class :class:`~docplex.cp.solution.CpoModelSolution`
         """
@@ -598,13 +596,10 @@ class CpoModel(object):
                               If absent the expression name is used.
                               If the expression has no name, an exception is raised.
         """
-        ver = self.get_usable_format_version()
-        iskexpr = ver is not None and compare_natural(ver, '12.9') >= 0
-
         if isinstance(expr, CpoExpr):
-            if iskexpr:
-                assert expr.type != Type_Constraint, "KPI expression can not be a top-level constraint"
-            else:
+            assert expr.type != Type_Constraint, "KPI expression can not be a top-level constraint"
+            # If format version is < 12.9, check integer var only
+            if self.format_version is not None and compare_natural(self.format_version, '12.9') < 0:
                 assert expr.type == Type_IntVar, "KPI expression can only be an integer variable."
         else:
             assert isinstance(expr, types.FunctionType), "Argument 'expr' should be a model expression or a lambda expression"
@@ -837,6 +832,10 @@ class CpoModel(object):
     def set_format_version(self, ver):
         """ Set the expected version of the CPO format.
 
+        If the version is None (default), the model is generated with the most recent version.
+        If the solver is not the most recent, the model may be rejected at solve time if a recent feature has been used.
+        If the version is set, available features are checket at modeling time.
+
         Args:
             ver:  CPO format version
         """
@@ -854,20 +853,6 @@ class CpoModel(object):
             String containing the version of the CPO format. None for default.
         """
         return self.format_version
-
-
-    def get_usable_format_version(self):
-        """ Gets the version of the CPO format, using default if not defined locally
-
-        If not defined explicitly using :meth:`set_format_version`, this method returns the default value
-        set in the configuration file in context.model.version.
-
-        Returns:
-            String containing the version of the CPO format.
-        """
-        if self.format_version:
-            return self.format_version
-        return config.context.model.version
 
 
     def get_source_file(self):
@@ -902,12 +887,10 @@ class CpoModel(object):
         # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
         estack.extend([x for x, l in self.search_phases])
-        if self.objective is not None:
-            estack.append(self.objective)
         result = CpoModelStatistics(self)
-
-         # Loop while expression stack is not empty
         doneset = set()  # Set of ids of expressions already processed
+
+        # Loop while expression stack is not empty
         while estack:
             e = estack.pop()
             eid = id(e)
@@ -1413,10 +1396,10 @@ class CpoModel(object):
         Returns:
             New solver properly initialized.
         """
-        solver = CpoSolver(self, **kwargs)
+        slvr = CpoSolver(self, **kwargs)
         for l in self.listeners:
-            solver.add_listener(l)
-        return solver
+            slvr.add_listener(l)
+        return slvr
 
 
     @staticmethod

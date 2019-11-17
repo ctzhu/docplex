@@ -6,7 +6,7 @@
 
 # gendoc: ignore
 
-from six import itervalues
+from six import itervalues, iteritems
 from docplex.mp.compat23 import izip
 
 from docplex.mp.xcounter import update_dict_from_item_value
@@ -110,6 +110,51 @@ class ModelAggregator(object):
 
         return self._to_expr(qcc, lcc, total_num)
 
+    def _scal_prod_f(self, var_map, coef_fn, assume_alldifferent):
+        if assume_alldifferent:
+            return self._scal_prod_f_alldifferent(var_map, coef_fn)
+        else:
+            # var_map is a dictionary of variables.
+            # coef_fn is a function accepting dictionary keys
+            lcc_type = self.counter_type
+            lcc = lcc_type()
+            number_validation_fn = self._checker.get_number_validation_fn()
+            if number_validation_fn:
+                for k, dvar in iteritems(var_map):
+                    fcoeff = coef_fn(k)
+                    safe_coeff = number_validation_fn(fcoeff)
+                    if safe_coeff:
+                        update_dict_from_item_value(lcc, dvar, safe_coeff)
+            else:
+                for k, dvar in iteritems(var_map):
+                    fcoeff = coef_fn(k)
+                    if fcoeff:
+                        update_dict_from_item_value(lcc, dvar, fcoeff)
+
+            return self._to_expr(qcc=None, lcc=lcc)
+
+
+    def _scal_prod_f_alldifferent(self, var_map, coef_fn):
+        # var_map is a dictionary of variables.
+        # coef_fn is a function accepting dictionary keys
+        lcc_type = self.counter_type
+        lcc = lcc_type()
+        lcc_setitem = lcc_type.__setitem__
+        number_validation_fn = self._checker.get_number_validation_fn()
+        if number_validation_fn:
+            for k, dvar in iteritems(var_map):
+                fcoeff = coef_fn(k)
+                safe_coeff = number_validation_fn(fcoeff)
+                if safe_coeff:
+                    lcc_setitem(lcc, dvar, safe_coeff)
+        else:
+            for k, dvar in iteritems(var_map):
+                fcoeff = coef_fn(k)
+                if fcoeff:
+                    lcc_setitem(lcc, dvar, fcoeff)
+
+        return self._to_expr(qcc=None, lcc=lcc)
+
     def sum(self, sum_args):
         if is_iterator(sum_args):
             return self._sum_with_iter(sum_args)
@@ -127,7 +172,8 @@ class ModelAggregator(object):
         elif is_number(sum_args):
             return sum_args
         else:
-            return self._linear_factory._to_linear_expr(sum_args)
+            # TODO: use linear operand here
+            return self._linear_factory._to_linear_operand(sum_args)
 
     def _sum_with_iter(self, args):
         sum_of_nums = 0
@@ -171,8 +217,20 @@ class ModelAggregator(object):
         return self._to_expr(qcc, lcc, sum_of_nums)
 
     def _sum_vars(self, dvars):
-        sumvars_terms = self._varlist_to_terms(dvars)
-        return self._to_expr(qcc=None, lcc=sumvars_terms)
+        if is_numpy_ndarray(dvars):
+            return self._sum_vars(dvars.flat)
+        elif is_pandas_series(dvars):
+            return self.sum(dvars.values)
+        elif isinstance(dvars, dict):
+            # handle dict: sum all values
+            return self._sum_with_iter(itervalues(dvars))
+        elif is_iterable(dvars):
+            checked_dvars = self._checker.typecheck_var_seq(dvars, caller='Model.sumvars()')
+            sumvars_terms = self._varlist_to_terms(checked_dvars)
+            return self._to_expr(qcc=None, lcc=sumvars_terms)
+        else:
+            self._model.fatal('Model.sumvars() expects an iterable returning variables, {0!r} was passed',
+                              dvars)
 
     def _varlist_to_terms(self, var_list):
         # INTERNAL: converts a sum of vars to a dict, sorting if needed.

@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from docplex.mp.utils import is_number
+from docplex.mp.utils import resolve_caller_as_string, is_number, is_ordered_sequence
+from docplex.mp.constants import BasisStatus
 
 import math
 
@@ -42,10 +43,12 @@ class StaticTypeChecker(object):
 
     @classmethod
     def typecheck_added_constraint(cls, mdl, ct):
-        if not ct.has_valid_index():
+        if not ct.is_added():
             mdl.fatal("Constraint: {0!s} has not been added to any model".format(ct))
         elif mdl is not ct.model:
             mdl.fatal("Constraint: {0!s} belongs to a different model".format(ct))
+
+
 
     @classmethod
     def mul_quad_lin_error(cls, logger, f1, f2):
@@ -63,8 +66,48 @@ class StaticTypeChecker(object):
         # check for a "real" number, not a NaN, not infinity
         caller_string = "{0}: ".format(caller) if caller is not None else ""
         if not is_number(arg):
-            logger.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+            logger.fatal("{0}Expecting number, {1!r} was passed", caller_string, arg)
         elif math.isnan(arg):
-            logger.fatal("{0}NaN value detected", caller_string)
+            logger.fatal("{0}NaN value was passed", caller_string)
         elif math.isinf(arg):
-            logger.fatal("{0}Infinite value detected", caller_string)
+            logger.fatal("{0}Infinite value was passed", caller_string)
+
+    @classmethod
+    def check_number_pair(cls, logger, arg, caller=None):
+        caller_string = "{0}: ".format(caller) if caller is not None else ""
+        if arg is None:
+            logger.fatal("{0}expecting 2-tuple of floats, {1!r} was passed", caller_string, arg)
+        if isinstance(arg, tuple):
+            if len(arg) != 2:
+                logger.fatal("{0}expecting 2-tuple of floats, invalid tuple {1!r} was passed",
+                             caller_string, arg)
+            cls.typecheck_num_nan_inf(logger, arg[0])
+            cls.typecheck_num_nan_inf(logger, arg[1])
+        else:
+            logger.fatal("{0}expecting 2-tuple of floats, {1!r} was passed", caller_string, arg)
+
+    @classmethod
+    def check_file(cls, logger, path, name, expected_extensions, caller=None):
+        import os
+        if not os.path.exists(path):
+            raise IOError("{0} file not found: {1}".format(name, path))
+        # find extension
+        filename, file_extension = os.path.splitext(path)
+        if file_extension not in expected_extensions:
+            caller_string = '' if not caller else caller + ' '
+            logger.warning("{0}Unexpected file extension: {1}, expecting one of {2}", caller_string,
+                           file_extension, "|".join(x for x in expected_extensions))
+
+
+    @classmethod
+    def typecheck_initial_lp_stats(cls, logger, stats, stat_type, caller=None):
+        caller_s = resolve_caller_as_string(caller)
+        if not is_ordered_sequence(stats):
+            logger.fatal('{0}expects ordered sequence of {2} basis statuses, {1!r} was passed', caller_s, stats, stat_type)
+        l_stats = list(stats)
+        for s, stat in enumerate(l_stats):
+            if not isinstance(stat, BasisStatus):
+                logger.fatal('{0}expects a sequence of {3} basis status, {1} was passed at pos {2}',
+                             caller_s, stat, s, stat_type)
+        return l_stats
+

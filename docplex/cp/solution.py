@@ -726,6 +726,8 @@ class CpoModelSolution(object):
             expr: Variable expression, variable name or KPI name.
         Returns:
             Variable value, None if variable is not found.
+        Raises:
+            KeyError if expression is not in the solution.
         """
         var = self.get_var_solution(expr)
         if var is not None:
@@ -745,13 +747,14 @@ class CpoModelSolution(object):
          * If the variable is fully instantiated, a single integer.
          * If the variable is partially instantiated, a domain expressed as a list of integers or intervals.
 
-
         For an interval variable, value can be:
 
          * If the variable is absent, an empty tuple.
          * If the variable is fully instantiated, a tuple of 3 integers (start, end, size).
          * If the variable is partially instantiated, a tuple (start, end, size, length) where each
            individual value can be an integer or an interval expressed as a tuple.
+
+        *New in version 2.9.*
 
         Args:
             var: Model variable
@@ -801,9 +804,11 @@ class CpoModelSolution(object):
         Args:
             name: Name of the KPI
         Returns:
-            Value of the KPI, None if not in the solution
+            Value of the KPI
+        Raises:
+            KeyError if KPI is not in the solution.
         """
-        return self.kpi_values.get(name)
+        return self.kpi_values[name]
 
 
     def is_empty(self):
@@ -813,6 +818,21 @@ class CpoModelSolution(object):
             True if there is no objective value and no variable
         """
         return (self.objective_values is None) and (not self.var_solutions_dict)
+
+
+    def map_solution(self, sobj):
+        """ Map a python object on this solution.
+
+        This method builds a copy of the source object and replace in its attributes all occurrences of
+        model expressions by their value in this solution.
+        This method is called recursively on all child objects.
+
+        Args:
+            sobj:  Source object
+        Returns:
+            Copy of the source object where model expressions are replaced by their values
+        """
+        return replace(sobj, self.get_value)
 
 
     def _add_json_solution(self, jsol, expr_map, model, prms):
@@ -1025,8 +1045,8 @@ class CpoRunResult(object):
     def __init__(self, model):
         super(CpoRunResult, self).__init__()
         self.model = model
-        self.solver_log = None                      # Solver log
-        self.process_infos = CpoProcessInfos()     # Process information
+        self.solver_log = None                  # Solver log
+        self.process_infos = CpoProcessInfos()  # Process information
 
 
     def get_model(self):
@@ -1195,6 +1215,21 @@ class CpoSolveResult(CpoRunResult):
             True if there is a solution that is optimal.
         """
         return self.solve_status == SOLVE_STATUS_OPTIMAL
+
+
+    def map_solution(self, sobj):
+        """ Map a python object on this solution.
+
+        This method builds a copy of the source object and replace in its attributes all occurrences of
+        model expressions by their value in this solution.
+        This method is called recursively on all child objects.
+
+        Args:
+            sobj:  Source object
+        Returns:
+            Copy of the source object where model expressions are replaced by their values
+        """
+        return self.solution.map_solution(sobj)
 
 
     def __nonzero__(self):

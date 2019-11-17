@@ -154,7 +154,7 @@ class ConflictStatus(Enum):
     This enumerated class defines the conflict status types.
     """
     Excluded, Possible_member, Possible_member_lower_bound, Possible_member_upper_bound, \
-    Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
+      Member, Member_lower_bound, Member_upper_bound = -1, 0, 1, 2, 3, 4, 5
 
 
 class SOSType(Enum):
@@ -279,14 +279,14 @@ class ObjectiveSense(Enum):
     def cplex_coef(self):
         return 1 if self.is_minimize() else -1
 
+    @property
     def verb(self):
         # INTERNAL
-        return "minimize" if self.is_minimize() else "maximize" if self.is_maximize() else "WHAT???"
+        return self.name.lower()
 
-    def action(self):
-        # INTERNAL
-        # minimize -> minimizing, maximize -> maximizing...
-        return "%sing" % self.verb()[:-1]
+    @property
+    def short_name(self):
+        return self.verb[:3]
 
     @staticmethod
     def parse(arg, logger=None, default_sense=None):
@@ -455,6 +455,24 @@ class QualityMetric(Enum):
 
 
 class BasisStatus(Enum):
+    """ This enumerated type describes the different values for basis status.
+
+    Basis status can be queried for variables and linear constraints in LP problems.
+
+    Possible values are:
+
+    - NotABasisStatus: invalid or unknown status,
+    - Basic, means the variable belongs to the base,
+    - AtLower, means the variable is non-basic, at its lower bound,
+    - AtUpper, means the variable is non-basic, at its upper bound,
+    - FreeNonBasic, means the variable is nonbasic and is not at a bound.
+
+    See Also:
+        The different values for basis status can be found in the CPLEX documentation:
+
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.9.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getbase.html
+
+    """
 
     def __new__(cls, code, cpx_codename):
         obj = object.__new__(cls)
@@ -463,7 +481,7 @@ class BasisStatus(Enum):
         obj.codename = cpx_codename
         return obj
 
-    unknown = -1, "Unknown"
+    NotABasisStatus = -1, "NotBasisStatus"
     AtLowerBound = 0, "CPX_AT_LOWER"
     Basic = 1, "CPX_BASIC"
     AtUpperBound = 2, "CPX_AT_UPPER"
@@ -475,4 +493,110 @@ class BasisStatus(Enum):
             if bs.value == code:
                 return bs
         else:
-            return cls.unknown
+            return cls.NotABasisStatus
+
+
+class WriteLevel(Enum):
+    """
+    This enumerated class controls what is written in MST mip start files.
+    The numeric value is identical to the CPLEX WriteLevel parameter values.
+
+    The possible values are (in order of decreasing quantity of information written).
+
+        - AllVars: all variables are written
+        - DiscreteVars: all discrete variables are  written (binary, integer, semi-integer)
+        - NonZeroVars: all non-zero vars are written, regardless of their type.
+        - DiscreteNonZeroVars: all discrete non-zero vars are written.
+
+        - Auto: automatic value, same as DiscreteVars.
+
+    *New in version 2.10*
+    """
+
+    def __new__(cls, code, short_name):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj.short_name = short_name
+        return obj
+
+    Auto = 0, "auto"  # same as DiscreteVars: filter discrete, keep zeros
+    AllVars = 1, "all"  # write all variables and their value, zero or nonzero
+    DiscreteVars = 2, "discrete"  # write all discrete variables and their value
+    NonZeroVars = 3, "nonzero"   # write only nonzero variables
+    NonZeroDiscreteVars = 4 , "nonzero_discrete" # write nonzero discrete variables
+
+    def filter_zeros(self):
+        return self in {WriteLevel.NonZeroVars, WriteLevel.NonZeroDiscreteVars}
+
+    def filter_discrete(self):
+        return self in {WriteLevel.Auto, WriteLevel.DiscreteVars, WriteLevel.NonZeroDiscreteVars}
+
+    @classmethod
+    def parse(cls, level):
+        if level is None:
+            return cls.Auto
+        elif level in cls:
+            return level
+        else:
+            for wl in cls:
+                if wl.value == level:
+                    return wl
+                elif is_string(level) and wl.name.lower() == level.lower():
+                    return wl
+            else:
+                return cls.Auto
+
+
+class EffortLevel(Enum):
+
+    """
+    This enumerated class controls the effort level used for a MIP start.
+    The numeric value is identical to the CPLEX EffortLevel parameter values.
+
+    *New in version 2.10*
+
+    """
+    Auto = 0
+    CheckFeas = 1
+    SolveFixed = 2
+    SolveMIP = 3
+    Repair = 4
+    NoCheck = 5
+
+    @classmethod
+    def parse(cls, arg):
+        fallback = cls.Auto
+        if arg is None:
+            return fallback
+        elif isinstance(arg, EffortLevel):
+            return arg
+        else:
+            for eff in EffortLevel:
+                if eff.value == arg:
+                    return eff
+                elif is_string(arg) and arg.lower() == eff.name.lower():
+                    return eff
+            else:
+                return fallback
+
+# problem type conversion
+_problemtype_map = {0: "LP",
+                    1: "MILP",
+                    3: "fixed_MILP",
+                    4: "nodeLP",
+                    5: "QP",
+                    7: "MIQP",
+                    8: "fixed_MIQP",
+                    9: "node_QP",
+                    10: "QCP",
+                    11: "MIQCP",
+                    12: "node_QCP"}
+
+
+def int_probtype_to_string(probtype, fallback_probtype="unknown"):
+    try:
+        iprobe_type = int(probtype)
+        return _problemtype_map.get(iprobe_type, fallback_probtype)
+    except ValueError:
+        return fallback_probtype

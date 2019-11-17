@@ -22,21 +22,6 @@ class AdvAggregator(ModelAggregator):
     def __init__(self, linear_factory, quad_factory, counter_type):
         ModelAggregator.__init__(self, linear_factory, quad_factory, counter_type)
 
-    def _scal_prod_f(self, var_map, coef_fn):
-        # var_map is a dictionary of variables.
-        # coef_fn is a function accepting dictionary keys
-        lcc_type = self.counter_type
-        lcc = lcc_type()
-        lcc_setitem = lcc_type.__setitem__
-        number_validation_fn = self._checker.get_number_validation_fn()
-        for k, dvar in iteritems(var_map):
-            coeff = coef_fn(k)
-            safe_coeff = number_validation_fn(coeff) if number_validation_fn else coeff
-            if safe_coeff:
-                lcc_setitem(lcc, dvar, safe_coeff)
-
-        return self._to_expr(qcc=None, lcc=lcc)
-
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
         if not is_iterable(coefs, accept_string=False):
@@ -319,17 +304,10 @@ class AdvModel(Model):
             turns off checking everywhere, it should be used with extreme caution.
         """
         self._checker.check_ordered_sequence(arg=terms,
-                                             header='Model.scal_prod() requires a list of expressions/variables')
+                                             caller='Model.scal_prod() requires a list of expressions/variables')
         var_seq = self._checker.typecheck_var_seq_all_different(terms)
         return self._aggregator._scal_prod_vars_all_different(var_seq, coefs)
 
-    def scal_prod_functional(self, var_dict, coef_fn):
-        StaticTypeChecker.typecheck_callable(self, coef_fn,
-                                             "Functional scalar product requires a function taking variable keys as argument. A non-callable was passed: {0!r}".format(
-                                                 coef_fn))
-        return self._aggregator._scal_prod_f(var_dict, coef_fn)
-
-    dotf = scal_prod_functional
 
     def quad_matrix_sum(self, matrix, dvars, symmetric=False):
         """
@@ -483,7 +461,7 @@ class AdvModel(Model):
             or a `pandas` series. The size of the sequence must match the number of columns in the matrix.
         :param rhs: A sequence of numbers: accepts a Python list, a `numpy` array,
             or a `pandas` series. The size of the sequence must match the number of rows in the matrix.
-        :param sense: A constraint sense \; accepts either a
+        :param sense: A constraint sense, accepts either a
             value of type `ComparisonType` or a string (e.g 'le', 'eq', 'ge').
 
         :returns: A list of linear constraints.
@@ -624,8 +602,8 @@ class AdvModel(Model):
         # check
 
         checker.typecheck_var_seq(s_dvars)
-        checker.typecheck_num_seq(s_lbs)
-        checker.typecheck_num_seq(s_ubs)
+        checker.typecheck_num_seq(s_lbs, caller="AdvModel.matrix_ranges.lbs")
+        checker.typecheck_num_seq(s_ubs, caller="AdvModel.matrix_ranges.ubs")
 
         # ---
         # check dimensions and whether to transpose or not.

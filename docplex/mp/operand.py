@@ -30,6 +30,10 @@ class Operand(object):
     def is_in_use(self):
         return False
 
+    # noinspection PyMethodMayBeStatic
+    def is_shared(self):
+        return False
+
     def notify_modified(self, event):
         pass
 
@@ -101,6 +105,9 @@ class LinearOperand(Operand):
 
     def is_zero(self):
         return False
+
+    def get_constant(self):
+        return 0
 
     # no strict comparisons
     def __lt__(self, e):

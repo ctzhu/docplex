@@ -121,30 +121,26 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         timer.cancel()
         if evt != EVT_VERSION_INFO:
             raise LocalSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
-        self.version_info = json.loads(data.decode('utf-8'))
+        self.version_info = verinf = json.loads(data.decode('utf-8'))
         self.available_command = self.version_info['AvailableCommands']
-        context.log(3, "Local solver info: '", self.version_info, "'")
+        # Normalize information
+        verinf['AgentModule'] = __name__
+        iver = verinf.get('AngelVersion')
+        if iver:
+            verinf['InterfaceVersion'] = iver
 
-        # Convert model into CPO format
-        cpostr = self._get_cpo_model_string()
+        context.log(3, "Local solver info: '", verinf, "'")
 
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
-        mver = self.format_version
+        mver = solver.get_model_format_version()
         if sver and mver and compare_natural(mver, sver) > 0:
             raise LocalSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
 
-        # Encode model
-        stime = time.time()
-        cpostr = cpostr.encode('utf-8')
-        self.process_infos[CpoProcessInfos.MODEL_ENCODE_TIME] = time.time() - stime
-
         # Send CPO model to process
-        stime = time.time()
-        self._write_message(CMD_SET_CPO_MODEL, cpostr)
-        self.process_infos[CpoProcessInfos.MODEL_SEND_TIME] = time.time() - stime
+        cpostr = self._get_cpo_model_string()
+        self._send_cpo_model(cpostr)
         context.log(3, "Model sent.")
-        self._wait_json_result(EVT_SUCCESS)  # JSON stored
 
 
     def __del__(self):
@@ -218,6 +214,13 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Build result object
         return self._create_result_object(CpoSolveResult, jsol)
+
+
+    def abort_search(self):
+        """ Abort current search.
+        This method is designed to be called by a different thread than the one currently solving.
+        """
+        self.end()
 
 
     def refine_conflict(self):
@@ -339,6 +342,23 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             super(CpoSolverLocal, self).end()
 
 
+    def _send_cpo_model(self, cpostr):
+        """ Set the cpo model in the solver
+        Args:
+            cpostr:  CPO model as a string
+        """
+        # Encode model
+        stime = time.time()
+        cpostr = cpostr.encode('utf-8')
+        self.process_infos.incr(CpoProcessInfos.MODEL_ENCODE_TIME, time.time() - stime)
+
+        # Send CPO model to process
+        stime = time.time()
+        self._write_message(CMD_SET_CPO_MODEL, cpostr)
+        self._wait_json_result(EVT_SUCCESS)  # JSON stored
+        self.process_infos.incr(CpoProcessInfos.MODEL_SEND_TIME, time.time() - stime)
+
+
     def _wait_event(self, xevt):
         """ Wait for a particular event while forwarding logs if any.
         Args:
@@ -369,8 +389,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                     if firsterror is None:
                         firsterror = ldata.replace('\n', '')
                     out = self.log_output if self.log_output is not None else sys.stdout
-                    out.write("ERROR: ")
-                    out.write(ldata)
+                    out.write("ERROR: {}\n".format(ldata))
                     out.flush()
             elif evt == EVT_TRACE:
                 self.context.log(4, data.decode('utf-8'))

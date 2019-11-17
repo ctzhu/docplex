@@ -31,14 +31,14 @@ class PwlFunction(ModelingObjectBase):
     """
 
     @staticmethod
-    def check_number(logger, arg):
-        StaticTypeChecker.typecheck_num_nan_inf(logger, arg)
+    def check_number(logger, arg, caller=None):
+        StaticTypeChecker.typecheck_num_nan_inf(logger, arg, caller)
 
 
     @staticmethod
     def check_list_pair_breaksxy(logger, arg):
         if not is_iterable(arg):
-            logger.fatal("not an iterable: {0!s}".format(arg))
+            logger.fatal("argument 'breaksxy' expects iterable, {0!r} was passed".format(arg))
         if isinstance(arg, tuple):
             # Encapsulate tuple argument into a list: this allows defining a PWL with a tuple if there is only
             #  one element in its definition

@@ -46,25 +46,26 @@ _ANONYMOUS = "Anonymous"
 
 class CpoCompiler(object):
     """ Compiler to CPO file format """
-    __slots__ = ('model',                 # Source model
-                 'parameters',            # Solving parameters
-                 'add_source_location',   # Indicator to add location traces in generated output
-                 'format_version',        # Output format version
-                 'is_format_12_8',        # Indicates that format version is at least 12.8
-                 'is_format_12_9',        # Indicates that format version is at least 12.9
-                 'name_all_constraints',  # Indicator to fore a name on each constraint (for conflict refiner)
-                 'min_length_for_alias',  # Minimum variable name length to replace it by an alias
-                 'verbose_output',        # Verbose output (not short_output)
-                 'id_printable_strings',  # Dictionary of printable string for each identifier
-                 'last_location',         # Last source location (file, line)
-                 'list_consts',           # List of constants
-                 'list_vars',             # List of variables
-                 'list_exprs',            # List of model expressions
-                 'list_phases',           # List of search phases
-                 'expr_infos',            # Map of expression infos.
-                                          # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
-                 'expr_by_names',         # Map of expressions by CPO name. Used to retrieve expressions from solutions.
-                 'alias_name_map',        # Map of variable renamed with a shorter name. key = old name, value = new name
+    __slots__ = ('model',                    # Source model
+                 'parameters',               # Solving parameters
+                 'add_source_location',      # Indicator to add location traces in generated output
+                 'format_version',           # Output format version
+                 'is_format_less_than_12_8', # Indicates that format version is less than 12.8
+                 'is_format_at_least_12_8',  # Indicates that format version is at least 12.8
+                 'is_format_at_least_12_9',  # Indicates that format version is at least 12.9
+                 'name_all_constraints',     # Indicator to fore a name on each constraint (for conflict refiner)
+                 'min_length_for_alias',     # Minimum variable name length to replace it by an alias
+                 'verbose_output',           # Verbose output (not short_output)
+                 'id_printable_strings',     # Dictionary of printable string for each identifier
+                 'last_location',            # Last source location (file, line)
+                 'list_consts',              # List of constants
+                 'list_vars',                # List of variables
+                 'list_exprs',               # List of model expressions
+                 'list_phases',              # List of search phases
+                 'expr_infos',               # Map of expression infos.
+                                             # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
+                 'expr_by_names',            # Map of expressions by CPO name. Used to retrieve expressions from solutions.
+                 'alias_name_map',           # Map of variable renamed with a shorter name. key = old name, value = new name
                  )
 
     def __init__(self, model, **kwargs):
@@ -108,13 +109,21 @@ class CpoCompiler(object):
             self.name_all_constraints = mctx.name_all_constraints
             self.verbose_output = not mctx.short_output
 
-        # Determine format version
+        # Determine CPO format version
         self.format_version = None if model is None else model.get_format_version()
-        # If not given, take default version
-        if self.format_version is None and mctx is not None:
+        if self.format_version is None:
             self.format_version = mctx.version
-        self.is_format_12_8 = self.format_version and compare_natural(self.format_version, '12.8') >= 0
-        self.is_format_12_9 = self.format_version and compare_natural(self.format_version, '12.9') >= 0
+
+        # Determine output variant triggers
+        if self.format_version is None:
+            # Assume most recent solver
+            self.is_format_less_than_12_8 = False
+            self.is_format_at_least_12_8 = True
+            self.is_format_at_least_12_9 = True
+        else:
+            self.is_format_less_than_12_8 = self.format_version and compare_natural(self.format_version, '12.8') < 0
+            self.is_format_at_least_12_8 = self.format_version and compare_natural(self.format_version, '12.8') >= 0
+            self.is_format_at_least_12_9 = self.format_version and compare_natural(self.format_version, '12.9') >= 0
 
         # Initialize source location
         if self.verbose_output:
@@ -259,7 +268,7 @@ class CpoCompiler(object):
         # Write KPIs if any
         kpis = model.get_kpis()
         if kpis:
-            if self.is_format_12_9:
+            if self.is_format_at_least_12_9:
                 if self.verbose_output:
                     out.write(u"\n//--- KPIs ---\n")
                 out.write(u"KPIs {\n")
@@ -350,7 +359,7 @@ class CpoCompiler(object):
                     out.write(name + u" = " + self._compile_expression(expr.expr, False) + u";\n")
                 elif isroot and expr.type in (Type_Constraint, Type_SearchPhase, Type_BoolExpr):
                     # Named constraint
-                    if self.is_format_12_8:
+                    if self.is_format_at_least_12_8:
                         out.write(name + u": " + self._compile_expression(expr, True) + u";\n")
                     else:
                         out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n" + name + u";\n")
@@ -370,7 +379,7 @@ class CpoCompiler(object):
         # Build starting point declaration
         cout = []
         if isinstance(var, CpoIntVarSolution):
-            self._compile_int_var_starting_point(var, cout)
+            self._compile_integer_var_starting_point(var, cout)
         elif isinstance(var, CpoIntervalVarSolution):
             self._compile_interval_var_starting_point(var, cout)
         else:
@@ -462,7 +471,7 @@ class CpoCompiler(object):
                         cout.append("[]")
                     else:
                         cout.append('[')
-                        self._compile_var_domain(vals, cout)
+                        self._compile_integer_var_domain(vals, cout)
                         cout.append(']')
                 elif t is Type_Bool:
                     cout.append("true()" if e.value else "false()")
@@ -483,7 +492,7 @@ class CpoCompiler(object):
             elif t.is_variable:
                 estack.pop()
                 if t is Type_IntVar:
-                    self._compile_int_var(e, cout)
+                    self._compile_integer_var(e, cout)
                 elif t is Type_IntervalVar:
                     self._compile_interval_var(e, cout)
                 elif t is Type_SequenceVar:
@@ -526,8 +535,7 @@ class CpoCompiler(object):
                     # Check first call
                     if cnx <= 0:
                         # Check special case of sum of cumulexpr
-                        fver = self.format_version
-                        if oper is Oper_sum and e.type is Type_CumulExpr and (fver is None or compare_natural(fver, '12.8') < 0):
+                        if self.is_format_less_than_12_8 and oper is Oper_sum and e.type is Type_CumulExpr:
                             # Replace function call by a serie of additions
                             largs = oprnds[0].value
                             res = largs[0]
@@ -586,19 +594,19 @@ class CpoCompiler(object):
         return u''.join(cout)
 
 
-    def _compile_int_var(self, v, cout):
-        """ Compile a IntVar in a string in CPO format
+    def _compile_integer_var(self, v, cout):
+        """ Compile a integer variable in a string in CPO format
         Args:
             v:    Variable
             cout: Output string list
         """
         cout.append("intVar(")
-        self._compile_var_domain(v.get_domain(), cout)
+        self._compile_integer_var_domain(v.get_domain(), cout)
         cout.append(")")
 
 
-    def _compile_int_var_starting_point(self, v, cout):
-        """ Compile a starting point IntVar in a string in CPO format
+    def _compile_integer_var_starting_point(self, v, cout):
+        """ Compile a integer variable starting point in a string in CPO format
         Args:
             v:    Variable
             cout: Output string list
@@ -654,16 +662,13 @@ class CpoCompiler(object):
         cout.append("present" if v.is_present() else "optional")
         rng = v.get_start()
         if rng is not None:
-            cout.append(", start=")
-            self._compile_var_domain([rng], cout)
+            cout.append(", start=" + _interval_var_domain_string(rng))
         rng = v.get_end()
         if rng is not None:
-            cout.append(", end=")
-            self._compile_var_domain([rng], cout)
+            cout.append(", end=" + _interval_var_domain_string(rng))
         rng = v.get_size()
         if rng is not None:
-            cout.append(", size=")
-            self._compile_var_domain([rng], cout)
+            cout.append(", size=" + _interval_var_domain_string(rng))
         cout.append(")")
 
 
@@ -727,14 +732,14 @@ class CpoCompiler(object):
             if i > 0:
                 cout.append(", ")
             cout.append("[")
-            self._compile_var_domain(tpl, cout)
+            self._compile_integer_var_domain(tpl, cout)
             cout.append("]")
         cout.append("]")
 
 
     @staticmethod
-    def _compile_var_domain(dom, cout):
-        """ Compile a variable domain in CPO format
+    def _compile_integer_var_domain(dom, cout):
+        """ Compile a integer variable domain in CPO format
 
         Args:
             dom:   Variable domain
@@ -745,7 +750,7 @@ class CpoCompiler(object):
                 if i > 0:
                     cout.append(", ")
                 if isinstance(d, (list, tuple)):
-                    cout.append(_int_var_domain_string(d))
+                    cout.append(_int_var_value_string(d[0]) + ".." + _int_var_value_string(d[1]))
                 else:
                     cout.append(_number_value_string(d))
         else:
@@ -1046,17 +1051,6 @@ def _allocate_expr_id(allocator, exprmap):
     return id
 
 
-def _int_var_domain_string(intv):
-    """ Build the string representing an interval domain
-
-    Args:
-       intv: Domain interval (list or tuple of 2 integers)
-    Returns:
-        String representation of the interval
-    """
-    return _int_var_value_string(intv[0]) + ".." + _int_var_value_string(intv[1])
-
-
 def _interval_var_value_string(ibv):
     """ Build the string representing an interval variable domain value
 
@@ -1075,18 +1069,20 @@ def _interval_var_value_string(ibv):
         return str(ibv)
 
 
-def _interval_var_domain_string(intv):
+def _interval_var_domain_string(dom):
     """ Build the string representing an interval_var domain
 
     Args:
-        intv: Domain interval
+        dom: Domain interval
     Returns:
         String representation of the domain
     """
-    smn = intv[0]
-    smx = intv[1]
-    if smn == smx:
-        return _interval_var_value_string(smn)
-    return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
+    if isinstance(dom, (list, tuple)):
+        smn, smx = dom
+        if smn == smx:
+            return _interval_var_value_string(smn)
+        return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
+    else:
+        return _interval_var_value_string(dom)
 
 

@@ -20,12 +20,13 @@ import inspect
 from collections import deque, Iterable
 import json
 import platform
+import copy
 import importlib
 
 try:
-    from StringIO import StringIO
+    from StringIO import StringIO  # Python 2
 except ImportError:
-    from io import StringIO
+    from io import StringIO        # Python 3
 
 
 ###############################################################################
@@ -760,7 +761,7 @@ class Barrier(object):
     This class implements a simple barrier with no timeout.
     Implemented here because not available in Python 2
     """
-    __slots__ = ('parties',  # Chrono start time
+    __slots__ = ('parties',  # Number of parties required before unlocking the barrier
                  'count',    # Number of waiting parties
                  'lock',     # Counters protection lock
                  'barrier'   # Threads blocking lock
@@ -967,6 +968,88 @@ def replace_in_tuple(tpl, ndx, val):
     lst = list(tpl)
     lst[ndx] = val
     return tuple(lst)
+
+
+def replace(obj, rfun):
+    """ Build a copy of a source object and apply a replacement function on all its attributes.
+
+    If an object is not changed, its original version is returned.
+
+    Args:
+       obj:  Source object
+       rfun: Value replacement function
+    Returns:
+        Copy of source object with all values replaced, or same object if no value has been replaced.
+    """
+    # Check if object is immediately replaceable
+    try:
+        nobj = rfun(obj)
+        # Check case where replace function force to keep same object
+        if nobj is obj:
+            return obj
+    except:
+        nobj = obj
+
+    # Check basic types (also eliminates strings)
+    ot = type(nobj)
+    if ot in BASIC_TYPES:
+        return nobj
+
+    # Duplicate object a priori
+    changed = False
+    nobj = copy.copy(obj)
+
+    # Check if object is a tuple (particular case, can not process case of general object extending tuple)
+    if isinstance(obj, tuple):
+        nvals = tuple(replace(x, rfun) for x in obj)
+        changed = any(nx is not x for x, nx in zip(obj, nvals))
+        if changed:
+            # Particular case of named tuples
+            if hasattr(obj, '_fields'):
+                nobj = ot(*nvals)
+            else:
+                nobj = ot(nvals)
+
+    # Check if object is dictionary
+    elif isinstance(obj, dict):
+        nobj.clear()
+        for k, v in obj.items():
+            nk = replace(k, rfun)
+            nv = replace(v, rfun)
+            nobj[nk] = nv
+            changed |= (nk is not k) or (nv is not v)
+
+    # Check if object is list
+    elif isinstance(obj, list):
+        for i in range(len(obj)):
+            v = obj[i]
+            nv = replace(v, rfun)
+            nobj[i] = nv
+            changed |= (nv is not v)
+
+    # Replace in attributes if any (even in objects extending basic composed types)
+    if hasattr(obj, '__dict__'):
+        for atr in obj.__dict__:
+            if not atr.startswith('_'):
+                try:
+                    v = getattr(obj, atr)
+                    nv = replace(v, rfun)
+                    setattr(nobj, atr, nv)
+                    changed |= (nv is not v)
+                except:
+                    pass
+
+    # Replace in slots attributes if any (even in objects extending basic composed types)
+    if hasattr(obj, '__slots__'):
+        for atr in obj.__slots__:
+            if not atr.startswith('_'):
+                v = getattr(obj, atr)
+                nv = replace(v, rfun)
+                setattr(nobj, atr, nv)
+                changed |= (nv is not v)
+
+    # Return object
+    return nobj if changed else obj
 
 
 def assert_arg_int_interval(val, mn, mx, name=None):

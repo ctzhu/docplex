@@ -13,6 +13,7 @@ This environment may be:
 
  * on premise, using a local version of CPLEX Optimization Studio to solve MP problems, or
  * on DOcplexcloud, with the Python program running inside the Python Worker.
+ * on Decision Optimization in Watson Machine Learning.
 
 As much as possible, the adaptation to the solving environment is
 automatic. The functions that are presented here are useful for handling

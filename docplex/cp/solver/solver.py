@@ -57,8 +57,6 @@ Detailed description
 """
 
 import docplex.cp.config as config
-from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context, is_array, is_string, parse_json_string
-import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
 from docplex.cp.solution import *
 from docplex.cp.solver.solver_listener import CpoSolverListener
@@ -66,6 +64,7 @@ from docplex.cp.solver.solver_listener import CpoSolverListener
 import time, importlib, inspect
 import traceback
 import threading
+
 
 ###############################################################################
 ##  Public constants
@@ -94,33 +93,47 @@ class CpoSolverAgent(object):
     """ This class is an abstract class that must be extended by every solver agent that intend
     to be called by :class:`CpoSolver` to solve a CPO model.
     """
+    __slots__ = ('name',             # Agent name
+                 'solver',           # Parent solver
+                 'model',            # Source model
+                 'params',           # Solver parameters
+                 'context',          # Solve context
+                 'last_json_result', # String of the last received JSON result
+                 'rename_map',       # Map of renamed variables. Key is new name, value is original name
+                 'version_info',     # Solver version information (dict). None if unknown.
+                 'process_infos',    # Processing information
+                 'log_output',       # Log output stream
+                 'log_print',        # Print log indicator
+                 'log_data',         # Log data buffer (list of strings)
+                 'log_enabled',      # Global log enabled indicator
+                 'expr_map',         # Map of expressions to rebuild result
+                )
 
     def __init__(self, solver, params, context):
         """ Constructor
 
         Args:
-            solver:   Parent solver
-            params:   Solving parameters
+            solver:   Parent solver, object of type CpoSolver
+            params:   Solving parameters, object of type CpoParameters
             context:  Solver agent context
         Raises:
-            CpoException if jar file does not exists
+            CpoException if agent can not be created properly.
         """
         super(CpoSolverAgent, self).__init__()
-        self.solver = solver             # Parent solver
-        self.model = solver.get_model()  # Source model
-        self.params = params             # Model parameters
-        self.context = context           # Solve context
-        self.last_json_result = None     # Last result
-        self.log_data = []               # Log data (list of strings)
-        self.rename_map = None           # Map of renamed variables. Key is new name, value is original name
-        self.format_version = None       # Version of the generated CPO
+        self.solver = solver
+        self.model = solver.get_model()
+        self.params = params
+        self.context = context
+        self.last_json_result = None
+        self.rename_map = None
+        self.version_info = None
         self.process_infos = CpoProcessInfos()
 
         # Initialize log
-        self.log_output = context.get_log_output()                            # Log output stream
-        self.log_print = context.trace_log and (self.log_output is not None)  # Print log indicator
-        self.log_buffer = [] if context.add_log_to_solution else None         # Log buffer
-        self.log_enabled = self.log_print or (self.log_data is not None)      # Global log process indicator
+        self.log_output = context.get_log_output()
+        self.log_print = context.trace_log and (self.log_output is not None)
+        self.log_data = [] if context.add_log_to_solution else None
+        self.log_enabled = self.log_print or (self.log_data is not None)
 
 
     def solve(self):
@@ -161,6 +174,16 @@ class CpoSolverAgent(object):
         Returns:
             Last (fail) solve result with last solve information,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        self._raise_not_supported()
+
+
+    def abort_search(self):
+        """ Abort current search.
+        This method is designed to be called by a different thread than the one currently solving.
+
         Raises:
             CpoNotSupportedException: method not available in this solver agent.
         """
@@ -251,10 +274,9 @@ class CpoSolverAgent(object):
         # Build string
         ctx = self.context
         stime = time.time()
-        cplr = CpoCompiler(self.model, params=self.params, context=self.context.get_root())
+        cplr = CpoCompiler(self.model, params=self.params, context=ctx.get_root())
         cpostr = cplr.get_as_string()
         self.expr_map = cplr.get_expr_map()
-        self.format_version = cplr.format_version
         self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
         self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
 
@@ -299,8 +321,8 @@ class CpoSolverAgent(object):
             if self.log_print:
                 self.log_output.write(data)
                 self.log_output.flush()
-            if self.log_buffer is not None:
-                self.log_buffer.append(data)
+            if self.log_data is not None:
+                self.log_data.append(data)
 
 
     def _set_last_json_result_string(self, json):
@@ -342,21 +364,14 @@ class CpoSolverAgent(object):
             # Parse JSON
             stime = time.time()
             jsol = parse_json_string(jsol)
-            # # Replace variable names if rename was used
-            # if self.rename_map:
-            #     _replace_names_in_json_dict(jsol.get('intVars'),        self.rename_map)
-            #     _replace_names_in_json_dict(jsol.get('intervalVars'),   self.rename_map)
-            #     _replace_names_in_json_dict(jsol.get('sequenceVars'),   self.rename_map)
-            #     _replace_names_in_json_dict(jsol.get('stateFunctions'), self.rename_map)
-            #     self.context.log(3, "Updated JSON result:\n", jsol)
             # Build result structure
             res._add_json_solution(jsol, self.expr_map)
             res.process_infos[CpoProcessInfos.RESULT_PARSE_TIME] = time.time() - stime
 
         # Process Log
-        if self.log_buffer is not None:
-            res._set_solver_log(''.join(self.log_buffer))
-            self.log_buffer = []
+        if self.log_data is not None:
+            res._set_solver_log(''.join(self.log_data))
+            self.log_data = []
         return res
 
 
@@ -474,6 +489,15 @@ class CpoSolver(object):
         return self.model
 
 
+    def get_model_format_version(self):
+        """ If defined, returns the format version of the model.
+
+        Returns:
+            Model format version, None if not defined.
+        """
+        return None if self.model is None else self.model.get_format_version()
+
+
     def solve(self):
         """ Solve the model
 
@@ -515,7 +539,8 @@ class CpoSolver(object):
                 self._set_status(STATUS_RELEASED)
                 return self._create_solution_aborted()
             else:
-                traceback.print_exc()
+                if self.context.log_exceptions:
+                    traceback.print_exc()
                 raise e
         self._set_status(STATUS_IDLE)
         stime = time.time() - stime
@@ -580,7 +605,8 @@ class CpoSolver(object):
                 self.last_result = self._create_solution_aborted()
                 return self.last_result
             else:
-                traceback.print_exc()
+                if self.context.log_exceptions:
+                    traceback.print_exc()
                 raise e
         self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
@@ -612,7 +638,7 @@ class CpoSolver(object):
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
-        if self.status == STATUS_RELEASED:
+        if self.status == STATUS_RELEASED or self.status == STATUS_ABORTED:
            return self.last_result
         self._check_status(STATUS_SEARCH_WAITING)
         msol = self.agent.end_search()
@@ -756,7 +782,7 @@ class CpoSolver(object):
         agt = self.agent
         self.agent = None
         if agt is not None:
-            agt.end()
+            agt.abort_search()
 
 
     def end(self):
@@ -995,6 +1021,50 @@ class CpoSolver(object):
         # Create agent instance
         agent = sclass(self, sctx.params, sctx)
         return agent
+
+
+###############################################################################
+##  Public functions
+###############################################################################
+
+def get_version_info():
+    """ If the solver agent defined in the configuration enables this function,
+    this method returns solver version information.
+
+    This method creates a CP solver to retrieve this information, and end it immediately.
+    It returns a dictionary with various information, as in the following example:
+    ::
+    {
+       "AngelVersion" : 5,  # Or 'DllVersion' for Dll
+       "SourceDate" : "Sep 12 2017",
+       "SolverVersion" : "12.8.0.0",
+       "IntMin" : -9007199254740991,
+       "IntMax" : 9007199254740991,
+       "IntervalMin" : -4503599627370494,
+       "IntervalMax" : 4503599627370494,
+    }
+
+    Returns:
+        Solver information dictionary, or None if not available.
+    """
+    from docplex.cp.model import CpoModel
+    try:
+        with CpoSolver(CpoModel()) as slvr:
+            return slvr.agent.version_info
+    except:
+        pass
+    return None
+
+
+def get_solver_version():
+    """ If the solver agent defined in the configuration enables this function,
+    this method returns solver version number.
+
+    Returns:
+        Solver version string, or None if not available.
+    """
+    vinfo = get_version_info()
+    return vinfo.get('SolverVersion') if vinfo else None
 
 
 ###############################################################################

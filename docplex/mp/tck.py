@@ -16,10 +16,9 @@ from docplex.mp.linear import Var, Expr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.progress import ProgressListener
 from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
-    is_ordered_sequence, is_iterator
+    is_ordered_sequence, is_iterator, resolve_caller_as_string
 from docplex.mp.vartype import VarType
 import six
-
 
 _vartype_code_map = {sc().get_cplex_typecode(): sc().short_name for sc in VarType.__subclasses__()}
 
@@ -28,7 +27,93 @@ def vartype_code_to_string(vartype_code):
     return _vartype_code_map.get(vartype_code, '????')
 
 
-class IDocplexTypeChecker(object):
+class DocplexNumericCheckerMixin(object):
+
+    @staticmethod
+    def static_validate_num1(e, checked_num=False, infinity=1e+20):
+        # checks for number and truncates to 1e=20
+        if not checked_num and not is_number(e):
+            docplex_fatal("Expecting number, got: {0!r}".format(e))
+        elif -infinity <= e <= infinity:
+            return e
+        elif e >= infinity:
+            return infinity
+        else:
+            return -infinity
+
+    @staticmethod
+    def static_validate_num2(e, infinity=1e+20, context_msg=None):
+        # checks for number, nans, nath.inf, and truncates to 1e+20
+        if not is_number(e):
+            docplex_fatal("Not a number: {}".format(e))
+        elif math.isnan(e):
+            msg = "NaN value found in expression"
+            if context_msg is not None:
+                try:
+                    msg = "{0}: {1}".format(context_msg(), msg)
+                except TypeError:
+                    msg = "{0}: {1}".format(context_msg, msg)
+            docplex_fatal(msg)
+        elif math.isinf(e):
+            msg = "Infinite value forbidden in expression"
+            if context_msg is not None:
+                try:
+                    msg = "{0}: {1}".format(context_msg(), msg)
+                except TypeError:
+                    msg = "{0}: {1}".format(context_msg, msg)
+            docplex_fatal(msg)
+        elif -infinity <= e <= infinity:
+            return e
+        elif e >= infinity:
+            return infinity
+        else:
+            return -infinity
+
+    @classmethod
+    def typecheck_num_seq(cls, logger, seq, check_math, caller=None):
+        # build a list to avoid consuming an iterator
+        checked_num_list = list(seq)
+        for i, x in enumerate(checked_num_list):
+            def loop_caller():
+                return "%s, pos %d" % (caller, i) if caller else ""
+
+            cls.typecheck_num(logger, x, check_math, loop_caller)
+        return checked_num_list
+
+    @classmethod
+    def typecheck_num(cls, logger, arg, check_math, caller=None):
+        if not is_number(arg):
+            caller_string = resolve_caller_as_string(caller)
+            logger.fatal("{0}Expecting number, got: {1!r}", (caller_string, arg))
+        elif check_math:
+            if math.isnan(arg):
+                caller_string = resolve_caller_as_string(caller)
+                logger.fatal("{0}NaN value detected", (caller_string,))
+            elif math.isinf(arg):
+                caller_string = resolve_caller_as_string(caller)
+                logger.fatal("{0}Infinite value detected", (caller_string,))
+
+    @classmethod
+    def typecheck_int(cls, logger, arg, check_math, accept_negative=True, caller=None):
+        if not is_number(arg):
+            caller_string = resolve_caller_as_string(caller)
+            logger.fatal("{0}Expecting number, got: {1!r}", (caller_string, arg))
+        if check_math:
+            if math.isnan(arg):
+                caller_string = resolve_caller_as_string(caller)
+                logger.fatal("{0}NaN value detected", (caller_string,))
+            elif math.isinf(arg):
+                caller_string = resolve_caller_as_string(caller)
+                logger.fatal("{0}Infinite value detected", (caller_string,))
+        if not is_int(arg):
+            caller_string = resolve_caller_as_string(caller)
+            logger.fatal("{0}Expecting integer, got: {1!r}", (caller_string, arg))
+        elif not accept_negative and arg < 0:
+            caller_string = resolve_caller_as_string(caller)
+            logger.fatal("{0}Expecting positive integer, got: {1!r}", (caller_string, arg))
+
+
+class DocplexTypeCheckerI(object):
     def typecheck_iterable(self, arg):
         raise NotImplementedError  # pragma: no cover
 
@@ -47,13 +132,13 @@ class IDocplexTypeChecker(object):
     def typecheck_continuous_var(self, obj):
         return self.typecheck_var(obj, vartype='C')
 
-    def typecheck_var_seq(self, seq, vtype=None):
+    def typecheck_var_seq(self, seq, vtype=None, caller=None):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_num_seq(self, seq):
+    def typecheck_num_seq(self, seq, caller=None):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_operand(self, obj, accept_numbers=True, caller=None):
@@ -63,6 +148,9 @@ class IDocplexTypeChecker(object):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_ct_to_add(self, ct, mdl, header):
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
@@ -105,7 +193,7 @@ class IDocplexTypeChecker(object):
     def typecheck_two_in_model(self, model, obj1, obj2, ctx_msg):
         raise NotImplementedError  # pragma: no cover
 
-    def check_ordered_sequence(self, arg, header):
+    def check_ordered_sequence(self, arg, caller, accept_iterator=True):
         raise NotImplementedError  # pragma: no cover
 
     def check_trivial_constraints(self):
@@ -122,7 +210,7 @@ class IDocplexTypeChecker(object):
 
 
 # noinspection PyAbstractClass
-class DOcplexLoggerTypeChecker(IDocplexTypeChecker):
+class DOcplexLoggerTypeChecker(DocplexTypeCheckerI):
     def __init__(self, logger):
         self._logger = logger
 
@@ -137,8 +225,13 @@ class DOcplexLoggerTypeChecker(IDocplexTypeChecker):
 
 
 class StandardTypeChecker(DOcplexLoggerTypeChecker):
+
     def __init__(self, logger):
         DOcplexLoggerTypeChecker.__init__(self, logger)
+
+    @property
+    def name(self):
+        return "std"
 
     def typecheck_iterable(self, arg):
         # INTERNAL: checks for an iterable
@@ -164,24 +257,23 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Expecting {0} variable, got: {1!s} type: {2!s}",
                        vartype_code_to_string(vartype), obj, obj.vartype)
 
-    def typecheck_var_seq(self, seq, vtype=None):
+    def typecheck_var_seq(self, seq, vtype=None, caller=None):
         # build a list to avoid consuming an iterator
         checked_var_list = list(seq)
+        type_msg = ''
         for i, x in enumerate(checked_var_list):
             if not isinstance(x, Var):
-                self.fatal("Expecting sequence of variables, got: {0!r} at position {1}", x, i)
+                caller_s = resolve_caller_as_string(caller)
+                self.fatal("{2}Expecting an iterable returning variables, {0!r} was passed at position {1}", x, i, caller_s)
             if vtype and x.vartype != vtype:
-                self.fatal("Expecting sequence of type {0} variables, got: {1!r} at position {2}",
-                           vtype.short_name, x, i)
+                caller_s = resolve_caller_as_string(caller)
+                self.fatal("{3}Expecting an iterable returning variables of type {0}, {1!r} was passed at position {2}",
+                           vtype.short_name, x, i, caller_s)
 
         return checked_var_list
 
-    def typecheck_num_seq(self, seq):
-        # build a list to avoid consuming an iterator
-        checked_num_list = list(seq)
-        for x in checked_num_list:
-            self.typecheck_num(x)
-        return checked_num_list
+    def typecheck_num_seq(self, seq, caller=None):
+        return DocplexNumericCheckerMixin.typecheck_num_seq(self._logger, seq, check_math=False, caller=caller)
 
     def typecheck_var_seq_all_different(self, seq):
         # return the checked sequence, so take the list
@@ -207,6 +299,18 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Expecting constraint, got: {0!r} with type: {1!s}", ct, type(ct))
         self.typecheck_in_model(mdl, ct, header)
 
+    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
+        if ct.is_added():
+            header = '%s ' % context if context else ''
+            if do_raise:
+                self.fatal('{0}expects a non-added constraint, {1} is added (index={2})',
+                           header, ct, ct.get_index()
+                           )
+            else:
+                self.warning('{0}expects a non-added constraint, {1} is added (index={2})',
+                             header, ct, ct.get_index()
+                             )
+
     def typecheck_linear_constraint(self, obj, accept_range=True):
         if accept_range:
             if not isinstance(obj, AbstractConstraint):
@@ -226,7 +330,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 if not ct.is_linear():
                     self.fatal("Expecting sequence of linear constraints, got: {0!r} at position {1}", ct, i)
                 elif not accept_range and not isinstance(ct, LinearConstraint):
-                    self.fatal("Expecting sequence of linear constraints (not ranges), got: {0!r} at position {1}", ct, i)
+                    self.fatal("Expecting sequence of linear constraints (not ranges), got: {0!r} at position {1}", ct,
+                               i)
         return checked_cts_list
 
     def typecheck_zero_or_one(self, arg):
@@ -234,8 +339,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("expecting 0 or 1, got: {0!s}", arg)
 
     def typecheck_num(self, arg, caller=None):
-        caller_string = "{0}: ".format(caller) if caller is not None else ""
         if not is_number(arg):
+            caller_string = "{0}: ".format(caller) if caller is not None else ""
             self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):
@@ -252,6 +357,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         l_lbs = len(lbs)
         if l_lbs and l_ubs:
             names = names or generate_constant(None, max(l_lbs, l_ubs))
+            # noinspection PyArgumentList,PyArgumentList
             for lb, ub, varname in izip(lbs, ubs, names):
                 self.check_var_domain(lb, ub, varname)
 
@@ -275,19 +381,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if any(k is None for k in keys):
             self.fatal("Variable keys cannot be None, got: {0!r}", keys)
 
-    @staticmethod
-    def static_validate_num(e, checked_num=False, infinity=1e+20):
-        if not checked_num and not is_number(e):
-            docplex_fatal("Expecting number, got: {0!r}".format(e))
-        elif -infinity <= e <= infinity:
-            return e
-        elif e >= infinity:
-            return infinity
-        else:
-            return -infinity
-
     def get_number_validation_fn(self):
-        return self.static_validate_num
+        return DocplexNumericCheckerMixin.static_validate_num1
 
     @staticmethod
     def _is_operand(arg, accept_numbers=True):
@@ -318,11 +413,11 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     def check_trivial_constraints(self):
         return True
 
-    def check_ordered_sequence(self, arg, header):
+    def check_ordered_sequence(self, arg, caller, accept_iterator=True):
         # in some cases, we need an ordered sequence, if not the code won't crash
         # but may do unexpected things
-        if not is_ordered_sequence(arg) and not is_iterator(arg):
-            self.fatal("{0}, got: {1!s}", header, type(arg).__name__)
+        if not(is_ordered_sequence(arg) or (accept_iterator and is_iterator(arg))):
+            self.fatal("{0}, got: {1!s}", caller, type(arg).__name__)
 
     def check_solution_hook(self, mdl, sol_hook_fn):
         if not callable(sol_hook_fn):
@@ -333,8 +428,9 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 hook_signature = signature(sol_hook_fn)
                 nb_params = len(hook_signature.parameters)
                 if nb_params != 1:
-                    self.fatal('Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
-                               .format(nb_params))
+                    self.fatal(
+                        'Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
+                        .format(nb_params))
             except (ImportError, TypeError):  # not a callable object or no signature
                 pass
 
@@ -348,68 +444,14 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 self.warning("Duplicate {2} name: {0!s}, used for: {1}", name, name_table[name], qualifier)
 
 
-class NumericTypeChecker(StandardTypeChecker):
-
-    def __init__(self, logger):
-        StandardTypeChecker.__init__(self, logger)
-
-    @staticmethod
-    def static_validate_num(e, infinity=1e+20, context_msg=None):
-        if not is_number(e):
-            docplex_fatal("Not a number: {}".format(e))
-        elif math.isnan(e):
-            msg = "NaN value found in expression"
-            if context_msg is not None:
-                try:
-                    msg = "{0}: {1}".format(context_msg(), msg)
-                except TypeError:
-                    msg = "{0}: {1}".format(context_msg, msg)
-            docplex_fatal(msg)
-        elif math.isinf(e):
-            msg = "Infinite value forbidden in expression"
-            if context_msg is not None:
-                try:
-                    msg = "{0}: {1}".format(context_msg(), msg)
-                except TypeError:
-                    msg = "{0}: {1}".format(context_msg, msg)
-            docplex_fatal(msg)
-        elif -infinity <= e <= infinity:
-            return e
-        elif e >= infinity:
-            return infinity
-        else:
-            return -infinity
-
-    def get_number_validation_fn(self):
-        return self.static_validate_num
-
-    def typecheck_num(self, arg, caller=None):
-        caller_string = "{0}: ".format(caller) if caller is not None else ""
-        if not is_number(arg):
-            self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
-        elif math.isnan(arg):
-            self.fatal("{0}NaN value detected", caller_string)
-        elif math.isinf(arg):
-            self.fatal("{0}Infinite value detected", caller_string)
-
-    def typecheck_int(self, arg, accept_negative=True, caller=None):
-        caller_string = "{0}: ".format(caller) if caller is not None else ""
-        if not is_number(arg):
-            self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
-        elif math.isnan(arg):
-            self.fatal("{0}NaN value detected", caller_string)
-        elif math.isinf(arg):
-            self.fatal("{0}Infinite value detected", caller_string)
-        elif not is_int(arg):
-            self.fatal("{0}Expecting integer, got: {1!r}", caller_string, arg)
-        elif not accept_negative and arg < 0:
-            self.fatal("{0}Expecting positive integer, got: {1!r}", caller_string, arg)
-
-
-class DummyTypeChecker(IDocplexTypeChecker):
+class DummyTypeChecker(DOcplexLoggerTypeChecker):
     # noinspection PyUnusedLocal
     def __init__(self, logger):
-        pass
+        super(DummyTypeChecker, self).__init__(logger)
+
+    @property
+    def name(self):
+        return "off"
 
     def typecheck_iterable(self, arg):
         pass  # pragma: no cover
@@ -423,10 +465,10 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_var(self, obj, vartype=None):
         pass  # pragma: no cover
 
-    def typecheck_var_seq(self, seq, vtype=None):
+    def typecheck_var_seq(self, seq, vtype=None, caller=None):
         return seq  # pragma: no cover
 
-    def typecheck_num_seq(self, seq):
+    def typecheck_num_seq(self, seq, caller=None):
         return seq  # pragma: no cover
 
     def typecheck_var_seq_all_different(self, seq):
@@ -440,6 +482,9 @@ class DummyTypeChecker(IDocplexTypeChecker):
 
     def typecheck_ct_to_add(self, ct, mdl, header):
         pass  # pragma: no cover
+
+    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
+        pass
 
     def typecheck_linear_constraint(self, obj, accept_range=True):
         pass  # pragma: no cover
@@ -479,7 +524,7 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_two_in_model(self, model, obj1, obj2, ctx_msg):
         pass  # pragma: no cover
 
-    def check_ordered_sequence(self, arg, header):
+    def check_ordered_sequence(self, arg, caller, accept_iterator=True):
         pass  # pragma: no cover
 
     def check_trivial_constraints(self):
@@ -498,17 +543,64 @@ class DummyTypeChecker(IDocplexTypeChecker):
         pass
 
 
+class NumericTypeChecker(DummyTypeChecker):
+
+    def __init__(self, logger):
+        super(NumericTypeChecker, self).__init__(logger)
+
+    @property
+    def name(self):
+        return "numeric"
+
+    def get_number_validation_fn(self):
+        return DocplexNumericCheckerMixin.static_validate_num2
+
+    def typecheck_num(self, arg, caller=None):
+        DocplexNumericCheckerMixin.typecheck_num(self._logger, arg, check_math=True, caller=caller)
+
+    def typecheck_int(self, arg, accept_negative=True, caller=None):
+        DocplexNumericCheckerMixin.typecheck_int(self._logger, arg, check_math=True, accept_negative=accept_negative,
+                                                 caller=caller)
+
+    def typecheck_num_seq(self, seq, caller=None):
+        return DocplexNumericCheckerMixin.typecheck_num_seq(self._logger, seq, check_math=True, caller=caller)
+
+
+class FullTypeChecker(StandardTypeChecker):
+
+    def __init__(self, logger):
+        super(FullTypeChecker, self).__init__(logger)
+
+    @property
+    def name(self):
+        return "full"
+
+    def get_number_validation_fn(self):
+        return DocplexNumericCheckerMixin.static_validate_num2
+
+    def typecheck_num(self, arg, caller=None):
+        DocplexNumericCheckerMixin.typecheck_num(self._logger, arg, check_math=True, caller=caller)
+
+    def typecheck_int(self, arg, accept_negative=True, caller=None):
+        DocplexNumericCheckerMixin.typecheck_int(self._logger, arg, check_math=True, accept_negative=accept_negative,
+                                                 caller=caller)
+
+    def typecheck_num_seq(self, seq, caller=None):
+        return DocplexNumericCheckerMixin.typecheck_num_seq(self._logger, seq, check_math=True, caller=caller)
+
+
 #  ------------------------------
 # noinspection PyPep8
-_tck_map = {'default' : StandardTypeChecker,
+_tck_map = {'default': StandardTypeChecker,
             'standard': StandardTypeChecker,
-            'std'     : StandardTypeChecker,
-            'on'      : StandardTypeChecker,
+            'std': StandardTypeChecker,
+            'on': StandardTypeChecker,
             # --
-            'numeric' : NumericTypeChecker,
+            'numeric': NumericTypeChecker,
+            'full': FullTypeChecker,
             # --
-            'off'      : DummyTypeChecker,
-            'deploy'   : DummyTypeChecker,
+            'off': DummyTypeChecker,
+            'deploy': DummyTypeChecker,
             'no_checks': DummyTypeChecker}
 
 
@@ -518,9 +610,10 @@ def get_typechecker(arg, logger):
         if key in _tck_map:
             checker_type = _tck_map[key]
         else:
-            msg = 'Unexpected typechecker key: {0} - expecting on|off|std|default|numeric. Using default'.format(key)
+            msg = 'Unexpected typechecker key: {0} - expecting on|off|std|default|numeric|full. Using default'.format(
+                key)
             if logger:
-                logger.warning(msg)
+                logger.error(msg)
             else:
                 print('*Warning: {0}'.format(msg))
             checker_type = StandardTypeChecker

@@ -8,7 +8,7 @@
 
 from docplex.mp.sosvarset import SOSVariableSet
 from docplex.mp.operand import LinearOperand
-from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr
+from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr, ConstantExpr
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
@@ -117,7 +117,7 @@ class _AbstractModelFactory(object):
         if Environment.env_is_python36:
             # for python >= 3.6, dict is ordered
             self._ordered_dict_type = dict
-        else:
+        else:  # pragma: no cover
             from collections import OrderedDict
             self._ordered_dict_type = OrderedDict
 
@@ -141,18 +141,9 @@ class ModelFactory(_AbstractModelFactory):
         self._var_container_counter = 0
         self.number_validation_fn = model._checker.get_number_validation_fn()
         self._engine = engine
-        self.one_expr = None
         self.ordered = ordered
         self.term_dict_type = term_dict_type
         self.stringifier = str_flatten_tuple
-
-    @property
-    def _has_cplex(self):
-        try:
-            cpx = self._engine.get_cplex()
-            return cpx is not None
-        except DOcplexException:
-            return False
 
     @property
     def infinity(self):
@@ -164,14 +155,6 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_zero_expr(self):
         return ZeroExpr(self._model)
-
-    def new_one_expr(self):
-        return LinearExpr(self._model, e=None, constant=1, safe=True)
-
-    def _get_cached_one_expr(self):
-        if self.one_expr is None:
-            self.one_expr = LinearExpr(self._model, e=None, constant=1, safe=True)
-        return self.one_expr
 
     def fatal(self, msg, *args):
         self._model.fatal(msg, *args)
@@ -194,6 +177,17 @@ class ModelFactory(_AbstractModelFactory):
 
         idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
         self_model._register_one_var(var, idx, varname)
+        return var
+
+    def new_safe_var(self, vartype, lb=None, ub=None, varname=None):
+        # INTERNAL
+        self_model = self._model
+        used_varname = None if self_model.ignore_names else varname
+        rlb = vartype._lb if lb is None else lb
+        rub = vartype._ub if ub is None else ub
+        var = Var(self_model, vartype, used_varname, rlb, rub, _safe_lb=True, _safe_ub=True)
+        idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
+        self_model._register_one_var(var, idx, used_varname)
         return var
 
     def new_constraint_status_var(self, ct):
@@ -256,6 +250,22 @@ class ModelFactory(_AbstractModelFactory):
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
+    def _check_bounds(self, nb_vars, bounds, default_bound, true_if_lb):
+        nb_bounds = len(bounds)
+        bound_name = 'lb' if true_if_lb else 'ub'
+        for b, b_value in enumerate(bounds):
+            if b_value is not None and not is_number(b_value):
+                self.fatal("Variable {2} expect numbers, {0!r} was passed at pos: #{1}",
+                           b_value, b, bound_name)
+        float_bounds = [self.float_or_default(bv, default_bound) for bv in bounds]
+
+        if nb_bounds > nb_vars:
+            self.warning(
+                "Variable bounds list too large, required: %d, got: %d." % (nb_vars, nb_bounds))
+            return float_bounds[:nb_vars]
+        else:
+            return float_bounds
+
     def _expand_bounds(self, keys, var_bound, default_bound, size, true_if_lb):
         ''' Converts raw bounds data (either LB or UB) to CPLEX-compatible bounds list.
             If lbs is None, this is the default, return [].
@@ -288,38 +298,29 @@ class ModelFactory(_AbstractModelFactory):
                 # see how we can use defaults for those missing bounds
                 self.fatal("Variable bounds list is too small, expecting: %d, got: %d" % (size, nb_bounds))
             else:
-                for b, b_value in enumerate(var_bound):
-                    if b_value is not None and not is_number(b_value):
-                        self.fatal("Variable bounds list expects numbers, got: {0!r} (pos: #{1})",
-                                   b_value, b)
-                float_bounds = [self.float_or_default(bv, default_bound) for bv in var_bound]
-
-                if nb_bounds > size:
-                    self.warning(
-                        "Variable bounds list is too large, required: %d, got: %d." % (size, nb_bounds))
-                    return float_bounds[:size]
-                else:
-                    return float_bounds
+                return self._check_bounds(size, var_bound, default_bound, true_if_lb)
 
         elif is_iterator(var_bound):
             # unfold the iterator, as CPLEX needs a list
             return list(var_bound)
 
         elif isinstance(var_bound, dict):
-            return [var_bound.get(k, default_bound) for k in keys]
+            dict_bounds =  [var_bound.get(k, default_bound) for k in keys]
+            return self._check_bounds(size, dict_bounds, default_bound, true_if_lb)
         else:
             # try a function?
             try:
-                _computed_bounds = [var_bound(k) for k in keys]
-                for b, bnd in enumerate(_computed_bounds):
-                    if bnd is None:
-                        _computed_bounds[b] = default_bound
-                    elif not is_number(bnd):
-                        self.fatal("computed bound expects a number, got: {0!s}", bnd)
-                    else:
-                        # conversion to float()
-                        _computed_bounds[b] = float(bnd)
-                return _computed_bounds
+                fn_bounds = [var_bound(k) for k in keys]
+                return self._check_bounds(size, fn_bounds, default_bound, true_if_lb)
+                # for b, bnd in enumerate(_fn_bounds):
+                #     if bnd is None:
+                #         _fn_bounds[b] = default_bound
+                #     elif not is_number(bnd):
+                #         self.fatal("computed bound expects a number, got: {0!s}", bnd)
+                #     else:
+                #         # conversion to float()
+                #         _fn_bounds[b] = float(bnd)
+                return fn_bounds
 
             except TypeError:
                 self._bad_bounds_fatal(var_bound)
@@ -422,7 +423,7 @@ class ModelFactory(_AbstractModelFactory):
         var_dict = _dict_type(izip(all_key_tuples, cube_vars))
         return var_dict
 
-    def new_var_df(self, keys1, keys2, vartype, lb=None, ub=None, name=None):
+    def new_var_df(self, keys1, keys2, vartype, lb=None, ub=None, name=None):  # pragma: no cover
         try:
             from pandas import DataFrame
         except ImportError:
@@ -443,15 +444,21 @@ class ModelFactory(_AbstractModelFactory):
         vdtf.columns = col_keys
         return vdtf
 
-    def constant_expr(self, cst, safe_number=False, force_clone=False):
+    def _new_constant_expr(self, cst, safe_number=True):
+        if safe_number:
+            k = cst
+        else:
+            self_number_validation_fn = self.number_validation_fn
+            k = self_number_validation_fn(cst) if self_number_validation_fn else cst
+        return ConstantExpr(self._model, k)
+
+    use_constant_expr = True
+    def constant_expr(self, cst, safe_number=False):
         if 0 == cst:
             return self.new_zero_expr()
-        elif 1 == cst:
-            if force_clone:
-                return LinearExpr(self._model, e=None, constant=1, safe=True)
-            else:
-                return self._get_cached_one_expr()
-        else:
+        elif self.use_constant_expr:
+            return self._new_constant_expr(cst, safe_number=safe_number)
+        else:  # pragma: no cover
             if safe_number:
                 k = cst
             else:
@@ -478,7 +485,7 @@ class ModelFactory(_AbstractModelFactory):
             else:
                 return e
         elif is_number(e):
-            return self.constant_expr(cst=e, force_clone=force_clone, safe_number=False)
+            return self.constant_expr(cst=e, safe_number=False)
         else:
             try:
                 return e.to_linear_expr()
@@ -500,7 +507,7 @@ class ModelFactory(_AbstractModelFactory):
         elif isinstance(e, self._operand_types):
             return e.to_linear_expr()
         elif is_number(e):
-            return self.constant_expr(cst=e, force_clone=force_clone, safe_number=False)
+            return self.constant_expr(cst=e, safe_number=False)
         else:
             try:
                 return e.to_linear_expr()
@@ -569,9 +576,9 @@ class ModelFactory(_AbstractModelFactory):
         indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, active_value, name)
         return indicator_ct
 
-    def new_equivalence_constraint(self, binary_var, linear_ct, active_value=1, name=None):
+    def new_equivalence_constraint(self, binary_var, linear_ct, true_value=1, name=None):
         # INTERNAL
-        equiv_ct = EquivalenceConstraint(self._model, binary_var, linear_ct, active_value, name)
+        equiv_ct = EquivalenceConstraint(self._model, binary_var, linear_ct, true_value, name)
         return equiv_ct
 
     def new_if_then_constraint(self, if_ct, then_ct, negate=False):
@@ -603,50 +610,48 @@ class ModelFactory(_AbstractModelFactory):
 
     # updates
 
-    def update_linear_constraint_exprs(self, ct):
-        self._engine.update_linear_constraint(ct, UpdateEvent.LinearConstraintGlobal)
+    def update_linear_constraint_exprs(self, ct, expr_event):
+        ct_event = UpdateEvent.LinearConstraintRhs if expr_event is UpdateEvent.ExprConstant\
+            else  UpdateEvent.LinearConstraintGlobal
+        self._engine.update_constraint(ct, ct_event)
 
     def update_indicator_constraint_expr(self, ind, expr, event):
-        self._engine.update_logical_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
+        self._engine.update_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
 
-    @classmethod
-    def check_is_discrete(cls, arg):
-        try:
-            # try an operand
-            return arg.is_discrete()
-        except AttributeError:
-            # should be a number ??
-            return is_int(arg)
+    # @classmethod
+    # def check_is_discrete(cls, arg):
+    #     try:
+    #         # try an operand
+    #         return arg.is_discrete()
+    #     except AttributeError:
+    #         # should be a number ??
+    #         return is_int(arg)
 
     def check_expr_discrete_lock(self, expr, arg):
+        # INTERNAL
         if expr.is_discrete_locked():
             self.fatal('Expression: {0} is used in equivalence, cannot be modified', expr)
-            # else:
-            #     if not self.check_is_discrete(arg):
-            #         self.fatal(self._cannot_modify_expr_non_discrete_msg, expr, arg)
 
     _cannot_modify_linearct_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified.'
 
     _cannot_modify_linearct_non_discrete_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified with non-discrete expr: {1}'
     _cannot_modify_expr_non_discrete_msg = 'Expression: {0} is used in equivalence, cannot be modified with non-discrete item: {1}'
 
-
-    def _check_logical_ct_edited(self, linct, new_expr):
+    def _check_editable(self, linct, new_expr):
         log_ct = linct.get_super_logical_ct()
         if log_ct is not None:
             # check that expression is discrete
             if log_ct.is_equivalence() and not new_expr.is_discrete():
                 self.fatal(self._cannot_modify_linearct_non_discrete_msg, linct, new_expr)
-            self._engine.update_logical_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
+            self._engine.update_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
 
     def set_linear_constraint_expr_from_pos(self, lct, pos, new_expr, update_subscribers=True):
         # INTERNAL
         # pos is 0 for left, 1 for right
         new_operand = self._to_linear_operand(e=new_expr, force_clone=False)
-        self._check_logical_ct_edited(lct, new_operand)
+        self._check_editable(lct, new_operand)
 
         old_expr = lct.get_expr_from_pos(pos)
-
         exprs = [lct._left_expr, lct._right_expr]
         exprs[pos] = new_operand
         # -- event
@@ -655,7 +660,7 @@ class ModelFactory(_AbstractModelFactory):
         else:
             event = UpdateEvent.LinearConstraintGlobal
         # ---
-        self._engine.update_linear_constraint(lct, event, *exprs)
+        self._engine.update_constraint(lct, event, *exprs)
         lct.set_expr_from_pos(pos, new_operand)
         if update_subscribers:
             # -- update  subscribers
@@ -671,7 +676,7 @@ class ModelFactory(_AbstractModelFactory):
     def set_linear_constraint_sense(self, ct, arg_newsense):
         new_sense = ComparisonType.parse(arg_newsense)
         if new_sense != ct.sense:
-            self._engine.update_linear_constraint(ct, UpdateEvent.LinearConstraintType, new_sense)
+            self._engine.update_constraint(ct, UpdateEvent.LinearConstraintType, new_sense)
             ct._internal_set_sense(new_sense)
 
     def set_range_constraint_lb(self, rngct, new_lb):
@@ -703,7 +708,7 @@ class ModelFactory(_AbstractModelFactory):
         # assume bvars is a sequence of binary vars
         nb_args = len(bvars)
         if not nb_args:
-            return self.new_one_expr()
+            return self._new_constant_expr(cst=1, safe_number=True)
         elif 1 == nb_args:
             return bvars[0]
         else:
@@ -719,23 +724,23 @@ class ModelFactory(_AbstractModelFactory):
         else:
             return LogicalOrExpr(self._model, bvars)
 
-    def new_max_expr(self, *args):
+    def _new_min_max_expr(self, expr_class, builtin_fn, empty_value, *args):
         nb_args = len(args)
         if 0 == nb_args:
-            return - self.infinity
+            return empty_value
         elif 1 == nb_args:
             return args[0]
+        elif all(is_number(a) for a in args):
+            # if all args are numbers, simply compute a number
+            return builtin_fn(args) # a number
         else:
-            return MaximumExpr(self._model, [self._to_linear_operand(a) for a in args])
+            return expr_class(self._model, [self._to_linear_operand(a) for a in args])
+
+    def new_max_expr(self, *args):
+        return self._new_min_max_expr(MaximumExpr, max, -self.infinity, *args)
 
     def new_min_expr(self, *args):
-        nb_args = len(args)
-        if 0 == nb_args:
-            return self.infinity
-        elif 1 == nb_args:
-            return args[0]
-        else:
-            return MinimumExpr(self._model, [self._to_linear_operand(a) for a in args])
+        return self._new_min_max_expr(MinimumExpr, min, self.infinity, *args)
 
     def new_abs_expr(self, e):
         if is_number(e):
@@ -768,7 +773,21 @@ class ModelFactory(_AbstractModelFactory):
 
         # send objective
         self_engine.set_objective_sense(self_model.objective_sense)
-        self_engine.set_objective_expr(self_model.objective_expr, old_objexpr=None)
+        if self_model.has_multi_objective():
+            multi_objective = self_model._multi_objective
+            exprs = multi_objective.exprs
+            nb_exprs = len(exprs)
+            self_engine.set_multi_objective_exprs(new_multiobjexprs=exprs,
+                                                  old_multiobjexprs=[],
+                                                  priorities=multi_objective.priorities,
+                                                  weights=multi_objective.weights,
+                                                  abstols=MultiObjective.as_optional_sequence(multi_objective.abstols,
+                                                                                              nb_exprs),
+                                                  reltols=MultiObjective.as_optional_sequence(multi_objective.reltols,
+                                                                                              nb_exprs),
+                                                  objnames=multi_objective.names)
+        else:
+            self_engine.set_objective_expr(self_model.objective_expr, old_objexpr=None)
 
     def new_sos(self, dvars, sos_type, name):
         # INTERNAL
@@ -833,7 +852,7 @@ class ModelFactory(_AbstractModelFactory):
     def _new_constraint_block1(self, cts):
         posted_cts = []
         checker = self._checker
-        prepfn = self._model._prepare_constraint
+        filterfn = self._model._prepare_constraint
         check_trivial = self._checker.check_trivial_constraints()
         # look first
         ctseq = list(cts)
@@ -853,12 +872,12 @@ class ModelFactory(_AbstractModelFactory):
             for ct, ctname in ctseq:
                 checker.typecheck_linear_constraint(ct, accept_range=False)
                 checker.typecheck_string(ctname, accept_empty=True)
-                if prepfn(ct, ctname, check_for_trivial_ct=check_trivial, arg_checker=checker):
+                if filterfn(ct, ctname, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         else:
+            checker.typecheck_constraint_seq(ctseq, check_linear=True, accept_range=True)
             for ct in ctseq:
-                checker.typecheck_linear_constraint(ct, accept_range=True)
-                if prepfn(ct, ctname=None, check_for_trivial_ct=check_trivial, arg_checker=checker):
+                if filterfn(ct, ctname=None, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         self._post_constraint_block(posted_cts)
         return posted_cts
@@ -873,7 +892,7 @@ class ModelFactory(_AbstractModelFactory):
     def new_range_block(self, lbs, exprs, ubs, names):
         try:
             n_exprs = len(exprs)
-            if n_exprs != len(lbs):
+            if n_exprs != len(lbs):  # pragma: no cover
                 self.fatal('incorrect number of expressions: expecting {0}, got: {1}'.format(len(lbs), n_exprs))
         except TypeError:
             pass  # no len available.
@@ -884,8 +903,12 @@ class ModelFactory(_AbstractModelFactory):
         self._post_constraint_block(ranges)
         return ranges
 
-    def new_solution(self, var_value_dict=None, name=None):
-        return SolveSolution(model=self._model, var_value_map=var_value_dict, name=name)
+    def new_solution(self, var_value_dict=None, name=None, keep_zeros=True, **kwargs):
+        rounding = kwargs.get('rounding', False)
+        obj = kwargs.get('objectiveValue', None)
+        return SolveSolution(model=self._model, obj=obj,
+                             var_value_map=var_value_dict, name=name,
+                             keep_zeros=keep_zeros, rounding=rounding)
 
     def _new_var_container(self, vartype, key_list, lb, ub, name):
         # INTERNAL

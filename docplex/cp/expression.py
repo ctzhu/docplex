@@ -202,6 +202,32 @@ class CpoExpr(object):
         return depth
 
 
+    def get_node_count(self):
+        """ Gets the total expression node count.
+
+        Node count is the total number of function calls and atoms in this expression.
+        If a sub-expression is present multiple times, it is counted only once.
+
+        Returns:
+            Expression node count
+        """
+        # Initialize stack of expressions to parse
+        estack = [self]
+        result = 0
+        doneset = set()  # Set of ids of expressions already processed
+
+        # Loop while expression stack is not empty
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                doneset.add(eid)
+                # Stack children expressions
+                estack.extend(e.children)
+
+        return len(doneset)
+
+
     def __nonzero__(self):
         """ Safe function to protect for use of CpoExpr as boolean.
 
@@ -343,8 +369,8 @@ class CpoExpr(object):
 
     def __add__(self, other):
         """ Plus """
-        # if other is 0:  # Do not use == because it is overloaded
-        #     return self
+        if other is 0:  # Do not use == because it is overloaded
+            return self
         other = build_cpo_expr(other)
         if self.is_kind_of(Type_IntExpr):
             if other.is_kind_of(Type_IntExpr):
@@ -360,8 +386,8 @@ class CpoExpr(object):
 
     def __radd__(self, other):
         """ Plus (right) """
-        # if other is 0:  # Do not use == because it is overloaded
-        #     return self
+        if other is 0:  # Do not use == because it is overloaded
+            return self
         return build_cpo_expr(other).__add__(self)
 
     def __pos__(self):
@@ -2219,9 +2245,9 @@ def _build_int_var_domain(min, max, domain):
     if domain is None:
         if min is None:
             if max is None:
-                return (INT_MIN, INT_MAX),
+                return ((INT_MIN, INT_MAX),)
             _check_arg_integer(max, "max")
-            return (INT_MIN, max),
+            return ((INT_MIN, max),)
         else:
             if max is None:
                 # Test that first argument is directly a domain (ascending compatibility)
@@ -2230,20 +2256,19 @@ def _build_int_var_domain(min, max, domain):
                     min = None
                 else:
                     _check_arg_integer(min, "min")
-                    return (min, INT_MAX),
+                    return ((min, INT_MAX),)
             else:
                 _check_arg_integer(min, "min")
                 _check_arg_integer(max, "max")
                 assert min <= max, "Argument 'min' should be lower or equal to 'max'"
-                return (min, max),
+                return ((min, max),)
 
     # Domain given extensively
     assert (min is None) and (max is None), "If domain is given extensively in 'domain', 'min' and/or 'max' should not be given"
-    if is_array(domain):
-        #assert is_array(domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
-        assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
-    else:
-        assert is_int(domain), "Argument 'domain' should be an integer, or a list of integers and/or intervals (tuples of 2 integers)"
+    if is_int(domain):
+        return domain
+    domain = tuple(domain)
+    assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
     return domain
 
 

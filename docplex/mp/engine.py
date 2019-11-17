@@ -9,6 +9,7 @@ from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException
 from docplex.util.status import JobSolveStatus
+from docplex.mp.constants import CplexScope
 
 
 # gendoc: ignore
@@ -28,7 +29,7 @@ class ISolver(object):
     def register_callback(self, cb):
         raise NotImplementedError  # pragma: no cover
 
-    def connect_progress_listeners(self, listeners):
+    def connect_progress_listeners(self, listeners, model):
         """
         Connects progress listeners
         :param listeners:
@@ -213,13 +214,7 @@ class IEngine(ISolver):
     def update_objective_epxr(self, expr, event, *args):
         raise NotImplemented  # pragma: no cover
 
-    def update_linear_constraint(self, ct, event, *args):
-        raise NotImplementedError  # pragma: no cover
-
-    def update_quadratic_constraint(self, qct, event, *args):
-        raise NotImplementedError  # pragma: no cover
-
-    def update_logical_constraint(self, logct, event, *args):
+    def update_constraint(self, ct, event, *args):
         raise NotImplementedError  # pragma: no cover
 
     def check_var_indices(self, dvars):
@@ -234,14 +229,11 @@ class IEngine(ISolver):
     def clear_all_sos(self):
         raise NotImplementedError  # pragma: no cover
 
-    def add_lazy_constraints(self, lazy_cts):
-        raise NotImplementedError  # pragma: no cover
-
-    def clear_lazy_constraints(self):
-        raise NotImplementedError  # pragma: no cover
-
     def get_basis(self, mdl):
         raise NotImplementedError  # pragma: no cover
+
+    def set_lp_start(self, var_stats, ct_stats):
+        raise NotImplementedError
 
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
@@ -332,8 +324,9 @@ class DummyEngine(IEngine):
     def unregister_callback(self, cb):
         pass  # pragma: no cover
 
-    def connect_progress_listeners(self, listeners):
-        pass  # pragma: no cover
+    def connect_progress_listeners(self, listeners, model):
+        if listeners:
+            model.warning("Progress listeners require CPLEX, not supported on engine {0}.".format(self.name))
 
     def disconnect_progress_listeners(self, listeners):
         pass  # pragma: no cover
@@ -363,20 +356,17 @@ class DummyEngine(IEngine):
         # nothing to do except for cplex
         pass  # pragma: no cover
 
-    def update_linear_constraint(self, ct, event, *args):
-        # nothing to do except for cplex
-        pass  # pragma: no cover
 
-    def update_quadratic_constraint(self, qct, event, *args):
-        pass  # pragma: no cover
-
-    def update_logical_constraint(self, logct, event, *args):
+    def update_constraint(self, ct, event, *args):
         pass  # pragma: no cover
 
     def get_quality_metrics(self):
         return {}  # pragma: no cover
 
     def supports_logical_constraints(self):
+        return True, None
+
+    def supports_multi_objective(self):
         return True, None
 
     def check_var_indices(self, dvars):
@@ -391,14 +381,12 @@ class DummyEngine(IEngine):
     def clear_all_sos(self):
         pass
 
-    def add_lazy_constraints(self, lazy_cts):
-        pass
-
-    def clear_lazy_constraints(self):
-        pass
 
     def get_basis(self, mdl):
         return None, None
+
+    def set_lp_start(self, var_stats, ct_stats):
+        raise DOcplexException('set_lp_start() requires CPLEX, not available for {0}'.format(self.name))
 
 
 # noinspection PyAbstractClass,PyUnusedLocal
@@ -446,7 +434,8 @@ class IndexerEngine(DummyEngine):
 
     def create_batch_cts(self, ct_seq):
         old_ct_count = self._ct_counter
-        self._increment_cts(len(ct_seq))
+        size = sum(1 for _ in ct_seq) # iterator is consumed
+        self._increment_cts(size)
         return range(old_ct_count, self._ct_counter)
 
     def create_block_linear_constraints(self, ct_seq):
@@ -477,7 +466,9 @@ class IndexerEngine(DummyEngine):
         return {}
 
     def get_all_slack_values(self, mdl):
-        return {}
+        return {CplexScope.LINEAR_CT_SCOPE: {},
+                CplexScope.QUAD_CT_SCOPE: {},
+                CplexScope.IND_CT_SCOPE: {}}
 
     def dump(self, path):
         pass

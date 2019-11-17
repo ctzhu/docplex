@@ -16,7 +16,9 @@ from docplex.cp.function import *
 from docplex.cp.catalog import *
 from docplex.cp.solution import *
 from docplex.cp.model import CpoModel
+import docplex.cp.config as config
 import math
+import traceback
 
 
 ###############################################################################
@@ -175,8 +177,8 @@ class CpoParser(object):
         except Exception as e:
             #if isinstance(e, CpoParserException):
             #    raise e
-            import traceback
-            traceback.print_exc()
+            if config.context.log_exceptions:
+                traceback.print_exc()
             self._raise_exception(str(e))
         return True
 
@@ -650,8 +652,27 @@ class CpoParser(object):
         # Read statements up to end of section
         tok = self._next_token()
         while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
-            # Get and check the variable that is concerned
+            # Check directive (#line)
+            if tok is TOKEN_HASH:
+                self._read_directive(self._next_token().value)
+                tok = self._next_token()
+                continue
+
+            # Check token is a string
             vname = self._check_token_string(tok)
+
+            # Check experimental section "expressions"
+            if vname == "expressions":
+                # Read opening brace
+                self._check_token(self._next_token(), TOKEN_BRACE_OPEN)
+                # Read and ignore all up to next brace close
+                tok = self._next_token()
+                while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
+                    tok = self._next_token()
+                self._next_token()
+                continue
+
+            # Get and check the variable that is concerned
             var = self.expr_dict.get(vname)
             if var is None:
                 self._raise_exception("There is no variable named '{}' in this model".format(vname))

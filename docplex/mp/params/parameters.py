@@ -21,7 +21,6 @@ class ParameterGroup(object):
         with a full hierarchy of parameters with groups as nodes.
 
     """
-
     def __init__(self, name, parent_group=None):
         self._name = name
         self._parent = parent_group
@@ -169,6 +168,17 @@ class ParameterGroup(object):
                     print("!! update_self_dict: name collision with: %s" % k)  # pragma: no cover
         self_dict.update(extra_dict)
 
+    def _restore_dict_recursive(self):
+        # internal use for  deepcopy
+        param_dict = {p._short_name: p for p in self.iter_params()}
+        subgroup_dict = {sg._name: sg for sg in self.iter_subgroups()}
+        # update the __dict__ itself
+        self._update_self_dict(param_dict, do_check=False)
+        self._update_self_dict(subgroup_dict, do_check=False)
+        # recurse
+        for sg in self.iter_subgroups():
+            sg._restore_dict_recursive()
+
     @staticmethod
     def make(name, param_dict_fn, subgroup_fn, parent=None):
         # INTERNAL
@@ -188,6 +198,8 @@ class ParameterGroup(object):
             subgroup_dict = {group_name: group_fn(self)
                              for group_name, group_fn in iteritems(subgroup_fn_dict)}
             self._update_self_dict(subgroup_dict)
+
+
 
     def number_of_nondefaults(self):
         return sum(1 for _ in self.generate_nondefault_params())
@@ -661,6 +673,27 @@ class RootParameterGroup(ParameterGroup):
         ParameterGroup.__init__(self, name)
         self._cplex_version = cplex_version
         self._models = []
+
+    def __deepcopy__(self, memodict={}):
+        """
+        Returns:
+           A deep copy of the parameter group.
+        """
+        import copy
+        saved_models = self._models
+        self._models = []
+        new_root = RootParameterGroup(self.name, self._cplex_version)
+        memodict[id(self)] = new_root
+        for p in self.iter_params():
+            new_root._add_param(copy.copy(p))
+        for sg in self.iter_subgroups():
+            new_root._add_subgroup(copy.deepcopy(sg, memodict))
+        # add parameter and subgroup names to the inner __dict__ of the root
+        new_root._restore_dict_recursive()
+        # ---
+        for m in saved_models:
+            new_root.connect_model(m)
+        return new_root
 
     def connect_model(self, m):
         self._models.append(m)

@@ -27,6 +27,10 @@ To be able to process multiple solutions, the model should be solved:
  * or using the method :meth:`docplex.cp.model.CpoModel.solve`
    but setting the parameter *context.solver.solve_with_start_next* to True.
 
+
+*New in version 2.8.*
+
+
 Detailed description
 --------------------
 """
@@ -41,6 +45,8 @@ class CpoSolverListener(object):
 
     This class is an 'abstract' class that must be extended by actual listener implementation.
     All method of this class are empty.
+
+    *New in version 2.8.*
     """
 
     def solver_created(self, solver):
@@ -132,6 +138,8 @@ class CpoSolverListener(object):
 
 class LogSolverListener(CpoSolverListener):
     """ Solve listener that just log listener events.
+
+    *New in version 2.8.*
     """
 
     def __init__(self, prefix=""):
@@ -191,6 +199,8 @@ from threading import Condition
 
 class AutoStopListener(CpoSolverListener):
     """ Solver listener that aborts a search when a predefined criteria is reached.
+
+    *New in version 2.8.*
     """
     def __init__(self, qsc_time=None, qsc_sols=None, min_sols=0, max_sols=None):
         """ Create a new solver listener that aborts the solve if defined criteria are reached.
@@ -294,6 +304,8 @@ class AutoStopListener(CpoSolverListener):
 
 class DelayListener(CpoSolverListener):
     """ Solver listener that waits a given delay after each solution.
+
+    *New in version 2.8.*
     """
     def __init__(self, delay):
         """ Create a new solver listener that waits a given delay after each solution.
@@ -341,6 +353,8 @@ else:
 
     class _SolverInfoPanel:
         """ Solver info panel that display objective value(s) and KPIs.
+
+        *New in version 2.8.*
         """
         def __init__(self, master, model, stopfun):
             """
@@ -553,6 +567,8 @@ else:
          * the last known values of the KPIs (if any)
          * a *Stop solve* button allowing to stop the solve and keep the last known solution as model solution.
          * if parse_log indicator is set, information taken from the log: memory usage, bounds, etc
+
+        *New in version 2.8.*
 
         Args:
             parse_log(optional): Enable log parsing to retrieve additional information such as memory, bounds, etc

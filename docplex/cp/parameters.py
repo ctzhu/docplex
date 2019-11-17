@@ -698,6 +698,8 @@ class CpoParameters(Context):
         This parameter determines how KPIs are displayed in the log during the search.
 
         The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.
+
+        *New in version 2.8, for CPO solver version 12.9.0 and higher.*
         """
         return self.get_attribute('KPIDisplay')
 

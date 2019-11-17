@@ -260,6 +260,9 @@ context.verbose = 0
 # Visu enable indicator (internal, can be disabled for testing purpose)
 context.visu_enabled = True
 
+# Indicator to log catched exceptions
+context.log_exceptions = False
+
 
 #-----------------------------------------------------------------------------
 # Modeling context
@@ -275,8 +278,9 @@ context.model.length_for_alias = 15
 # Automatically add a name to every top-level constraint
 context.model.name_all_constraints = False
 
-# Model format generation version
-context.model.version = '12.9.0.0'
+# Model format generation version that is used by default if no format version is given in the model.
+# If None, latest format is used without specifying it explicitly.
+context.model.version = None
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
@@ -562,7 +566,8 @@ def _eval_file(file):
         try:
             exec(open(f).read())
         except Exception as e:
-            traceback.print_exc()
+            if context.log_exceptions:
+                traceback.print_exc()
             raise Exception("Error while loading config file {}: {}".format(f, str(e)))
 
 

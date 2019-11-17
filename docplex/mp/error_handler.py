@@ -60,7 +60,7 @@ class InfoLevel(Enum):
     def parse(cls, arg, default_level=INFO):
         # INTERNAL
         if not arg:
-            return default_level
+            return cls.INFO
         elif isinstance(arg, cls):
             return arg
         elif is_string(arg):

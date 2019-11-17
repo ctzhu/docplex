@@ -98,7 +98,7 @@ class ModelPrettyPrinter(TextModelPrinter):
             self._newline(out)
 
     def _print_objective(self, wrapper, model):
-        wrapper.write(model.objective_sense.verb())
+        wrapper.write(model.objective_sense.verb)
         wrapper.flush(print_newline=True)
         objexpr = model.objective_expr
         objlin = objexpr.get_linear_part()
@@ -177,7 +177,7 @@ class ModelPrettyPrinter(TextModelPrinter):
             self._print_binary_constraint(wrapper, ct)
             wrapper.write(';', separator=False)
             wrapper.set_indent(' ')
-            wrapper.flush(print_newline=True, reset=False)
+            wrapper.flush(print_newline=True, restart_from_empty_line=False)
 
     def _print_ranges(self, wrapper, model):
         wrapper.begin_line()
@@ -210,7 +210,7 @@ class ModelPrettyPrinter(TextModelPrinter):
             symb = '<=>' if ct.is_equivalence() else '<='
             self._print_logical_constraint(wrapper, ct, logical_symbol=symb)
             wrapper.set_indent(' ')
-            wrapper.flush(reset=True)
+            wrapper.flush(restart_from_empty_line=True)
 
     def _print_quadratic_cts(self, wrapper, model):
         for qct in model.iter_quadratic_constraints():
@@ -226,29 +226,28 @@ class ModelPrettyPrinter(TextModelPrinter):
             self._print_binary_constraint(wrapper, qct)
             wrapper.write(';', separator=False)
             wrapper.set_indent(' ')
-            wrapper.flush(reset=True)
+            wrapper.flush(restart_from_empty_line=True)
 
     def _print_kpis(self, out, wrapper, model):
         printed_section_header = False
         for kpi in model.iter_kpis():
-            if not kpi.requires_solution():
-                continue
+            if kpi.is_decision_expression():
+                if not printed_section_header:
+                    self._newline(out)
+                    self._print_line_comment(out, " KPI section")
+                    printed_section_header = True
 
-            if not printed_section_header:
-                self._newline(out)
-                self._print_line_comment(out, " KPI section")
-                printed_section_header = True
-
-            kpi_expr = kpi.to_expr()
-            kpi_typename = 'int' if kpi_expr.is_discrete() else 'float'
-            wrapper.write('dexpr {0} {1}'.format(kpi_typename, self._translate_chars(kpi.name)))
-            wrapper.write('=')
-            if isinstance(kpi_expr, LinearExpr):
-                self._print_lexpr(wrapper, self._num_printer, self._var_name_map, kpi_expr, print_constant=True)
-            elif isinstance(kpi_expr, Var):
-                wrapper.write(kpi_expr.name)
-            wrapper.write(';', separator=False)
-            wrapper.flush(reset=True)
+                kpi_expr = kpi.to_expr()
+                kpi_typename = 'int' if kpi_expr.is_discrete() else 'float'
+                wrapper.write('dexpr {0} {1}'.format(kpi_typename, self._translate_chars(kpi.name)))
+                wrapper.write('=')
+                if isinstance(kpi_expr, LinearExpr):
+                    self._print_lexpr(wrapper, self._num_printer, self._var_name_map, kpi_expr, print_constant=True)
+                elif isinstance(kpi_expr, Var):
+                    wrapper.write(kpi_expr.name)
+                wrapper.write(';', separator=False)
+                wrapper.flush(restart_from_empty_line=True)
+                # ---
         if printed_section_header:
             wrapper.newline()
 

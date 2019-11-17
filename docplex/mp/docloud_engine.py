@@ -14,6 +14,7 @@ import tempfile
 import warnings
 
 from docplex.mp.engine import IndexerEngine
+
 try:
     # import DOcloudConnector only if JobClient is available
     from docloud.job import JobClient
@@ -52,7 +53,6 @@ import sys
 
 # this is the default exchange format for docloud
 _DEFAULT_EXCHANGE_FORMAT = LP_format
-
 
 # default attachment name to trigger conflict refiner
 feasibility_name = "file.feasibility"
@@ -210,7 +210,9 @@ class DOcloudEngine(IndexerEngine):
     def __init__(self, mdl, exchange_format=None, **kwargs):
         IndexerEngine.__init__(self)
 
-        warnings.warn('Solve using \'docloud\' agent is deprecated. Consider submitting your model to DOcplexcloud. See https://ibm.biz/BdYhhK', DeprecationWarning)
+        warnings.warn(
+            'Solve using \'docloud\' agent is deprecated. Consider submitting your model to DOcplexcloud. See https://ibm.biz/BdYhhK',
+            DeprecationWarning)
 
         docloud_context = kwargs.get('docloud_context')
         # --- log output can be overridden at solve time, so use te one from the context, not the model's
@@ -234,7 +236,6 @@ class DOcloudEngine(IndexerEngine):
         self.debug_dump = docloud_context.debug_dump
         self.debug_dump_dir = docloud_context.debug_dump_dir
 
-
     def _new_printer(self, ctx):
         return self._printer
 
@@ -255,20 +256,18 @@ class DOcloudEngine(IndexerEngine):
         """
         return True
 
-    def connect_progress_listeners(self, progress_listener_list):
+    def connect_progress_listeners(self, progress_listener_list, model):
         if progress_listener_list:
             self._model.warning("Progress listeners are not supported on DOcplexcloud.")
 
     def register_callback(self, cb):
         self._model.error('Callbacks are not available on DOcplexcloud')
 
-
     @staticmethod
     def _docloud_cplex_version():
         # INTERNAL: returns the version of CPLEX used in DOcplexcloud
         # for now returns a string. maybe we could ping Docloud and get a dynamic answer.
         return "12.6.3.0"
-
 
     def _serialize_parameters(self, parameters, write_level=None, relax_mode=None):
         # return a string in PRM format
@@ -388,7 +387,7 @@ class DOcloudEngine(IndexerEngine):
         model_data = self.serialize_model(mdl)
         docloud_parameters = mdl.parameters
         prm_data = self._serialize_parameters(docloud_parameters, write_level=1, relax_mode=relax_mode)
-        prm_name = self._make_attachment_name(job_name , '.prm')
+        prm_name = self._make_attachment_name(job_name, '.prm')
         feasopt_data = self._serialize_relaxables(relaxable_groups)
 
         # --- dump if need be
@@ -410,8 +409,6 @@ class DOcloudEngine(IndexerEngine):
         attachments.append(self._make_attachment(prm_name, prm_data))
         attachments.append(self._make_attachment(normalize_basename(job_name) + FeasibilityPrinter.extension,
                                                  feasopt_data))
-
-
 
         # here we go...
         def notify_info(info):
@@ -459,6 +456,7 @@ class DOcloudEngine(IndexerEngine):
             mdl: The model for which conflict refinement is performed.
             preferences: a dictionary defining constraints preferences.
             groups: a list of ConstraintsGroup.
+            :parameters: cplex parameters .
 
         Returns:
             A list of "TConflictConstraint" namedtuples, each tuple corresponding to a constraint that is
@@ -486,23 +484,23 @@ class DOcloudEngine(IndexerEngine):
             # Add all constraints
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[VarUbConstraintWrapper],
                                             [(VarUbConstraintWrapper(v), mprinter._var_print_name(v))
-                                                   for v in self._model.iter_variables()],
+                                             for v in self._model.iter_variables()],
                                             preference=1.0)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[VarLbConstraintWrapper],
                                             [(VarLbConstraintWrapper(v), mprinter._var_print_name(v))
-                                                   for v in self._model.iter_variables()],
+                                             for v in self._model.iter_variables()],
                                             preference=1.0)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[LinearConstraint],
                                             [(c, mprinter.linearct_print_name(c))
-                                                    for c in self._model.iter_linear_constraints()],
+                                             for c in self._model.iter_linear_constraints()],
                                             preference_dict=preferences)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[QuadraticConstraint],
                                             [(c, mprinter.qc_print_name(c))
-                                                    for c in self._model.iter_quadratic_constraints()],
+                                             for c in self._model.iter_quadratic_constraints()],
                                             preference_dict=preferences)
             artifact_as_xml.add_constraints(ct_type_by_constraint_type[IndicatorConstraint],
                                             [(c, mprinter.logicalct_print_name(c))
-                                                    for c in self._model.iter_indicator_constraints()],
+                                             for c in self._model.iter_indicator_constraints()],
                                             preference_dict=preferences)
         else:
             for grp in groups:
@@ -564,12 +562,17 @@ class DOcloudEngine(IndexerEngine):
     def _make_attachment_name(self, basename, extension):
         return make_attachment_name(basename + extension)
 
+    def export_one_mip_start(self, mipstart, job_name, attachments):
+        warmstart_data = SolutionMSTPrinter.print_to_string(mipstart).encode('utf-8')
+        mipstart_name = mipstart.name.lower() if mipstart.name else job_name
+        warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
+        attachments.append({'name': warmstart_name, 'data': warmstart_data})
+
     # noinspection PyProtectedMember
     def solve(self, mdl, parameters=None, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # Before submitting the job, we will build the list of attachments
         # parameters are CPLEX parameters
         attachments = []
-
 
         # make sure model is the first attachment: that will be the name of the job on the console
         job_name = normalize_basename("python_%s" % mdl.name)
@@ -577,21 +580,29 @@ class DOcloudEngine(IndexerEngine):
         try:
             model_data_name = self._make_attachment_name(job_name, self._exchange_format.extension)
             attachments.append({'name': model_data_name, 'filename': model_file})
-    
+
             # prm
             docloud_parameters = parameters if parameters is not None else mdl.parameters
             prm_data = self._serialize_parameters(docloud_parameters)
             prm_name = self._make_attachment_name(job_name, '.prm')
             attachments.append({'name': prm_name, 'data': prm_data})
-    
+
             # warmstart_data
             # export mipstart solution in CPLEX mst format, if any, else None
             # if within a lexicographic solve, th elex_mipstart supersedes allother mipstarts
-            mdl_mipstarts = lex_mipstart or mdl.mip_starts
-            if mdl_mipstarts:
-                warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts).encode('utf-8')
-                mipstart_name = lex_mipstart.name.lower() if (lex_mipstart and lex_mipstart.name) else job_name
+            if lex_mipstart:
+                mipstart_name = lex_mipstart.name.lower() if lex_mipstart.name else job_name
+                warmstart_data = SolutionMSTPrinter.print_to_string(lex_mipstart).encode('utf-8')
                 warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
+                attachments.append({'name': warmstart_name, 'data': warmstart_data})
+
+            elif mdl.number_of_mip_starts:
+                mipstart_name = job_name
+                warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
+                mdl_mipstarts = [s for s, _ in mdl.iter_mip_starts()]
+                mdl_efforts = [eff for (_, eff) in mdl.iter_mip_starts()]
+                warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts, effort_level=mdl_efforts,
+                                                                    use_lp_names=True).encode('utf-8')
                 attachments.append({'name': warmstart_name, 'data': warmstart_data})
 
             # benders annotation
@@ -619,13 +630,13 @@ class DOcloudEngine(IndexerEngine):
                                         gzip=not self._exchange_format.is_binary,
                                         info_callback=notify_info,
                                         info_to_monitor={'jobid', 'progress'})
-    
+
             # --- cplex solve details
             json_details = connector.get_cplex_details()
             self._solve_details = SolveDetails.from_json(json_details)
             self._solve_details._quality_metrics = self._compute_quality_metrics(json_details)
             # ---
-    
+
             # --- build a solution object, or None
             solution_handler = JSONSolutionHandler(connector.results.get('solution.json'))
             if not solution_handler.has_solution:
@@ -634,7 +645,7 @@ class DOcloudEngine(IndexerEngine):
             else:
                 solution = self._make_solution(mdl, solution_handler)
             # ---
-    
+
             return solution
         finally:
             if os.path.isfile(model_file):
@@ -718,7 +729,6 @@ class DOcloudEngine(IndexerEngine):
                 self._unexpected_cloud_constraint_index(mdl, ct_index)
         return infeasibilities
 
-
     def _compute_infeasibilities_from_slacks(self, mdl, solution_handler):
         # INTERNAL - temporary
         raw_slacks = solution_handler.constraint_slacks()
@@ -757,7 +767,7 @@ class DOcloudEngine(IndexerEngine):
         # find last occurence of '.' then identify the enum from the last part
         dotpos = mname.rfind('.')
         assert dotpos >= 0
-        return QualityMetric.parse(mname[dotpos+1:], raise_on_error=False)
+        return QualityMetric.parse(mname[dotpos + 1:], raise_on_error=False)
 
     def _compute_quality_metrics(self, json_details):
         qms = {}
@@ -774,4 +784,3 @@ class DOcloudEngine(IndexerEngine):
                         if iqv >= 0:
                             qms[qm.int_key] = iqv
         return qms
-

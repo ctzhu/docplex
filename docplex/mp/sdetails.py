@@ -4,7 +4,8 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 from docplex.mp.compat23 import StringIO
-from docplex.mp.utils import _ToleranceScheme
+from docplex.mp.utils import is_almost_equal
+from docplex.mp.constants import int_probtype_to_string
 from math import isnan
 
 from six import PY2 as SIX_PY2
@@ -52,8 +53,7 @@ class SolveDetails(object):
         if not isinstance(other, SolveDetails):
             return False
 
-        tol = _ToleranceScheme(relative=relative, absolute=absolute)
-        if compare_times and not tol.equals(self.time, other.time):
+        if compare_times and not is_almost_equal(self.time, other.time, relative, absolute):
             return False
         elif self.status_code != other.status_code:
             return False
@@ -63,7 +63,7 @@ class SolveDetails(object):
             return False
         elif self.nb_linear_nonzeros != other.nb_linear_nonzeros:
             return False
-        elif not tol.equals(self.mip_relative_gap, other.mip_relative_gap):
+        elif not is_almost_equal(self.mip_relative_gap, other.mip_relative_gap, relative, absolute):
             return False
 
         else:
@@ -81,26 +81,6 @@ class SolveDetails(object):
         if not isnan(self._best_bound):
             worker_dict['PROGRESS_BEST_OBJECTIVE'] = self._best_bound
         return worker_dict
-
-    _problemtype_map = {0: "LP",
-                        1: "MILP",
-                        3: "fixed_MILP",
-                        4: "nodeLP",
-                        5: "QP",
-                        7: "MIQP",
-                        8: "fixed_MIQP",
-                        9: "node_QP",
-                        10: "QCP",
-                        11: "MIQCP",
-                        12: "node_QCP"}
-
-    @staticmethod
-    def _convert_problemtype(probtype, unknown_probtype="unknown"):
-        try:
-            iprobe_type = int(probtype)
-            return SolveDetails._problemtype_map.get(iprobe_type, unknown_probtype)
-        except ValueError:
-            return unknown_probtype
 
     @staticmethod
     def to_plain_str(arg_s):
@@ -121,7 +101,7 @@ class SolveDetails(object):
     _json_fields = (("_time", "cplex.time", float, 0),
                     ("_solve_status_code", "cplex.status", int, -1),
                     ("_solve_status", "cplex.statusstring", lambda s: SolveDetails.to_plain_str(s), ""),
-                    ("_problem_type", "cplex.problemtype", lambda p: SolveDetails._convert_problemtype(p), ""),
+                    ("_problem_type", "cplex.problemtype", lambda p: int_probtype_to_string(p), ""),
                     ("_ncolumns", "cplex.columns", int, 0),
                     ("_linear_nonzeros", "MODEL_DETAIL_NON_ZEROS", int, 0),
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),

@@ -1,113 +1,229 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2017
+# (c) Copyright IBM Corp. 2015, 2019
 # --------------------------------------------------------------------------
+'''This package contains classes to monitor the progress of a MIP solve.
 
-# gendoc: ignore
+This abstract class defines protocol methods, which are called from within CPLEX's MIP search algorithm.
 
-from docplex.mp.solution import SolveSolution
-from six import iteritems, string_types
+Progress listeners are based on CPLEX's MIPInfoCallback, and work only with a
+local installation of CPLEX, not on Cplexcloud.
+
+At each node, all progress listeners attached to the model receive progress data
+through a `notify_progress` method, with an instance of :class:`~ProgressData`.
+This named tuple class contains information about solve time, objective value,
+best bound, gap and nodes, but no variable values.
+
+The base class for progress listeners is :class:`~ProgressListener`.
+DOcplex provides concrete sub-classes to handle basic cases, but
+you may also create your own sub-class of :class:`~ProgressListener` to suit your needs.
+Each instance of :class:`~ProgressListener` must be attached to a model to receive events during
+a MIP solve., using `Model.add_progress_listener`.
+
+An example of such a progress listener is :class:`TextProgressListener`,
+which prints a message to stdout in a format similar to CPLEX log, each time it receives a progress data.
+
+If you need to get the values of variables in an intermediate solution,
+you should sub-class from class :class:`~SolutionListener`.
+In this case, the :func:`~ProgressListener.notify_solution` method will be called
+each time CPLEX finds a valid intermediate solution, with an instance of :class:`docplex.mp.solution.SolveSolution`.
+
+Listeners are called from within CPLEX code, with its own frequency. It may occur that listeners are
+called with no real progress in either the objective or the best bound. To help you chose what kind
+of calls you are really interested in, DOcplex uses the enumerated class :class:`~ProgressClock'.
+The baseline clock is the CPLEX clock, but you can refine this clock: for example,
+`ProgressClock.Objective` filters all calls but those where the objective has improved.
+
+To summarize, listeners are called from within CPLEX's MIP search algorithm, when the clock
+you have chosen accepts the call. All listeners are created with a clock argument that controls which
+calls they accept.
+
+When a listener accepts a call, its method :func:`~ProgressListener.notify_progress` is called with the current progress data.
+See :class:`~TextProgressListener` as an example of a simple progress listener.
+
+In addition, if the listener derives from :class:`~SolutionListener`, its method :func:`~ProgressListener.notify_solution` is also called
+with the intermediate solution, passed as an instance of :class:`docplex.mp.solution.SolveSolution`.
+See :class:`~SolutionRecorder` as an example of solution listener
+
+'''
+from six import iteritems
 from enum import Enum
+from collections import namedtuple
 
 from docplex.mp.context import auto_publising_kpis_table_names
 from docplex.util.environment import get_environment
-from docplex.mp.utils import write_kpis_table
+from docplex.mp.utils import write_kpis_table, is_string, is_number
+from docplex.mp.error_handler import docplex_fatal
+
+_TProgressData_ = namedtuple('_TProgressData',
+                             ['id', 'has_incumbent',
+                              'current_objective', 'best_bound', 'mip_gap',
+                              'current_nb_iterations', 'current_nb_nodes', 'remaining_nb_nodes',
+                              'time', 'det_time'])
 
 
-class ProgressData(object):
-    """ A container class to hold data retrived from progress callbacks.
+# noinspection PyUnresolvedReferences
+class ProgressData(_TProgressData_):
+    """ A named tuple class to hold progress data, as reeived from CPLEX.
 
+    Attributes:
+        has_incumbent: a boolean, indicating whether an incumbent solution is available (or not),
+            at the moment the listener is called.
+        current_objective: contains the current objective, if an incumbent is available, else None.
+        best_bound: The current best bound as reported by the solver.
+        mip_gap: the gap between the best integer objective and the objective of the best node remaining;
+            available if an incumbent is available.
+        current_nb_nodes: the current number of nodes.
+        current_nb_iterations: the current number of iterations.
+        remaining_nb_nodes: the remaining number of nodes.
+        time: the elapsed time since solve started.
+        det_time: the deterministic time since solve started.
     """
-    BIGNUM = 1e+75
 
-    def __init__(self):
-        bignum = self.BIGNUM
-        self.has_incumbent = False
-        self.current_objective = bignum
-        self.best_bound = bignum
-        self.mip_gap = bignum
-        self.current_nb_nodes = 0
-        self.current_nb_iterations = 0
-        self.remaining_nb_nodes = 0
-        self.time = -1
-        self.det_time = -1
+    def __str__(self):  # pragma: no cover
+        fmt = 'ProgressData({0}, {1}, obj={2}, bbound={3}, #nodes={4})'. \
+            format(self.id, self.has_incumbent, self.current_objective, self.best_bound, self.current_nb_nodes)
+        return fmt
 
-    def get_objective(self, default_obj_value=None):
-        return self.current_objective if self.has_incumbent else default_obj_value
 
-    def get_tuple(self):
-        return (self.has_incumbent,
-                self.current_objective,
-                self.best_bound,
-                self.mip_gap,
-                self.current_nb_nodes,
-                self.remaining_nb_nodes,
-                self.time,
-                self.det_time)
+class ProgressClock(Enum):
+    """
+    This enumerated class controls the type of events a listener listens to.
+
+    The possible values are (in order of decreasing call frequency).
+
+        - All: the listener listens to all calls from CPLEX.
+        - BestBound: listen to changes in best bound, not necessarily with a solution present.
+        - Solutions: listen to all intermediate solutions, not necessarily impriving.
+            Nothing prevents being called several times with an identical solution.
+
+        - Gap: listen to intermediate solutions, where either objective or best bound has improved.
+        - Objective: listen to intermediate solutions, where the solution objective has improved.
+
+    To determine whether objective or best bound have improved (or not), see the numerical parameters
+    `absdiff` and `reldiff` in `:class:ProgressListener` and all its descendant classes.
+
+    *New in version 2.10*
+    """
+    #
+    # An enumeration of filtering levels for listeners.
+    #
+    All = 0
+    Solutions = 1
+    BestBound = 2  # best bound clock is indepedent from solution clock
+    Objective = 5  # b101
+    Gap = 7  # the gap clock changes when there is a solution, and either bound or objective has changed
+
+    @property
+    def listens_to_solution(self):
+        # returns true if the enum listens to solutions
+        return 1 == self.value & 1
+
+    @classmethod
+    def parse(cls, arg):
+        if isinstance(arg, ProgressClock):
+            return arg
+        else:
+            # int value
+            for fl in cls:
+                if arg == fl.value:
+                    return fl
+                elif is_string(arg) and arg.lower() == fl.name.lower():
+                    return fl
+            else:
+                # pragma: no cover
+                raise ValueError('Expecting filter level, {0!r} was passed'.format(arg))
+
+
+default_absdiff = 1e-1
+default_reldiff = 1e-2
 
 
 class ProgressListener(object):
-    def __init__(self):
-        self._cb = None
-        self._aborted = False
+    '''  The base class for progress listeners.
+    '''
 
-    def disconnect(self):
+    def __init__(self, clock_arg=ProgressClock.All, absdiff=None, reldiff=None):
+        self._cb = None
+        clock = ProgressClock.parse(clock_arg)
+        self._clock = clock
+        self._current_progress_data = None
+        self._absdiff = absdiff if absdiff is not None else default_absdiff
+        self._reldiff = reldiff if reldiff is not None else default_reldiff
+        self._filter = make_clock_filter(clock, absdiff, reldiff)
+
+    @property
+    def clock(self):
+        """ Returns the clock of the listener.
+
+        :return:
+            an instance of :class:`~ProgressClock`
+
+        """
+        return self._clock
+
+    @property
+    def abs_diff(self):
+        return self._absdiff
+
+    @property
+    def relative_diff(self):
+        return self._reldiff
+
+    @property
+    def current_progress_data(self):
+        """ This property return the current progress data, if any.
+
+        Returns the latest progress data, if at least one has been received.
+
+        :return: an instance of :class:~ProgressData` or None.
+        """
+        return self._current_progress_data
+
+    def _set_current_progress_data(self, pdata):
+        # INTERNAL
+        self._current_progress_data = pdata
+
+    def accept(self, pdata):
+        return self._filter.accept(pdata)
+
+    def _disconnect(self):
+        # INTERNAL
         self._cb = None
 
-    def connect_cb(self, cb):
+    def _connect_cb(self, cb):
+        # INTERNAL
         self._cb = cb
-        self._aborted = False
-
-    def abort(self):
-        ''' Aborts the CPLEX search.
-
-        This method tells CPLEX to stop the MIP search.
-        You may use this method in a custom progress listener to stop the search based on your
-        criteria (for example, when improvements in gap go below a minimum threshold).
-
-        PROOFREAD
-
-        '''
-        if self._cb is not None and not self._aborted:
-            self._aborted = True
-            self._cb.abort()
-
-    def has_aborted(self):
-        return self._aborted
 
     def requires_solution(self):
-        """ Returns True if the listener wants solution information at each intermediate solution.
-        The default is False, do not require solution information.
-        """
         return False
 
     def notify_solution(self, s):
         """ Redefine this method to handle an intermediate solution from the callback.
+
         Args:
             s: solution
-        :return:
-        """
-        pass
-
-    def notify_start(self):
-        """ The method called when a solve has been initiated on a model.
-
-        Defaul behavior is to do nothing.
-        Put here any code to reinitialize the state of the listener
-        """
-        pass
-
-    def notify_jobid(self, jobid):
-        """ The method called when a model is solved on the cloud and the job
-        has been submitted.
-
-        This method is not called when solve is using a local engine.
         """
         pass  # pragma: no cover
 
+    def notify_start(self):
+        """ This methods  is called on all attached listeners at the beginning of a solve().
+
+        When writing a custom listener, this method is used to restore
+        internal data which can be modified during solve.
+        Always call the superclass `notify_start` before adding specific code in a sub-class.
+        """
+        self._current_progress_data = None
+        self._filter.reset()
+
+    def notify_jobid(self, jobid):
+        pass  # pragma: no cover
+
     def notify_end(self, status, objective):
-        """The method called when solve is finished on a model. The status is the solve status from the
+        """The method called when solve is finished on a model.
+
+        The status is the solve status from the
         solve() method
         """
         pass  # pragma: no cover
@@ -115,407 +231,457 @@ class ProgressListener(object):
     def notify_progress(self, progress_data):
         """ This method is called from within the solve with a ProgressData instance.
 
-        :param progress_data: an instance of ProgressData containing solver info,
-            as called from the CPLEX solver.
+        :param progress_data: an instance of :class:`ProgressData` containing data about the
+            current point in the search tree.
+
         """
         pass  # pragma: no cover
 
-    @staticmethod
-    def static_make_solution(model, obj, engine_name, incumbents):
-        # INTERNAL
-        sol = SolveSolution(model, obj=obj, solved_by=engine_name)
-        for v in model.iter_variables():
-            # incumbent values are provided as a list with indices as positions.
-            incumbent_value = incumbents[v._index]
-            if incumbent_value:
-                # silently round discrete values, just as with engine solutions.
-                 sol._set_var_value_internal(v, incumbent_value, rounding=True)
-        return sol
+    def abort(self):
+        ''' Aborts the CPLEX search.
 
-    @classmethod
-    def _is_significant_change(cls, old_value, new_value, min_relative, min_absolute):
-        abs_diff = abs(new_value - old_value)
-        rel_diff = abs_diff / (1.0 + abs(new_value))
-        return rel_diff >= min_relative or abs_diff >= min_absolute
+        This method tells CPLEX to stop the MIP search.
+        You may use this method in a custom progress listener to stop the search based on your own
+        criteria (for example, when improvements in gap is consistently below a minimum threshold).
+        '''
+        ccb = self._cb
+        if ccb is not None:
+            ccb.abort()
+
+
+# noinspection PyUnusedLocal,PyMethodMayBeStatic
+class FilterAcceptAll(object):
+
+    def accept(self, pdata):
+        return True
 
     def reset(self):
         pass
 
 
-class _IProgressFilter(object):
+# noinspection PyMethodMayBeStatic
+class FilterAcceptAllSolutions(object):
+
     def accept(self, pdata):
-        raise NotImplementedError  # pragma: no cover
+        return pdata.has_incumbent
 
     def reset(self):
         pass
 
 
-class _ProgressFilterAcceptAll(_IProgressFilter):
-    def accept(self, pdata):
-        return pdata.has_incumbent
+class Watcher(object):
 
-    def has_significant_objective_change(self, pdata):
-        return pdata.has_incumbent
+    def __init__(self, name, absdiff, reldiff, update_fn):
+        assert absdiff >= 0
+        assert reldiff >= 0
 
-
-class _ProgressFilter(object):
-    # INTERNAL: used to filter calls from CPLEX
-
-    def __init__(self, node_diff=1e+20, relative_diff=1e-2, abs_diff=0.1):
-        """ Builds a filter for progress listeners.
-
-        A filter accepts calls from the callback according to the parameters below:
-
-        :param node_diff: An integer. Accepts the call whenver the increment in the number of visited nodes
-            exceeds this limit.
-        :param relative_diff: A floating number, used to determine whether the objective or best bound have changed.
-            if the relative difference between the last recorded value and the new value is greater than this value, the call is accepted.
-        :param abs_diff: A floating number, used to determine whether the objective or best bound have changed.
-            if the bsolite  difference between the last recorded value and the new value is greater than this value, the call is accepted.
-        """
-        self._relative_change = relative_diff
-        self._abs_change = abs_diff
-        self._node_diff = node_diff
-        # dynamic
-        self._incumbent_count = 0
-        self._last_incumbent_obj = None
-        self._last_bound = None
-        self._last_node = 0
+        self.name = name
+        self._watched = None
+        self._old = None
+        self._absdiff = absdiff
+        self._reldiff = reldiff
+        self._update_fn = update_fn
 
     def reset(self):
-        self._incumbent_count = 0
-        self._last_incumbent_obj = None
-        self._last_bound = None
-        self._last_node = 0
+        self._watched = None
+        self._old = None
 
-    @staticmethod
-    def make_from_kwargs(kwargs):
-        node_diff = kwargs.get("node_diff", 1e+20)
-        relative_diff = kwargs.get("relative_diff", 1e-2)
-        abs_diff = kwargs.get("abs_diff", 0.1)
-        return _ProgressFilter(node_diff=node_diff,
-                               relative_diff=relative_diff,
-                               abs_diff=abs_diff)
+    def accept(self, progress_data):
+        accepted = False
 
-    def _is_significant_change(self, old_value, new_value):
-        return ProgressListener._is_significant_change(old_value, new_value, self._relative_change, self._abs_change)
+        old = self._watched
+        new_watched = self._update_fn(progress_data)
+        # if new_watched is None, then it is not available (e.g. objective)
+        if new_watched is not None:
+            if old is None:
+                accepted = True
+            else:
+                # assert is a number
+                delta = abs(new_watched - old)
+                reldiff = self._reldiff
+                absdiff = self._absdiff
+                if absdiff > 0 and abs(new_watched - old) >= absdiff:
+                    accepted = True
+                elif reldiff and delta / (1 + abs(old)) >= reldiff:
+                    accepted = True
+        return accepted
 
-    def accept(self, pdata):
-        accept = False
-        if self._incumbent_count == 0 and not pdata.has_incumbent:
+    def sync(self, pdata):
+        cur = self._watched
+        self._watched = self._update_fn(pdata)
+        self._old = cur
+
+    def __str__(self):  # pragma: no cover
+        ws = '--' if self._watched is None else self._watched
+        return 'W_{0}[{1}]'.format(self.name, ws)
+
+
+class ClockFilter(object):
+
+    def __init__(self, level, obj_absdiff, bbound_absdiff, obj_reldiff=0, bbound_reldiff=0, node_delta=-1):
+        watchers = []
+        if obj_absdiff > 0 or obj_reldiff > 0:
+            def update_obj(pdata):
+                return pdata.current_objective if pdata.has_incumbent else None
+
+            obj_watcher = Watcher(name='obj', absdiff=obj_absdiff, reldiff=obj_reldiff, update_fn=update_obj)
+            watchers.append(obj_watcher)
+        if bbound_absdiff > 0 or bbound_reldiff > 0:
+            def update_bbound(pdata):
+                return pdata.best_bound
+
+            watchers.append(Watcher(name='gap_bound', absdiff=bbound_absdiff, reldiff=bbound_reldiff,
+                                    update_fn=update_bbound))
+        if node_delta > 0:
+            used_node_delta = max(node_delta, 1)
+
+            def update_nodes(pdata):
+                return pdata.current_nb_nodes
+
+            watchers.append(Watcher(name='nodes', absdiff=used_node_delta, reldiff=0, update_fn=update_nodes))
+        self._watchers = watchers
+        self._clock = level
+        self._listens_to_solution = level.listens_to_solution
+
+    def accept(self, progress_data):
+        if not progress_data.has_incumbent and self._listens_to_solution:
             return False
+        # the filter accepts data as soon as one of its cells accepts it.
+        poke = self.peek(progress_data)
+        if poke is None:
+            return False
+        else:
+            # print("- accepting event #{0}, reason: {1}".format(progress_data.id, poke.name))
+            for w in self._watchers:
+                w.sync(progress_data)
+            return True
 
-        if pdata.has_incumbent:
-            self._incumbent_count += 1
-            if (self._last_incumbent_obj is None) or self._is_significant_change(self._last_incumbent_obj,
-                                                                                 pdata.current_objective):
-                self._last_incumbent_obj = pdata.current_objective
-                self._last_bound = pdata.best_bound
-                self._last_node = pdata.current_nb_nodes
-                accept = True
+    def peek(self, progress_data):
+        for w in self._watchers:
+            if w.accept(progress_data):
+                return w
+        else:
+            return None
 
-            if self._last_bound is None or self._is_significant_change(self._last_bound, pdata.best_bound):
-                self._last_bound = pdata.best_bound
-                self._last_node = pdata.current_nb_nodes
-                self._last_incumbent_obj = pdata.current_objective
-                accept = True
+    def reset(self):
+        for w in self._watchers:
+            w.reset()
 
-        # nodes
-        if self._node_diff > 1:
-            if pdata.current_nb_nodes - self._last_node > self._node_diff:
-                self._last_node = pdata.current_nb_nodes
-                self._last_bound = pdata.best_bound
-                if pdata.has_incumbent:
-                    self._last_incumbent_obj = pdata.current_objective
-                accept = True
 
-        return accept
+# noinspection PyArgumentEqualDefault
+def make_clock_filter(level, absdiff, reldiff, nodediff=0):
+    absdiff_ = 1e-1 if absdiff is None else absdiff
+    reldiff_ = 1e-2 if reldiff is None else reldiff
+    if level == ProgressClock.All:
+        return FilterAcceptAll()
+    elif level == ProgressClock.Solutions:
+        return FilterAcceptAllSolutions()
+    elif level == ProgressClock.Gap:
+        return ClockFilter(level, obj_absdiff=absdiff_, obj_reldiff=reldiff_,
+                           bbound_absdiff=absdiff_, bbound_reldiff=reldiff_, node_delta=nodediff)
+    elif level == ProgressClock.Objective:
+        return ClockFilter(level, obj_absdiff=absdiff_, obj_reldiff=reldiff_,
+                           bbound_absdiff=0, bbound_reldiff=0, node_delta=nodediff)
+    elif level == ProgressClock.BestBound:
+        return ClockFilter(level, obj_absdiff=0, obj_reldiff=0,
+                           bbound_absdiff=absdiff_, bbound_reldiff=reldiff_)
 
-    def _detect_change(self, last_value_attr_name, current_attr_name, pdata):
-        last_attr_value = getattr(self, last_value_attr_name)
-        if pdata.has_incumbent:
-            if (last_attr_value is None) or self._is_significant_change(last_value_attr_name,
-                                                                        getattr(pdata, current_attr_name)):
-                self._last_incumbent_obj = pdata.current_objective
-                self._last_bound = pdata.best_bound
-                self._last_node = pdata.current_nb_nodes
-                return True
-        return False
-
-    def has_significant_objective_change(self, pdata):
-        if pdata.has_incumbent:
-            if (self._last_incumbent_obj is None) or self._is_significant_change(self._last_incumbent_obj,
-                                                                                 pdata.current_objective):
-                self._last_incumbent_obj = pdata.current_objective
-                self._last_bound = pdata.best_bound
-                self._last_node = pdata.current_nb_nodes
-                return True
-        return False
+    else:
+        # pragma: no cover
+        raise ValueError('unexpected level: {0!r}'.format(level))
 
 
 class TextProgressListener(ProgressListener):
-    """ A simple implementation of Progress Listener, which prints messages to stdout
+    """ A simple implementation of Progress Listener, which prints messages to stdout,
+        in the manner of the CPLEX log.
+
+    :param clock: an enumerated value of type `:class:ProgressClock` which defines the frequency of the listener.
+    :param absdiff: a float value which controls the minimum absolute change for objective or best bound values
+    :param reldiff: a float value which controls the minimum absolute change for objective or best bound values.
+
+    Note:
+        The default behavior is to listen to an improvement in either the objective or best bound,
+        each being improved by either an absolute value change of at least `absdiff`,
+        or a relative change of at least `reldiff`.
+
     """
 
-    def __init__(self, filtering=True, gap_fmt=None, obj_fmt=None, **kwargs):
-        ProgressListener.__init__(self)
+    def __init__(self, clock=ProgressClock.Gap, gap_fmt=None, obj_fmt=None,
+                 absdiff=None, reldiff=None):
+        ProgressListener.__init__(self, clock, absdiff, reldiff)
         self._gap_fmt = gap_fmt or "{:.2%}"
         self._obj_fmt = obj_fmt or "{:.4f}"
         self._count = 0
-        if filtering:
-            self._filter = _ProgressFilter.make_from_kwargs(kwargs)
-        else:
-            self._filter = _ProgressFilterAcceptAll()
-
-    @property
-    def message_count(self):
-        return self._count
 
     def notify_start(self):
-        ProgressListener.notify_start(self)
+        super(TextProgressListener, self).notify_start()
         self._count = 0
-        self._filter.reset()
 
     def notify_progress(self, progress_data):
-        if self._filter.accept(progress_data):
-            self._count += 1
-            pdata_has_incumbent = progress_data.has_incumbent
-            incumbent_symbol = '+' if pdata_has_incumbent else ' '
-            # if pdata_has_incumbent:
-            #     self._incumbent_count += 1
-            current_obj = progress_data.current_objective
-            if pdata_has_incumbent:
-                objs = self._obj_fmt.format(current_obj)
-            else:
-                objs = "N/A"
-            best_bound = progress_data.best_bound
-            nb_nodes = progress_data.current_nb_nodes
-            remaining_nodes = progress_data.remaining_nb_nodes
-            if pdata_has_incumbent:
-                gap = self._gap_fmt.format(progress_data.mip_gap)
-            else:
-                gap = "N/A"
-            raw_time = progress_data.time
-            rounded_time = round(raw_time, 1)
-
-            print("{0:>3}{7}: Best Integer={1}, Best Bound={2:.4f}, gap={3}, nodes={4}/{5} [{6}s]"
-                  .format(self._count, objs, best_bound, gap, nb_nodes, remaining_nodes, rounded_time,
-                          incumbent_symbol))
-
-
-class RecordProgressListener(ProgressListener):
-    def __init__(self, filtering=True, **kwargs):
-        ProgressListener.__init__(self)
-        self.__recorded = []
-        self.__final_objective = 1e+75
-        self.__final_status = False
-        if filtering:
-            self._filter = _ProgressFilter.make_from_kwargs(kwargs)
+        self._count += 1
+        pdata_has_incumbent = progress_data.has_incumbent
+        incumbent_symbol = '+' if pdata_has_incumbent else ' '
+        # if pdata_has_incumbent:
+        #     self._incumbent_count += 1
+        current_obj = progress_data.current_objective
+        if pdata_has_incumbent:
+            objs = self._obj_fmt.format(current_obj)
         else:
-            self._filter = _ProgressFilterAcceptAll()
+            objs = "N/A"  # pragma: no cover
+        best_bound = progress_data.best_bound
+        nb_nodes = progress_data.current_nb_nodes
+        remaining_nodes = progress_data.remaining_nb_nodes
+        if pdata_has_incumbent:
+            gap = self._gap_fmt.format(progress_data.mip_gap)
+        else:
+            gap = "N/A"  # pragma: no cover
+        raw_time = progress_data.time
+        rounded_time = round(raw_time, 1)
+
+        print("{0:>3}{7}: Node={4} Left={5} Best Integer={1}, Best Bound={2:.4f}, gap={3}, ItCnt={8} [{6}s]"
+              .format(self._count, objs, best_bound, gap, nb_nodes, remaining_nodes, rounded_time,
+                      incumbent_symbol, progress_data.current_nb_iterations))
+
+
+class ProgressDataRecorder(ProgressListener):
+    """ A specialized class of ProgressListener, which collects all ProgressData it receives.
+
+    """
+
+    def __init__(self, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
+        super(ProgressDataRecorder, self).__init__(clock, absdiff, reldiff)
+        self._recorded = []
 
     def notify_start(self):
-        # restart
-        self.__recorded = []
-        self.__final_objective = 1e+75
-        self._filter.reset()
+        super(ProgressDataRecorder, self).notify_start()
+        # clear recorded data
+        self._recorded = []
 
     def notify_progress(self, progress_data):
-        if self._filter.accept(progress_data):
-            self.__recorded.append(progress_data.get_tuple())
-
-    def notify_end(self, status, objective):
-        """ The method called when solve is finished on a model. The status is the solve status from the
-        solve() method
-        """
-        self.__final_status = status
-        if status:
-            self.__final_objective = objective
-
-    @property
-    def final_objective(self):
-        return self.__final_objective
-
-    @property
-    def final_status(self):
-        return self.__final_status
+        self._recorded.append(progress_data)
 
     @property
     def number_of_records(self):
-        return len(self.__recorded)
+        return len(self._recorded)
 
-    def iter_progress_data(self):
-        return iter(self.__recorded)
+    @property
+    def iter_recorded(self):
+        """ Returns an iterator on stored progress data
+
+        :return: an iterator.
+        """
+        return iter(self._recorded)
 
 
 class SolutionListener(ProgressListener):
-    """ A specialized implementation of Progress Listener, which memorizes intermediate solutions.
+    """ The base class for listeners that work on intermediate solutions.
 
-    This subclass of ProgressListener memorizes only the latest solution found. It can easily
-    be subclassed to memorize *all* intermediate solutions by storing them in a list.
-    @PROOFREAD
+    To define a custom behavior for a subclass of this class, you need to redefine `notify_solution`.
+    The current progress data is available from the `current_progress_data` property.
     """
 
-    def __init__(self, model):
-        ProgressListener.__init__(self)
-        self._model = model
-        self._engine_name = model.solve_with
-        self._current_solution = None
-        self._current_objective = ProgressData.BIGNUM
+    # noinspection PyMethodMayBeStatic
+    def check_solution_clock(self):
+        if not self.clock.listens_to_solution:
+            docplex_fatal('Solution listener requires a solution clock among (Solutions,Objective|Gap), {0} was passed',
+                          self.clock)
 
-    def reset(self):
-        self._current_solution = None
-        self._current_objective = ProgressData.BIGNUM
+    def __init__(self, clock=ProgressClock.Solutions, absdiff=None, reldiff=None):
+        super(SolutionListener, self).__init__(clock, absdiff, reldiff)
+        self.check_solution_clock()
 
     def requires_solution(self):
-        # this class of listener requires solution information
         return True
 
-    def notify_progress(self, progress_data):
-        if progress_data.has_incumbent:
-            self._current_objective = progress_data.current_objective
+    def notify_solution(self, sol):
+        """ Generic method to be redefined by custom listeners to
+        handle intermediate solutions. This method is called by the
+        CPLEX search with an intermediate solution.
 
-    def notify_solution(self, incumbents):
-        sol = self.static_make_solution(model=self._model,
-                                        obj=self._current_objective,
-                                        engine_name=self._engine_name,
-                                        incumbents=incumbents)
-        self._current_solution = sol
-        return sol
+        :param sol: an instance of :class:`docplex.mp.solution.SolveSolution`
+
+        Note: as this method is called at each node of the MIP search, it may happen
+        that several calls are made with an identical solution, that is, different object
+        instances, but sharing the same variable values.
+        """
+        pass  # pragma: no cover
+
+    def notify_start(self):
+        super(SolutionListener, self).notify_start()
+
+    def accept(self, pdata):
+        return pdata.has_incumbent and super(SolutionListener, self).accept(pdata)
+
+
+class SolutionRecorder(SolutionListener):
+    """ A specialized implementation of :class:`SolutionListener`,
+    which stores --all-- intermediate solutions.
+
+    As  the listener might be called at different times with identical incumbent
+    values, thus the list of solutions list might well contain identical solutions.
+    """
+
+    def __init__(self, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
+        super(SolutionRecorder, self).__init__(clock, absdiff, reldiff)
+        self._solutions = []
+
+    def notify_start(self):
+        """ Redefinition of the generic notify_start() method to clear all data modified by solve().
+        In this case, clears the list of solutions.
+        """
+        super(SolutionListener, self).notify_start()
+        self._solutions = []
+
+    def notify_solution(self, sol):
+        """ Redefintion of the generic `notify_solution` method, called by CPLEX.
+         For this class, appends the intermediate solution to the list of stored solutions.
+
+        """
+        self._solutions.append(sol)
+
+    def iter_solutions(self):
+        """ Returns an iterator on the stored solutions"""
+        return iter(self._solutions)
+
+    @property
+    def number_of_solutions(self):
+        """ Returns the number of stored solutions. """
+        return len(self._solutions)
 
     @property
     def current_solution(self):
-        """ This property returns the last memorized solution, if any.
-
-        Returns:
-            the last memorized solution (an instance of `docplex.mp.SolveSolution`, if one has been found,
-            or None if the model has not found any solution yet.
-
-        @PROOFREAD
-        """
-        return self._current_solution
+        # redefinition of generic method `notify_solution`, called by CPLEX.
+        sols = self._solutions
+        return sols[-1] if sols else None
 
 
 class SolutionHookListener(SolutionListener):
-    def __init__(self, model, sol_hook):
-        SolutionListener.__init__(self, model)
-        self._hook_fn = sol_hook
 
-    def notify_solution(self, incumbents):
-        sol = SolutionListener.notify_solution(self, incumbents)
+    def __init__(self, sol_hook_fn, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
+        SolutionListener.__init__(self, clock, absdiff, reldiff)
+        self._hook_fn = sol_hook_fn
+
+    def notify_solution(self, sol):
         self._hook_fn(sol)
 
 
-class KpiFilterLevel(Enum):
-    # what kind of filtering do we want for kpis?
-    Unfiltered = 0
-    FilterObjectiveAndBound = 1
-    FilterObjective = 2
+class KpiListener(SolutionListener):
+    """ A refinement of SolutionListener, which computes KPIs at each intermediate solution.
 
-    def listen_to_bound(self):
-        return self is KpiFilterLevel.FilterObjectiveAndBound
+    Calls the `publish` method with a dicitonary of KPIs. Defaul tis to do nothing.
 
-    def is_filtered(self):
-        return self is not KpiFilterLevel.Unfiltered
+    This listener listens to the `Gap` clock.
 
-    @classmethod
-    def parse(cls, arg):
-        if isinstance(arg, KpiFilterLevel):
-            return arg
-        else:
-            # None
-            if arg is None:
-                return KpiFilterLevel.Unfiltered
-            # String value
-            if isinstance(arg, string_types):
-                try:
-                    return KpiFilterLevel['arg']
-                except KeyError:
-                    raise ValueError('not a filter level: %s' % arg)
-            # int value
-            for fl in cls:
-                if arg == fl.value:
-                    return fl
+    """
+
+    objective_kpi_name = '_current_objective'
+    time_kpi_name = '_current_time'
+
+    def __init__(self, model, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
+        super(KpiListener, self).__init__(clock, absdiff, reldiff)
+        self.model = model
+
+    def publish(self, kpi_dict):
+        """ This method is called at each improving solution, with a dictionay of name, values.
+
+        :param kpi_dict: a dicitonary of names and KPi values, computed on the intermediate solution.
+
+        """
+        pass
+
+    def notify_solution(self, sol):
+        pdata = self.current_progress_data
+
+        # 1. build a dict from formatted names to kpi values.
+        kpis_as_dict = {kp.name: kp.compute(sol) for kp in self.model.iter_kpis()}
+        # 2. add predefined keys for obj, time.
+        kpis_as_dict[self.objective_kpi_name] = sol.objective_value
+        kpis_as_dict[self.time_kpi_name] = pdata.time
+        self.publish(kpis_as_dict)
+
+class KpiPrinter(KpiListener):
+
+    def __init__(self, model, clock=ProgressClock.Gap, absdiff=None, reldiff=None,
+                 kpi_format='* ItCnt={3:d}  KPI: {1:<{0}} = '):
+        super(KpiPrinter, self).__init__(model, clock, absdiff, reldiff)
+        self.kpi_format = kpi_format
+
+    def publish(self, kpi_dict):
+        try:
+            max_kpi_name_len = max(len(kn) for kn in kpi_dict)  # max() raises ValueError on empty
+        except ValueError:
+            max_kpi_name_len = 0
+        kpi_num_format = self.kpi_format + '{2:.3f}'
+        kpi_str_format = self.kpi_format + '{2!s}'
+        print('-' * (max_kpi_name_len + 15))
+        itcnt = self.current_progress_data.current_nb_iterations
+        for kn, kv in iteritems(kpi_dict):
+            if is_number(kv):
+                k_format = kpi_num_format
             else:
-                raise ValueError('not a filter level: {0!r}'.format(arg))
+                k_format = kpi_str_format
+            kps = k_format.format(max_kpi_name_len, kn, kv, itcnt)
+            print(kps)
 
 
-class KpiRecorder(SolutionListener):
-    def __init__(self, model, filter_level=KpiFilterLevel.FilterObjectiveAndBound,
+class _KpiRecorder(SolutionListener):
+    # '''A specialized subclass of :class:`~SolutionListener` that stores the KPI values
+    # at each intermediate solution.
+    #
+    # The `clock` argument defines which events are listened to.
+    #
+    # See Also:
+    #     the enumerated class :class:`~ProgressClock`
+    # '''
+
+    def __init__(self, model, clock=ProgressClock.Gap,
                  publish_hook=None,
-                 kpi_publish_format=None,
-                 listen_to_bound=False):
-        super(KpiRecorder, self).__init__(model)
+                 kpi_publish_format=None, absdiff=None, reldiff=None):
+        super(_KpiRecorder, self).__init__(clock, absdiff, reldiff)
+        self.model = model
+        self._context = model.context
         self.publish_hook = publish_hook
         self.kpi_publish_format = kpi_publish_format or 'KPI.%s'
-
-        # all data below are attached to a solve (must be reset when starting a new solve...)
-        self._kpis = []
-        self._filter_level = KpiFilterLevel.parse(filter_level)  # = filtered
-        self._listen_to_bound = listen_to_bound
-        self._last_accept = True
-        self._last_time = -1
-        self._report_count = 0
         self.publish_name_fn = lambda kn: self.kpi_publish_format % kn
-        self._filter = _ProgressFilter() if self._filter_level.is_filtered() else _ProgressFilterAcceptAll()
 
-    def reset(self):
-        self._kpis = []
-        self._last_accept = True
-        self._last_time = -1
-        self._filter.reset()
-        self._report_count = 0
+        # stored dictionaries of kpi values (name: value)
+        self._kpi_dicts = []
 
-    @property
-    def kpis(self):
-        return self._kpis
+    def notify_start(self):
+        super(_KpiRecorder, self).notify_start()
+        self._kpi_dicts = []
 
     @property
     def nb_reported(self):
-        return self._report_count
+        return len(self._kpi_dicts)
 
-    def notify_progress(self, pdata):
-        super(KpiRecorder, self).notify_progress(pdata)
-        # ---
-        filter_level = self._filter_level
-        if filter_level == KpiFilterLevel.FilterObjective:
-            self._last_accept = self._filter.has_significant_objective_change(pdata)
-        else:
-            self._last_accept = self._filter.accept(pdata)
-        # ---
-        self._last_time = pdata.time
+    def notify_solution(self, sol):
+        pdata = self.current_progress_data
 
-    def notify_solution(self, incumbents):
-        super(KpiRecorder, self).notify_solution(incumbents)
         publish_name_fn = self.publish_name_fn
-        if self._last_accept:
-            self._report_count += 1
-            # build a name/value dictionary with builtin values
-            k = self._model.kpis_as_dict(self.current_solution, use_names=True)
-            name_values = {publish_name_fn(kn): kv for kn, kv in iteritems(k)}
+        # 1. build a dict from formatted names to kpi values.
+        name_values = {publish_name_fn(kp.name): kp.compute(sol) for kp in self.model.iter_kpis()}
+        # 2. add predefined keys for obj, time.
+        name_values['PROGRESS_CURRENT_OBJECTIVE'] = sol.objective_value
+        name_values[publish_name_fn('_time')] = pdata.time
 
-            # This must be this value for the current objective
-            name_values['PROGRESS_CURRENT_OBJECTIVE'] = self.current_solution.objective_value
-            # predefined keys, not KPIs
-            # name_values[publish_name_fn('_objective')] = self.current_solution.objective_value
-            name_values[publish_name_fn('_time')] = self._last_time
+        # 3. store it (why???)
+        self._kpi_dicts.append(name_values)
 
-            self._kpis.append(name_values)
+        # usually publish kpis in environment...
+        if self.publish_hook is not None:
+            self.publish_hook(name_values)
 
-            # usually publish kpis in environment...
-            if self.publish_hook is not None:
-                self.publish_hook(name_values)
-
-            # save kpis.csv table
-            context = self._model.context
-            if auto_publising_kpis_table_names(context) is not None:
-                write_kpis_table(env=get_environment(),
-                                 context=context,
-                                 model=self._model,
-                                 solution=self.current_solution)
+        # save kpis.csv table
+        context = self._context
+        if auto_publising_kpis_table_names(context) is not None:
+            write_kpis_table(env=get_environment(),
+                             context=context,
+                             model=self.model,
+                             solution=sol)
 
     def iter_kpis(self):
-        return iter(self._kpis)
+        return iter(self._kpi_dicts)
 
     def __as_df__(self, **kwargs):
         try:
@@ -523,5 +689,5 @@ class KpiRecorder(SolutionListener):
         except ImportError:
             raise RuntimeError("convert as DataFrame: This feature requires pandas")
 
-        df = DataFrame(self._kpis)
+        df = DataFrame(self._kpi_dicts, **kwargs)
         return df

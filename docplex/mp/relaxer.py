@@ -8,7 +8,7 @@ from six import iteritems
 from collections import defaultdict, namedtuple
 from docplex.mp.constants import RelaxationMode
 
-from docplex.mp.utils import is_function, apply_thread_limitations
+from docplex.mp.utils import is_function, apply_thread_limitations, _to_list
 from docplex.mp.basic import Priority
 from docplex.mp.constr import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
@@ -18,44 +18,45 @@ from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_
 from docplex.util import as_df
 from docplex.mp.utils import PublishResultAsDf
 
-
 try:
     import pandas as pd
-except ImportError:
+except ImportError:  # pragma: no cover
     pd = None
+
+TOutputTables = namedtuple('TOutputTables', ['Constraint', 'Priority', 'Amount'])
 
 
 def to_output_table(relaxer, use_pd=True):
-    columns = ['Constraint', 'Priority', 'Amount']
     if pd and use_pd:
         return as_df(relaxer)
     else:
-        TOutputTables = namedtuple('TOutputTables', columns)
         result = []
         prioritizer = relaxer.prioritizer
         for ct, relaxed in relaxer.iter_relaxations():
             result.append(TOutputTables(ct.name,
-                                        prioritizer.get_priority(ct).name,
+                                        prioritizer.get_priority_internal(ct).name,
                                         relaxed))
         return result
 
 
-def _match_priority_name(prio, s, sep='_'):
-    if not s:
-        return False  # pragma: no cover
-
-    s_lower = s.lower()
-    prio_name = prio.name.lower()
-    return s_lower.find(prio_name) >= 0
-
-
-class IConstraintPrioritizer(object):
-    ''' Abstract interface for the prioritizer.
-        This class is a functor to be called on each model constraint.
+# noinspection PyAbstractClass
+class Prioritizer(object):
+    ''' Abstract base class for prioritizers.
+        This class acts like a functor to be called on each model constraint.
     '''
+
+    def __init__(self, override=False):
+        self._override = override
 
     def get_priority(self, ct):
         raise NotImplementedError("base class")  # pragma: no cover
+
+    def get_priority_internal(self, ct):
+        ct_prio = ct.priority
+        if not self._override and ct_prio:
+            return ct_prio
+        else:
+            return self.get_priority(ct)
 
 
 class IRelaxationListener(object):
@@ -97,13 +98,7 @@ class VerboseRelaxationListener(IRelaxationListener):
               format(self.relaxation_count, priority.name, len(relaxables), obj, len(violations)))
 
 
-# noinspection PyAbstractClass
-class AbstractPrioritizer(IConstraintPrioritizer):
-    def __init__(self, override=False):
-        self._override = override
-
-
-class NamedPrioritizer(IConstraintPrioritizer):
+class NamedPrioritizer(Prioritizer):
     # INTERNAL
     # """ Basic prioritizer that relaxes any constraint with a name.
     #
@@ -116,20 +111,15 @@ class NamedPrioritizer(IConstraintPrioritizer):
     #
     # """
 
-    def __init__(self, priority=Priority.MEDIUM):
+    def __init__(self, priority=Priority.MEDIUM, override=False):
+        Prioritizer.__init__(self, override)
         self._priority = priority
 
     def get_priority(self, ct):
-        ctprio = ct.priority
-        if ctprio is not None:
-            return ctprio
-        elif ct.has_user_name():
-            return self._priority
-        else:
-            return Priority.MANDATORY
+        return self._priority if ct.has_user_name() else Priority.MANDATORY
 
 
-class UniformPrioritizer(AbstractPrioritizer):
+class UniformPrioritizer(Prioritizer):
     # INTERNAL
     # """ Constraint prioritizer that relaxes all constraints.
     #
@@ -138,18 +128,15 @@ class UniformPrioritizer(AbstractPrioritizer):
     #
     # """
 
-    def __init__(self, override=False, common_priority=Priority.MEDIUM):
-        AbstractPrioritizer.__init__(self, override)
-        self._common_priority = common_priority
+    def __init__(self, priority=Priority.MEDIUM, override=False):
+        Prioritizer.__init__(self, override)
+        self._priority = priority
 
     def get_priority(self, ct):
-        if not self._override and ct.priority is not None:
-            return ct.priority
-
-        return self._common_priority
+        return self._priority
 
 
-class MatchNamePrioritizer(AbstractPrioritizer):
+class MatchNamePrioritizer(Prioritizer):
     # INTERNAL
     # """ Constraint prioritizer based on constraint names.
     #
@@ -172,7 +159,7 @@ class MatchNamePrioritizer(AbstractPrioritizer):
                  priority_for_non_matches=Priority.MANDATORY,
                  case_sensitive=False,
                  override=False):
-        AbstractPrioritizer.__init__(self, override)
+        Prioritizer.__init__(self, override)
         assert isinstance(priority_for_unnamed, Priority)
         assert isinstance(priority_for_non_matches, Priority)
 
@@ -184,15 +171,11 @@ class MatchNamePrioritizer(AbstractPrioritizer):
     def get_priority(self, ct):
         ''' Looks for known priority names inside constraint names.
         '''
-        if not self._override:
-            ct_user_priority = ct.priority
-            if ct_user_priority is not None:
-                return ct_user_priority
 
-        ctname = ct.name
         if not ct.has_user_name():
             return self.priority_for_unnamed_cts
         else:
+            ctname = ct.name
             ctname_to_match = ctname if self._is_case_sensitive else ctname.lower()
             best_matched = 0
             best_matching_priority = self.priority_for_non_matching_cts
@@ -208,7 +191,7 @@ class MatchNamePrioritizer(AbstractPrioritizer):
             return best_matching_priority
 
 
-class MappingPrioritizer(AbstractPrioritizer):
+class MappingPrioritizer(Prioritizer):
     # INTERNAL
     # """
     # Constraint prioritizer based on a dictionary of constraints and priorities.
@@ -224,42 +207,31 @@ class MappingPrioritizer(AbstractPrioritizer):
     # """
 
     def __init__(self, priority_mapping, default_priority=Priority.MANDATORY, override=False):
-        AbstractPrioritizer.__init__(self, override)
+        Prioritizer.__init__(self, override)
         # --- typecheck that this dict is a a {ct: prio} mapping.
         if not isinstance(priority_mapping, dict):
             raise TypeError
         for k, v in iteritems(priority_mapping):
             if not isinstance(k, AbstractConstraint):
                 raise TypeError
-            if not isinstance(v, Priority):
+
+            if not hasattr(v, 'cplex_preference'):
                 raise TypeError
         # ---
         self._mapping = priority_mapping
         self._default_priority = default_priority
 
     def get_priority(self, ct):
-        if not self._override:
-            # attribute priority first
-            ct_priority = ct.priority
-            if ct_priority is not None:
-                return ct_priority
-
         # return the dict's value for ct if nay, else its own priority or the default.
         return self._mapping.get(ct, ct.priority or self._default_priority)
 
 
-class FunctionalPrioritizer(AbstractPrioritizer):
+class FunctionalPrioritizer(Prioritizer):
     def __init__(self, fn, override=False):
-        AbstractPrioritizer.__init__(self, override)
+        Prioritizer.__init__(self, override)
         self._prioritize_fn = fn
 
     def get_priority(self, ct):
-        if not self._override:
-            # attribute priority first
-            ct_priority = ct.priority
-            if ct_priority is not None:
-                return ct_priority
-
         return self._prioritize_fn(ct)
 
 
@@ -271,7 +243,7 @@ _TParamData = namedtuple('_TParamInfo', ['short_name', 'default_value', 'accesso
 class Relaxer(PublishResultAsDf, object):
     ''' This class is an abstract algorithm, in the sense that it operates on interfaces.
 
-        It takes a prioritizer, which an implementation of ``IConstraintPrioritizer``.
+        It takes a prioritizer, which an implementation of ``ConstraintPrioritizer``.
         For convenience, predefined prioritizer types are accessible  through names:
 
             - `all` relaxes all constraints using a MEDIUM priority; this is the default.
@@ -303,7 +275,7 @@ class Relaxer(PublishResultAsDf, object):
 
         self._precision = precision
         # ---
-        if isinstance(prioritizer, IConstraintPrioritizer):
+        if hasattr(prioritizer, 'get_priority'):
             self._prioritizer = prioritizer
         elif prioritizer == 'match':
             self._prioritizer = MatchNamePrioritizer(override=override)
@@ -333,7 +305,6 @@ class Relaxer(PublishResultAsDf, object):
 
         if self._verbose:
             self.add_listener(self._verbose_listener)
-
 
     @property
     def prioritizer(self):
@@ -430,7 +401,7 @@ class Relaxer(PublishResultAsDf, object):
         mandatory_justifier = None
         nb_mandatories = 0
         for ct in mdl.iter_constraints():
-            prio = self._prioritizer.get_priority(ct)
+            prio = self._prioritizer.get_priority_internal(ct)
             if prio.is_mandatory():
                 nb_mandatories += 1
                 if mandatory_justifier is None:
@@ -475,11 +446,11 @@ class Relaxer(PublishResultAsDf, object):
         relax_context = mdl.prepare_actual_context(**kwargs)
 
         forced_docloud = context_must_use_docloud(relax_context, **kwargs)
-        have_credentials = context_has_docloud_credentials(relax_context, do_warn=True)
+        have_credentials = context_has_docloud_credentials(relax_context)
         transient_engine = False
         relax_engine = mdl.get_engine()
 
-        if forced_docloud:
+        if forced_docloud:  # pragma: no cover
             if have_credentials:
                 # create new docloud engine on the fly
                 relax_engine = mdl._new_docloud_engine(relax_context)
@@ -509,12 +480,12 @@ class Relaxer(PublishResultAsDf, object):
                         # this should not happen...
                         continue  # pragma: no cover
 
-                    pref = prio.cplex_preference()
+                    pref = prio.cplex_preference
                     # build a new group
                     relax_group = _TRelaxableGroup(pref, cts)
 
                     # relaxing new batch of cts:
-                    if not is_cumulative:
+                    if not is_cumulative:  #  pragma: no cover
                         # if not cumulative reset the groupset
                         all_groups = [relax_group]
                         all_relaxable_cts = cts
@@ -551,7 +522,9 @@ class Relaxer(PublishResultAsDf, object):
                             if self._accept_violation(raw_infeas):
                                 self._relaxations[ct] = raw_infeas
                         if not self._relaxations:
-                            mdl.warning("Relaxation of model `{0}` found one relaxed solution, but no relaxed constraints - check".format(mdl.name))
+                            mdl.warning(
+                                "Relaxation of model `{0}` found one relaxed solution, but no relaxed constraints - check".format(
+                                    mdl.name))
 
                         for l in self._listeners:
                             l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
@@ -577,7 +550,7 @@ class Relaxer(PublishResultAsDf, object):
             if saved_context_log_output != mdl.context.solver.log_output:
                 mdl.context.solver.log_output = saved_context_log_output
             mdl.context = saved_context
-            if transient_engine:
+            if transient_engine:  # pragma: no cover
                 del relax_engine
             if temp_relax_verbose != self._verbose:
                 # realign listener with flag
@@ -614,14 +587,14 @@ class Relaxer(PublishResultAsDf, object):
               - Priority: The priority of the constraint
               - Amount: The amount of relaxation
         '''
-        if not pd:
+        if not pd:  # pragma: no cover
             raise NotImplementedError('Cannot convert results to DataFrame, pandas is not available')
         columns = ['Constraint', 'Priority', 'Amount']
         results_list = []
         prioritizer = self.prioritizer
         for ct, relaxed in self.iter_relaxations():
             results_list.append({'Constraint': ct.name,
-                                 'Priority': prioritizer.get_priority(ct).name,
+                                 'Priority': prioritizer.get_priority_internal(ct).name,
                                  'Amount': relaxed})
         df = pd.DataFrame(results_list, columns=columns)
         return df
@@ -687,3 +660,24 @@ class Relaxer(PublishResultAsDf, object):
         '''
         self._check_successful_relaxation()
         return ct in self._relaxations
+
+    @classmethod
+    def run_feasopt(cls, model, relaxables, relax_mode):
+        relaxable_list = _to_list(relaxables)
+        groups = []
+        checker = model._checker
+        try:
+            for pref, ctseq in relaxable_list:
+                checker.typecheck_num(pref)
+                cts = _to_list(ctseq)
+                for ct in cts:
+                    checker.typecheck_constraint(ct)
+                groups.append((pref, cts))
+        except ValueError:
+            model.fatal("expecting container with (preference, constraints), got: {0!s}", relaxable_list)
+
+        feasible = model.get_engine().solve_relaxed(mdl=model, relaxable_groups=groups,
+                                                    prio_name='feasopt',
+                                                    relax_mode=relax_mode)
+        return feasible
+

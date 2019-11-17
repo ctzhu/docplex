@@ -63,6 +63,7 @@ import docplex.cp.config as config
 import docplex.cp.expression as expression
 import collections
 from docplex.cp.utils import xrange
+import traceback
 
 
 ###############################################################################
@@ -399,8 +400,8 @@ class FznReader(object):
         except Exception as e:
             if isinstance(e, FznParserException):
                 raise e
-            import traceback
-            traceback.print_exc()
+            if config.context.log_exceptions:
+                traceback.print_exc()
             self._raise_exception(str(e))
 
         if self.token is not TOKEN_EOF:

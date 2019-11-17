@@ -136,6 +136,8 @@ class TextModelPrinter(ModelPrinter):
         self._lc_name_map = {}  # indicators have a seperate index space.
         self._qc_name_map = {}
         self._pwl_name_map = {}
+        self._lzc_name_map = {}  # lazy constraints
+        self._ucc_name_map = {}  # user cut constraints
         # ------------------------
 
         self._rangeData = {}
@@ -226,7 +228,12 @@ class TextModelPrinter(ModelPrinter):
         # --
         return cur_name
 
-    def _precompute_name_dict(self, mobj_seq, prefix):
+    def _precompute_name_dict(self, mobj_seq, prefix, indexerfn_=None):
+
+        if indexerfn_ is None:
+            indexerfn = lambda mo: mo.index
+        else:
+            indexerfn = indexerfn_
         fixed_name_dir = {}
         all_names = set()
         hide_names = self.mangle_names()
@@ -238,10 +245,13 @@ class TextModelPrinter(ModelPrinter):
                     # to disambiguate, start with name#index, then add ##1,2,3,
                     seed_name = '%s#%d' % (fixed_name, mobj._index)
                     fixed_name = self._disambiguate(seed_name, all_names, mobj, prefix, local_index)
-                fixed_name_dir[mobj._index] = fixed_name
+                fixed_name_dir[indexerfn(mobj)] = fixed_name
                 all_names.add(fixed_name)
 
         return fixed_name_dir
+
+    def _precompute_name_dict_by_obj(self, mobj_seq, prefix):
+        return self._precompute_name_dict(mobj_seq, prefix, indexerfn_=lambda _x: _x)
 
     def _num_to_string(self, num):
         # INTERNAL
@@ -253,6 +263,8 @@ class TextModelPrinter(ModelPrinter):
         self._lc_name_map = self._precompute_name_dict(model.iter_logical_constraints(), prefix='lc')
         self._qc_name_map = self._precompute_name_dict(model.iter_quadratic_constraints(), prefix='qc')
         self._pwl_name_map = self._precompute_name_dict(model.iter_pwl_constraints(), prefix='pwl')
+        self._lzc_name_map = self._precompute_name_dict_by_obj(model.iter_lazy_constraints(), prefix='l')
+        self._ucc_name_map = self._precompute_name_dict_by_obj(model.iter_user_cut_constraints(), prefix='u')
 
         self._rangeData = {}
         for rng in model.iter_range_constraints():
@@ -264,15 +276,6 @@ class TextModelPrinter(ModelPrinter):
             rhs = rng.cplex_num_rhs()
             rngval = rng.cplex_range_value(do_raise=False)
             self._rangeData[rng] = (varname, rhs, rngval)
-
-    @staticmethod
-    def fix_whitespace(name):
-        """
-        Swaps white spaces by underscores. Names with no blanks are not copied.
-        :param name:
-        :return:
-        """
-        return name.replace(" ", "_")
 
     def _var_print_name(self, dvar):
         # INTERNAL
@@ -516,14 +519,14 @@ class _ExportWrapper(object):
                     self._curr_line += token
             self._wrote = True
 
-    def flush(self, print_newline=True, reset=False):
+    def flush(self, print_newline=True, restart_from_empty_line=False):
         self._oss.write(self._curr_line)
         if print_newline:
             self._oss.write('\n')
         # Reset '_wrote' flag so that no separator will be added when writing first token of next line
         self._wrote = False
         # if reset, start a new line.
-        self._curr_line = '' if reset else self._indent_str
+        self._curr_line = '' if restart_from_empty_line else self._indent_str
 
     def newline(self):
         self._oss.write('\n')

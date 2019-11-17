@@ -58,13 +58,13 @@ class _IAdvancedExpr(Expr, LinearOperand):
     def _new_generated_continuous_var(self, lb=None, ub=None, name=None):
         # INTERNAL
         m = self._model
-        var = m._lfactory.new_var(m.continuous_vartype, lb=lb, ub=ub, varname=name)
+        var = m._lfactory.new_safe_var(m.continuous_vartype, lb=lb, ub=ub, varname=name)
         var.notify_origin(self)
         return var
 
     def _new_generated_binary_var(self, name=None):
         m = self._model
-        bvar = m._lfactory.new_var(m.binary_vartype, varname=name)
+        bvar = m._lfactory.new_safe_var(m.binary_vartype, varname=name)
         bvar.notify_origin(self)
         return bvar
 
@@ -125,14 +125,14 @@ class _IAdvancedExpr(Expr, LinearOperand):
     def _is_resolved(self):
         return self._resolved and self._f_var is not None
 
-    def name_functional_var_name(self, fvar, fvar_meta_format="_%s%d"):
-        fname = fvar_meta_format % (self.function_symbol, fvar.index)
+    def _name_functional_var_name(self, fvar, fvar_meta_format="_%s%d"):
+        fname = fvar_meta_format % (self.function_symbol, fvar._index)
         fvar.set_name(fname)
 
     def _create_functional_var(self, named=True):
         fvar = self._new_generated_free_continuous_var(name=None)
         if named:
-            self.name_functional_var_name(fvar)
+            self._name_functional_var_name(fvar)
         return fvar
 
     @property
@@ -436,7 +436,7 @@ class _LogicalSequenceExpr(_SequenceExpr):
     def _create_functional_var(self, named=True):
         # the resulting variable is a binary variable...
         bvar = self._new_generated_binary_var(name=None)
-        self.name_functional_var_name(bvar)
+        self._name_functional_var_name(bvar)
         return bvar
 
     def __init__(self, model, exprs, name=None):

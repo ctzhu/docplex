@@ -473,7 +473,10 @@ class LogicalAndExpr(_LogicalSequenceExpr):
         if self_x_vars:
             cts = [(self_and_var <= xv) for xv in self_x_vars]
             m = self._model
-            cts.append(len(self_x_vars) * self_and_var >= m._aggregator._sum_with_seq(self._xvars))
+            nb_vars = len(self_x_vars)
+            # rtc-39600: subtract n-1 from the sum.
+            # the -and- var is propagated to 1 if all sum vars are 1.
+            cts.append(self_and_var >= m._aggregator._sum_with_seq(self._xvars) - (nb_vars-1))
             self._post_generated_cts(cts)
 
 

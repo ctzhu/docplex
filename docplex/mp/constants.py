@@ -536,7 +536,7 @@ class WriteLevel(Enum):
     def parse(cls, level):
         if level is None:
             return cls.Auto
-        elif level in cls:
+        elif isinstance(level, cls):
             return level
         else:
             for wl in cls:

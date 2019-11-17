@@ -153,6 +153,10 @@ class ProgressListener(object):
         self._reldiff = reldiff if reldiff is not None else default_reldiff
         self._filter = make_clock_filter(clock, absdiff, reldiff)
 
+    def _get_model(self):
+        ccb = self._cb
+        return ccb._model if ccb else None
+
     @property
     def clock(self):
         """ Returns the clock of the listener.
@@ -243,10 +247,17 @@ class ProgressListener(object):
         This method tells CPLEX to stop the MIP search.
         You may use this method in a custom progress listener to stop the search based on your own
         criteria (for example, when improvements in gap is consistently below a minimum threshold).
+
+        Note:
+            This method should be called from within a :func:`notify_progress` method call, otherwise it will have
+            no effect.
+
         '''
         ccb = self._cb
         if ccb is not None:
             ccb.abort()
+        else:
+            print('!!! callback is not connected - abort() ignored')
 
 
 # noinspection PyUnusedLocal,PyMethodMayBeStatic

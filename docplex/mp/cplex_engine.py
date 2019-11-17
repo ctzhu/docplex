@@ -853,7 +853,7 @@ class CplexEngine(DummyEngine):
         return self._create_typed_indicator_internal(self._cplex.indicator_constraints,
                                                      self._indcst_scope,
                                                      eqct.binary_var, eqct.linear_constraint,
-                                                     complemented=eqct.cpx_complemented(),
+                                                     complemented=eqct.cpx_complemented,
                                                      equivalence=True, name=eqct.name)
 
     def create_batch_equivalence_constraints(self, eqcts):
@@ -862,7 +862,8 @@ class CplexEngine(DummyEngine):
         indct_scope = self._indcst_scope
         # TODO: create batch with one call...
         rets = [self._create_typed_indicator_internal(cpx_indicators, indct_scope, eqct.binary_var,
-                                                      eqct.linear_constraint, equivalence=True)
+                                                      eqct.linear_constraint, equivalence=True,
+                                                      complemented=eqct.cpx_complemented)
                 for eqct in eqcts]
         return rets
 
@@ -891,7 +892,7 @@ class CplexEngine(DummyEngine):
             ret = self._create_typed_indicator_internal(cpx_indicators, indct_scope, ind.binary_var,
                                                         ind.get_linear_constraint(),
                                                         equivalence=False,
-                                                        complemented=ind.cpx_complemented(),
+                                                        complemented=ind.cpx_complemented,
                                                         name=ind._get_safe_name())
             rets.append(ret)
         return rets

@@ -482,22 +482,23 @@ class DOcloudConnector(object):
             A ProgressData
         """
         from docplex.mp.progress import ProgressData
-        pg = ProgressData()
+        has_incumbent = current_objective = best_bound = mip_gap = current_nb_iterations = current_nb_nodes = remaining_nb_nodes = 0
+        time = 0
         details = info.get('details')
         if details:
-            pg.current_objective = float(details.get('PROGRESS_CURRENT_OBJECTIVE',
-                                                     pg.current_objective))
-            pg.best_bound = float(details.get('PROGRESS_BEST_OBJECTIVE',
-                                              pg.best_bound))
+            current_objective = float(details.get('PROGRESS_CURRENT_OBJECTIVE', 0))
+            best_bound = float(details.get('PROGRESS_BEST_OBJECTIVE', 0))
+            mip_gap = None
             if 'PROGRESS_CURRENT_OBJECTIVE' in details and 'PROGRESS_BEST_OBJECTIVE' in details:
-                if pg.current_objective > 0:
-                    pg.mip_gap = abs(pg.current_objective - pg.best_bound) / pg.current_objective
-            pg.current_nb_nodes = int(details.get('cplex.nodes.processed',
-                                                  pg.current_nb_nodes))
-            pg.remaining_nb_nodes = int(details.get('cplex.nodes.left',
-                                                    pg.remaining_nb_nodes))
+                if current_objective > 0:
+                    mip_gap = abs(current_objective - best_bound) / current_objective
+            current_nb_nodes = int(details.get('cplex.nodes.processed', 0))
+            remaining_nb_nodes = int(details.get('cplex.nodes.left', 0))
             # assume that there's an incubent if ther's a gap
-            pg.has_incumbent = 'PROGRESS_GAP' in details
+            has_incumbent = 'PROGRESS_GAP' in details
         if 'startedAt' in info and 'updatedAt' in info:
-            pg.time = ((info.get('updatedAt')) - int(info.get('startedAt'))) / 1000
+            time = ((info.get('updatedAt')) - int(info.get('startedAt'))) / 1000
+        pg = ProgressData(0, has_incumbent, current_objective, best_bound, mip_gap,
+                          0, current_nb_nodes, remaining_nb_nodes,
+                          time, 0)
         return pg

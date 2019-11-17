@@ -1155,6 +1155,7 @@ class LogicalConstraint(AbstractConstraint):
     def get_linear_constraint(self):
         return self._linear_ct
 
+    @property
     def cpx_complemented(self):
         return 1 - self._active_value
 

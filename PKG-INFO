@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.10.150
+Version: 2.10.154
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -244,7 +244,7 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        Changed in 2.10.150:
+        Changed in 2.10.154:
         ````````````````````
         * In ``docplex.mp``:
            * fixed a bug in ModelReader when reading SAV files with no names
@@ -268,6 +268,18 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Multi-objective is now copied in Model.copy()
            * Wrote full documentation on progress listeners
            * Added `Model.set_lp_start_basis()` to provide an initial basis for LP problems.
+        
+        * In ``docplex.cp``:
+           * When trying to access a solution member that does not exists, an exception is thrown instead of returning None.
+           * Add a new map_solution function that replace in a Python object all model expressions by their value in a solve result.
+           * In CPO parser, fix a problem reading #line statements in startingPoint section.
+           * In CPO parser, skip experimental section 'expressions' in 'startingPoint' section.
+           * Simplify writing of interval variable domains reduced to a single value.
+           * Adding a second objective function now raises an exception
+           * Add new experimental local solve with a shared library.
+           * Enable iterators to specify the domain of an integer variable
+           * Add global methods get_version_info() and get_solver_verion() in docplex.cp.solver.
+           * By default, generate CPO model without explicit format version.
         
              
         

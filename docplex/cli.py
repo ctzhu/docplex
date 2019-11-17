@@ -195,13 +195,13 @@ def execute_job(client, inputs, verbose, details, nodelete):
                 response = client.execute(log=sys.stdout, **xkwargs)
                 continuous_logs_available = True
             except TypeError as cla:
-                if 'execute() got an unexpected keyword argument \'continuous_logs\'' in cla:
+                if 'execute() got an unexpected keyword argument \'continuous_logs\'' in str(cla):
                     del xkwargs['continuous_logs']
                     response = client.execute(**xkwargs)
                 else:
                     raise
         except TypeError as te:
-            if 'execute() got an unexpected keyword argument \'info_cb\'' in te:
+            if 'execute() got an unexpected keyword argument \'info_cb\'' in str(te):
                 print('Your version of docplexcloud client does not support details polling (--details option). Please update')
                 return(-1)
             else:
@@ -277,7 +277,7 @@ def run_command(prog, argv, url=None, key=None):
     parser.add_argument('--as', nargs=1, metavar='HOST',
                         dest="host_config", default=None,
                         help="'as host' - use the cplex_config_<HOST>.py configuration file found in PYTHONPATH")
-    parser.add_argument('--url', nargs=1, metavar='URL',
+    parser.add_argument('--url', metavar='URL',
                         dest="url", default=None,
                         help="The DOcplexcloud connection URL. If not specified, will use those found in docplex config files")
     parser.add_argument('--key', metavar='API_KEY',

@@ -186,15 +186,15 @@ class LPModelPrinter(TextModelPrinter):
                           free_symbol='Free'):
         if lb is None and ub is None:
             # try to indent with space of '0 <= ', that is 5 space
-            out.write("%s %s %s\n" % (varname_indent, varname, free_symbol))
+            out.write(" %s %s %s\n" % (varname_indent, varname, free_symbol))
         elif lb is None:
-            out.write("%s %s %s %s\n" % (varname_indent, varname, le_symbol, num_printer.to_string(ub)))
+            out.write(" %s %s %s %s\n" % (varname_indent, varname, le_symbol, num_printer.to_string(ub)))
         elif ub is None:
-            out.write("%s %s %s\n" % (num_printer.to_string(lb), le_symbol, varname))
+            out.write(" %s %s %s\n" % (num_printer.to_string(lb), le_symbol, varname))
         elif lb == ub:
-            out.write("%s %s %s %s\n" % (varname_indent, varname, "=", num_printer.to_string(lb)))
+            out.write(" %s %s %s %s\n" % (varname_indent, varname, "=", num_printer.to_string(lb)))
         else:
-            out.write("%s %s %s %s %s\n" % (num_printer.to_string(lb),
+            out.write(" %s %s %s %s %s\n" % (num_printer.to_string(lb),
                                             le_symbol, varname, le_symbol,
                                             num_printer.to_string(ub)))
 
@@ -361,7 +361,7 @@ class LPModelPrinter(TextModelPrinter):
         # ---  print objective
         if model.has_multi_objective():
             out.write(model.objective_sense.name)
-            out.write(' multi-objective')
+            out.write(' multi-objectives')
             self._newline(out)
             def make_default_obj_name(o):
                 return 'obj%d' % o if o > 0 else 'obj'
@@ -371,7 +371,7 @@ class LPModelPrinter(TextModelPrinter):
                 name = oname or make_default_obj_name(o)
                 obj_label = '%s%s:' % (' ', name)
                 wrapper.write(obj_label)
-                wrapper.write('Priority=%g Weight=%g AbsTol=%g Reltol=%g' % (prio, w, abstol, reltol))
+                wrapper.write('Priority=%g Weight=%g AbsTol=%g RelTol=%g' % (prio, w, abstol, reltol))
                 wrapper.flush()
                 # print the expression and its constant
                 printed = self._print_expr_iter(wrapper, self_num_printer, var_name_map, expr.iter_terms(),

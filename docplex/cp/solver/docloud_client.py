@@ -10,7 +10,8 @@
 This module implements a DOcplexcloud client allowing to submit a CPO model for solving on DOcplexcloud.
 """
 
-import time, json, requests
+import time, json
+import requests
 
 from docplex.cp.utils import CpoException, is_symbol_char, Context
 

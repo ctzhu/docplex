@@ -237,11 +237,6 @@ class DOcloudEngine(IndexerEngine):
 
     def _new_printer(self, ctx):
         return self._printer
-        # printer = ModelPrinterFactory.new_printer(self._exchange_format, full_obj=True)
-        # if ctx.solver.docloud.mangle_names:
-        #     print('LP names will be mangled')
-        #     printer.hide_use_names = True
-        # return printer
 
     def supports_logical_constraints(self):
         # <-> is supposed to be supported in LP?
@@ -570,7 +565,7 @@ class DOcloudEngine(IndexerEngine):
         return make_attachment_name(basename + extension)
 
     # noinspection PyProtectedMember
-    def solve(self, mdl, parameters=None, lex_mipstart=None):
+    def solve(self, mdl, parameters=None, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # Before submitting the job, we will build the list of attachments
         # parameters are CPLEX parameters
         attachments = []
@@ -684,6 +679,7 @@ class DOcloudEngine(IndexerEngine):
 
         sol = SolveSolution.make_engine_solution(model=mdl,
                                                  obj=docloud_obj,
+                                                 blended_obj_by_priority=[docloud_obj],
                                                  var_value_map=docloud_values_by_vars,
                                                  solved_by=self.get_name(),
                                                  solve_details=self._solve_details,

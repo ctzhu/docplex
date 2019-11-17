@@ -36,7 +36,7 @@ class ISolver(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         ''' Redefine this method for the real solve.
             Returns a solution object or None.
         '''
@@ -113,7 +113,7 @@ class ISolver(object):
     def supports_logical_constraints(self):
         raise NotImplementedError  # pragma: no cover
 
-    def solved_as_lp(self):
+    def solved_as_mip(self):
         return False
 
 
@@ -228,6 +228,20 @@ class IEngine(ISolver):
     def check_constraint_indices(self, cts):
         raise NotImplementedError  # pragma: no cover
 
+    def create_sos(self, sos):
+        raise NotImplementedError  # pragma: no cover
+
+    def clear_all_sos(self):
+        raise NotImplementedError  # pragma: no cover
+
+    def add_lazy_constraints(self, lazy_cts):
+        raise NotImplementedError  # pragma: no cover
+
+    def clear_lazy_constraints(self):
+        raise NotImplementedError  # pragma: no cover
+
+    def get_basis(self, mdl):
+        raise NotImplementedError  # pragma: no cover
 
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
@@ -275,6 +289,9 @@ class DummyEngine(IEngine):
 
     def rename_var(self, var, new_name):
         pass  # nothing to do, except in cplex...
+
+    def rename_linear_constraint(selfself, linct, new_name):
+        pass # nothing to do, except in cplex...
 
     def set_var_type(self, var, new_type):
         pass  # nothing to do, except in cplex...
@@ -324,7 +341,7 @@ class DummyEngine(IEngine):
     def can_solve(self):
         return False  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         return None  # pragma: no cover
 
     def get_solve_status(self):
@@ -367,6 +384,21 @@ class DummyEngine(IEngine):
 
     def check_constraint_indices(self, cts):
         pass
+
+    def create_sos(self, sos):
+        pass
+
+    def clear_all_sos(self):
+        pass
+
+    def add_lazy_constraints(self, lazy_cts):
+        pass
+
+    def clear_lazy_constraints(self):
+        pass
+
+    def get_basis(self, mdl):
+        return None, None
 
 
 # noinspection PyAbstractClass,PyUnusedLocal
@@ -499,7 +531,7 @@ class NoSolveEngine(IndexerEngine):
     def can_solve(self):
         return False
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         """
         This solver cannot solve. never ever.
         """
@@ -553,7 +585,7 @@ class ZeroSolveEngine(IndexerEngine):
     def get_var_zero_solution(self, dvar):
         return max(0, dvar.lb)
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)
@@ -596,7 +628,7 @@ class FakeFailEngine(IndexerEngine):
     def get_name(self):
         return "no_solution_solve"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # solve fails equivalent to returning None
         return None  # pragma: no cover
 
@@ -628,7 +660,7 @@ class TerminatedEngine(IndexerEngine):
     def name(self):
         return "exception"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # solve fails equivalent to returning None
         self.terminate()
         return None  # pragma: no cover
@@ -665,7 +697,7 @@ class RaiseErrorEngine(IndexerEngine):
     def get_name(self):
         return "raise"  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         # solve fails equivalent to returning None
         self._simulate_error()
         return None  # pragma: no cover

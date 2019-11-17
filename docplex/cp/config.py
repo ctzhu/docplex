@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 
 """
@@ -276,7 +276,7 @@ context.model.length_for_alias = 15
 context.model.name_all_constraints = False
 
 # Model format generation version
-context.model.version = '12.8.0.0'
+context.model.version = '12.9.0.0'
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
@@ -351,6 +351,15 @@ context.solver.auto_publish.result_output = "solution.json"
 
 # Indicate to auto-publish kpis in environment
 context.solver.auto_publish.kpis_output = "kpis.csv"
+
+# Indicate to auto-publish conflicts in environment
+context.solver.auto_publish.conflicts_output = "conflicts.csv"
+
+# Indicate to enable auto-publish also with local environment
+context.solver.auto_publish.local_publish = False
+
+# Default solver listeners
+context.solver.listeners = ["docplex.cp.solver.environment_client.EnvSolverListener"]
 
 
 #-----------------------------------------------------------------------------

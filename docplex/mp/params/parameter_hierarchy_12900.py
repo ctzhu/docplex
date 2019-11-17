@@ -12,7 +12,7 @@ from docplex.mp.params.parameters import *
 # generating code for group: Barrier_Limits
 def _group_barrier_limits_params(pgroup):
     return dict(corrections=IntParameter(pgroup, "corrections", "CPX_PARAM_BARMAXCOR", 3013, "maximum correction limit", default_value=-1, min_value=-1.0, max_value=9223372036800000000),
-                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1000000000000.0, min_value=1.0, max_value=1e+75),
+                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1e+12, min_value=1.0, max_value=1e+75),
                 iteration=IntParameter(pgroup, "iteration", "CPX_PARAM_BARITLIM", 3012, "barrier iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
                 objrange=NumParameter(pgroup, "objrange", "CPX_PARAM_BAROBJRNG", 3004, "barrier objective range (above and below zero)", default_value=1e+20, min_value=0.0, max_value=1e+75)
                 )
@@ -207,19 +207,6 @@ def _group_mip_pool_make(pgroup):
     return ParameterGroup.make("pool", _group_mip_pool_params, None, pgroup)
 
 
-# generating code for group: MIP_SubMIP
-def _group_mip_submip_params(pgroup):
-    return dict(startalg=IntParameter(pgroup, "startalg", "CPX_PARAM_SUBMIPSTARTALG", 2205, "algorithm to solve initial relaxation for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
-                subalg=IntParameter(pgroup, "subalg", "CPX_PARAM_SUBMIPSUBALG", 2206, "algorithm to solve subproblems for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
-                nodelimit=IntParameter(pgroup, "nodelimit", "CPX_PARAM_SUBMIPNODELIMIT", 2212, "sub-MIP node limit", default_value=500, min_value=1.0, max_value=9223372036800000000),
-                scale=IntParameter(pgroup, "scale", "CPX_PARAM_SUBMIPSCAIND", 2207, "type of scaling used for sub-MIPs", default_value=0, min_value=-1.0, max_value=1.0)
-                )
-
-
-def _group_mip_submip_make(pgroup):
-    return ParameterGroup.make("submip", _group_mip_submip_params, None, pgroup)
-
-
 # generating code for group: MIP_Strategy
 def _group_mip_strategy_params(pgroup):
     return dict(backtrack=NumParameter(pgroup, "backtrack", "CPX_PARAM_BTTOL", 2002, "factor for backtracking, lower values give more", default_value=0.9999, min_value=0.0, max_value=1.0),
@@ -246,6 +233,19 @@ def _group_mip_strategy_params(pgroup):
 
 def _group_mip_strategy_make(pgroup):
     return ParameterGroup.make("strategy", _group_mip_strategy_params, None, pgroup)
+
+
+# generating code for group: MIP_SubMIP
+def _group_mip_submip_params(pgroup):
+    return dict(startalg=IntParameter(pgroup, "startalg", "CPX_PARAM_SUBMIPSTARTALG", 2205, "algorithm to solve initial relaxation for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                subalg=IntParameter(pgroup, "subalg", "CPX_PARAM_SUBMIPSUBALG", 2206, "algorithm to solve subproblems for sub-MIPs", default_value=0, min_value=0.0, max_value=5.0),
+                nodelimit=IntParameter(pgroup, "nodelimit", "CPX_PARAM_SUBMIPNODELIMIT", 2212, "sub-MIP node limit", default_value=500, min_value=1.0, max_value=9223372036800000000),
+                scale=IntParameter(pgroup, "scale", "CPX_PARAM_SUBMIPSCAIND", 2207, "type of scaling used for sub-MIPs", default_value=0, min_value=-1.0, max_value=1.0)
+                )
+
+
+def _group_mip_submip_make(pgroup):
+    return ParameterGroup.make("submip", _group_mip_submip_params, None, pgroup)
 
 
 # generating code for group: MIP_Tolerances
@@ -277,13 +277,23 @@ def _group_mip_subgroups():
                 limits=_group_mip_limits_make,
                 polishafter=_group_mip_polishafter_make,
                 pool=_group_mip_pool_make,
-                submip=_group_mip_submip_make,
                 strategy=_group_mip_strategy_make,
+                submip=_group_mip_submip_make,
                 tolerances=_group_mip_tolerances_make)
 
 
 def _group_mip_make(pgroup):
     return ParameterGroup.make("mip", _group_mip_params, _group_mip_subgroups, pgroup)
+
+
+# generating code for group: MultiObjective
+def _group_multiobjective_params(pgroup):
+    return dict(display=IntParameter(pgroup, "display", "CPX_PARAM_MULTIOBJDISPLAY", 1600, "level of display during multi-objective optimization", default_value=1, min_value=0.0, max_value=2.0)
+)
+
+
+def _group_multiobjective_make(pgroup):
+    return ParameterGroup.make("multiobjective", _group_multiobjective_params, None, pgroup)
 
 
 # generating code for group: Network_Tolerances
@@ -334,6 +344,7 @@ def _group_preprocessing_params(pgroup):
                 dependency=IntParameter(pgroup, "dependency", "CPX_PARAM_DEPIND", 1008, "indicator for preprocessing dependency checker", default_value=-1, min_value=-1.0, max_value=3.0),
                 dual=IntParameter(pgroup, "dual", "CPX_PARAM_PREDUAL", 1044, "take dual in preprocessing", default_value=0, min_value=-1.0, max_value=1.0),
                 fill=PositiveIntParameter(pgroup, "fill", "CPX_PARAM_AGGFILL", 1002, "limit on fill in aggregation", default_value=10, max_value=2100000000),
+                folding=IntParameter(pgroup, "folding", "CPX_PARAM_FOLDING", 1164, "indicator for folding of LPs", default_value=-1, min_value=-1.0, max_value=5.0),
                 linear=IntParameter(pgroup, "linear", "CPX_PARAM_PRELINEAR", 1058, "indicator for linear reductions", default_value=1, min_value=0.0, max_value=1.0),
                 numpass=IntParameter(pgroup, "numpass", "CPX_PARAM_PREPASS", 1052, "limit on applications of presolve", default_value=-1, min_value=-1.0, max_value=2100000000),
                 presolve=BoolParameter(pgroup, "presolve", "CPX_PARAM_PREIND", 1030, "presolve indicator", default_value=1),
@@ -464,7 +475,7 @@ def _group_cpxparam_params(pgroup):
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 paramdisplay=BoolParameter(pgroup, "paramdisplay", "CPX_PARAM_PARAMDISPLAY", 1163, "whether to display changed parameters before optimization", default_value=1),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201804051, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201808295, min_value=0.0, max_value=2100000000),
                 record=BoolParameter(pgroup, "record", "CPX_PARAM_RECORD", 1162, "record calls to C API", default_value=0),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
@@ -482,6 +493,7 @@ def _group_cpxparam_subgroups():
                 emphasis=_group_emphasis_make,
                 feasopt=_group_feasopt_make,
                 mip=_group_mip_make,
+                multiobjective=_group_multiobjective_make,
                 network=_group_network_make,
                 output=_group_output_make,
                 preprocessing=_group_preprocessing_make,
@@ -492,5 +504,8 @@ def _group_cpxparam_subgroups():
 
 
 def make_root_params_12900():
-    return RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.9.0.0")
+    proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.9.0.0")
+    # -- set synchronous params
+    proot.read.datacheck._synchronous = True
+    return proot
 #  --- end of generated code ---

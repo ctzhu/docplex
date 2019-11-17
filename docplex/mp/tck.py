@@ -68,7 +68,7 @@ class IDocplexTypeChecker(object):
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts, check_linear=False):
+    def typecheck_constraint_seq(self, cts, check_linear=False, accept_range=True):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
@@ -207,8 +207,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal("Expecting constraint, got: {0!r} with type: {1!s}", ct, type(ct))
         self.typecheck_in_model(mdl, ct, header)
 
-    def typecheck_linear_constraint(self, obj, accept_ranges=True):
-        if accept_ranges:
+    def typecheck_linear_constraint(self, obj, accept_range=True):
+        if accept_range:
             if not isinstance(obj, AbstractConstraint):
                 self.fatal("Expecting linear constraint, got: {0!r}", obj)
             if not obj.is_linear():
@@ -217,13 +217,16 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             if not isinstance(obj, LinearConstraint):
                 self.fatal("Expecting linear constraint, got: {0!s} with type: {1!s}", obj, type(obj))
 
-    def typecheck_constraint_seq(self, cts, check_linear=False):
+    def typecheck_constraint_seq(self, cts, check_linear=False, accept_range=True):
         checked_cts_list = list(cts)
         for i, ct in enumerate(checked_cts_list):
             if not isinstance(ct, AbstractConstraint):
                 self.fatal("Expecting sequence of constraints, got: {0!r} at position {1}", ct, i)
-            if check_linear and not ct.is_linear():
-                self.fatal("Expecting sequence of linear constraints, got: {0!r} at position {1}", ct, i)
+            if check_linear:
+                if not ct.is_linear():
+                    self.fatal("Expecting sequence of linear constraints, got: {0!r} at position {1}", ct, i)
+                elif not accept_range and not isinstance(ct, LinearConstraint):
+                    self.fatal("Expecting sequence of linear constraints (not ranges), got: {0!r} at position {1}", ct, i)
         return checked_cts_list
 
     def typecheck_zero_or_one(self, arg):
@@ -234,15 +237,11 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         caller_string = "{0}: ".format(caller) if caller is not None else ""
         if not is_number(arg):
             self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
-        elif math.isnan(arg):
-            self.fatal("{0}NaN value detected", caller_string)
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):
         caller_string = "{0}: ".format(caller) if caller is not None else ""
         if not is_number(arg):
             self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
-        elif math.isnan(arg):
-            self.fatal("{0}NaN value detected", caller_string)
         elif not is_int(arg):
             self.fatal("{0}Expecting integer, got: {1!r}", caller_string, arg)
         elif not accept_negative and arg < 0:
@@ -336,14 +335,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 if nb_params != 1:
                     self.fatal('Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
                                .format(nb_params))
-            except (ImportError,TypeError):  # not a callable object or no signature
+            except (ImportError, TypeError):  # not a callable object or no signature
                 pass
-
 
     def typecheck_pwl_function(self, pwl):
         if not isinstance(pwl, PwlFunction):
             self.fatal('Expecting piecewise-linear function, {0!r} was passed', pwl)
-
 
     def check_duplicate_name(self, name, name_table, qualifier):
         if name_table is not None:
@@ -352,6 +349,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
 
 class NumericTypeChecker(StandardTypeChecker):
+
     def __init__(self, logger):
         StandardTypeChecker.__init__(self, logger)
 
@@ -384,6 +382,28 @@ class NumericTypeChecker(StandardTypeChecker):
 
     def get_number_validation_fn(self):
         return self.static_validate_num
+
+    def typecheck_num(self, arg, caller=None):
+        caller_string = "{0}: ".format(caller) if caller is not None else ""
+        if not is_number(arg):
+            self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+        elif math.isnan(arg):
+            self.fatal("{0}NaN value detected", caller_string)
+        elif math.isinf(arg):
+            self.fatal("{0}Infinite value detected", caller_string)
+
+    def typecheck_int(self, arg, accept_negative=True, caller=None):
+        caller_string = "{0}: ".format(caller) if caller is not None else ""
+        if not is_number(arg):
+            self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+        elif math.isnan(arg):
+            self.fatal("{0}NaN value detected", caller_string)
+        elif math.isinf(arg):
+            self.fatal("{0}Infinite value detected", caller_string)
+        elif not is_int(arg):
+            self.fatal("{0}Expecting integer, got: {1!r}", caller_string, arg)
+        elif not accept_negative and arg < 0:
+            self.fatal("{0}Expecting positive integer, got: {1!r}", caller_string, arg)
 
 
 class DummyTypeChecker(IDocplexTypeChecker):
@@ -421,10 +441,10 @@ class DummyTypeChecker(IDocplexTypeChecker):
     def typecheck_ct_to_add(self, ct, mdl, header):
         pass  # pragma: no cover
 
-    def typecheck_linear_constraint(self, obj, accept_ranges=True):
+    def typecheck_linear_constraint(self, obj, accept_range=True):
         pass  # pragma: no cover
 
-    def typecheck_constraint_seq(self, cts, check_linear=False):
+    def typecheck_constraint_seq(self, cts, check_linear=False, accept_range=True):
         # must return sequence unchanged
         return cts  # pragma: no cover
 

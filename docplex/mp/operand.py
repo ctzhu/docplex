@@ -26,6 +26,7 @@ class Operand(object):
     def notify_unsubscribed(self, subscriber):
         pass
 
+    # noinspection PyMethodMayBeStatic
     def is_in_use(self):
         return False
 
@@ -51,6 +52,7 @@ class Operand(object):
 
     def __ge__(self, rhs):
         return self._model._qfactory.new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.GE)
+
 
     le = __le__
     eq = __eq__
@@ -85,6 +87,7 @@ class LinearOperand(Operand):
     def size(self):
         return self.number_of_terms()
 
+    # noinspection PyMethodMayBeStatic
     def iter_quads(self):
         return iter_emptyset()
 
@@ -115,6 +118,9 @@ class LinearOperand(Operand):
             Boolean: True if the variable is present in the expression, else False.
         """
         return self.contains_var(dvar)
+
+    def __ne__(self, rhs):
+        return self._model._lfactory.new_neq_constraint(lhs=self, rhs=rhs)
 
     def contains_var(self, dvar):
         raise NotImplementedError  # pragma: no cover

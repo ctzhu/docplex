@@ -17,10 +17,16 @@ import sys
 
 from six import PY2 as SIX_PY2
 from six import itervalues
+import six
 
+try:
+    import pandas
+except ImportError:
+    pandas = False
 
 from docplex.mp.compat23 import Queue
 from docplex.mp.compat23 import izip
+from docplex.util.environment import get_environment
 
 __int_types = {int}
 __float_types = {float}
@@ -31,9 +37,9 @@ __pandas_dataframe_type = None
 __spark_dataframe_type = None
 
 try:
-    type(long)
+    type(long)  # @UndefinedVariable
     # long is indeed a type we are in Python2,
-    __int_types.add(long)
+    __int_types.add(long)  # @UndefinedVariable
 except NameError:  # pragma: no cover
     # long is not a type, do nothing
     pass  # pragma: no cover
@@ -85,9 +91,9 @@ except ImportError:
 
 # 'findspark' must be executed if running in Windows environment, before importing Spark
 try:
-    import findspark
+    import findspark  # @UnresolvedImport
     findspark.init()
-except (ImportError, IndexError):
+except (ImportError, IndexError, ValueError):
     pass
 
 try:
@@ -205,7 +211,7 @@ def is_spark_dataframe(s):
 
 string_types = {str}
 if SIX_PY2:
-    string_types.add(unicode)
+    string_types.add(unicode)  # @UndefinedVariable
 string_types = frozenset(string_types)
 
 
@@ -312,6 +318,13 @@ class DOcplexLimitsExceeded(DOcplexException):
 
     def __init__(self):
         DOcplexException.__init__(self, self.cplexce_limits_exceeded_msg)
+
+
+class DocplexQuadToLinearException(DOcplexException):
+
+    def __init__(self, q):
+        msg = "Quadratic expression [{0!s}] cannot be converted to a linear expression".format(q)
+        DOcplexException.__init__(self, msg)
 
 
 def normalize_basename(s, force_lowercase=True, maxlen=255):
@@ -519,6 +532,14 @@ def write_csv_line(output, line, encoding):
     l = ','.join([encode_csv_string('%s' % c) for c in line])
     output.write(l.encode(encoding))
     output.write('\n'.encode(encoding))
+
+def write_csv(env, table, fields, name):
+    # table must be a named tuple
+    encoding = 'utf-8'
+    with env.get_output_stream(name) as ostr:
+        write_csv_line(ostr, fields, encoding)
+        for line in table:
+            write_csv_line(ostr, line, encoding)
 
 
 def write_kpis(env, kpis_table, name):
@@ -836,6 +857,10 @@ class _IndexScope(_AutomaticSymbolGenerator):
     def _make_index_map(self):
         return {m.get_index(): m for m in self._obj_iter()}
 
+    def number_of_objects(self):
+        idxmap = self._index_map
+        return 0 if idxmap is None else len(idxmap)
+
     @property
     def iter(self):
         return self._obj_iter()
@@ -848,11 +873,15 @@ class _IndexScope(_AutomaticSymbolGenerator):
             checker.typecheck_valid_index(idx)
         return self._object_by_index(idx)
 
-    def _object_by_index(self, idx):
+    def _object_by_index(self, idx, do_raise=False):
         if self._index_map is None:
             self._index_map = self._make_index_map()
         # do not raise when not found, return None.
-        return self._index_map.get(idx)
+        if do_raise:
+            return self._index_map[idx]
+        else:
+            # returns None if idx not in map
+            return self._index_map.get(idx)
 
     def reset(self):
         _AutomaticSymbolGenerator.reset(self)
@@ -958,4 +987,111 @@ class OutputStreamAdapter:
             output_s = s.encode(self.encoding)
         self.stream.write(output_s)
 
+
+def get_auto_publish_names(context, prop_name, default_name):
+    # comparing auto_publish to boolean values because it can be a non-boolean
+    if context.solver.auto_publish is True:
+        return [default_name]
+    elif context.solver.auto_publish is False:
+        return None
+    if prop_name in context.solver.auto_publish:
+        name = context.solver.auto_publish[prop_name]
+    else:
+        name = None
+    if isinstance(name, six.string_types):
+        # only one string value: make this the name of the table
+        # in a list with one object
+        name = [name]
+    elif name is True:
+        # if true, then use default name:
+        name = [default_name]
+    elif name is False:
+        # Need to compare explicitely to False
+        name = None
+    else:
+        # otherwise the kpi_table_name can be a collection-like of names,
+        # just return it
+        pass
+    return name
+
+
+def identity_func(x):
+    return x
+
+
+def value_if_defined(obj, property, default=None):
+    value = getattr(obj, property) if hasattr(obj, property) else None
+    return value if value is not None else default
+
+
+class PublishResultAsDf(object):
+    '''Mixin for classes publishing a result as data frame
+    '''
+    def write_output_table(self, df, context,
+                           output_property_name=None,
+                           output_name=None):
+        '''Publishes the output `df`.
+
+        The `context` is used to control the output name:
+
+            - If context.solver.auto_publish is true, the `df` is written using
+            output_name.
+            - If context.solver.auto_publish is false, This method does nothing.
+            - If context.solver.auto_publish.output_property_name is true,
+               then `df` is written using output_name.
+            - If context.solver.auto_publish.output_propert_name is None or
+            False, this method does nothing.
+            - If context.solver.auto_publish.output_propert_name is a string,
+            it is used as a name to publish the df
+
+        Example:
+
+            A solver can be defined as publishing a result as data frame::
+
+                class SomeSolver(PublishResultAsDf)
+                   def __init__(self, output_customizer):
+                      # output something if context.solver.autopublish.somesolver_output is set
+                      self.output_table_property_name = 'somesolver_output'
+                      # output filename unless specified by somesolver_output:
+                      self.default_output_table_name = 'somesolver.csv'
+                      # customizer if users wants one
+                      self.output_table_customizer = output_customizer
+                      # uses pandas.DataFrame if possible, otherwise will use namedtuples
+                      self.output_table_using_df = True
+
+                    def solve(self):
+                        # do something here and return a result as a df
+                        result = pandas.DataFrame(columns=['A','B','C'])
+                        return result
+
+            Example usage::
+
+               solver = SomeSolver()
+               results = solver.solve()
+               solver.write_output_table(results)
+
+        '''
+        prop = value_if_defined(self, 'output_table_property_name')
+        prop = output_property_name if output_property_name else prop
+        default_name = value_if_defined(self, 'default_output_table_name')
+        default_name = output_name if output_name else default_name
+        names = get_auto_publish_names(context, prop, default_name)
+        use_df = value_if_defined(self, 'output_table_using_df', True)
+        if names:
+            env = get_environment()
+            customizer = value_if_defined(self, 'output_table_customizer', identity_func)
+            for name in names:
+                r = customizer(df)
+                if pandas and use_df:
+                    env.write_df(r, name)
+                else:
+                    # assume r is a namedtuple
+                    write_csv(env, r, r[0]._fields, name)
+
+
+    def is_publishing_output_table(self, context):
+        prop = value_if_defined(self, 'output_table_property_name')
+        default_name = value_if_defined(self, 'default_output_table_name')
+        names = get_auto_publish_names(context, prop, default_name)
+        return names
 

@@ -8,7 +8,7 @@ from __future__ import print_function
 
 from six import iteritems
 
-from docplex.mp.utils import is_int, is_number, is_string
+from docplex.mp.utils import is_int, is_string
 from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import docplex_fatal
 
@@ -291,7 +291,8 @@ class Parameter(object):
     This class is not meant to be instantiated but subclassed.
 
     """
-    __slots__ = ('_parent', '_short_name', '_cpx_name', '_id', '_description', '_default_value', '_current_value')
+    __slots__ = ('_parent', '_short_name', '_cpx_name', '_id', '_description', '_default_value',
+                 '_current_value', '_synchronous')
 
     # This global flag controls checking new values.
     # If set to False, assigned values are not checked for min/max ranges
@@ -308,13 +309,15 @@ class Parameter(object):
         self._default_value = default_value
         # current = default at start...
         self._current_value = default_value
+        self._synchronous = False
         # link to parent group
         group._add_param(self)
 
     def ctor_name(self):
         return self.__class__.__name__
 
-
+    def is_synchronous(self):
+        return self._synchronous
 
     @property
     def short_name(self):
@@ -451,6 +454,10 @@ class Parameter(object):
         accepted_value = self._check_value(new_value)
         if accepted_value is not None:
             self._current_value = accepted_value
+            if self._synchronous:
+                #print(" syncing {0!s} to {1}".format(self, accepted_value))
+                self.root_group().apply(self)
+
         return accepted_value
 
     def get(self):
@@ -497,7 +504,7 @@ class Parameter(object):
         :rtype:
             string
         """
-        return "{0}:{1:s}(2!s)".format(self._short_name, self.type_name(), self._current_value)
+        return "{0}:{1:s}({2!s})".format(self._short_name, self.type_name(), self._current_value)
 
     def __str__(self):
         return self.to_string()
@@ -510,7 +517,7 @@ class Parameter(object):
         # INTERNAL
         raise NotImplementedError  # pragma: no cover
 
-    def _root_group(self):
+    def root_group(self):
         return self._parent.root_group()
 
     def _repr_classname(self):
@@ -579,10 +586,11 @@ class IntParameter(Parameter):
         return self._max_value  # pragma: no cover
 
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
-                 max_value=None):
+                 max_value=None, sync=False):
         Parameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value)
         self._min_value = min_value
         self._max_value = max_value
+        self._synchronous = sync
 
     def type_name(self):
         return "int"
@@ -652,6 +660,16 @@ class RootParameterGroup(ParameterGroup):
     def __init__(self, name, cplex_version):
         ParameterGroup.__init__(self, name)
         self._cplex_version = cplex_version
+        self._models = []
+
+    def connect_model(self, m):
+        self._models.append(m)
+
+    def apply(self, param):
+        # apply one parameter to connected models
+        for m in self._models:
+            m.apply_one_parameter(param)
+
 
     @property
     def cplex_version(self):

@@ -125,18 +125,15 @@ class _IAdvancedExpr(Expr, LinearOperand):
     def _is_resolved(self):
         return self._resolved and self._f_var is not None
 
+    def name_functional_var_name(self, fvar, fvar_meta_format="_%s%d"):
+        fname = fvar_meta_format % (self.function_symbol, fvar.index)
+        fvar.set_name(fname)
+
     def _create_functional_var(self, named=True):
+        fvar = self._new_generated_free_continuous_var(name=None)
         if named:
-            # add a unique counter suffix cf. RTC
-            unique_counter = self._model._new_unique_counter()
-            if unique_counter == 0:
-                # the first time, we use the the raw name, else we suffix #<unique>
-                fname = self.to_string()
-            else:
-                fname = "%s#%d" % (self.to_string(), unique_counter)
-        else:
-            fname = None
-        return self._new_generated_free_continuous_var(name=fname)
+            self.name_functional_var_name(fvar)
+        return fvar
 
     @property
     def functional_var(self):
@@ -242,7 +239,6 @@ class AbsExpr(FunctionalExpr):
 
     def __init__(self, model, argument_expr):
         FunctionalExpr.__init__(self, model, argument_expr)
-        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "abs"
@@ -254,8 +250,7 @@ class AbsExpr(FunctionalExpr):
     def _resolve(self):
         self_f_var = self._f_var
         assert self_f_var
-        m = self.model
-        abs_index = m._new_unique_counter()
+        abs_index = self_f_var.index
         abs_names = ["_abs_pp_%d" % abs_index, "_abs_np_%d" % abs_index] if use_debug_names else [None, None]
         # 1. allocate two variables in one pass.
         positive_var = self._new_generated_continuous_var(lb=0, name=abs_names[0])
@@ -356,7 +351,6 @@ class MinimumExpr(_SequenceExpr):
 
     def __init__(self, model, exprs, name=None):
         _SequenceExpr.__init__(self, model, exprs, name)
-        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "min"
@@ -404,7 +398,6 @@ class MaximumExpr(_SequenceExpr):
 
     def __init__(self, model, exprs, name=None):
         _SequenceExpr.__init__(self, model, exprs, name)
-        #self._ensure_resolved_f_var()
 
     def _get_function_symbol(self):
         return "max"
@@ -440,15 +433,11 @@ class MaximumExpr(_SequenceExpr):
 
 class _LogicalSequenceExpr(_SequenceExpr):
 
-    def _create_functional_var(self):
+    def _create_functional_var(self, named=True):
         # the resulting variable is a binary variable...
-        unique_counter = self._model._new_unique_counter()
-        if unique_counter == 0:
-            # the first time, we use the the raw name, else we suffix #<unique>
-            fname = self.to_string()
-        else:
-            fname = "%s#%d" % (self.to_string(), unique_counter)
-        return self._new_generated_binary_var(name=fname)
+        bvar = self._new_generated_binary_var(name=None)
+        self.name_functional_var_name(bvar)
+        return bvar
 
     def __init__(self, model, exprs, name=None):
         _IAdvancedExpr.__init__(self, model, name)
@@ -456,7 +445,6 @@ class _LogicalSequenceExpr(_SequenceExpr):
         self._exprs = exprs
         # never allocate vars: arguments --are-- binary variables.
         self._xvars = exprs
-        #self._ensure_resolved_f_var()
 
     def is_discrete(self):
         return True
@@ -532,8 +520,11 @@ class PwlExpr(FunctionalExpr):
             self._ensure_resolved()
 
     def _get_function_symbol(self):
+        # this method determines the name of the generated variable
+        # as usual it starts with "_" to mark this is a generated variable.
         pwl_name = self._pwl_func.get_name()
-        return pwl_name or '_pwl{0}'.format(self._usage_counter)
+        # TODO: what if pwl_name is not LP-compliant??
+        return "pwl" if not pwl_name else "pwl_%s#" % pwl_name
 
     def _get_solution_value(self, s=None):
         raw = self._f_var._get_solution_value(s)
@@ -548,7 +539,6 @@ class PwlExpr(FunctionalExpr):
         mdl = self._model
         pwl_constraint = mdl._lfactory.new_pwl_constraint(self, self.get_name())
         mdl._add_pwl_constraint_internal(pwl_constraint)
-
 
     @property
     def pwl_func(self):

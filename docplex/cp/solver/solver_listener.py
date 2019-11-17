@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -42,10 +42,6 @@ class CpoSolverListener(object):
     This class is an 'abstract' class that must be extended by actual listener implementation.
     All method of this class are empty.
     """
-
-    def __init__(self):
-        super(CpoSolverListener, self).__init__()
-
 
     def solver_created(self, solver):
         """ Notify the listener that the solver object has been created.
@@ -90,16 +86,34 @@ class CpoSolverListener(object):
         pass
 
 
-    def solution_found(self, solver, msol):
-        """ Signal that a solution has been found.
-
-        Deprecated. Use :meth:`result_found` instead.
+    def start_refine_conflict(self, solver):
+        """ Notify that the refine conflict is started.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
-            msol:   Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`
         """
-        self.solution_found(solver, msol)
+        pass
+
+
+    def end_refine_conflict(self, solver):
+        """ Notify that the refine conflict is ended.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        pass
+
+
+    def conflict_found(self, solver, cflct):
+        """ Signal that a conflict has been found.
+
+        This method is called when a conflict result is found by the solver when method refine_conflict() is called.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            cflct:  Conflict descriptor, object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`
+        """
+        pass
 
 
     def new_log_data(self, solver, data):

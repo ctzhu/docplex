@@ -8,10 +8,53 @@ from collections import namedtuple, Iterable
 from docplex.mp.constants import ComparisonType
 from docplex.mp.context import check_credentials
 from docplex.mp.cloudutils import context_must_use_docloud
+
+from docplex.mp.utils import PublishResultAsDf
+
 import warnings
 
 
+try:
+    import pandas
+except ImportError:
+    pandas = None
+
+
 TConflictConstraint = namedtuple("_TConflictConstraint", ["name", "element", "status"])
+
+
+def trim_field(element):
+    s = str(element)
+    suffix = '...' if len(s) > 100 else ''
+    return s[:100] + suffix
+
+
+def to_output_table(conflicts, use_df=True):
+    # Returns the output tables, as df if pandas is available or as a list
+    # of named tuple ['Type', 'Status', 'Name', 'Expression']
+    columns = ['Type', 'Status', 'Name', 'Expression']
+    TOutputTables = namedtuple('TOutputTables', columns)
+
+    def data_for_df(c):
+        return {'Type': 'Constraint',
+                'Status': c.status.name if c.status is not None else '',
+                'Name': c.name if c.name else '',
+                'Expression': trim_field(c.element)}
+
+    def data_for_namedtuples(c):
+        return TOutputTables('Constraint',
+                             c.status,
+                             c.name if c.name else '',
+                             trim_field(c.element))
+
+    output_data = []
+    data_converter = data_for_df if pandas and use_df else data_for_namedtuples
+    for c in conflicts:
+        output_data.append(data_converter(c))
+    if pandas and use_df:
+        output_data = pandas.DataFrame(columns=columns,
+                                       data=output_data)
+    return output_data
 
 
 class VarUbConstraintWrapper(object):
@@ -127,7 +170,7 @@ class ConstraintsGroup(object):
         return self._cts
 
 
-class ConflictRefiner(object):
+class ConflictRefiner(PublishResultAsDf, object):
     ''' This class is an abstract algorithm; it operates on interfaces.
 
     A conflict is a set of mutually contradictory constraints and bounds within a model.
@@ -136,45 +179,14 @@ class ConflictRefiner(object):
     conflict to arrive at a minimal conflict.
     '''
 
-    def __init__(self):
-        pass
+    def __init__(self, output_processing=None):
+        self.output_table_customizer = output_processing
+        self.output_table_property_name = 'conflicts_output'
+        self.default_output_table_name = 'conflicts.csv'
+        self.output_table_using_df = True
 
     def refine_conflict(self, mdl, preferences=None, groups=None, **kwargs):
         """ Starts the conflict refiner on the model.
-
-        If CPLEX is available, the conflict refinement operation will be performed using the native CPLEX.
-        If CPLEX is not available, the conflict refinement operation will be started on DOcplexcloud.
-        The DOcplexcloud connection parameters are checked in the following order:
-
-            - If ``kwargs`` contains valid ``url`` and ``key`` values, they are used.
-            - If ``kwargs`` contains a ``context`` and that context contains a
-              valid ``solver.docloud.url`` and ``solver.docloud.key`` values,
-              those values are used. Other attributes of ``solver.docloud``
-              can also be used. See :class:`docplex.mp.context.Context`.
-            - Finally, the model's attribute ``context`` is used. This ``context``
-              is set at model creation time.
-
-        If CPLEX is not available and the model has no valid credentials, an error is raised, because there is
-        no way to perform the conflict refinement.
-
-        Note that if the ``url`` and ``key`` parameters are present and the
-        values of the parameters are not in the ignored url or key list,
-        the conflict refinement operation will be started on DOcplexcloud even if CPLEX is
-        available.
-
-        Example::
-
-            # forces the conflict refiner on DOcplexcloud with the specified url and keys
-            crefiner.refine_conflict(url='https://foo.com', key='bar')
-
-        Example::
-
-            # set some DOcplexcloud credentials, but depend on another
-            # method to decide if conflict refiner is local or not
-            ctx.solver.docloud.url = 'https://foo.com'
-            ctx.solver.docloud.key = 'bar'
-            agent = 'local' if method_that_decides_if_solve_is_local() or 'docloud'
-            crefiner.conflict_refiner(context=ctx, agent=agent)
 
         Args:
             mdl: The model to be relaxed.
@@ -195,6 +207,9 @@ class ConflictRefiner(object):
             This list is empty if no conflict is found by the conflict refiner.
         """
 
+        if mdl.has_multi_objective():
+            mdl.fatal("Conflict refiner is not supported for multi-objective")
+
         # take into account local argument overrides
         context = mdl.prepare_actual_context(**kwargs)
 
@@ -207,6 +222,8 @@ class ConflictRefiner(object):
 
             forced_docloud = context_must_use_docloud(context, **kwargs)
 
+            results = None
+
             have_credentials = False
             if context.solver.docloud:
                 have_credentials, error_message = check_credentials(context.solver.docloud)
@@ -214,20 +231,26 @@ class ConflictRefiner(object):
                     warnings.warn(error_message, stacklevel=2)
             if forced_docloud:
                 if have_credentials:
-                    return self._refine_conflict_cloud(mdl, context, preferences, groups)
+                    results = self._refine_conflict_cloud(mdl, context, preferences, groups)
                 else:
                     mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
                                context.solver.docloud)
             # from now on docloud_context is None
             elif mdl.environment.has_cplex:
                 # if CPLEX is installed go for it
-                return self._refine_conflict_local(mdl, context, preferences, groups)
+                results = self._refine_conflict_local(mdl, context, preferences, groups)
             elif have_credentials:
                 # no context passed as argument, no Cplex installed, try model's own context
-                return self._refine_conflict_cloud(mdl, context, preferences, groups)
+                results = self._refine_conflict_cloud(mdl, context, preferences, groups)
             else:
                 # no way to solve.. really
                 return mdl.fatal("CPLEX DLL not found: please provide DOcplexcloud credentials")
+
+            # write conflicts table.write_output_table() handles everything related to
+            # whether the table should be published etc...
+            if self.is_publishing_output_table(mdl.context):
+                self.write_output_table(to_output_table(results, self.output_table_using_df), mdl.context)
+            return results
         finally:
             if saved_log_output_stream != mdl.log_output:
                 mdl.set_log_output_as_stream(saved_log_output_stream)

@@ -16,16 +16,19 @@ import six
 try:  # pragma: no cover
     from itertools import zip_longest as izip_longest
 except ImportError:  # pragma: no cover
+    # noinspection PyUnresolvedReferences
     from itertools import izip_longest
 
 from six import iteritems, iterkeys
 
-from docplex.mp.compat23 import StringIO, izip
-from docplex.mp.constants import CplexScope
-from docplex.mp.utils import is_iterable, is_number, is_string, str_holo, OutputStreamAdapter
+from docplex.mp.compat23 import StringIO
+from docplex.mp.constants import CplexScope, BasisStatus
+from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_holo, OutputStreamAdapter
 from docplex.mp.utils import make_output_path2, DOcplexException
 from docplex.mp.linear import Var
 from docplex.mp.error_handler import docplex_fatal
+
+from docplex.mp.solmst import SolutionMSTPrinter
 
 from collections import defaultdict
 
@@ -43,8 +46,8 @@ class SolveSolution(object):
     def _is_discrete_value(v):
         return v == int(v)
 
-    def __init__(self, model, var_value_map=None, obj=None, name=None, solved_by=None, keep_zeros=True,
-                 rounding=False):
+    def __init__(self, model, var_value_map=None, obj=None, blended_obj_by_priority=None, name=None, solved_by=None,
+                 keep_zeros=True, rounding=False):
         """ SolveSolution(model, var_value_map, obj, name)
 
         Creates a new solution object, associated to a a model.
@@ -55,6 +58,9 @@ class SolveSolution(object):
             obj: The value of the objective in the solution. A value of None means the objective is not defined at the
                 time the solution is created, and will be set later.
 
+            blended_obj_by_priority: For multi-objective models: the value of sub-problems' objectives (each sub-problem
+                groups objectives having same priority).
+
             var_value_map: a Python dictionary containing associations of variables to values.
 
             name: a name for the solution. The default is None, in which case the solution is named after the
@@ -64,7 +70,8 @@ class SolveSolution(object):
         """
         assert model is not None
         assert solved_by is None or is_string(solved_by)
-        assert obj is None or is_number(obj)
+        assert obj is None or is_number(obj) or is_indexable(obj)
+        assert blended_obj_by_priority is None or is_indexable(blended_obj_by_priority)
 
         self.__model = model
         self._checker = model._checker
@@ -72,12 +79,18 @@ class SolveSolution(object):
         self._problem_name = model.name
         self._problem_objective_expr = model.objective_expr if model.has_objective() else None
         self._objective = self.NO_OBJECTIVE_VALUE if obj is None else obj
+        self._blended_objective_by_priority = [self.NO_OBJECTIVE_VALUE] if blended_obj_by_priority is None else \
+            blended_obj_by_priority
         self._solved_by = solved_by
         self.__var_value_map = {}
+
+        # attributes
         self._reduced_costs = None
         self._dual_values = None
         self._slack_values = None
         self._infeasibilities = {}
+        self._basis_statuses = None
+
         self.__round_discrete = rounding
         self._solve_status = None
         self._keep_zeros = keep_zeros
@@ -89,11 +102,13 @@ class SolveSolution(object):
             self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
 
     @staticmethod
-    def make_engine_solution(model, var_value_map, obj, solved_by, solve_details, job_solve_status=None):
+    def make_engine_solution(model, var_value_map, obj, blended_obj_by_priority, solved_by, solve_details,
+                             job_solve_status=None):
         # INTERNAL
         sol = SolveSolution(model,
                             var_value_map=None,
                             obj=obj,
+                            blended_obj_by_priority=blended_obj_by_priority,
                             solved_by=solved_by,
                             rounding=True,
                             keep_zeros=False)
@@ -183,7 +198,7 @@ class SolveSolution(object):
                 self.model.warning("No variable with named {0}", var_key)
                 return None
 
-        else:  #  pragma: no cover
+        else:  # pragma: no cover
             self.model.fatal("Expecting variable or name, got: {0!r}", var_key)
 
     def _typecheck_var_key_value(self, var_key, value, caller):
@@ -200,7 +215,7 @@ class SolveSolution(object):
             value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_key_value(var_key, value, keep_zero=True, rounding=False)
+        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False)
 
     def __setitem__(self, var_key, value):
         # always keep zero, no warnings, no checks
@@ -213,19 +228,37 @@ class SolveSolution(object):
 
     def _set_var_key_value(self, var_key, value, keep_zero, rounding):
         # INTERNAL: no checks done.
-        if value or keep_zero:
-            var = self._resolve_var(var_key, do_raise=False)
-            if var is not None:
-                self._set_var_value_internal(var, value, rounding)
+        dvar = self._resolve_var(var_key, do_raise=False)
+        if dvar is not None:
+            if value or keep_zero:
+                # either value is nonzero or we keep all, store.
+                self._set_var_value_internal(dvar, value, rounding)
+            elif self.contains(dvar):
+                # value is 0 and we dont keep zeros: zap the variable, if
+                del self.__var_value_map[dvar]
 
     def _set_var_value_internal(self, var, value, rounding):
         # INTERNAL, no check
-        if var.is_discrete() and rounding and not self._is_discrete_value(value):
+        if rounding and var.is_discrete() and not self._is_discrete_value(value):
             stored_value = self._roundfn(value)
         else:
             stored_value = value
 
         self.__var_value_map[var] = stored_value
+
+    def update(self, var_values_iterable):
+        """
+        Updates the solution from a dictionary. Keys can be either strings, interpreted as variable names,
+        or variables; values are the new values for the variable.
+
+        This method returns nothing, only performs a side effect on the solution object.
+
+        :param var_values_iterable: a dictionary of keys, values.
+
+        """
+        keep_zeros = self._keep_zeros
+        for k, v in iteritems(var_values_iterable):
+            self._set_var_key_value(k, v, keep_zeros, rounding=False)
 
     @property
     def model(self):
@@ -257,23 +290,38 @@ class SolveSolution(object):
 
     def get_objective_value(self):
         """
-        Gets the objective value as defined in the solution.
+        Gets the objective value (or list of objectives value) as defined in the solution.
         When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
         To check whether the objective has been set, use :func:`has_objective`.
 
         Returns:
-            float: The value of the objective as defined by the solution.
+            float or list(float): The value of the objective (or list of values for multi-objective) as defined by
+            the solution.
         """
         return self._objective
 
     def set_objective_value(self, obj):
         """
-        Sets the objective value of the solution.
+        Sets the objective value (or list of values for multi-objective) of the solution.
         
         Args:
-            obj (float): The value of the objective in the solution.
+            obj (float or list(float)): The value of the objective (or list of values for multi-objective) in
+            the solution.
         """
         self._objective = obj
+
+    def get_blended_objective_value_by_priority(self):
+        """
+        Gets the blended objective value (or list of blended objectives value) by priority level as defined in
+        the solution.
+        When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
+        To check whether the objective has been set, use :func:`has_objective`.
+
+        Returns:
+            float or list(float): The value of the objective (or list of values for multi-objective) as defined by
+            the solution.
+        """
+        return self._blended_objective_by_priority
 
     def has_objective(self):
         """
@@ -286,17 +334,33 @@ class SolveSolution(object):
 
     @property
     def objective_value(self):
-        """ This property is used to get or set the objective valueof the solution.
+        """ This property is used to get the objective value of the solution.
+        In case of multi-objective this property returns the value for the first objective
 
         When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
         To check whether the objective has been set, use :func:`has_objective`.
 
         """
+        if is_indexable(self._objective):
+            return self._objective[0]
         return self._objective
 
     @objective_value.setter
     def objective_value(self, new_objvalue):
         self.set_objective_value(new_objvalue)
+
+    @property
+    def multi_objective_values(self):
+        """ This property is used to get the list of objective values of the solution.
+        In case of single objective this property returns the value for the objective as a singleton list
+
+        When the objective value has not been defined, a special value `NO_SOLUTION` is returned.
+        To check whether the objective has been set, use :func:`has_objective`.
+
+        """
+        if is_indexable(self._objective):
+            return self._objective
+        return [self._objective]
 
     @property
     def solve_status(self):
@@ -377,8 +441,8 @@ class SolveSolution(object):
         because the :func:`__getitem__` method has been overloaded.
 
         Args:
-            arg: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string),
-                 or an expression.
+            arg: A decision variable (:class:`docplex.mp.linear.Var`),
+                 a variable name (a string), or an expression.
 
         Returns:
             float: The value of the variable in the solution.
@@ -509,7 +573,17 @@ class SolveSolution(object):
         if check_models and (self.model != other.model):
             return False
 
-        if math.fabs(self.objective_value - other.objective_value) >= obj_precision:
+        if is_iterable(self.objective_value) and is_iterable(other.objective_value):
+            if len(self.objective_value) == len(other.objective_value):
+                for self_obj_val, other_obj_val in zip(self.objective_value, other.objective_value):
+                    if math.fabs(self_obj_val - other_obj_val) >= obj_precision:
+                        return False
+            else:  # Different number of objectives
+                return False
+        elif not is_iterable(self.objective_value) and not is_iterable(other.objective_value):
+            if math.fabs(self.objective_value - other.objective_value) >= obj_precision:
+                return False
+        else:  # One solution is for multi-objective, and not the other
             return False
 
         for dvar, val in self.iter_var_values():
@@ -542,6 +616,14 @@ class SolveSolution(object):
         if self._slack_values is None:
             self._slack_values = engine.get_all_slack_values(model)
 
+    def ensure_basis_statuses(self, model, engine):
+        if self._basis_statuses is None:
+            #  returns a tuple of two lists
+            self._basis_statuses = engine.get_basis(model)
+
+    def has_basis(self):
+        return self._basis_statuses is not None
+
     def get_reduced_costs(self, dvars):
         rcs = self._reduced_costs
         assert rcs is not None
@@ -558,6 +640,15 @@ class SolveSolution(object):
         # first get cplex_scope, then fetch the slack: two indirections
         return [all_slacks[ct.cplex_scope()].get(ct, 0) for ct in cts]
 
+    def get_var_basis_statuses(self, dvars):
+        assert self._basis_statuses is not None
+        all_var_basis_statuses = self._basis_statuses[0]
+        return [BasisStatus.parse(all_var_basis_statuses.get(dv, -1)) for dv in dvars]
+
+    def get_linearct_basis_statuses(self, linear_cts):
+        assert self._basis_statuses is not None
+        all_linearct_basis_statuses = self._basis_statuses[1]
+        return [all_linearct_basis_statuses.get(lct, -1) for lct in linear_cts]
 
     def get_infeasibility(self, ct):
         return self._infeasibilities.get(ct, 0)
@@ -658,6 +749,19 @@ class SolveSolution(object):
         # as it follows getitem protocol, it can mistakenly be interpreted as an iterable
         raise TypeError
 
+    def __as_df__(self):
+        try:
+            import pandas
+        except ImportError:
+            raise NotImplementedError('Cannot convert solution to pandas.DataFrame if pandas is not available')
+        solution_df = pandas.DataFrame(columns=['name', 'value'])
+
+        for index, dvar in enumerate(self.iter_variables()):
+            solution_df.loc[index, 'name'] = dvar.to_string()
+            solution_df.loc[index, 'value'] = dvar.solution_value
+
+        return solution_df
+
     def print_mst(self):
         """
         Writes the solution in an output stream "out" (assumed to satisfy the file interface)
@@ -690,6 +794,9 @@ class SolveSolution(object):
                 the basename argument is not used.
                 If passed None, the output directory will be ``tempfile.gettempdir()``.
 
+        returns:
+            The full path of the file, when successful, else None
+
         Example:
             Assuming the solution has the name "prob":
 
@@ -706,6 +813,7 @@ class SolveSolution(object):
                                      basename_arg=basename)
         if mst_path:
             self.print_mst_to_stream(mst_path)
+            return mst_path
 
     def get_printer(self, key):
         # INTERNAL
@@ -808,139 +916,6 @@ class SolveSolution(object):
         '''
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
         return kpi._get_solution_value(self)
-
-
-class SolutionMSTPrinter(object):
-    # header contains the final newline
-    mst_header = """<?xml version = "1.0" standalone="yes"?>
-<?xml-stylesheet href="https://www.ilog.com/products/cplex/xmlv1.0/solution.xsl" type="text/xsl"?>
-
-"""
-    mst_extension = ".mst"
-
-    one_solution_start_tag = "<CPLEXSolution version=\"1.0\">"
-    one_solution_end_tag = "</CPLEXSolution>"
-
-    # used when several solutions are present
-    many_solution_start_tag = "<CPLEXSolutions version=\"1.0\">"
-    many_solution_end_tag = "</CPLEXSolutions>"
-
-    @staticmethod
-    def print_signature(out):
-        from docplex.version import docplex_version_string
-        osa = OutputStreamAdapter(out)
-        osa.write("<!-- This file has been generated by DOcplex version {}  -->\n".format(docplex_version_string))
-
-    @classmethod
-    def print(cls, out, solutions):
-        # solutions can be either a plain solution or a sequence or an iterator
-        if not is_iterable(solutions):
-            cls.print_one_solution(solutions, out)
-        else:
-            sol_seq = list(solutions)
-            nb_solutions = len(sol_seq)
-            assert nb_solutions > 0
-            if 1 == nb_solutions:
-                cls.print_one_solution(sol_seq[0], out)
-            else:
-                cls.print_many_solutions(sol_seq, out)
-
-    @classmethod
-    def print_one_solution(cls, sol, out, print_header=True):
-        osa = OutputStreamAdapter(out)
-        if print_header:
-            osa.write(cls.mst_header)
-            cls.print_signature(out)
-        # <CPLEXSolution version="1.0">
-        osa.write(cls.one_solution_start_tag)
-        osa.write("\n")
-
-        # <header
-        # problemName="foo"
-        # objectiveValue="42"
-        # />
-        osa.write(" <header\n   problemName=\"{0}\"\n".format(sol.problem_name))
-        if sol.has_objective():
-            osa.write("   objectiveValue=\"{0:g}\"\n".format(sol.objective_value))
-        osa.write("  />\n")
-
-        # prepare reduced costs 
-        """ For mst, we don't want this !
-        model = sol.model
-        if not model._solves_as_mip():
-            reduced_costs = model.reduced_costs(model.iter_variables())
-        else:
-            reduced_costs = []
-        """
-        #  <variables>
-        #    <variable name="x1" index ="1" value="3.14"/>
-        #  </variables>
-        osa.write(" <variables>\n")
-        """ For mst, we don't want this !
-        for (dvar, rc) in zip_longest(model.iter_variables(), reduced_costs,
-                                      fillvalue=None):
-            var_name = dvar.name
-            var_value = sol[dvar]
-            var_index = dvar.index
-            rc_string = ""
-            if rc is not None:
-                rc_string = "reducedCost=\"{}\"".format(rc)
-            osa.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\" {3}/>\n"
-              .format(var_name, var_index, var_value, rc_string))
-        """
-        for dvar, val in sol.iter_var_values():
-            var_name = dvar.print_name()
-            var_value = sol[dvar]
-            var_index = dvar.index
-            osa.write("  <variable name=\"{0}\" index=\"{1}\" value=\"{2:g}\"/>\n"
-                      .format(var_name, var_index, var_value))
-        osa.write(" </variables>\n")
-
-        #  </CPLEXSolution version="1.0">
-        osa.write(cls.one_solution_end_tag)
-        osa.write("\n")
-
-    @classmethod
-    def print_many_solutions(cls, sol_seq, out):
-        osa = OutputStreamAdapter(out)
-        osa.write(cls.mst_header)
-        cls.print_signature(out)
-        # <CPLEXSolutions version="1.0">
-        osa.write(cls.many_solution_start_tag)
-        osa.write("\n")
-
-        for sol in sol_seq:
-            cls.print_one_solution(sol, out, print_header=False)
-
-        # <CPLEXSolutions version="1.0">
-        osa.write(cls.many_solution_end_tag)
-        osa.write("\n")
-
-    @classmethod
-    def print_to_stream(cls, solutions, out, extension=mst_extension, **kwargs):
-        if out is None:
-            # prints on standard output
-            cls.print(sys.stdout, solutions)
-        elif isinstance(out, str):
-            # a string is interpreted as a path name
-            path = out if out.endswith(extension) else out + extension
-            with open(path, "w") as of:
-                cls.print_to_stream(solutions, of)
-                # print("* file: %s overwritten" % path)
-        else:
-            try:
-                cls.print(out, solutions)
-
-            except AttributeError:  # pragma: no cover
-                pass  # pragma: no cover
-                # stringio will raise an attribute error here, due to with
-                # print("Cannot use this an output: %s" % str(out))
-
-    @classmethod
-    def print_to_string(cls, solutions):
-        oss = StringIO()
-        cls.print_to_stream(solutions, out=oss)
-        return oss.getvalue()
 
 
 from json import JSONEncoder
@@ -1050,10 +1025,10 @@ class SolutionJSONEncoder(JSONEncoder):
         for (dvar, rc) in izip_longest(model.iter_variables(), reduced_costs,
                                        fillvalue=None):
             value = sol[dvar]
-            if not keep_zeros and value == 0:
+            if not keep_zeros and not value:
                 continue
             v = {"index": "{}".format(dvar.index),
-                 "name": dvar.print_name(),
+                 "name": dvar.lp_name,
                  "value": "{}".format(value)}
             if rc is not None:
                 v["reducedCost"] = rc

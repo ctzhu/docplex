@@ -19,8 +19,6 @@ from six import iteritems
 class ModelAnnotationPrinter(object):
     # header contains the final newline
     mst_header = """<?xml version = "1.0" standalone="yes"?>
-<?xml-stylesheet href="https://www.ilog.com/products/cplex/xmlv1.0/solution.xsl" type="text/xsl"?>
-
 """
     anno_extension = ".ann"
 

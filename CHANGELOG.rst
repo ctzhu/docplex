@@ -1,11 +1,26 @@
 Changelog
 ---------
 
+Changed in 2.9.141:
+```````````````````
+* In ``docplex.mp``:
+   * Removed links to rawgit.com as this service is going end of life.
+   * Model.solve_lexicographic() is deprecated. This method should be used
+     to perform lexicographic solve with COS 12.8, but with COS 12.9,
+     Model.set_multi_objective() should be used for solving problems
+     with multiple objectives.
+
+* In ``docplex.cp``:
+   * Add KPIs supported by CPO Solver 12.9
+   * Update CPO parser to read KPIs section for format 12.9
+   * Add new examples with KPIs.
+
+
 Changed in 2.8.125:
 ```````````````````
-* Solving with solver agent 'docloud' is deprecated. Models are now preferably
-  solved with local solver or the python source can be submitted to DOcplexcloud
-  solve service. See https://ibm.biz/BdYhhK
+* Solving with solver agent 'docloud' is deprecated. 
+  Models are now preferably solved with local solver, or the python source can be submitted to DOcplexcloud solve service. 
+  See https://ibm.biz/BdYhhK.
 
 * In ``docplex.mp``:
    * solve_lexicographic is being deprecated. In a future version, a new api will be available to support multi-objectives.
@@ -13,7 +28,6 @@ Changed in 2.8.125:
 * In ``docplex.cp``:
    * Fix problem with boolean indicators in no_overlap(), always_constant() and always_equal().
    * Allow model solution to be used directly as a starting point (ignores what is not integer or interval var).
-   * Add new examples with KPIs.
    * Add methods domain_min(), domain_max(), domain_iterator() and domain_contains() on both CpoIntVar and CpoIntVarSolution.
    * Default solver agent is now 'local' instead of 'docloud'. All examples modified consequently.
 

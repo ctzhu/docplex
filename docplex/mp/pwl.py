@@ -8,8 +8,8 @@ from docplex.mp.utils import is_iterable
 from docplex.mp.basic import ModelingObjectBase
 from docplex.mp.utils import DOcplexException, is_number
 from docplex.mp.compat23 import izip
+from docplex.mp.sttck import StaticTypeChecker
 
-import math
 import copy
 
 
@@ -31,60 +31,59 @@ class PwlFunction(ModelingObjectBase):
     """
 
     @staticmethod
-    def check_number(checker, arg):
-        checker.typecheck_num(arg)
-        if math.isinf(arg):
-            checker.fatal("infinite value detected")
+    def check_number(logger, arg):
+        StaticTypeChecker.typecheck_num_nan_inf(logger, arg)
+
 
     @staticmethod
-    def check_list_pair_breaksxy(checker, arg):
+    def check_list_pair_breaksxy(logger, arg):
         if not is_iterable(arg):
-            checker.fatal("not an iterable: {0!s}".format(arg))
+            logger.fatal("not an iterable: {0!s}".format(arg))
         if isinstance(arg, tuple):
             # Encapsulate tuple argument into a list: this allows defining a PWL with a tuple if there is only
             #  one element in its definition
             arg = [arg]
         if len(arg) == 0:
-            checker.fatal("argument 'breaksxy' must be a non-empty list of (x, y) tuples.")
+            logger.fatal("argument 'breaksxy' must be a non-empty list of (x, y) tuples.")
         prev_pair = None
         pprev_pair = None
         for pair in arg:
             if isinstance(pair, tuple):
                 if len(pair) != 2:
-                    checker.fatal("invalid tuple in 'breaksxy': {0!s}. Each tuple must have 2 items.".format(pair))
-                PwlFunction.check_number(checker, pair[0])
-                PwlFunction.check_number(checker, pair[1])
+                    logger.fatal("invalid tuple in 'breaksxy': {0!s}. Each tuple must have 2 items.".format(pair))
+                PwlFunction.check_number(logger, pair[0])
+                PwlFunction.check_number(logger, pair[1])
             else:
-                checker.fatal("invalid item in 'breaksxy': {0!s}. Each item must be a (x, y) tuple.".format(pair))
+                logger.fatal("invalid item in 'breaksxy': {0!s}. Each item must be a (x, y) tuple.".format(pair))
             if prev_pair is not None:
                 if pair[0] < prev_pair[0]:
-                    checker.fatal("X coordinate in: {0!s} cannot be smaller than previous break abscisse: {1!s}.".
-                                  format(pair, prev_pair))
+                    logger.fatal("X coordinate in: {0!s} cannot be smaller than previous break abscisse: {1!s}.".
+                                 format(pair, prev_pair))
                 if pprev_pair is not None and pair[0] == prev_pair[0] and prev_pair[0] == pprev_pair[0]:
-                    checker.fatal(
+                    logger.fatal(
                         "invalid break: {0!s}. There cannot be more than 2 consecutive breaks with same abscisse.".
                             format(pair))
             pprev_pair = prev_pair
             prev_pair = pair
 
     @staticmethod
-    def check_number_pair(checker, arg):
+    def check_number_pair(logger, arg):
         if arg is None:
-            checker.fatal("argument 'anchor' must be defined")
+            logger.fatal("argument 'anchor' must be defined")
         if isinstance(arg, tuple):
             if len(arg) != 2:
-                checker.fatal("invalid tuple for 'anchor': {0!s}. Anchor argument must have 2 items.".format(arg))
-            PwlFunction.check_number(checker, arg[0])
-            PwlFunction.check_number(checker, arg[1])
+                logger.fatal("invalid tuple for 'anchor': {0!s}. Anchor argument must have 2 items.".format(arg))
+            PwlFunction.check_number(logger, arg[0])
+            PwlFunction.check_number(logger, arg[1])
         else:
-            checker.fatal("invalid value for 'anchor': {0!s}. Anchor argument must be a (x, y) tuple.".format(arg))
+            logger.fatal("invalid value for 'anchor': {0!s}. Anchor argument must be a (x, y) tuple.".format(arg))
 
     @staticmethod
-    def check_list_pair_slope_breakx(checker, arg, anchor):
+    def check_list_pair_slope_breakx(logger, arg, anchor):
         if arg is None:
-            checker.fatal("argument 'slopebreaksx' must be defined")
+            logger.fatal("argument 'slopebreaksx' must be defined")
         if not is_iterable(arg):
-            checker.fatal("not an iterable: {0!s}".format(arg))
+            logger.fatal("not an iterable: {0!s}".format(arg))
         if len(arg) == 0:
             return
         if isinstance(arg, tuple):
@@ -96,23 +95,23 @@ class PwlFunction(ModelingObjectBase):
         for pair in arg:
             if isinstance(pair, tuple):
                 if len(pair) != 2:
-                    checker.fatal("invalid tuple in 'slopebreaksx': {0!s}. Each tuple must have 2 items.".
-                                  format(pair))
-                PwlFunction.check_number(checker, pair[0])
-                PwlFunction.check_number(checker, pair[1])
+                    logger.fatal("invalid tuple in 'slopebreaksx': {0!s}. Each tuple must have 2 items.".
+                                 format(pair))
+                PwlFunction.check_number(logger, pair[0])
+                PwlFunction.check_number(logger, pair[1])
             else:
-                checker.fatal("invalid item in 'slopebreaksx': {0!s}. Each item must be a (x, y) tuple.".format(pair))
+                logger.fatal("invalid item in 'slopebreaksx': {0!s}. Each item must be a (x, y) tuple.".format(pair))
             if prev_pair is not None:
                 if pair[1] < prev_pair[1]:
-                    checker.fatal("X coordinate in: {0!s} cannot be smaller than previous break abscisse: {1!s}.".
-                                  format(pair, prev_pair))
+                    logger.fatal("X coordinate in: {0!s} cannot be smaller than previous break abscisse: {1!s}.".
+                                 format(pair, prev_pair))
                 if pprev_pair is not None and pair[1] == prev_pair[1] and prev_pair[1] == pprev_pair[1]:
-                    checker.fatal(
+                    logger.fatal(
                         "invalid break: {0!s}. There cannot be more than 2 consecutive breaks with same abscisse.".
                             format(pair))
                 if pair[1] == prev_pair[1] and anchor[0] == pair[1]:
-                    checker.fatal("anchor {0!s} cannot be defined at discontinuity point: {1!s}".
-                                  format(anchor, pair))
+                    logger.fatal("anchor {0!s} cannot be defined at discontinuity point: {1!s}".
+                                 format(anchor, pair))
             pprev_pair = prev_pair
             prev_pair = pair
 
@@ -197,7 +196,7 @@ class PwlFunction(ModelingObjectBase):
         def _get_y_value(self, x_coord, prev_break_index=-1):
             """
             :param x_coord:
-            :param prev_break: this parameter is mandatory if a breakxy tuple does exist before x_coord. Otherwise
+            :param prev_break_index: this parameter is mandatory if a breakxy tuple does exist before x_coord. Otherwise
                 an exception is raised.
             :return:
             """

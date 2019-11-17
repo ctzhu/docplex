@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -500,7 +500,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                         rc = self.process.returncode
                     except:
                         rc = "unknown"
-                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped (current rc={}).".format(rc))
+                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped (rc={}).".format(rc))
             else:
                 raise LocalSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
 

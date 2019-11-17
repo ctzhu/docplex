@@ -733,8 +733,10 @@ class QuadExpr(_SubscriptionMixin, Expr):
         # subtract linear part
         self._linexpr.subtract(other_quad._linexpr)
 
-    def to_linear_expr(self):  # pragma: no cover
-        self.fatal("Quadratic expression [{0!s}] cannot be converted to a linear expression", self)
+    def to_linear_expr(self, msg=None):  # pragma: no cover
+        # used_msg = msg or "Quadratic expression [{0!s}] cannot be converted to a linear expression"
+        # self.fatal(used_msg, self)
+        raise DocplexQuadToLinearException(self)
 
     def is_normalized(self):  # pragma: no cover
         # INTERNAL
@@ -753,6 +755,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def __ge__(self, other):
         return self._model._qfactory.new_ge_constraint(self, other)
+
+    def __ne__(self, other):
+        self.model.fatal("Operator `!=` is not supported for quadratic expressions, {0!s} was passed", self)
 
     def notify_expr_modified(self, expr, event):
         if expr is self._linexpr:

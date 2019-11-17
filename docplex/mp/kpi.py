@@ -14,7 +14,10 @@ class KPI(object):
     """ Abstract class for key performance indicators (KPIs).
 
     Each KPI has a unique name. A KPI is attached to a model instance and can compute a numerical value,
-    using the :func:`compute` method.
+    using the :func:`compute` method. The `compute` method takes an optional solution argument;
+    if passed a valid SolveSolution object, this solution is used to evaluate the KPI, else compute()
+    will attempt to access th emodel's solution. If the model has no attached solution, then an exception
+    is raised by `compute`.
 
     Some KPIs require a valid solution of the model, while others do not. Use :func:`requires_solution` to
     check whether a given KPI requires a solution.
@@ -98,7 +101,9 @@ class DecisionKPI(KPI):
     """ Specialized class of Key Performance Indicator, based on expressions.
 
     This subclass is built from a decision variable or a linear expression.
-    The :func:`compute` method returns the solution value after a successful solve.
+    The :func:`compute` method evaluate the value of the KPI in a solution. This solution can either be passed
+    to the `compute` method, or using th emodel's solution. In the latter case, the model must have been solved
+    with a solution.
 
     """
     def __init__(self, kpi_op, name=None):
@@ -134,13 +139,22 @@ class DecisionKPI(KPI):
         return self._expr.model
 
     def compute(self, s=None):
-        """ Redefinition of the abstract `compute()` method.
+        """ Redefinition of the abstract `compute(s=None)` method.
 
         Returns:
-            float: The value of the decision expression at the solution.
+            float: The value of the decision expression in the solution.
+
+        Note:
+            Evaluating a KPI requires a solution object. This solution can either be passed explicitly
+            in the `s` argument, otherwise the model solution is used. In the latter case, th emodel must
+            have been solved with a solution, otherwise an exception is raised.
 
         Raises:
-            Evaluating this KPI raises an exception if the underlying model has not been solved successfully.
+            Evaluating a KPI raises an exception if no `s` solution has been passed
+            and the underlying model has not been solved with a solution.
+
+        See Also:
+            :class:`docplex.mp.solution.SolveSolution`
         """
         return self._expr._get_solution_value(s)
 

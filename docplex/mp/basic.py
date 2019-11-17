@@ -11,6 +11,7 @@ from enum import Enum
 
 from docplex.mp.operand import Operand
 from docplex.mp.utils import is_number, is_string, str_holo
+from docplex.mp.format import LP_format
 
 
 class ModelingObjectBase(object):
@@ -57,6 +58,17 @@ class ModelingObjectBase(object):
     def check_name(self, new_name):
         # INTERNAL: basic method for checking names.
         pass  # pragma: no cover
+
+    def check_lp_name(self, new_name):
+        #ModelingObject.check_name(self, new_name)
+        if not is_string(new_name) or not new_name:
+            self.fatal("Variable name accepts only non-empty strings, {0!r} was passed", new_name)
+        elif new_name.find(' ') >= 0:
+            self.warning("Variable name contains blank space, var: {0!s}, name: \'{1!s}\'", self, new_name)
+        elif not LP_format.is_lp_compliant(new_name):
+            self.warning("Candidate variable name is not LP-compliant: '{1}', old_name was: {0} (name will be changed to x<nn>)", self.name, new_name)
+
+
 
     def has_name(self):
         """ Checks whether the object has a name.
@@ -143,7 +155,8 @@ class ModelingObjectBase(object):
 class ModelingObject(ModelingObjectBase):
     __slots__ = ("_index", "_origin", "_container")
 
-    def is_valid_index(self, idx):
+    @staticmethod
+    def is_valid_index(idx):
         # INTERNAL: This is where the valid index check is performed
         return idx >= 0
 
@@ -309,8 +322,8 @@ class Expr(ModelingObjectBase, Operand):
         self._check_model_has_solution()
         return self._get_solution_value()
 
-    def __ne__(self, other):
-        self.model.unsupported_neq_error(self, other)
+    # def __ne__(self, other):
+    #     self.model.unsupported_neq_error(self, other)
 
     def __pow__(self, power):
         # INTERNAL
@@ -375,10 +388,12 @@ class Priority(Enum):
         # INTERNAL: returns a CPLEX preference factor as a power of "base"
         # MEDIUM priority is the balance point with a preference of 1.
         assert is_number(base)
-        medium_index = Priority.MEDIUM.value / 100
+
         if self.is_mandatory():
             return 1e+20
         else:
+            # noinspection PyTypeChecker
+            medium_index = Priority.MEDIUM.value / 100
             # pylint complains about no value member but is wrong!
             diff = self.value / 100 - medium_index
             factor = 1.0

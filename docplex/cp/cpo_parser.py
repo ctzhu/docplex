@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -27,7 +27,7 @@ import math
 MIN_CPO_VERSION_NUMBER = "12.6.0.0"
 
 # Maximum CPO format version number
-MAX_CPO_VERSION_NUMBER = "12.8.0.0"
+MAX_CPO_VERSION_NUMBER = "12.9.0.0"
 
 # Map of all operators. Key is operator, value is list of corresponding operation descriptors
 _ALL_OPERATORS = {}
@@ -622,10 +622,10 @@ class CpoParser(object):
                 self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
                 ver = self._next_token().get_string()
                 self.model.set_format_version(ver)
-                if ver < MIN_CPO_VERSION_NUMBER:
+                if compare_natural(ver, MIN_CPO_VERSION_NUMBER) < 0:
                     raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
                                                                .format(ver, MIN_CPO_VERSION_NUMBER))
-                if ver > MAX_CPO_VERSION_NUMBER:
+                if compare_natural(ver, MAX_CPO_VERSION_NUMBER) > 0:
                     raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
                                                                .format(ver, MAX_CPO_VERSION_NUMBER))
                 self._check_token(self._next_token(), TOKEN_PARENT_CLOSE)

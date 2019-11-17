@@ -7,7 +7,7 @@
 # gendoc: ignore
 from docplex.mp.utils import is_number
 
-
+import math
 
 class StaticTypeChecker(object):
 
@@ -31,6 +31,11 @@ class StaticTypeChecker(object):
                 mdl.fatal("Zero divide on {0!s}", numerator)
 
     @classmethod
+    def typecheck_discrete_expression(cls, logger, expr, msg):
+        if not expr.is_discrete():
+            logger.fatal('{0}, expression: ({1!s}) is not discrete', msg, expr)
+
+    @classmethod
     def typecheck_discrete_constraint(cls, logger, ct, msg):
         if not ct.is_discrete():
             logger.fatal('{0}, {1!s} is not discrete', msg, ct)
@@ -52,3 +57,14 @@ class StaticTypeChecker(object):
     def typecheck_callable(cls, logger, arg, msg):
         if not callable(arg):
             logger.fatal(msg)
+
+    @classmethod
+    def typecheck_num_nan_inf(cls, logger, arg, caller=None):
+        # check for a "real" number, not a NaN, not infinity
+        caller_string = "{0}: ".format(caller) if caller is not None else ""
+        if not is_number(arg):
+            logger.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+        elif math.isnan(arg):
+            logger.fatal("{0}NaN value detected", caller_string)
+        elif math.isinf(arg):
+            logger.fatal("{0}Infinite value detected", caller_string)

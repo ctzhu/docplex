@@ -1,8 +1,9 @@
-'''
-A command line interface / client for DOcplexcloud.
+# --------------------------------------------------------------------------
+# Source file provided under Apache License, Version 2.0, January 2004,
+# http://www.apache.org/licenses/
+# (c) Copyright IBM Corp. 2015, 2018
+# --------------------------------------------------------------------------
 
-@author: kong
-'''
 from __future__ import print_function
 
 import argparse
@@ -104,8 +105,8 @@ class list_with_html_repr(list):
         return st
 
 
-def ls_jobs(client, program_result, quiet=False):
-    jobs = client.get_all_jobs()
+def ls_jobs(client, program_result, quiet=False, selected_jobs=None):
+    jobs = selected_jobs if selected_jobs else client.get_all_jobs()
     if ip:
         result = []
     for i, j in enumerate(jobs):
@@ -202,7 +203,7 @@ def execute_job(client, inputs, verbose, details, nodelete):
         except TypeError as te:
             if 'execute() got an unexpected keyword argument \'info_cb\'' in te:
                 print('Your version of docplexcloud client does not support details polling (--details option). Please update')
-                sys.exit(-1)
+                return(-1)
             else:
                 raise
         if response.execution_status != JobExecutionStatus.PROCESSED:
@@ -245,9 +246,22 @@ def run_command(prog, argv, url=None, key=None):
                       executes a job which input files are model.py and
                       model.dada, in verbose mode.
 '''
+    filter_help = '''
 
+   Within filters, the following variables are defined:
+      now: current date and time as timestamp in millisec
+      minute: 60 sec in millisec
+      hour: 60 minutes in millisec
+      day: 24 hour in millisec
+      job: The current job being filtered
+
+    Example filter usage:
+        Delete all jobs older than 3 hour
+        python -m docplex.cli --filter "now-job['startedAt'] > 3*hour " rm
+'''
     if ip is None:
         epilog += epilog_cli
+    epilog += filter_help
     parser = argparse.ArgumentParser(prog=prog, description=description, epilog=epilog,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('command',
@@ -266,11 +280,13 @@ def run_command(prog, argv, url=None, key=None):
     parser.add_argument('--url', nargs=1, metavar='URL',
                         dest="url", default=None,
                         help="The DOcplexcloud connection URL. If not specified, will use those found in docplex config files")
-    parser.add_argument('--key', nargs=1, metavar='API_KEY',
+    parser.add_argument('--key', metavar='API_KEY',
                         dest="key", default=None,
                         help="The DOcplexcloud connection key. If not specified, will use those found in docplex config files")
     parser.add_argument('--details', action='store_true', default=False,
                         help='Display solve details as they are available')
+    parser.add_argument('--filter', metavar='FILTER',  default=None,
+                        help='filter on job. Example: --filter "True if (now-job.createdAt) > 3600"')
     parser.add_argument('--quiet', '-q', action='store_true', default=False,
                         help='Only show numeric IDs as output')
     args = parser.parse_args(argv)
@@ -309,10 +325,38 @@ def run_command(prog, argv, url=None, key=None):
 
     client = JobClient(client_url, client_key)
 
+    target_jobs = []
+    if args.filter:
+        jobs = client.get_all_jobs()
+        now = (datetime.datetime.now() - datetime.datetime(1970,1,1)).total_seconds() * 1000.0
+        minute = 60 * 1000
+        hour = 60 * minute
+        day = 24 * hour
+        context = {'now': now,
+                   'minute': minute,
+                   'hour': hour,
+                   'day': day,
+                  }
+        for j in jobs:
+            context['job'] = j
+            keep = False
+            try:
+                keep = eval(args.filter, globals(), context)
+            except KeyError:  # if a key was not foud, just assume expression is false
+                keep = False
+            if keep:
+                target_jobs.append(j)
+
+    if target_jobs:
+        for i in target_jobs:
+            print('applying to %s' % i['_id'])
+
     if args.command == 'ls':
-        ls_jobs(client, program_result, quiet=args.quiet)
+        ls_jobs(client, program_result, quiet=args.quiet, selected_jobs=target_jobs)
     elif args.command == 'info':
-        if len(args.arguments) == 1 and args.arguments[0] == 'all':
+        if target_jobs:
+            args.arguments = [x["_id"] for x in target_jobs]
+        elif len(args.arguments) == 1 and args.arguments[0] == 'all':
             args.arguments = [x["_id"] for x in client.get_all_jobs()]
         for id in args.arguments:
             info_text = "NOT FOUND"
@@ -323,18 +367,36 @@ def run_command(prog, argv, url=None, key=None):
                 pass
             print("%s:\n%s" % (id, info_text))
     elif args.command == 'rm':
-        if args.arguments:
+        if target_jobs:
+            joblist = [x["_id"] for x in target_jobs]
+        elif args.arguments:
             joblist = args.arguments
         else:
             joblist = shlex.split(sys.stdin.read())
         rm_job(client, joblist, verbose=args.verbose)
     elif args.command == 'logs':
+        if target_jobs:
+            if len(target_jobs) != 1:
+                print('Logs can only be retrieved when filter select one job (actual selection count = %s)' % len(target_jobs))
+                program_result.return_code = -1
+                return(program_result)
+            args.arguments = [x["_id"] for x in target_jobs]
+        if not args.arguments:
+            print('Please specify job list in arguments or using filter.')
+            program_result.return_code = -1
+            return(program_result)
         for jid in args.arguments:
             log_items = client.get_log_items(jid)
             for log in log_items:
                 for record in log["records"]:
                     print(record["message"])
     elif args.command == 'download':
+        if target_jobs:
+            if len(target_jobs) != 1:
+                print('Jobs can only be downloaded when filter select one job (actual selection count = %s)' % len(target_jobs))
+                program_result.return_code = -1
+                return(program_result)
+            args.arguments = [x["_id"] for x in target_jobs]
         for jid in args.arguments:
             job = client.get_job(jid)
             for attachment in job['attachments']:
@@ -342,6 +404,10 @@ def run_command(prog, argv, url=None, key=None):
                 with open(attachment['name'], 'wb') as f:
                     f.write(client.download_job_attachment(id, attachment['name']))
     elif args.command == 'execute':
+        if target_jobs:
+            print('Execute command does not support job filtering')
+            program_result.return_code = -1
+            return(program_result)
         inputs = [{'name': basename(a), 'filename': a} for a in args.arguments]
         if args.verbose:
             for i in inputs:

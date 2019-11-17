@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -60,7 +60,6 @@ import docplex.cp.config as config
 from docplex.cp.utils import CpoException, CpoNotSupportedException, make_directories, Context, is_array, is_string, parse_json_string
 import docplex.cp.utils as utils
 from docplex.cp.cpo_compiler import CpoCompiler
-import docplex.cp.solver.environment_client as runenv
 from docplex.cp.solution import *
 from docplex.cp.solver.solver_listener import CpoSolverListener
 
@@ -278,6 +277,9 @@ class CpoSolverAgent(object):
             mname = self.model.get_name()
             if mname is None:
                 mname = "Anonymous"
+            else:
+                # Remove special characters introduced by Jupyter
+                mname = mname.replace('<', '').replace('>', '')
             file = ctx.model.dump_directory + "/" + mname + ".cpo"
             with utils.open_utf8(file, 'w') as f:
                 f.write(cpostr)
@@ -432,10 +434,15 @@ class CpoSolver(object):
         # Determine appropriate solver agent
         self.agent = self._get_solver_agent()
 
-        # Add solver listener for environment
-        env = runenv.get_environment()
-        if env is not None:
-            self.add_listener(runenv.EnvSolverListener())
+        # Add configured default listeners if any
+        # Note: calling solver_created() is not required as it is done by add_listener().
+        lstnrs = context.solver.listeners
+        if lstnrs is not None:
+            if is_array(lstnrs):
+                for lstnr in lstnrs:
+                    self._add_listener_from_class(lstnr)
+            else:
+                self._add_listener_from_class(lstnrs)
 
 
     def __iter__(self):
@@ -573,7 +580,7 @@ class CpoSolver(object):
                 self.last_result = self._create_solution_aborted()
                 return self.last_result
             else:
-                #traceback.print_exc()
+                traceback.print_exc()
                 raise e
         self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
@@ -649,10 +656,23 @@ class CpoSolver(object):
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
+        # Start refine conflict
         self._check_status(STATUS_IDLE)
         self._set_status(STATUS_REFINING_CONFLICT)
+        for lstnr in self.listeners:
+            lstnr.start_refine_conflict(self)
+
+        # Start refine conflict
         msol = self.agent.refine_conflict()
+        for lstnr in self.listeners:
+            lstnr.conflict_found(self, msol)
+
+        # End refine conflict
         self._set_status(STATUS_IDLE)
+        for lstnr in self.listeners:
+            lstnr.end_refine_conflict(self)
+
+
         return msol
 
 
@@ -790,6 +810,32 @@ class CpoSolver(object):
         # Notify listener
         lstnr.solver_created(self)
 
+
+    def _add_listener_from_class(self, lstnr):
+        """ Add a solver listener from its class (instance is created).
+
+        Args:
+            lstnr:  Solver listener class, or string identifying the class
+        """
+        if is_string(lstnr):
+            # Get listener class from string
+            try:
+                lclass = utils.get_module_element_from_path(lstnr)
+            except Exception as e:
+                raise CpoException("Unable to retrieve solver listener class '{}': {}".format(lstnr, e))
+            if not inspect.isclass(lclass):
+                raise CpoException("Solver listener '{}' is not a class.".format(lstnr))
+            if not issubclass(lclass, CpoSolverListener):
+                raise CpoException("Solver listener class '{}' should extend CpoSolverListener.".format(lstnr))
+        else:
+            # Listener is assumed to directly be a class
+            lclass = lstnr
+            if not inspect.isclass(lclass):
+                raise CpoException("Solver listener '{}' is not a class.".format(lclass))
+            if not issubclass(lclass, CpoSolverListener):
+                raise CpoException("Solver listener class '{}' should extend CpoSolverListener.".format(lclass))
+        # Add listener
+        self.add_listener(lclass())
 
     def remove_listener(self, lstnr):
         """ Remove a solver listener previously added with :meth:`~docplex.cp.solver.solver.CpoSolver.add_listener`.
@@ -934,29 +980,17 @@ class CpoSolver(object):
             sctx.write(out=sctx.get_log_output())
         cpath = sctx.class_name
         if cpath is None:
-            raise CpoException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")
+            raise CpoException("Solving agent '" + aname + "' context should contain an attribute 'class_name'")
 
-        # Split class name
-        pnx = cpath.rfind('.')
-        if pnx < 0:
-            raise CpoException("Invalid class name '" + cpath + "' for solving agent '" + aname + "'. Should be <package>.<module>.<class>.")
-        mname = cpath[:pnx]
-        cname = cpath[pnx + 1:]
-
-        # Load module
+        # Retrieve solver agent class
         try:
-            module = importlib.import_module(mname)
+            sclass = utils.get_module_element_from_path(cpath)
         except Exception as e:
-            raise CpoException("Module '" + mname + "' import error: " + str(e))
-
-        # Create and check class
-        sclass = getattr(module, cname, None)
-        if sclass is None:
-            raise CpoException("Module '" + mname + "' does not contain a class '" + cname + "'")
+            raise CpoException("Unable to retrieve solver agent class '{}': {}".format(cpath, e))
         if not inspect.isclass(sclass):
-            raise CpoException("Agent class '" + cpath + "' is not a class.")
+            raise CpoException("Solver agent '{}' is not a class.".format(cpath))
         if not issubclass(sclass, CpoSolverAgent):
-            raise CpoException("Solver agent class '" + cpath + "' does not extend CpoSolverAgent.")
+            raise CpoException("Solver agent class '{}' should extend CpoSolverAgent.".format(cpath))
 
         # Create agent instance
         agent = sclass(self, sctx.params, sctx)

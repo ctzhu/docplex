@@ -15,6 +15,29 @@ from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.sdetails import SolveDetails
 
 from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
+from docplex.util import as_df
+from docplex.mp.utils import PublishResultAsDf
+
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+
+def to_output_table(relaxer, use_pd=True):
+    columns = ['Constraint', 'Priority', 'Amount']
+    if pd and use_pd:
+        return as_df(relaxer)
+    else:
+        TOutputTables = namedtuple('TOutputTables', columns)
+        result = []
+        prioritizer = relaxer.prioritizer
+        for ct, relaxed in relaxer.iter_relaxations():
+            result.append(TOutputTables(ct.name,
+                                        prioritizer.get_priority(ct).name,
+                                        relaxed))
+        return result
 
 
 def _match_priority_name(prio, s, sep='_'):
@@ -245,7 +268,7 @@ _TRelaxableGroup = namedtuple("_TRelaxableGroup", ["preference", "relaxables"])
 _TParamData = namedtuple('_TParamInfo', ['short_name', 'default_value', 'accessor'])
 
 
-class Relaxer(object):
+class Relaxer(PublishResultAsDf, object):
     ''' This class is an abstract algorithm, in the sense that it operates on interfaces.
 
         It takes a prioritizer, which an implementation of ``IConstraintPrioritizer``.
@@ -272,7 +295,11 @@ class Relaxer(object):
     _default_mode = RelaxationMode.OptSum
 
     def __init__(self, prioritizer='all', verbose=False, precision=default_precision,
-                 override=False):
+                 override=False, output_processing=None):
+        self.output_table_customizer = output_processing
+        self.output_table_property_name = 'relaxations_output'
+        self.default_output_table_name = 'relaxations.csv'
+        self.output_table_using_df = True  # if pandas is available of course
 
         self._precision = precision
         # ---
@@ -307,12 +334,21 @@ class Relaxer(object):
         if self._verbose:
             self.add_listener(self._verbose_listener)
 
+
+    @property
+    def prioritizer(self):
+        return self._prioritizer
+
     def set_verbose(self, is_verbose):
         if is_verbose != self._verbose:
-            if is_verbose:
-                self.add_listener(self._verbose_listener)
-            else:
-                self.remove_listener(self._verbose_listener)
+            self._verbose = is_verbose
+            self.set_verbose_listener_from_flag(is_verbose)
+
+    def set_verbose_listener_from_flag(self, is_verbose):
+        if is_verbose:
+            self.add_listener(self._verbose_listener)
+        else:
+            self.remove_listener(self._verbose_listener)
 
     def get_verbose(self):
         return self._verbose
@@ -355,7 +391,7 @@ class Relaxer(object):
         # Args:
         #     listener: The listener to remove.
         # """
-        if isinstance(listener, IRelaxationListener) and listener in self._listeners:
+        if listener in self._listeners:
             self._listeners.remove(listener)
 
     def clear_listeners(self):
@@ -413,10 +449,10 @@ class Relaxer(object):
             assert mandatory_justifier is not None
             mdl.warning('{0} constraint(s) will not be relaxed (e.g.: {1!s})', nb_mandatories, mandatory_justifier)
 
-        relax_verbose = kwargs.pop('verbose', False)
-        temp_listener = VerboseRelaxationListener() if relax_verbose and not self._verbose else None
-        if temp_listener:
-            self.add_listener(temp_listener)
+        temp_relax_verbose = kwargs.pop('verbose', False)
+        if temp_relax_verbose != self._verbose:
+            # install/deinstall listener for this relaxation only
+            self.set_verbose_listener_from_flag(temp_relax_verbose)
 
         # relaxation loop
         all_groups = []
@@ -452,7 +488,7 @@ class Relaxer(object):
                 mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
                           relax_context.solver.docloud)
 
-        if self.verbose:
+        if temp_relax_verbose:
             print("-- starting relaxation. mode: {0!s}, precision={1}".format(used_relax_mode.name, self._precision))
 
         try:
@@ -514,18 +550,26 @@ class Relaxer(object):
                             raw_infeas = relaxed_sol.get_infeasibility(ct)
                             if self._accept_violation(raw_infeas):
                                 self._relaxations[ct] = raw_infeas
+                        if not self._relaxations:
+                            mdl.warning("Relaxation of model `{0}` found one relaxed solution, but no relaxed constraints - check".format(mdl.name))
 
                         for l in self._listeners:
                             l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
                         # now get out
                         break
                     else:
+                        # TODO: maybe issue a warning that relaxation has failed?
                         # relaxation has failed, notify the listeners
                         for l in self._listeners:
                             l.notify_failed_relaxation(prio, all_relaxable_cts)
 
             mdl.notify_solve_relaxed(relaxed_sol, relax_engine.get_solve_details())
 
+            # write relaxation table.write_output_table() handles everything related to
+            # whether the table should be published etc...
+            if self.is_publishing_output_table(mdl.context):
+                output_table = to_output_table(self, self.output_table_using_df)
+                self.write_output_table(output_table, mdl.context)
         finally:
             # --- restore context, log_output if set.
             if saved_log_output_stream != mdl.log_output:
@@ -535,8 +579,9 @@ class Relaxer(object):
             mdl.context = saved_context
             if transient_engine:
                 del relax_engine
-            if temp_listener:
-                self.remove_listener(temp_listener)
+            if temp_relax_verbose != self._verbose:
+                # realign listener with flag
+                self.set_verbose_listener_from_flag(self._verbose)
 
         return relaxed_sol
 
@@ -558,6 +603,28 @@ class Relaxer(object):
 
         """
         return self._relaxations.copy()
+
+    def __as_df__(self):
+        ''' Returns a pandas.DataFrame with all relaxed constraint.
+
+        Returns:
+           A pandas.DataFrame which columns are:
+
+              - Constraint: the constraint name
+              - Priority: The priority of the constraint
+              - Amount: The amount of relaxation
+        '''
+        if not pd:
+            raise NotImplementedError('Cannot convert results to DataFrame, pandas is not available')
+        columns = ['Constraint', 'Priority', 'Amount']
+        results_list = []
+        prioritizer = self.prioritizer
+        for ct, relaxed in self.iter_relaxations():
+            results_list.append({'Constraint': ct.name,
+                                 'Priority': prioritizer.get_priority(ct).name,
+                                 'Amount': relaxed})
+        df = pd.DataFrame(results_list, columns=columns)
+        return df
 
     def get_total_relaxation(self):
         self._check_successful_relaxation()

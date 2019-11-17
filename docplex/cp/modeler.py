@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -1485,11 +1485,14 @@ def allowed_assignments(exprs, values):
     """
     exprs = build_cpo_expr(exprs)
     if exprs.is_kind_of(Type_IntExpr):
+        # Expr is a single integer
         return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, _convert_arg(values, values, Type_IntArray)))
 
     # 'expr' is an array of expressions, and 'values' a tupleset
     assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
-    return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
+    tset = build_cpo_tupleset(values)
+    assert len(exprs.children) == len(tset.value[0]), "Arity of tupleset should match the number of expressions"
+    return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, tset))
 
 
 def forbidden_assignments(exprs, values):

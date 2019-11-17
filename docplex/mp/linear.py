@@ -15,15 +15,13 @@ from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _Subscrip
 from docplex.mp.operand import LinearOperand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import *
+from docplex.mp.format import LP_format
 from docplex.mp.sttck import StaticTypeChecker
 
 
 class DOCplexQuadraticArithException(Exception):
     # INTERNAL
     pass
-
-
-# from docplex.mp.xcounter import ExprCounter
 
 
 class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
@@ -90,11 +88,13 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self.vartype.accept_domain_value(candidate_value, lb=self._lb, ub=self._ub)
 
     def check_name(self, new_name):
-        ModelingObject.check_name(self, new_name)
+        #ModelingObject.check_name(self, new_name)
         if not is_string(new_name) or not new_name:
-            self.fatal("Variable name accepts only non-empty strings, got: {0!s}", new_name)
+            self.fatal("Variable name accepts only non-empty strings, {0!r} was passed", new_name)
         elif new_name.find(' ') >= 0:
             self.warning("Variable name contains blank space, var: {0!s}, name: \'{1!s}\'", self, new_name)
+        elif not LP_format.is_lp_compliant(new_name):
+            self.warning("Candidate variable name is not LP-compliant, old name was: {0}, new name: \'{1!s}\' (will be changed to x<nn>)", self.name, new_name)
 
     def __hash__(self):
         return self._index
@@ -284,9 +284,9 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         self_container = self.get_container()
         return self_container.get_var_key(self) if self_container else None
 
-    def __ne__(self, other):
-        # INTERNAL: For now, not supported
-        self.model.unsupported_neq_error(self, other)
+    # def __ne__(self, other):
+    #     # INTERNAL: For now, not supported
+    #     self.model.unsupported_neq_error(self, other)
 
     def __mul__(self, e):
         return self.times(e)
@@ -481,17 +481,20 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self.to_string()
 
     def to_string(self):
-        str_name = self.get_name() or ('_x%d' % (self.unchecked_index + 1))
+        str_name = self.get_name() or ("x%d" % (self.unchecked_index + 1))
         return str_name
 
     def print_name(self):
         # INTERNAL
-        return self._name or self._model._var_scope.new_obj_symbol(self)
+        return self.lp_name
+
+    @property
+    def lp_name(self):
+        return self._name or "x%s" % (self.index+1)
 
     def _must_print_lb(self):
         self_vartype = self._vartype
-        return self_vartype.get_cplex_typecode() not in 'SN'\
-               and self._lb == self_vartype.get_default_lb()
+        return self_vartype.get_cplex_typecode() not in 'SN' and self._lb == self_vartype.get_default_lb()
 
     def __repr__(self):
         self_vartype, self_lb, self_ub = self._vartype, self._lb, self._ub
@@ -530,6 +533,31 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self._model._reduced_cost1(self)
 
     @property
+    def basis_status(self):
+        """
+        This property returns the basis status of the variable, if any.
+        The variable must be continuous, otherwise an exception is raised.
+
+        Returns:
+            An enumerated value from the enumerated type `docplex.constants.BasisStatus`.
+            The integer value of this enum is equal to Cplex's basis status value;
+            for example, BasisStatus.Basic has value 1, BasisStatus.AtLower has value 0, etc...
+
+        Note:
+            for the model to hold basis information, the model must have been solved as a LP problem.
+            In some cases, a model which failed to solve may still have a basis available. Use
+            `Model.has_basis()` to check whether the model has basis information or not.
+
+        See Also:
+            :func:`docplex.mp.model.Model.has_basis`
+
+
+        """
+        if not self.is_continuous():
+            self.fatal("Basis status is for continuous variables, {0!s} has type {1!s}", self, self.vartype.short_name)
+        return self._model._var_basis_status1(self)
+
+    @property
     def benders_annotation(self):
         """
         This property is used to get or set the Benders annotation of a variable.
@@ -553,6 +581,31 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
                 if ctv is self:
                     yield ct
                     break
+
+    def equals(self, other):
+        """
+        This method is used to test equality to an expression.
+        Because of the overloading of operator `==` through the redefinition of
+        the `__eq__` method, you cannot use `==` to test for equality.
+        In order to test that two decision variables ar ethe same, use th` Python `is` operator;
+        use the `equals` method to test whether a given expression is equivalent to a variable:
+        for example, calling `equals` with a linear expression which consists of this variable only,
+        with a coefficient of 1, returns True.
+
+        Args:
+            other: an expression or a variable.
+
+        :return:
+            A boolean value, True if the passed variable is this very variable, or
+            if the passed expression is equivalent to the variable, else False.
+
+        """
+        # noinspection PyPep8
+        return self is other or \
+               (isinstance(other, LinearOperand) and
+                other.get_constant() == 0 and
+                other.number_of_terms() == 1 and
+                other.unchecked_get_coef(self) == 1)
 
 
 # noinspection PyAbstractClass
@@ -768,6 +821,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
             new_self._add_term(dvar, coef)
             # beware self is modified here
             self.notify_replaced(new_self)
+            # noinspection PyMethodFirstArgAssignment
             self = new_self
         return self
 
@@ -823,7 +877,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     def __idiv__(self, other):
         return self.divide(other)
 
-    def __itruediv__(self, other):   # pragma: no cover
+    def __itruediv__(self, other):  # pragma: no cover
         # for py3
         return self.divide(other)
 
@@ -837,8 +891,8 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def equals(self, other):
         return isinstance(other, LinearOperand) and \
-               other.get_constant() == 0 and\
-               other.number_of_terms() == 1 and\
+               other.get_constant() == 0 and \
+               other.number_of_terms() == 1 and \
                other.unchecked_get_coef(self._dvar) == self._coef
 
     # conversion
@@ -870,7 +924,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     either using operators or using `Model.linear_expr()`.
     """
 
-    def _new_terms_dict(self, model, *args, **kwargs):
+    @staticmethod
+    def _new_terms_dict(model, *args, **kwargs):
         return model._term_dict_type(*args, **kwargs)
 
     @staticmethod
@@ -1199,6 +1254,28 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         return dvar in self.__terms
 
     def equals(self, other):
+        """
+         This method is used to test equality between expressions.
+         Because of the overloading of operator `==` through the redefinition of
+         the `__eq__` method, you cannot use `==` to test for equality.
+         The `equals` method to test whether a given expression is equivalent to a variable.
+         Two linear expressions are equivalent if they have the same coefficient for all
+         variables.
+
+         Args:
+            other: a number or any expression.
+
+
+
+         Returns:
+             A boolean value, True if the passed expression is equivalent, else False.
+
+
+         Note:
+            A constant expression is considered equivalent to its constant number.
+
+                m.linear_expression(3).equals(3) returns True
+        """
         if is_number(other):
             return self.is_constant() and other == self.constant
         else:
@@ -1224,7 +1301,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         for v, coeff in self.iter_sorted_terms():
             if not coeff:
-                continue  #  pragma: no cover
+                continue  # pragma: no cover
 
             # 1 separator
             if use_space and c > 0:
@@ -1306,7 +1383,9 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(e, ZeroExpr):
             event = None
         elif is_number(e):
-            self._constant += e
+            validfn = self._model._checker.get_number_validation_fn()
+            valid_e= validfn(e) if validfn else e
+            self._constant += valid_e
             event = UpdateEvent.ExprConstant
         elif isinstance(e, Expr) and e.is_quad_expr():
             raise DOCplexQuadraticArithException
@@ -1753,7 +1832,9 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         return "docplex.mp.ZeroExpr()"
 
     def equals(self, other):
-        return isinstance(other, ZeroExpr)
+        return (isinstance(other, LinearOperand) and (
+                           0 == other.get_constant() and (0 == other.number_of_terms()))) or\
+               (is_number(other) and other == 0)
 
     def square(self):
         return self

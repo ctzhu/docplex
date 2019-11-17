@@ -15,7 +15,7 @@ from six import iteritems
 
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.compat23 import StringIO, izip
-from docplex.mp.constants import SOSType, CplexScope, ObjectiveSense
+from docplex.mp.constants import SOSType, CplexScope, ObjectiveSense, BasisStatus
 from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstraint, \
     IndicatorConstraint, QuadraticConstraint, PwlConstraint, EquivalenceConstraint
 from docplex.mp.context import Context, \
@@ -85,13 +85,6 @@ class Model(object):
         # Creates a model named 'my model' with default context
         model = Model('my model')
 
-    In the following example, credentials for the solve service are looked up as
-    described in :func:`docplex.mp.context.Context.read_settings`::
-
-        # Creates a model with default ``context``, and override the ``agent``
-        # to solve on Decision Optimization on Cloud.
-        model = Model(agent='docloud')
-
     In this example, we create a model to solve with just 2 threads::
 
         context = Context.make_default_context()
@@ -107,13 +100,18 @@ class Model(object):
         name (optional): The name of the model.
         context (optional): The solve context to be used. If no ``context`` is
             passed, a default context is created.
-        agent (optional): The ``context.solver.agent`` is initialized with
-            this string.
         log_output (optional): If ``True``, solver logs are output to
             stdout. If this is a stream, solver logs are output to that
             stream object.
-        checker (optional): If ``None``, then checking is disabled everywhere. Turning off checking
+        checker (optional): If ``off``, then checking is disabled everywhere. Turning off checking
             may improve performance but should be done only with extreme caution.
+            Possible values for the `checker` keyword argument are:
+                - `default` (or `std`, or `on`): detects modeling errors, but doe snot check
+                    numerical values for infinities or NaNs. This is the default value
+                - `numerical`: checks modeling errors and also checks all number values for  infinities
+                    or NaNs. This option should be used when data are not trusted.
+                - `off`: no typechecking is performed. This options must be used when the model has been
+                    thorougly tested and numerical data are trusted.
     """
 
     _name_generator = _AutomaticSymbolGenerator(pattern="docplex_model", offset=1)
@@ -343,8 +341,6 @@ class Model(object):
             name (optional): The name of the model
             context (optional): The solve context to be used. If no ``context`` is
                 passed, a default context is created.
-            agent (optional): The ``context.solver.agent`` is initialized with
-                this string.
             log_output (optional): if ``True``, solver logs are output to
                 stdout. If this is a stream, solver logs are output to that
                 stream object.
@@ -374,6 +370,8 @@ class Model(object):
         self._constraint_priority_dict = {}
 
         self._allsos = []
+
+        self._lazy_constraints = []
 
         self._pwl_counter = {}
 
@@ -454,8 +452,6 @@ class Model(object):
 
         self._scopes = [self._var_scope, self._linct_scope, self._indicator_scope, self._quadct_scope, self._pwl_scope]
         self._ctscopes = [self._linct_scope, self._indicator_scope, self._quadct_scope, self._pwl_scope]
-        # a counter to generate unique numbers, incremented at each new request
-        self._unique_counter = -1
 
         # init engine
         engine = self._make_new_engine_from_agent(self.solver_agent, self.context)
@@ -480,6 +476,7 @@ class Model(object):
 
         # all the following must be placed after an engine has been set.
         self._objective_expr = None
+        self._multi_objective_exprs = None
         engineLogLevel = get_environment().get_parameter("oaas.engineLogLevel")
         if engineLogLevel is not None and engineLogLevel in {"FINE", "FINER", "FINEST"}:
             self.parameters.read.datacheck.set(2)
@@ -496,6 +493,7 @@ class Model(object):
     def _sync_params(self, params):
         # INTERNAL: execute only once
         if self.has_cplex():
+            params.connect_model(self)
             self_env = self._environment
             self_cplex_parameters_version = self.context.cplex_parameters.cplex_version
             self_engine = self.__engine
@@ -531,9 +529,9 @@ class Model(object):
         """ Returns the instance of Cplex used by the model, if any.
 
         In case no local installation of CPLEX can be found, this method either raises an exception,
-        if parameter `do_raise` is TYrue, or returns None if the parameter is False.
+        if parameter `do_raise` is True, or else returns None.
 
-        :param do_raise: Optional flag: if True, raise an exception when no Cplex instance
+        :param do_raise: An optional flag: if True, raise an exception when no Cplex instance
             is available, otherwise return None.
 
         :return: an instance of Cplex, or None.
@@ -658,13 +656,6 @@ class Model(object):
     @clean_before_solve.setter
     def clean_before_solve(self, must_clean):
         self._clean_before_solve = bool(must_clean)
-
-
-    # generate a new , unique counter, in the scope of this model
-    def _new_unique_counter(self):
-        # INTERNAL
-        self._unique_counter += 1
-        return self._unique_counter
 
     @property
     def time_limit_parameter(self):
@@ -1131,6 +1122,10 @@ class Model(object):
         #  if it has Piecewise Linear constraints
         return self._has_discrete_var() or self._allsos or self._pwl_counter or self.number_of_semicontinuous_variables
 
+    def solves_as_qxp(self):
+        # INTERNAL
+        return self.has_quadratic_constraint() or self._objective_expr.is_quad_expr()
+
     def get_statistics(self):
         """ Returns statistics on the model.
 
@@ -1232,19 +1227,74 @@ class Model(object):
         else:
             return base_name
 
+    def generate_user_variables(self):
+        # internal
+        for dv in self.iter_variables():
+            if not dv.is_generated():
+                yield dv
+
+    def generate_user_linear_constraints(self):
+        # internal
+        for lct in self.iter_linear_constraints():
+            if not lct.is_generated():
+                yield lct
+
     def find_matching_vars(self, pattern, match_case=False):
+        """ Finds all variables whose name contain a given string
+
+        This method searches for all variables whose name
+        is not null and contains the passed ``pattern`` string. Anonymous variables
+        are not considered.
+
+        :param pattern: a non-empty string.
+
+        :return: A list of decision variables.
+        """
+        return self._find_matching_objs(self.generate_user_variables, pattern, match_case)
+
+    def find_re_matching_vars(self, regexpr):
+        """ Finds all variables whose name match a regular expression.
+
+        This method searches for all variables with a name that
+        matches the given regular expression. Anonymous variables
+        are not counted as matching.
+
+        :param regexpr: a regular expression, as define din module ``re``
+
+        :return: A list of decision variables.
+        """
+        matches = []
+        for dv in self.generate_user_variables():
+            dvname = dv.name
+            if dvname and regexpr.match(dvname):
+                matches.append(dv)
+        return matches
+
+    def _find_matching_objs(self, obj_iter, pattern, match_case=False):
+        # internal
+        self._checker.typecheck_string(pattern, accept_empty=False, accept_none=False, header="Model.find_matching_vars")
         key_pattern = pattern if match_case else pattern.lower()
         matches = []
-        for dv in self.iter_variables():
-            dvname = dv.name
-            if dvname:
-                if match_case:
-                    if key_pattern in dvname:
-                        matches.append(dv)
-                else:
-                    if key_pattern in dvname.lower():
-                        matches.append(dv)
+        for obj in obj_iter():
+            obj_name = obj.name
+            if obj_name:
+                matched = obj_name if match_case else obj_name.lower()
+                if key_pattern in matched:
+                    matches.append(obj)
         return matches
+
+    def find_matching_linear_constraints(self, pattern, match_case=False):
+        """ Finds all linear constraints whose name contain a given string
+
+        This method searches for all linear constraints whose name
+        is not empty and contains the passed ``pattern`` string. Anonymous linear constraints
+        are not considered.
+
+        :param pattern: a non-empty string.
+
+        :return: A list of linear constraints.
+        """
+        return self._find_matching_objs(self.generate_user_linear_constraints, pattern, match_case)
 
     # index management
     def _build_index_dict(self, mobj_it, raise_on_invalid_index=False):
@@ -1279,6 +1329,12 @@ class Model(object):
         if new_name != dvar.name:
             self.__engine.rename_var(dvar, new_name)
             dvar._set_name(new_name)
+
+    def set_linear_constraint_name(self, linct, new_name):
+        # INTERNAL: use lct.name to set a linear constraint's name
+        if new_name != linct.get_name():
+            self.__engine.rename_linear_constraint(linct, new_name)
+            linct._set_name(new_name)
 
     def set_var_lb(self, var, candidate_lb):
         # INTERNAL: use var.lb to set lb
@@ -1367,9 +1423,22 @@ class Model(object):
         return self._count_constraints_filtered(lambda c: c.is_linear())
 
     def iter_range_constraints(self):
+        """
+        Returns an iterator on the range constraints of the model.
+
+        Returns:
+            An iterator object.
+        """
         return self.gen_constraints_with_type(RangeConstraint)
 
     def iter_binary_constraints(self):
+        """
+        Returns an iterator on the binary constraints (expr1 <op> expr2) of the model.
+        This does not include range constraints.
+
+        Returns:
+            An iterator object.
+        """
         return self.gen_constraints_with_type(LinearConstraint)
 
     def iter_linear_constraints(self):
@@ -1935,6 +2004,19 @@ class Model(object):
         """
         return self._var_dict(keys, self.semiinteger_vartype, lb, ub, name, key_format)
 
+    def semiinteger_var_matrix(self, keys1, keys2, lb, ub=None, name=None, key_format=None):
+        """ Creates a dictionary of semiinteger decision variables, indexed by pairs of key objects.
+
+        Creates a dictionary that allows the retrieval of variables from  a tuple
+        of two keys, the first one from `keys1`, the second one from `keys2`.
+        In short, variables are indexed by the Cartesian product of the two key sets.
+
+        A key can be any Python object, with the exception of None.
+
+        Arguments `lb`, `ub`, `name`, and `key_format` are interpreted as in :func:`semiinteger_var_dict`.
+        """
+        return self.var_multidict(self.semiinteger_vartype, [keys1, keys2], lb, ub, name, key_format)
+
     def semicontinuous_var_dict(self, keys, lb, ub=None, name=str, key_format=None):
         """  Creates a dictionary of semi-continuous decision variables, indexed by key objects.
 
@@ -1985,6 +2067,19 @@ class Model(object):
             :attr:`infinity`
         """
         return self._var_dict(keys, self.semicontinuous_vartype, lb, ub, name, key_format)
+
+    def semicontinuous_var_matrix(self, keys1, keys2, lb, ub=None, name=None, key_format=None):
+        """ Creates a dictionary of semivpntinuous decision variables, indexed by pairs of key objects.
+
+        Creates a dictionary that allows the retrieval of variables from  a tuple
+        of two keys, the first one from `keys1`, the second one from `keys2`.
+        In short, variables are indexed by the Cartesian product of the two key sets.
+
+        A key can be any Python object, with the exception of None.
+
+        Arguments `lb`, `ub`, `name`, and `key_format` are interpreted as in :func:`semiinteger_var_dict`.
+        """
+        return self.var_multidict(self.semicontinuous_vartype, [keys1, keys2], lb, ub, name, key_format)
 
     def var_multidict(self, vartype, seq_of_key_seqs, lb=None, ub=None, name=None, key_format=None):
         # INTERNAL
@@ -2416,6 +2511,10 @@ class Model(object):
         """
         return self._lfactory.new_binary_constraint(lhs, ctsense, rhs, name)
 
+
+    def not_equal_constraint(self, lhs, rhs, name=None):
+        return self._lfactory.new_neq_constraint(lhs, rhs, name)
+
     def _create_engine_constraint(self, ct):
         # INTERNAL
         eng = self.__engine
@@ -2516,7 +2615,7 @@ class Model(object):
             if ct_name_map is not None:
                 checker.check_duplicate_name(ctname, ct_name_map, "constraint")
                 ct_name_map[ctname] = ct
-            ct.set_name(ctname)
+            ct._set_name(ctname)
         # ---
 
         # check for already posted cts.
@@ -3101,12 +3200,13 @@ class Model(object):
 
     def round_objective_if_discrete(self, raw_obj):
         # INTERNAL
-        if self._objective_expr.is_discrete():
-            return self.round_nearest(raw_obj)
+        if is_iterable(raw_obj):
+            return [self.round_objective_if_discrete(raw_obj_item) for raw_obj_item in raw_obj]
         else:
-            return raw_obj
-
-
+            if self._objective_expr.is_discrete():
+                return self.round_nearest(raw_obj)
+            else:
+                return raw_obj
 
     def minimize(self, expr):
         """ Sets an expression as the expression to be minimized.
@@ -3130,6 +3230,50 @@ class Model(object):
         :param expr: A linear expression or a variable.
         """
         self.set_objective(ObjectiveSense.Maximize, expr)
+
+    def minimize_static_lex(self, exprs):
+        """ Sets a list of expressions to be minimized in a lexicographic solve.
+        exprs defines an ordered sequence of objective functions that are minimized.
+
+        The argument is converted to a list of linear expressions. Accepted types for the list elements are variables
+        (instances of :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        :class:`docplex.mp.linear.LinearExpr`), or numbers.
+
+        :warning: This method requires CPLEX 12.9
+
+        :param exprs: a list of linear expressions or variables
+        :return:
+        """
+        if not exprs:
+            self.error("Model.minimize_static_lex() requires a non-empty list of linear expressions, got: {0!r}".format(exprs))
+            return None
+
+        if not is_indexable(exprs):
+            self.fatal("Model.minimize_static_lex() requires an indexable collection of linear expressions or variables")
+        priorities = [len(exprs) - i - 1 for i in range(len(exprs))]
+        self.set_multi_objective(ObjectiveSense.Minimize, exprs, priorities=priorities)
+
+    def maximize_static_lex(self, exprs):
+        """ Sets a list of expressions to be maximized in a lexicographic solve.
+        exprs defines an ordered sequence of objective functions that are maximized.
+
+        The argument is converted to a list of linear expressions. Accepted types for the list elements are variables
+        (instances of :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        :class:`docplex.mp.linear.LinearExpr`), or numbers.
+
+        :warning: This method requires CPLEX 12.9
+
+        :param exprs: a list of linear expressions or variables
+        :return:
+        """
+        if not exprs:
+            self.error("Model.maximize_static_lex() requires a non-empty list of linear expressions, got: {0!r}".format(exprs))
+            return None
+
+        if not is_indexable(exprs):
+            self.fatal("Model.maximize_static_lex() requires an indexable collection of linear expressions or variables")
+        priorities = [len(exprs) - i - 1 for i in range(len(exprs))]
+        self.set_multi_objective(ObjectiveSense.Maximize, exprs, priorities=priorities)
 
     def is_minimize(self):
         warnings.warn("deprecated", DeprecationWarning)
@@ -3204,10 +3348,94 @@ class Model(object):
         """
         return not self._objective_expr.is_constant()
 
+    def set_multi_objective(self, sense, exprs, priorities=None, weights=None,
+                                abstols=None, reltols=None, names=None):
+        """ Sets a list of objectives.
+
+        :warning: This method requires CPLEX 12.9
+
+        Args:
+            :param sense: Either an instance of :class:`docplex.mp.basic.ObjectiveSense` (Minimize or Maximize),
+                    or a string: "min" or "max".
+            :param exprs: Is converted to a list of expressions. Accepted types for this list items are variables,
+                    linear expressions or numbers.
+            :param priorities: if defined, a list of priorities having the same size as the `exprs` argument. Priorities
+                    define how objectives are grouped together into sub-problems, and in which order these sub-problems
+                    are solved (in decreasing order of priorities).
+            :param weights: if defined, a list of weights having the same size as the `exprs` argument. Weights define
+                    how objectives with same priority are blended together to define the associated sub-problem's
+                    objective that is optimized.
+            :param abstols: if defined, a list of absolute tolerances having the same size as the `exprs` argument.
+            :param reltols: if defined, a list of relative tolerances having the same size as the `exprs` argument.
+            :param names:  if defined, a list of names for objectives having the same size as the `exprs` argument.
+        :return:
+
+        Note:
+            When using a number for an objective, the search will not optimize but only look for a feasible solution.
+        """
+        self.set_objective_sense(sense)
+        self.set_multi_objective_exprs(exprs, priorities=priorities, weights=weights,
+                                       abstols=abstols, reltols=reltols, names=names)
+
+    def set_multi_objective_exprs(self, new_multiobjexprs, priorities=None, weights=None,
+                                abstols=None, reltols=None, names=None, clear_objective=True):
+        """ Sets a list of objectives.
+
+        :param new_multiobjexprs: Is converted to a list of expressions. Accepted types for this list items are variables,
+                    linear expressions or numbers.
+            :param priorities: if defined, a list of priorities having the same size as the `exprs` argument. Priorities
+                    define how objectives are grouped together into sub-problems, and in which order these sub-problems
+                    are solved (in decreasing order of priorities).
+            :param weights: if defined, a list of weights having the same size as the `exprs` argument. Weights define
+                    how objectives with same priority are blended together to define the associated sub-problem's
+                    objective that is optimized.
+            :param abstols: if defined, a list of absolute tolerances having the same size as the `exprs` argument.
+            :param reltols: if defined, a list of relative tolerances having the same size as the `exprs` argument.
+            :param names:  if defined, a list of names for objectives having the same size as the `exprs` argument.
+            :param clear_objective: internal flag. Default value should be left unchanged
+        :return:
+
+        Note:
+            When using a number for an objective, the search will not optimize but only look for a feasible solution.
+        """
+        # Check case of a single objective
+        if new_multiobjexprs is not None and is_indexable(new_multiobjexprs) and len(new_multiobjexprs) == 1:
+            self.set_objective_expr(new_multiobjexprs[0])
+            return
+
+        if self.has_objective() and clear_objective:
+            self.set_objective_expr(None, clear_multiobj=False)
+
+        if new_multiobjexprs is None:
+            exprs = [self._new_default_objective_expr()]
+        else:
+            exprs = [self._lfactory._to_expr(new_objexpr) for new_objexpr in new_multiobjexprs]
+            for expr in exprs:
+                expr.notify_used(self)
+
+        eng = self.__engine
+        current_multi_objective_exprs = self._multi_objective_exprs
+        if eng:
+            # when ending the model, the engine is None here
+            eng.set_multi_objective_exprs(new_multiobjexprs=exprs, old_multiobjexprs=current_multi_objective_exprs,
+                                          priorities=priorities, weights=weights, abstols=abstols, reltols=reltols,
+                                          objnames=names)
+            if current_multi_objective_exprs is not None:
+                for expr in current_multi_objective_exprs:
+                    expr.notify_unsubscribed(subscriber=self)
+        self._multi_objective_exprs = exprs
 
     def has_objective(self):
         # INTERNAL
         return not self._objective_expr.is_zero()
+
+    def has_multi_objective(self):
+        # INTERNAL
+        if self._multi_objective_exprs is None:
+            return False
+        if len(self._multi_objective_exprs) == 1 and self._multi_objective_exprs[0].is_zero():
+            return False
+        return True
 
     def set_objective(self, sense, expr):
         """ Sets a new objective.
@@ -3250,8 +3478,12 @@ class Model(object):
     def objective_sense(self, new_sense):
         self.set_objective_sense(new_sense)
 
+    def set_objective_expr(self, new_objexpr, clear_multiobj=True):
+        if self.has_multi_objective() and clear_multiobj:
+            # Need also to set all attributes to default values so that the model won't be treated as multi-objective
+            self.set_multi_objective_exprs(None, priorities=[0], weights=[1],
+                                abstols=[0], reltols=[0], names=[None], clear_objective=False)
 
-    def set_objective_expr(self, new_objexpr):
         if new_objexpr is None:
             expr = self._new_default_objective_expr()
         else:
@@ -3264,6 +3496,7 @@ class Model(object):
         if eng:
             # when ending the model, the engine is None here
             eng.set_objective_expr(new_objexpr=expr, old_objexpr=current_objective_expr)
+
             if current_objective_expr is not None:
                 current_objective_expr.notify_unsubscribed(subscriber=self)
         self._objective_expr = expr
@@ -3344,40 +3577,6 @@ class Model(object):
     def solve(self, **kwargs):
         """ Starts a solve operation on the model.
 
-        If CPLEX is available, the solve operation will be performed using the native CPLEX.
-        If CPLEX is not available, the solve operation will be started on DOcplexcloud.
-        The DOcplexcloud connection parameters are looked up in the following order:
-
-            - if ``kwargs`` contains valid ``url`` and ``key`` values, they are used.
-            - if ``kwargs`` contains a ``context`` and that context contains
-                valid ``solver.docloud.url`` and ``solver.docloud.key`` values,
-                those values are used. Other attributes of ``solver.docloud``
-                can also be used. See :class:`docplex.mp.context.Context`
-            - finally, the model's attribute ``context`` is used. This ``context``
-                is set at model creation time.
-
-        If CPLEX is not available and the model has no valid credentials, an error is raised, as there is
-        no way to perform the solve.
-
-        Note that if ``url`` and ``key`` parameters are present and the
-        values of the parameters are not in the ignored url or key list,
-        the solve operation will be started on DOcplexcloud even if CPLEX is
-        available.
-
-        Example::
-
-            # forces the solve on DOcplexcloud with the specified url and keys
-            model.solve(url='https://foo.com', key='bar')
-
-        Example::
-
-            # set some DOcplexcloud credentials, but depend on another
-            # method to decide if solve is local or not
-            ctx.solver.docloud.url = 'https://foo.com'
-            ctx.solver.docloud.key = 'bar'
-            agent = 'local' if method_that_decides_if_solve_is_local() or 'docloud'
-            model.solve(context=ctx, agent=agent)
-
         Args:
             context (optional): An instance of context to be used in instead of
                 the context this model was built with.
@@ -3386,39 +3585,43 @@ class Model(object):
                 ``context.cplex_parameters``.
                 Accepts either a RootParameterGroup object (obtained by cloning the model's
                 parameters), or a dict of path-like names and values.
-
-            agent (optional): Changes the ``context.solver.agent`` parameter.
-                Supported agents include:
-
-                - ``docloud``: forces the solve operation to use DOcplexcloud
-                - ``local``: forces the solve operation to use native CPLEX
-
             checker (optional): a string which control all argument checks in Docplex.
                 Expects 'on' (the default) to enable all checks, or 'off' to disable all.
                 Disabling all checks might improve performance, but only when
                 it is safe to do so.
-
-            url (optional): Overwrites the URL of the
-                DOcplexcloud service defined by ``context.solver.docloud.url``.
-            key (optional): Overwrites the
-                authentication key of the DOcplexcloud service defined by
-                ``context.solver.docloud.key``.
             log_output (optional): if ``True``, solver logs are output to
                 stdout. If this is a stream, solver logs are output to that
                 stream object. Overwrites the ``context.solver.log_output``
                 parameter.
-            proxies (optional): a dict with the proxies mapping.
 
         Returns:
-            A :class:`docplex.mp.solution.SolveSolution` object if the solve operation succeeded.
-            None if the solve operation failed.
+            A :class:`docplex.mp.solution.SolveSolution` object if the solve operation managed to create
+            a feasible solution, else None.
+            The reason why solve returned None includes not only errors, but also proper cases of infeasibilties
+            or unboundedness. When solve returns None, use Model.solve_details to check the status
+            of the latest solve operation: Model.solve_details always returns
+            a :class:`docplex.mp.sdetails.SolveDetails` object, whether or not
+            a solution has been found. This object contains detailed information about the latest solve operation.
+
+        See Also:
+            :func:`solve_details`
+            :class:`docplex.mp.sdetails.SolveDetails`
         """
         if not self.is_optimized():
             self.info("No objective to optimize - searching for a feasible solution")
 
-
         lex_mipstart = kwargs.pop('_lex_mipstart', None)
+        lex_timelimits = kwargs.pop('lex_timelimits', None)
+        lex_mipgaps = kwargs.pop('lex_mipgaps', None)
         context = self.prepare_actual_context(**kwargs)
+
+        if lex_timelimits is not None and len(lex_timelimits) == 1:
+            # This will be handled as a single-objective ==> set timelimit parameter
+            context.cplex_parameters.timelimit = lex_timelimits[0]
+        if lex_mipgaps is not None and len(lex_mipgaps) == 1:
+            # This will be handled as a single-objective ==> set mipgap parameter
+            context.cplex_parameters.mip.tolerances.mipgap = lex_mipgaps[0]
+
 
         # log stuff
         saved_context_log_output = self.context.solver.log_output
@@ -3441,7 +3644,7 @@ class Model(object):
             elif self.environment.has_cplex:
                 # if CPLEX is installed go for it
                 force_clean_before_solve = kwargs.get('clean_before_solve')
-                return self._solve_local(context, force_clean_before_solve)
+                return self._solve_local(context, force_clean_before_solve, lex_timelimits, lex_mipgaps)
             elif have_credentials:
                 # no context passed as argument, no Cplex installed, try model's own context
                 return self._solve_cloud(context, lex_mipstart)
@@ -3473,7 +3676,7 @@ class Model(object):
         if solve_details and solve_details.has_hit_limit():
             self.info("solve: {0}".format(solve_details.status))
 
-    def _solve_local(self, context, force_clean_before_solve=None):
+    def _solve_local(self, context, force_clean_before_solve=None, lex_timelimits=None, lex_mipgaps=None):
         """ Starts a solve operation on the local machine.
 
         Note:
@@ -3554,10 +3757,11 @@ class Model(object):
             if force_clean_before_solve is not None:
                 self.clean_before_solve = force_clean_before_solve
             used_parameters = parameters or self.context._get_raw_cplex_parameters()
-            #assert used_parameters is not None
+            # assert used_parameters is not None
             self._apply_parameters_to_engine(used_parameters)
 
-            new_solution = self_engine.solve(self, parameters=parameters)
+            new_solution = self_engine.solve(self, parameters=parameters, lex_timelimits=lex_timelimits,
+                                             lex_mipgaps=lex_mipgaps)
             has_solution = new_solution is not None
             self._set_solution(new_solution)
             reported_obj = self._reported_objective_value()
@@ -3708,10 +3912,18 @@ class Model(object):
 
     def get_solve_details(self):
         """
-        This property returns detailed information about the last solve,  an instance of :class:`docplex.mp.solution.SolveDetails`.
+        This property returns detailed information about the latest solve,
+        an instance of :class:`docplex.mp.solution.SolveDetails`.
 
-        Note:
-            Detailed information is returned whether or not the solve succeeded.
+        When the latest solve did return a Solution instance, this property returns the solve details
+        corresponding to the solution; when no solution has been found (in other terms, the latest
+        solve operation returned None), it still returns a SolveDetails object,
+        containing a CPLEX code identifying the reason why no solution could be found
+         (for example, infeasibility or unboundedness).
+
+        See Also:
+            :class:`docplex.mp.sdetails.SolveDetails`
+
         """
         from copy import copy as shallow_copy
 
@@ -3742,7 +3954,9 @@ class Model(object):
                             **kwargs):
         """ Performs a lexicographic solve from an ordered collection of goals.
 
-        WILL BE DEPRECATED: Starting with CPLEX engines 12.9, a new api will be available to support multi-objectives.
+        Deprecated: From CPLEX 12.9,
+        :meth:`~docplex.mp.model.Model.set_multi_objective` should be used
+        instead.
 
         :param goals: An ordered collection of linear expressions.
 
@@ -3768,7 +3982,7 @@ class Model(object):
             If successful, returns a tuple with all pass solutions, reversed else None.
             The current solution of the model is the first solution in the tuple.
         """
-        warnings.warn("Will be deprecated with CPLEX 12.9 multi-objective support", PendingDeprecationWarning)
+        warnings.warn("Will be deprecated with CPLEX 12.9 multi-objective support", DeprecationWarning)
         if tolerances is None:
             schemes = generate_constant(_ToleranceScheme(), count_max=None)
         elif is_number(tolerances):
@@ -3832,7 +4046,7 @@ class Model(object):
             # must pop out the list as normal solve won't have it.
             pass_params = list(kwargs.pop(cplex_param_key))
             if len(pass_params) != nb_goals:
-                self.fatal("List of parameters should have same length as goals, expecting: {0} bu a list of size {1} was passed",
+                self.fatal("List of parameters should have same length as goals, expecting: {0} but a list of size {1} was passed",
                            nb_goals, pass_params)
             else:
                 iter_pass_params = iter(pass_params)
@@ -3936,7 +4150,10 @@ class Model(object):
     def check_has_solution(self):
         # see if we can refine messages here...
         if self._solution is None:
-            self.fatal("Model<{0}> did not solve successfully", self.name)
+            if self._solve_details is None:
+                self.fatal("Model<{0}> has not been solved yet", self.name)
+            else:
+                self.fatal("Model<{0}> did not solve successfully", self.name)
 
     def add_mip_start(self, mip_start_sol):
         """  Adds a (possibly partial) solution to use as a starting point for a MIP.
@@ -3963,7 +4180,7 @@ class Model(object):
     @property
     def objective_value(self):
         """ This property returns the value of the objective expression in the solution of the last solve.
-
+        In case of a multi-objective, only the value for the first objective is returned
 
         Raises an exception if the model has not been solved successfully.
 
@@ -3973,6 +4190,34 @@ class Model(object):
 
     def _objective_value(self):
         return self.solution.objective_value
+
+    @property
+    def multi_objective_values(self):
+        """ This property returns the list of values of the objective expressions in the solution of the last solve.
+
+        Raises an exception if the model has not been solved successfully.
+
+        """
+        self.check_has_solution()
+        return self._multi_objective_values()
+
+    def _multi_objective_values(self):
+        return self.solution.multi_objective_values
+
+    @property
+    def blended_objective_values(self):
+        """ This property returns the list of values of the blended objective expressions based on the decreasing
+        order of priorities in the solution of the last solve.
+
+        Raises an exception if the model has not been solved successfully.
+
+        """
+        self.check_has_solution()
+        blended_obj_values = self._blended_objective_values()
+        return blended_obj_values
+
+    def _blended_objective_values(self):
+        return self.solution.get_blended_objective_value_by_priority()
 
     def _reported_objective_value(self, failure_obj=0):
         return self.solution.objective_value if self.solution else failure_obj
@@ -4213,22 +4458,20 @@ class Model(object):
 
         return anno_path
 
-    def check_solved_as_lp(self, arg):
-        # first check a solution exists
-        self.check_has_solution()
-        return self.__engine.solved_as_lp() or self._solves_as_lp1(arg)
-
-    def solves_as_lp(self):
-        return not self._solves_as_mip()
-
-    def _solves_as_lp1(self, arg):
-        # INTERNAL
-        if self._solves_as_mip():
-            self.fatal('{0} are only available for LP problems'.format(arg))
+    def check_problem_type(self, feature, requires_solution=True, accept_qxp=True):
+        # internal
+        if self._solve_details is None:
+            self.fatal('{0} require a solution, but model is not solved yet'.format(feature))
+        elif requires_solution and self._solution is None:
+            self.fatal('{0} require a solution, but model is not solved with a solution'.format(feature))
+        elif self._solves_as_mip() or self.__engine.solved_as_mip():
+            self.fatal('{0} are not available for integer problems'.format(feature))
+        elif not accept_qxp and self.solves_as_qxp():
+            self.fatal('{0} are not available for QP/QCP problems'.format(feature))
 
     def _dual_value1(self, linear_ct):
         # PRIVATE
-        self.check_solved_as_lp(arg='dual values')
+        self.check_problem_type(feature='dual values')
         dvs = self.dual_values([linear_ct])
         return dvs[0]
 
@@ -4242,7 +4485,7 @@ class Model(object):
 
         :return: a sequence of float numbers
         """
-        self.check_solved_as_lp(arg='dual values')
+        self.check_problem_type(feature='dual values')
         checked_lcts = self._checker.typecheck_constraint_seq(cts, check_linear=True)
         return self._dual_values(checked_lcts)
 
@@ -4282,7 +4525,7 @@ class Model(object):
 
     def _reduced_cost1(self, dvar):
         # PRIVATE
-        self.check_solved_as_lp(arg='reduced costs')
+        self.check_problem_type(feature='reduced costs')
         #self._checker.typecheck_var(dvar)
         rcs = self._reduced_costs([dvar])
         return rcs[0]
@@ -4296,7 +4539,7 @@ class Model(object):
         :param dvars: a sequence of decision variables.
         :return: a sequence of float numbers, in the same order as the variable sequence.
         """
-        self.check_solved_as_lp(arg='reduced costs')
+        self.check_problem_type(feature='reduced costs')
         checked_vars = self._checker.typecheck_var_seq(dvars)
         return self._reduced_costs(checked_vars)
 
@@ -4306,6 +4549,42 @@ class Model(object):
         assert sol is not None
         sol.ensure_reduced_costs(model=self, engine= self.get_engine())
         return sol.get_reduced_costs(dvars)
+
+    def _var_basis_status1(self, dvar):
+        # internal
+        return self.var_basis_status([dvar])[0]
+
+    def var_basis_status(self, dvars):
+        self.check_problem_type(feature='basis status', requires_solution=False, accept_qxp=False)
+        checked_vars = self._checker.typecheck_var_seq(dvars)
+        return self._var_basis_status(checked_vars)
+
+    def _var_basis_status(self, dvars):
+        sol = self.solution
+        if sol:
+            sol.ensure_basis_statuses(model=self, engine= self.get_engine())
+            return sol.get_var_basis_statuses(dvars)
+        else:
+            var_basis, linct_basis = self.__engine.get_basis(self)
+            if not len(var_basis):
+                self.error("No basis is available")
+                return [BasisStatus.unknown]
+            else:
+                return [ BasisStatus.parse(var_basis.get(dv, -1)) for dv in dvars]
+
+    def has_basis(self):
+        """ returns True if the model contains basis information.
+
+
+
+        """
+        sol = self.solution
+        if sol:
+            sol.ensure_basis_statuses(model=self, engine= self.get_engine())
+            return sol.has_basis()
+        else:
+            var_basis, linct_basis = self.__engine.get_basis(self)
+            return len(var_basis) > 0
 
 
     DEFAULT_VAR_VALUE_QUOTED_SOLUTION_FMT = '  \"{varname}\"={value:.{prec}f}'
@@ -4552,8 +4831,10 @@ class Model(object):
             publish_name (string, optional): The published name of the KPI.
 
         Note:
-            If no publish_name is provided, DOcplex will use the name of the argument. If none,
-            it will use the string representation of the argument.
+            - If no publish_name is provided, DOcplex will try to access a 'name' attribute of the argument;
+            if none exists, it will use the tring representation of the argument , as returned by str().
+            - expression KPIs are not added to the model. In other terms, adding KPIs does not change the model
+            being solved.
 
         Example:
             `model.add_kpi(x+y+z, "Total Profit")` adds the expression `(x+y+z)` as a KPI with the name "Total Profit".
@@ -4771,7 +5052,7 @@ class Model(object):
         else:
             for sos in self.iter_sos():
                 if not sos.is_generated():
-                    copy_model._register_sos(sos.copy(copy_model, var_mapping))
+                    copy_model._create_engine_sos(sos.copy(copy_model, var_mapping))
 
         # parameters
         for p in self.parameters.iter_params():
@@ -4875,10 +5156,18 @@ class Model(object):
         else:
             return None
 
+    def get_engine_parameter_value(self, param):
+        return self.__engine.get_parameter(param)
+
     def apply_parameters(self):
         self._apply_parameters_to_engine(self.parameters)
 
+    def apply_one_parameter(self, param):
+        # internal
+        self.__engine.set_parameter(param, param.value)
+
     def _apply_parameters_to_engine(self, parameters_to_use):
+        # internal
         if parameters_to_use is not None:
             self_engine = self.__engine
             for param in parameters_to_use:
@@ -4984,8 +5273,16 @@ class Model(object):
     def _add_sos(self, dvars, sos_type, name=None):
         # INTERNAL
         new_sos = self._lfactory.new_sos(dvars, sos_type=sos_type, name=name)
+        sos_index = self.__engine.create_sos(new_sos)
         self._register_sos(new_sos)
+        new_sos.set_index(sos_index)
         return new_sos
+
+    def _create_engine_sos(self, new_sos):
+        # internal
+        sos_index = self.__engine.create_sos(new_sos)
+        self._register_sos(new_sos)
+        new_sos.set_index(sos_index)
 
     def _register_sos(self, new_sos):
         self._allsos.append(new_sos)
@@ -5009,6 +5306,7 @@ class Model(object):
         ''' Clears all SOS sets in the model.
         '''
         self._allsos = []
+        self.__engine.clear_all_sos()
 
     def _generate_sos(self, sos_type):
         # INTERNAL
@@ -5076,8 +5374,8 @@ class Model(object):
             self._checker.fatal("argument 'breaksxy' must be defined")
         if postslope is None:
             self._checker.fatal("argument 'postslope' must be defined")
-        PwlFunction.check_number(self._checker, preslope)
-        PwlFunction.check_number(self._checker, postslope)
+        PwlFunction.check_number(self, preslope)
+        PwlFunction.check_number(self, postslope)
         PwlFunction.check_list_pair_breaksxy(self._checker, breaksxy)
         return self._piecewise(PwlFunction._PwlAsBreaks(preslope, breaksxy, postslope), name)
 
@@ -5107,9 +5405,9 @@ class Model(object):
         Returns:
             The newly added piecewise linear function.
         """
-        PwlFunction.check_number(self._checker, lastslope)
-        PwlFunction.check_number_pair(self._checker, anchor)
-        PwlFunction.check_list_pair_slope_breakx(self._checker, slopebreaksx, anchor)
+        PwlFunction.check_number(self, lastslope)
+        PwlFunction.check_number_pair(self, anchor)
+        PwlFunction.check_list_pair_slope_breakx(self, slopebreaksx, anchor)
         return self._piecewise(PwlFunction._PwlAsSlopes(slopebreaksx, lastslope, anchor), name)
 
     def add_piecewise_constraint(self, y, pwlf, x, name=None):
@@ -5129,7 +5427,7 @@ class Model(object):
         self.__allpwlfuncs.append(pwl_func)
         return pwl_func
 
-    def _add_pwl_expr(self, pwl_func, arg, yvar=None, name=None, resolve=True):
+    def _add_pwl_expr(self, pwl_func, arg, yvar=None, resolve=True):
         pwl_func_usage_counter = self._pwl_counter.get(pwl_func, 0) + 1
         pwl_expr = self._lfactory.new_pwl_expr(pwl_func, arg, pwl_func_usage_counter, y_var=yvar, resolve=resolve)
         return pwl_expr
@@ -5235,4 +5533,21 @@ class Model(object):
     def set_constraint_priority(self, ct, prio):
         # INTERNAL
         self._constraint_priority_dict[ct] = prio
+
+    def add_lazy_constraints(self, lazy_cts):
+        lazy_cts_ = self._checker.typecheck_constraint_seq(lazy_cts, check_linear=True, accept_range=False)
+        self._lazy_constraints.extend(lazy_cts_)
+        self.__engine.add_lazy_constraints(lazy_cts_)
+
+    def add_lazy_constraint(self, lazy_ct):
+        self._checker.typecheck_linear_constraint(lazy_ct, accept_range=False)
+        self._lazy_constraints.append(lazy_ct)
+        self.__engine.add_lazy_constraints([lazy_ct])
+
+    def clear_lazy_constraints(self):
+        self._lazy_constraints = []
+        self.__engine.clear_lazy_constraints()
+
+    def iter_lazy_constraints(self):
+        return iter(self._lazy_constraints)
 

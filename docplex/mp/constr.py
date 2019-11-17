@@ -3,8 +3,8 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import ModelingObject, Priority, _BendersAnnotatedMixin
-from docplex.mp.constants import ComparisonType, UpdateEvent, CplexScope
+from docplex.mp.basic import ModelingObject, ModelingObjectBase, Priority, _BendersAnnotatedMixin
+from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
 
@@ -192,6 +192,9 @@ class BinaryConstraint(AbstractConstraint):
         """
         return self._right_expr
 
+    def get_var_coef(self, dvar):
+        return self._left_expr.unchecked_get_coef(dvar) - self._right_expr.unchecked_get_coef(dvar)
+
     def to_string(self):
         """ Returns a string representation of the constraint.
 
@@ -345,6 +348,9 @@ class BinaryConstraint(AbstractConstraint):
         self._left_expr.resolve()
         self._right_expr.resolve()
 
+    def is_discrete(self):
+        return self.get_left_expr().is_discrete() and self.get_right_expr().is_discrete()
+
 
 class LinearConstraint(BinaryConstraint, LinearOperand):
     """ The class that models all constraints of the form `<expr1> <OP> <expr2>`,
@@ -356,6 +362,20 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         BinaryConstraint.__init__(self, model, left_expr, ctsense, right_expr, name)
         left_expr.notify_used(self)
         right_expr.notify_used(self)
+
+    def check_name(self, new_name):
+        if new_name is not None:
+            self.check_lp_name(new_name)
+
+    def set_name(self, new_name):
+        # INTERNAL
+        self.check_name(new_name)
+        if self.has_valid_index():
+            self._model.set_linear_constraint_name(self, new_name)
+        else:
+            self._set_name(new_name)
+
+    name = property(ModelingObjectBase.get_name, set_name)
 
     def notify_used_in_logical_ct(self, lct):
         self._super_ct = lct
@@ -370,14 +390,11 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def cplex_range_value(self):
         return 0.0
 
-    def is_discrete(self):
-        return self.get_left_expr().is_discrete() and self.get_right_expr().is_discrete()
-
     def copy(self, target_model, var_map):
         copied_left = self.left_expr.copy(target_model, var_map)
         copied_right = self.right_expr.copy(target_model, var_map)
         copy_name = self.name
-        return LinearConstraint(target_model, copied_left, self.sense, copied_right, copy_name)
+        return self.__class__(target_model, copied_left, self.sense, copied_right, copy_name)
 
     @property
     def sense(self):
@@ -449,7 +466,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def _no_linear_ct_in_logical_test_error(self):
         if self.sense == ComparisonType.EQ:
             # for equality testing there -is- a workaround
-            msg = "Cannot use == to test expression equality, try using Python is: {0!s}".format(self)
+            msg = "Cannot use == to test expression equality, try using Python is operator or method equals: {0!s}".format(self)
         else:
             msg = "Cannot convert a linear constraint to boolean: {0!s}".format(self)
         raise TypeError(msg)
@@ -604,18 +621,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         """
         return self._model._slack_value1(self)
 
-    def generate_ordered_vars(self):
-        # INTERNAL
-        left_expr = self.left_expr
-        for lv in left_expr.iter_variables():
-            yield lv
-        for rv in self.right_expr.iter_variables():
-            if rv not in left_expr:
-                yield rv
-
-    def get_var_coef(self, dvar):
-        return self._left_expr.unchecked_get_coef(dvar) - self._right_expr.unchecked_get_coef(dvar)
-
     def iter_net_linear_coefs(self):
         # INTERNAL
         left_expr = self._left_expr
@@ -731,17 +736,17 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def __and__(self, other):
         return self.logical_and(other)
 
-    def _check_logical_operand(self, other):
+    def _check_logical_operand(self, banner, other):
         if not isinstance(other, LinearConstraint):
-            self.fatal('LinearConstraint.or() expects another linear constraint, got: {0!r}', other)
+            self.fatal('{0} expects another linear constraint, {1!r} was passed', banner, other)
         self._check_is_discrete(other)
 
     def logical_or(self, other):
-        self._check_logical_operand(other)
+        self._check_logical_operand("LinearConstraint.or()", other)
         return self.get_linear_factory().new_constraint_or(self, other)
 
     def logical_and(self, other):
-        self._check_logical_operand(other)
+        self._check_logical_operand("LinearConstraint.and()", other)
         return self.get_linear_factory().new_constraint_and(self, other)
 
     def __rshift__(self, other):
@@ -915,7 +920,7 @@ class RangeConstraint(AbstractConstraint):
         yield self._expr
 
     def cplex_range_value(self, do_raise=True):
-        return self.static_cplex_range_value(self, self._lb, self._ub, lambda : "Range has infeasible domain: {0!s}".format(self),
+        return self.static_cplex_range_value(self, self._lb, self._ub, lambda: "Range has infeasible domain: {0!s}".format(self),
                                              do_raise=do_raise)
 
     @classmethod
@@ -963,7 +968,6 @@ class RangeConstraint(AbstractConstraint):
         return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".\
             format(printable_name, self.lb, self._expr, self.ub)
 
-
     def resolve(self):
         self._expr.resolve()
 
@@ -979,6 +983,40 @@ class RangeConstraint(AbstractConstraint):
     @benders_annotation.setter
     def benders_annotation(self, new_anno):
         self.set_benders_annotation(new_anno)
+
+
+class NotEqualConstraint(LinearConstraint):
+
+    def __init__(self, model, negated_eqct, name=None):
+        # assume negated_eqct is the equality constraint we want to negate
+        self._negated_ct = negated_eqct
+        aux_eq_ct_status = self._negated_ct.get_resolved_status_var()
+        zero = model._lfactory.new_zero_expr()
+        LinearConstraint.__init__(self, model, aux_eq_ct_status, ComparisonType.EQ, zero, name)
+        self.lock_discrete()
+
+    def to_string(self):
+        eqct = self._negated_ct
+        return "{0} != {1}".format(eqct._left_expr, eqct._right_expr)
+
+    def set_sense(self, new_sense):
+        self.fatal("cannot modify sense of a not_equal constraint: {0!s}", self)
+
+    @property
+    def negated_constraint(self):
+        return self._negated_ct
+
+    def __str__(self):
+        """ Returns a string representation of the not equals constraint.
+
+        Returns:
+            A string.
+        """
+        return self.to_string()
+
+    def __repr__(self):
+        return "docplex.mp.NotEquals({0}, {1})". \
+            format(self._left_expr, self._right_expr)
 
 
 class LogicalConstraint(AbstractConstraint):
@@ -1243,8 +1281,6 @@ class QuadraticConstraint(BinaryConstraint):
     def _get_index_scope(self):
         return self._model._quadct_scope
 
-
-
     __slots__ = ()
 
     def is_trivial(self):
@@ -1362,30 +1398,29 @@ class PwlConstraint(AbstractConstraint):
 
     """
 
-    __slots__ = ('_pwl_expr', '_pwl_func', '_expr', '_y')
+    __slots__ = ('_pwl_expr', '_pwl_func', '_input_var', '_y')
 
     def __init__(self, model, pwl_expr, name=None):
         AbstractConstraint.__init__(self, model, name)
         self._pwl_expr = pwl_expr
         self._pwl_func = pwl_expr.pwl_func
-        self._expr = pwl_expr._x_var
+        self._input_var = pwl_expr._x_var
         self._y = None
 
     def resolve(self):
         self._pwl_expr.resolve()
 
     def is_satisfied(self, solution, tolerance):
-        expr_value = self._expr._get_solution_value(solution)
+        expr_value = self._input_var._get_solution_value(solution)
         y_value = solution._get_var_value(self._y)
         computed_f_expr_value = self._pwl_func.evaluate(expr_value)
         return ComparisonType.almost_equal(y_value, computed_f_expr_value, tolerance)
-
 
     @property
     def expr(self):
         """ This property returns the linear expression of the piecewise linear constraint.
         """
-        return self._expr
+        return self._input_var
 
     @property
     def pwl_func(self):
@@ -1403,9 +1438,6 @@ class PwlConstraint(AbstractConstraint):
 
     @property
     def usage_counter(self):
-        """ This property returns the usage counter of the piecewise linear function associated with the
-        piecewise linear constraint.
-        """
         return self._pwl_expr.usage_counter
 
     def _get_index_scope(self):
@@ -1417,11 +1449,19 @@ class PwlConstraint(AbstractConstraint):
         Returns:
            An iterator object.
         """
-        y = self.y
-        yield y
-        for v in self.expr.iter_variables():
-            if v is not y:
-                yield v
+        yield self.y
+        yield self._input_var
+
+
+    def iter_extended_variables(self):
+        # iterates on all extended variables involved in the computation
+        # yvar, xavr, plus all argument rexpr vars
+        # if argument var is identical to the input var, it is returned twice...?
+        yield self.y
+        yield self._input_var
+        for v in self._pwl_expr._argument_expr.iter_variables():
+            yield v
+
 
     def get_var_coef(self, dvar):
         if dvar is self.y:

@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -517,6 +517,21 @@ class CpoModel(object):
          * In integer variable, if the domain is not fixed to a single value, only a single range of values is allowed.
            If the variable domain is sparse, the range domain_min..domain_max is used.
 
+        An empty starting point can be created using method :meth:`~CpoModel.create_empty_solution`, and then filled
+        using dedicated methods :meth:`~docplex.cp.solution.CpoModelSolution.add_integer_var_solution` and
+        :meth:`~docplex.cp.solution.CpoModelSolution.add_interval_var_solution`, or using indexed assignment
+        as in the following example:
+        ::
+
+            mdl = CpoModel()
+            a = integer_var(0, 3)
+            b = interval_var(length=(1, 4))
+            . . .
+            stp = mdl.create_empty_solution()
+            stp[a] = 2
+            stp[b] = (2, 3, 4)
+            mdl.set_starting_point(stp)
+
         Starting point is available for CPO solver release greater or equal to 12.7.0.
 
         Args:
@@ -536,13 +551,27 @@ class CpoModel(object):
         return self.starting_point
 
 
+    def create_empty_solution(self):
+        """ Create an empty model solution that can be filled to be used as a starting point.
+
+        Returns:
+            New empty model solution, object of class :class:`~docplex.cp.solution.CpoModelSolution`
+        """
+        return CpoModelSolution()
+
+
     def add_kpi(self, expr, name=None):
         """ Add a Key Performance Indicator to the model.
 
         A Key Performance Indicators (KPI) is an expression whose value is considered as representative of the
         model solution and its quality.
 
-        The KPI expression can be:
+        For example, in a scheduling problem one may wish to minimize the makespan
+        (date at which all tasks are completed), but other values may be of interest, like the average job
+        completion time, or the maximum number of tasks executing in parallel over the horizon.
+        One can identify such expressions in the model by marking them as KPIs.
+
+        For CPO solver version lower than 12.9, KPI expressions are limited to:
 
          * an integer variable,
          * a Python lambda expression that computes the value of the KPI from the solve result given as parameter.
@@ -556,7 +585,11 @@ class CpoModel(object):
             mdl.add(a < b)
             mdl.add_kpi(lambda res: (res[a] + res[b]) / 2, "Average")
 
-        If the model is solved in a cloud context, these KPIs are associated to the objective value in the
+        For CPO solver version greater or equal to 12.9, KPI expressions can be any model expression.
+        KPI values are automatically displayed in the log, can be queried after the solve or for each solution,
+        and are exported to a CPO file when the model is exported.
+
+        If the model is solved in a cloud context, the KPIs are associated to the objective value in the
         solve details that are sent periodically to the client.
 
         Args:
@@ -566,7 +599,7 @@ class CpoModel(object):
                               If the expression has no name, an exception is raised.
         """
         ver = self.get_usable_format_version()
-        iskexpr = ver is not None and compare_natural(ver, '12.8.9') > 0
+        iskexpr = ver is not None and compare_natural(ver, '12.9') >= 0
 
         if isinstance(expr, CpoExpr):
             if iskexpr:
@@ -1435,7 +1468,7 @@ class CpoModel(object):
     def _get_calling_location(self):
         """ Determine the calling location, outside docplex.cp
         Returns:
-             Couplt (file, line), or None if impossible to determine
+             Couple (file, line), or None if impossible to determine
         """
         frm = inspect.currentframe()
         # Skip at least 2 frames (first called method + this one)

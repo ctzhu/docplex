@@ -45,7 +45,7 @@ from os.path import isfile, isabs
 
 from docplex.util.environment import get_environment
 
-from docplex.mp.utils import is_string, open_universal_newline
+from docplex.mp.utils import is_string, open_universal_newline, get_auto_publish_names
 from docplex.mp.environment import Environment
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.params.parameters import RootParameterGroup
@@ -141,30 +141,6 @@ def is_auto_publishing_solve_details(context):
         except AttributeError:
             auto_publish_details = False
     return auto_publish_details
-
-
-def get_auto_publish_names(context, prop_name, default_name):
-    # comparing auto_publish to boolean values because it can be a non-boolean
-    if context.solver.auto_publish is True:
-        return [default_name]
-    elif context.solver.auto_publish is False:
-        return None
-    name = context.solver.auto_publish[prop_name]
-    if isinstance(name, six.string_types):
-        # only one string value: make this the name of the table
-        # in a list with one object
-        name = [name]
-    elif name is True:
-        # if true, then use default name:
-        name = [default_name]
-    elif name is False:
-        # Need to compare explicitely to False
-        name = None
-    else:
-        # otherwise the kpi_table_name can be a collection-like of names,
-        # just return it
-        pass
-    return name
 
 
 def auto_publishing_result_output_names(context):
@@ -647,10 +623,14 @@ def create_default_auto_publish_context(defaults=True):
         auto_publish.solve_details = True
         auto_publish.result_output = 'solution.json'
         auto_publish.kpis_output = 'kpis.csv'
+        auto_publish.relaxations_output = 'relaxations.csv'
+        auto_publish.conflicts_output = 'conflicts.csv'
     else:
         auto_publish.solve_details = False
         auto_publish.result_output = None
         auto_publish.kpis_output = None
+        auto_publish.relaxations_output = None
+        auto_publish.conflicts_output = None
     return auto_publish
 
 

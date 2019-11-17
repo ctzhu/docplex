@@ -24,8 +24,8 @@ if psyst.lower() not in ('darwin', 'linux', 'windows', 'microsoft', 'aix'):
 
 # Check version of Python
 pv = sys.version_info
-if (pv < (2, 7)) or ((pv[0] == 3) and (pv < (3, 4) or pv >= (3, 7))):
-    msg = "DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x, 3.5.x and 3.6.x, not '{}'. Use it at your own risk."\
+if (pv < (2, 7)) or ((pv[0] == 3) and (pv < (3, 4) or pv >= (3, 8))):
+    msg = "DOcplex.CP is supported by Python versions 2.7.9+, 3.4.x, to 3.7.x, not '{}'. Use it at your own risk."\
         .format('.'.join(str(x) for x in pv))
     warnings.warn(msg, RuntimeWarning)
 

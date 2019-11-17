@@ -12,7 +12,7 @@ from docplex.mp.engine import DummyEngine
 from docplex.mp.utils import DOcplexException, str_holo, iter_one
 from docplex.mp.compat23 import izip
 
-from docplex.mp.constants import ConflictStatus, SolveAttribute
+from docplex.mp.constants import ConflictStatus
 from docplex.mp.constr import IndicatorConstraint, QuadraticConstraint, LinearConstraint, RangeConstraint, BinaryConstraint, \
     EquivalenceConstraint
 from docplex.mp.progress import ProgressData
@@ -39,6 +39,34 @@ from cplex._internal._procedural import chgcoeflist, chgobj, chgrhs, chgqpcoef, 
     addindconstr, addrows, chgrngval, addpwl, getnumpwl
 from cplex._internal._subinterfaces import IndicatorConstraintInterface
 from cplex.exceptions import CplexError, CplexSolverError
+try:
+    # from 12.9 up
+    from cplex._internal._procedural import multiobjsetobj
+    DEFAULT_CPX_NO_WEIGHT_CHANGE = cpx_cst.CPX_NO_WEIGHT_CHANGE
+    DEFAULT_CPX_NO_PRIORITY_CHANGE = cpx_cst.CPX_NO_PRIORITY_CHANGE
+    DEFAULT_CPX_NO_ABSTOL_CHANGE = cpx_cst.CPX_NO_ABSTOL_CHANGE
+    DEFAULT_CPX_NO_RELTOL_CHANGE = cpx_cst.CPX_NO_RELTOL_CHANGE
+
+    DEFAULT_CPX_STAT_MULTIOBJ_OPTIMAL = cpx_cst.CPX_STAT_MULTIOBJ_OPTIMAL
+    DEFAULT_CPX_STAT_MULTIOBJ_INForUNBD = cpx_cst.CPX_STAT_MULTIOBJ_INForUNBD
+    DEFAULT_CPX_STAT_MULTIOBJ_UNBOUNDED = cpx_cst.CPX_STAT_MULTIOBJ_UNBOUNDED
+    DEFAULT_CPX_STAT_MULTIOBJ_INFEASIBLE = cpx_cst.CPX_STAT_MULTIOBJ_INFEASIBLE
+    DEFAULT_CPX_STAT_MULTIOBJ_NON_OPTIMAL = cpx_cst.CPX_STAT_MULTIOBJ_NON_OPTIMAL
+    DEFAULT_CPX_STAT_MULTIOBJ_STOPPED = cpx_cst.CPX_STAT_MULTIOBJ_STOPPED
+
+except ImportError:
+    multiobjsetobj = None
+    DEFAULT_CPX_NO_WEIGHT_CHANGE = None
+    DEFAULT_CPX_NO_PRIORITY_CHANGE = None
+    DEFAULT_CPX_NO_ABSTOL_CHANGE = None
+    DEFAULT_CPX_NO_RELTOL_CHANGE = None
+
+    DEFAULT_CPX_STAT_MULTIOBJ_OPTIMAL = None
+    DEFAULT_CPX_STAT_MULTIOBJ_INForUNBD = None
+    DEFAULT_CPX_STAT_MULTIOBJ_UNBOUNDED = None
+    DEFAULT_CPX_STAT_MULTIOBJ_INFEASIBLE = None
+    DEFAULT_CPX_STAT_MULTIOBJ_NON_OPTIMAL = None
+    DEFAULT_CPX_STAT_MULTIOBJ_STOPPED = None
 
 try:
     # from 12.7.1 up
@@ -62,13 +90,13 @@ from docplex.mp.engine import NoSolveEngine
 
 try:
     from cplex._internal._pwl import PWLConstraintInterface
-except ImportError:  #  pragma: no cover
+except ImportError:  # pragma: no cover
     PWLConstraintInterface = None
 
 try:
     cpx_indicator_type_ifthen = cpx_cst.CPX_INDICATOR_IF
     cpx_indicator_type_equiv = cpx_cst.CPX_INDICATOR_IFANDONLYIF
-except AttributeError:  #  pragma: no cover
+except AttributeError:  # pragma: no cover
     # handle previous versions without indicator type
     cpx_indicator_type_ifthen = None
     cpx_indicator_type_equiv = None
@@ -87,7 +115,7 @@ try:
                       CplexScope.QUAD_CT_SCOPE: cpx_cst.CPX_ANNOTATIONOBJ_QC,
                       CplexScope.SOS_SCOPE: cpx_cst.CPX_ANNOTATIONOBJ_SOS}
 
-except (ImportError, AttributeError):  #  pragma: no cover
+except (ImportError, AttributeError):  # pragma: no cover
     LongAnnotationInterface = None
     setlonganno = None
     annotation_map = {}
@@ -118,8 +146,15 @@ def fast_add_linear(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
                                           range_values=ranges)
 
 
+def _is_defined_multiobjsetobj():
+    if multiobjsetobj is None:
+        return False
+    return True
+
+
 def static_fast_set_linear_obj(cpx, indices, obj_coefs):
     chgobj(cpx._env._e, cpx._lp, indices, obj_coefs)
+
 
 class ConnectListenersCallback(MIPInfoCallback):
     RELATIVE_EPS = 1e-5
@@ -167,8 +202,6 @@ class ConnectListenersCallback(MIPInfoCallback):
                 cpx_incumbent_values = self.get_incumbent_values()
                 for sl in self.__solution_listeners:
                     sl.notify_solution(cpx_incumbent_values)
-
-
 
 
 # internal
@@ -288,12 +321,12 @@ def _safe_cplex():
     try:
         cpxv = cplex.__version__
         cpx = cplex.Cplex()
-    except AttributeError:  #  pragma: no cover
+    except AttributeError:  # pragma: no cover
         # older version: use an instance
         cpx = cplex.Cplex()
         cpxv = cpx.get_version()
 
-    if cpxv.startswith('12.7.0'):  #  pragma: no cover
+    if cpxv.startswith('12.7.0'):  # pragma: no cover
         if cpx:
             del cpx
         # create a safe wrapper for RTC-31555
@@ -312,7 +345,7 @@ class CplexEngine(DummyEngine):
     cplex_error_re = re.compile(r'CPLEX Error\s+(\d+)')
 
     if cpx_indicator_type_equiv is None:
-        supports_typed_indicators = False  #  pragma: no cover
+        supports_typed_indicators = False  # pragma: no cover
     else:
         try:
             # noinspection PyStatementEffect
@@ -327,8 +360,9 @@ class CplexEngine(DummyEngine):
             self._cplex.get_version()) if not ok else None
         return ok, msg
 
-    def solved_as_lp(self):
-        return self._cplex.get_problem_type() == 0
+    def solved_as_mip(self):
+        return self._cplex.get_problem_type() not in\
+               {cpx_cst.CPXPROB_LP, cpx_cst.CPXPROB_QP, cpx_cst.CPXPROB_QCP}
 
     def __init__(self, mdl, **kwargs):
         """
@@ -339,7 +373,7 @@ class CplexEngine(DummyEngine):
         """
         DummyEngine.__init__(self)
         cpx = cplex.Cplex()
-        if cpx.get_version().startswith('12.7.0'):  #  pragma: no cover
+        if cpx.get_version().startswith('12.7.0'):  # pragma: no cover
             del cpx
             # create a safe wrapper for RTC-31555
             cpx = _SafeCplexWrapper()
@@ -426,7 +460,6 @@ class CplexEngine(DummyEngine):
             cpx.set_results_stream(streams[1])
             cpx.set_error_stream(streams[2])
             cpx.set_warning_stream(streams[3])
-
 
     def set_streams(self, out):
         self_log_output = self._saved_log_output
@@ -581,35 +614,50 @@ class CplexEngine(DummyEngine):
         self_var_ubs[dvar] = float(ub)  # force float here: numpy types will crash
 
 
-    def make_attribute_map_from_scope(self, mdl, cplexfn, scope):
+    def make_attribute_map_from_scope_fn(self, mdl, cplexfn, scope):
         # transforms an array of cplex values into a map
         # using the scope object as a mapper
         all_values = cplexfn()
+        return self.make_attribute_map_from_scope_list(mdl, all_values, scope)
+
+    @classmethod
+    def make_attribute_map_from_scope_list(cls, mdl, values, scope, keep_zeros=False):
         value_map = {}
-        for ix, cplex_value in enumerate(all_values):
+        for ix, cplex_value in enumerate(values):
             mobj = scope(ix)
             if mobj is None:
                 mdl.warning("No object with index: {}", ix)
-            elif cplex_value:
+            elif keep_zeros or cplex_value:
                 value_map[mobj] = cplex_value
 
         return value_map
 
     def get_all_reduced_costs(self, mdl):
-        return self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_reduced_costs, mdl._var_scope)
+        return self.make_attribute_map_from_scope_fn(mdl, self._cplex.solution.get_reduced_costs, mdl._var_scope)
 
     def get_all_dual_values(self, mdl):
-        return self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_dual_values, mdl._linct_scope)
+        return self.make_attribute_map_from_scope_fn(mdl, self._cplex.solution.get_dual_values, mdl._linct_scope)
 
     def get_all_slack_values(self, mdl):
-        lin_slacks =  self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_linear_slacks, mdl._linct_scope)
-        quad_slacks = self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_quadratic_slacks, mdl._quadct_scope)
-        ind_slacks = self.make_attribute_map_from_scope(mdl, self._cplex.solution.get_indicator_slacks, mdl._indicator_scope)
+        lin_slacks  = self.make_attribute_map_from_scope_fn(mdl, self._cplex.solution.get_linear_slacks,    mdl._linct_scope)
+        quad_slacks = self.make_attribute_map_from_scope_fn(mdl, self._cplex.solution.get_quadratic_slacks, mdl._quadct_scope)
+        ind_slacks  = self.make_attribute_map_from_scope_fn(mdl, self._cplex.solution.get_indicator_slacks, mdl._indicator_scope)
         # dict : cplex_scope -> dict from obj to slack
         return {CplexScope.LINEAR_CT_SCOPE: lin_slacks,
                 CplexScope.QUAD_CT_SCOPE: quad_slacks,
                 CplexScope.IND_CT_SCOPE: ind_slacks}
 
+    def get_basis(self, mdl):
+        try:
+            status_vars, status_licnts = self._cplex.solution.basis.get_basis()
+            var_statuses_map = self.make_attribute_map_from_scope_list(mdl, status_vars, mdl._var_scope, keep_zeros=True)
+            status_linearct_map = self.make_attribute_map_from_scope_list(mdl, status_licnts, mdl._linct_scope, keep_zeros=True)
+            return var_statuses_map, status_linearct_map
+        except CplexError as cpxe:
+            if cpxe.args[2] == 1262:  # code 1262 is "no basis exists"
+                return {}, {}
+            else:
+                raise
 
     # the returned list MUST be of size 2 otherwise the wrapper will crash.
     _trivial_linexpr = [[], []]
@@ -708,10 +756,7 @@ class CplexEngine(DummyEngine):
                 break
 
         range_values = [ct.cplex_range_value() for ct in linct_seq] if has_ranges else None
-
-        ret_add = fast_add_linear(self._cplex, cpx_linexprs, cpx_sense_string, cpx_rhss, cpx_names,
-                                        ranges=range_values)
-
+        ret_add = fast_add_linear(self._cplex, cpx_linexprs, cpx_sense_string, cpx_rhss, cpx_names, ranges=range_values)
         return self._allocate_range_index(size=block_size, ret_value=ret_add, scope=self._lincts_scope)
 
     def create_range_constraint(self, range_ct):
@@ -738,6 +783,12 @@ class CplexEngine(DummyEngine):
         #                         range_values=cpx_range_values,
         #                         names=cpx_names)
         return self._allocate_one_index(ret_value=ret_add, scope=self._lincts_scope, expect_range=True)
+
+    def rename_linear_constraint(self, linct, new_name):
+        safe_new_name = new_name or ""
+        linct_index = linct.get_index()
+        cpxlinears = self._cplex.linear_constraints
+        cpxlinears.set_names([(linct_index, safe_new_name)])
 
     def create_indicator_constraint(self, indicator):
         ret = self.create_batch_indicator_constraints(iter_one(indicator))
@@ -971,6 +1022,26 @@ class CplexEngine(DummyEngine):
             cpx = self._cplex
             chgobj(cpx._env._e, cpx._lp, indices, koefs)
 
+    def _fast_set_linear_multiobj(self, objidx, linexpr,
+                                  weight=DEFAULT_CPX_NO_WEIGHT_CHANGE,
+                                  priority=DEFAULT_CPX_NO_PRIORITY_CHANGE,
+                                  abstol=DEFAULT_CPX_NO_ABSTOL_CHANGE,
+                                  reltol=DEFAULT_CPX_NO_RELTOL_CHANGE,
+                                  objname=None):
+        nterms = linexpr.number_of_terms()
+        indices = [-1] * nterms
+        koefs = [0] * nterms
+        if nterms:
+            i = 0
+            for dv, k in linexpr.iter_terms():
+                indices[i] = dv._index
+                koefs[i] = float(k)
+                i += 1
+
+        cpx = self._cplex
+        multiobjsetobj(cpx._env._e, cpx._lp, objidx, objind=indices, objval=koefs,
+                       priority=priority, weight=weight, abstol=abstol, reltol=reltol, objname=objname)
+
     def _fast_update_linearct_coefs(self, ct_index, var_indices, coefs):
         assert len(var_indices) == len(coefs)
 
@@ -1103,6 +1174,14 @@ class CplexEngine(DummyEngine):
         self._clear_linear_objective_from_cplex(cpxobj)
         self._clear_quad_objective_from_cplex(cpxobj)
 
+    def _clear_multiobj_from_cplex(self, cpx_multiobj):
+        numobj = cpx_multiobj.get_num()
+        for objidx in range(numobj):
+            cpx_linear = cpx_multiobj.get_linear(objidx)
+            zap_linear = [(idx, 0) for idx, k in enumerate(cpx_linear) if k]
+            if zap_linear:
+                cpx_multiobj.set_linear(objidx, zap_linear)
+
     def _clear_linear_objective_from_cplex(self, cpxobj):
         # clear linear part
         cpx_linear = cpxobj.get_linear()
@@ -1158,6 +1237,10 @@ class CplexEngine(DummyEngine):
         else:
             # no clearing
             pass
+        # # if a multi-objective has been defined, clear it
+        # cpx_multiobj = self._cplex.multiobj
+        # if cpx_multiobj is not None:
+        #     self._clear_multiobj_from_cplex(cpx_multiobj=cpx_multiobj)
 
         # --- set offset
         cpx_objective.set_offset(float(new_objexpr.get_constant()))
@@ -1167,6 +1250,48 @@ class CplexEngine(DummyEngine):
             self._fast_set_linear_objective(new_objexpr.linear_part)
         else:
             self._fast_set_linear_objective2(linexpr=new_objexpr)
+
+    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs, multiobj_params=None,
+                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        self._check_multi_objective_support()
+
+        cpx_multiobj = self._cplex.multiobj
+        # old multi objective
+
+        if old_multiobjexprs is not None:
+            # Not safe to use the old expressions for clearing, in case they have been modified for the new expressions
+            self._clear_multiobj_from_cplex(cpx_multiobj=cpx_multiobj)
+        else:
+            # no clearing
+            pass
+        # # if a regular single objective has been defined, clear it
+        # cpx_objective = self._cplex.objective
+        # if cpx_objective is not None:
+        #     self._clear_objective_from_cplex(cpxobj=cpx_objective)
+
+        # --- set number of objectives
+        cpx_multiobj.set_num(len(new_multiobjexprs))
+        for objidx, new_objexpr in enumerate(new_multiobjexprs):
+            # --- set offset
+            cpx_multiobj.set_offset(objidx, float(new_objexpr.get_constant()))
+            # --- set coefficients
+            weight = DEFAULT_CPX_NO_WEIGHT_CHANGE
+            priority = DEFAULT_CPX_NO_PRIORITY_CHANGE
+            abstol = DEFAULT_CPX_NO_ABSTOL_CHANGE
+            reltol = DEFAULT_CPX_NO_RELTOL_CHANGE
+            objname = None
+            if priorities is not None and len(priorities) >= objidx + 1:
+                priority = priorities[objidx]
+            if weights is not None and len(weights) >= objidx + 1:
+                weight = weights[objidx]
+            if abstols is not None and len(abstols) >= objidx + 1:
+                abstol = abstols[objidx]
+            if reltols is not None and len(reltols) >= objidx + 1:
+                reltol = reltols[objidx]
+            if objnames is not None and len(objnames) >= objidx + 1:
+                objname = objnames[objidx]
+            self._fast_set_linear_multiobj(objidx, linexpr=new_objexpr, weight=weight, priority=priority,
+                                           abstol=abstol, reltol=reltol, objname=objname)
 
     def _set_linear_objective_coefs(self, cpx_objective, linexpr):
         # NOTE: convert to float as numpy doubles will crash cplex....
@@ -1200,6 +1325,15 @@ class CplexEngine(DummyEngine):
         else:
             self._clear_linear_objective(expr)
 
+    def _clear_multiobj(self, exprs):
+        # INTERNAL
+        self._resync_if_needed()
+        for objidx, expr in enumerate(exprs):
+            if expr.is_constant():
+                pass  # resetting offset will do.
+            else:
+                self._clear_linear_multiobj(objidx, expr)
+
     def _clear_linear_objective(self, linexpr):
         # compute the sequence of  var indices, then an array of zeroes
         size = linexpr.number_of_terms()
@@ -1212,6 +1346,19 @@ class CplexEngine(DummyEngine):
             zeros = [0] * size
             cpx = self._cplex
             chgobj(cpx._env._e, cpx._lp, indices, zeros)
+
+    def _clear_linear_multiobj(self, objidx, linexpr):
+        # compute the sequence of var indices, then an array of zeroes
+        size = linexpr.number_of_terms()
+        if size:
+            indices = [-1] * size
+            i = 0
+            for dv, _ in linexpr.iter_terms():
+                indices[i] = dv._index
+                i += 1
+            zeros = [0] * size
+            cpx = self._cplex
+            multiobjsetobj(cpx._env._e, cpx._lp, objidx, objind=indices, objval=zeros)
 
     @staticmethod
     def status2string(cpx_status):  # pragma: no cover
@@ -1231,7 +1378,9 @@ class CplexEngine(DummyEngine):
                                           113,  # CPXMIP_ABORT_FEAS
                                           116,  # CPXMIP_FAIL_FEAS_NO_TREE : integer sol exists (????)
                                           129,  # CPXMIP_OPTIMAL_POPULATED
-                                          130  # CPXMIP_OPTIMAL_POPULATED_TOL
+                                          130,  # CPXMIP_OPTIMAL_POPULATED_TOL
+                                          301,  # CPX_STAT_MULTIOBJ_OPTIMAL
+                                          305  # CPX_STAT_MULTIOBJ_NON_OPTIMAL
                                           })
 
     @classmethod
@@ -1250,7 +1399,8 @@ class CplexEngine(DummyEngine):
                                           cpx_cst.CPX_STAT_FEASIBLE_RELAXED_INF,
                                           cpx_cst.CPX_STAT_FEASIBLE_RELAXED_QUAD,
                                           cpx_cst.CPX_STAT_OPTIMAL_RELAXED_INF,
-                                          cpx_cst.CPX_STAT_OPTIMAL_RELAXED_SUM
+                                          cpx_cst.CPX_STAT_OPTIMAL_RELAXED_SUM,
+                                          cpx_cst.CPXMIP_ABORT_RELAXED
                                           }).union(_CPLEX_SOLVE_OK_STATUSES)
 
     @classmethod
@@ -1332,20 +1482,37 @@ class CplexEngine(DummyEngine):
             if annotated_by_scope:
                 self._model.fatal('Annotations require CPLEX 12.7.1 or higher')
 
-    def _apply_sos(self, mdl):
-        # INTERNAL
-        cpx_sos = self._cplex.SOS
-        # start by deleting all SOS: du passe faisons table rase....
-        cpx_sos.delete()
-        for sos_set in mdl.iter_sos():
-            cpx_sos_type = sos_set.sos_type._cpx_sos_type()
-            indices = [dv.index for dv in sos_set.iter_variables()]
-            weights = sos_set.get_ranks()
-            # do NOT pass None to cplex/swig here --> crash
-            cpx_sos_name = sos_set._get_safe_name()
-            # call cplex...
-            sos_index = cpx_sos.add(type=cpx_sos_type, SOS=cplex.SparsePair(ind=indices, val=weights),
-                                    name=cpx_sos_name)
+    def create_sos(self, sos_set):
+        cpx_sos_type = sos_set.sos_type._cpx_sos_type()
+        indices = [dv.index for dv in sos_set.iter_variables()]
+        weights = sos_set.get_ranks()
+        # do NOT pass None to cplex/swig here --> crash
+        cpx_sos_name = sos_set._get_safe_name()
+        # call cplex...
+        sos_index = self._cplex.SOS.add(type=cpx_sos_type,
+                                        SOS=cplex.SparsePair(ind=indices, val=weights),
+                                        name=cpx_sos_name)
+        return sos_index
+
+    def clear_all_sos(self):
+        self._cplex.SOS.delete()
+
+    def add_lazy_constraints(self, lazy_cts):
+        # lazy_cts is a sequence of linear constraints
+        cpx_rhss = [ct.cplex_num_rhs() for ct in lazy_cts]
+        cpx_senses = "".join(ct.cplex_code() for ct in lazy_cts)
+        if self._model.ignore_names:
+            cpx_names = []
+        else:
+            cpx_names = [ct._get_safe_name() for ct in lazy_cts]
+        cpx_convert_fn = self.linear_ct_to_cplex
+        cpx_linexprs = [cpx_convert_fn(ct) for ct in lazy_cts]
+        # TODO: switch to proecedural API at some point...
+        self._cplex.linear_constraints.advanced.add_lazy_constraints(cpx_linexprs, cpx_senses, cpx_rhss, cpx_names)
+
+    def clear_lazy_constraints(self):
+        self._cplex.linear_constraints.advanced.free_lazy_constraints()
+
 
     def sync_equivalence_cts(self, mdl):
         if self.supports_typed_indicators:
@@ -1369,12 +1536,11 @@ class CplexEngine(DummyEngine):
 
     def _parse_cplex_exception_as_status(self, cpx_ex):
         cpx_ex_s = str(cpx_ex)
+        msg = cpx_ex_s
         for extype in ['CplexSolverError', 'CplexError']:
             prefix = 'cplex.exceptions.errors.{0}: '.format(extype)
             if cpx_ex_s.startswith(prefix):
                 msg = cpx_ex_s[len(prefix):]
-        else:
-            msg = cpx_ex_s
 
         cpx_code_match = self.cplex_error_re.match(msg)
         code = -1
@@ -1402,7 +1568,21 @@ class CplexEngine(DummyEngine):
         else:
             pass
 
-    def solve(self, mdl, parameters=None, lex_mipstart=None):
+    def _get_priorities_list_in_decreasing_order(self):
+        # Compute list of priorities in decreasing order
+        prio_list = [self._cplex.multiobj.get_priority(oidx) for oidx in range(self._cplex.multiobj.get_num())]
+        prio_set = set(prio_list)
+        inversed_ordered_prio = sorted(list(prio_set))
+        inversed_ordered_prio.reverse()
+        return inversed_ordered_prio
+
+    def _check_multi_objective_support(self):
+        if not _is_defined_multiobjsetobj():
+            msg = 'Multi-objectives require CPLEX version 12.9 or above, this is CPLEX version: {0}'.format(
+                self._cplex.get_version())
+            self._model.fatal(msg)
+
+    def solve(self, mdl, parameters=None, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         self._resync_if_needed()
 
         cpx = self._cplex
@@ -1428,7 +1608,7 @@ class CplexEngine(DummyEngine):
             self._sync_var_bounds()
             self._sync_annotations(mdl)
             self.sync_equivalence_cts(mdl)
-            self._apply_sos(mdl)
+            #self._apply_sos(mdl)
 
             if mdl.clean_before_solve:
                 self.clean_before_solve()
@@ -1447,13 +1627,45 @@ class CplexEngine(DummyEngine):
             elif mip_starts:
                 self._model.warning("Lexicographic solve ignored {0} mipstarts".format(len(mip_starts)))
 
-
             # --- end of mipstart block ---
 
             linear_nonzeros = cpx.linear_constraints.get_num_nonzeros()
             nb_columns = cpx.variables.get_num()
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
-            cpx.solve()  # returns nothing in Python
+
+
+            # # FOR TEST PURPOSE ---- TEMPORARY **************************************************************************
+            # cpx.write("/temp/cplex_model.lp", filetype="lp")
+
+            #Handle lex_timelimits list
+            if lex_timelimits is not None or lex_mipgaps is not None:
+                self._check_multi_objective_support()
+
+                # Get list of priorities in decreasing order
+                decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
+
+                if lex_timelimits is not None and len(lex_timelimits) != len(decreasing_ordered_prio):
+                    mdl.fatal("lex_timelimits list length does not match number of priorities for multiobjective solve")
+                if lex_mipgaps is not None and len(lex_mipgaps) != len(decreasing_ordered_prio):
+                    mdl.fatal("lex_mipgaps list length does not match number of priorities for multiobjective solve")
+                paramsets = []
+                for _ in decreasing_ordered_prio:
+                    paramset = cpx.create_parameter_set()
+                    paramsets.append(paramset)
+                if lex_timelimits is not None:
+                    for paramIdx, timelimit in enumerate(lex_timelimits):
+                        paramsets[paramIdx].add(cpx_cst.CPX_PARAM_TILIM, timelimit)
+                if lex_mipgaps is not None:
+                    for paramIdx, mipgap in enumerate(lex_mipgaps):
+                        paramsets[paramIdx].add(cpx_cst.CPX_PARAM_EPGAP, mipgap)
+                # If there is a single priority level, timelimit and mipgaps are handled at the cplex_parameters level
+                paramsets = paramsets if len(paramsets) > 1 else None
+
+                cpx.solve(paramsets=paramsets)
+
+            else:
+                cpx.solve()
+
             cpx_status = cpx.solution.get_status()
             cpx_status_string = self._cplex.solution.get_status_string(cpx_status)
             is_mip = cpx._is_MIP()
@@ -1534,7 +1746,17 @@ class CplexEngine(DummyEngine):
     def _make_solution(self, mdl, job_solve_status):
         cpx = self._cplex
         full_obj = cpx.solution.get_objective_value()
+        if _is_defined_multiobjsetobj() and cpx.multiobj.get_num() > 1:
+            full_obj = [cpx.solution.multiobj.get_objective_value(objidx) for objidx in range(cpx.multiobj.get_num())]
         rounded_obj = mdl.round_objective_if_discrete(full_obj)
+
+        # Build list of objectives value by priority level (ie: each priority level corresponds to blended objectives
+        # with same priority)
+        full_obj_by_prio = [full_obj]
+        if _is_defined_multiobjsetobj() and cpx.multiobj.get_num() > 1:
+            decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
+            full_obj_by_prio = [cpx.solution.multiobj.get_objval_by_priority(prio) for prio in decreasing_ordered_prio]
+        rounded_obj_by_prio = mdl.round_objective_if_discrete(full_obj_by_prio)
 
         if mdl.number_of_variables > 0:
             all_var_indices = [dvar.get_index() for dvar in mdl.iter_variables()]
@@ -1549,6 +1771,7 @@ class CplexEngine(DummyEngine):
         solution = SolveSolution.make_engine_solution(model=mdl,
                                                       var_value_map=var_value_map,
                                                       obj=rounded_obj,
+                                                      blended_obj_by_priority=rounded_obj_by_prio,
                                                       solved_by=self.get_name(),
                                                       solve_details=solve_details,
                                                       job_solve_status=job_solve_status)
@@ -1568,7 +1791,8 @@ class CplexEngine(DummyEngine):
         try:
             linear_nonzeros = cpx.linear_constraints.get_num_nonzeros()
             nb_columns = cpx.variables.get_num()
-            cpx_fn(*args)
+            if args:
+                cpx_fn(*args)
             cpx_status = cpx.solution.get_status()
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
             cpx_status_string = self._cplex.solution.get_status_string(cpx_status)
@@ -1709,6 +1933,7 @@ class CplexEngine(DummyEngine):
             # the first item is a number, the preference
             # the second item is a list of constraint indices.
             self._last_solve_details = self._run_cpx_op_with_details(cpx.feasopt, *cpx_relax_groups)
+
 
         # feasopt state is restored by now
         cpx_solution = self_cplex.solution
@@ -1977,7 +2202,11 @@ class CplexEngine(DummyEngine):
         # In this function we try to do the exact same mappings as the IloCplex C++ and Java classes.
         # However, this is not always possible since the C++ and Java implementations are not consistent
         # and sometimes they are even in error (see RTC-21923).
+
         cpx_status = self._cplex.solution.get_status()
+        # what status for relaxed solutions??
+        relaxed_solution_status = JobSolveStatus.INFEASIBLE_SOLUTION
+        #
         if cpx_status in {cpx_cst.CPXMIP_ABORT_FEAS,
                           cpx_cst.CPXMIP_DETTIME_LIM_FEAS,
                           cpx_cst.CPXMIP_FAIL_FEAS,
@@ -1999,19 +2228,23 @@ class CplexEngine(DummyEngine):
             # Hit a limit without a feasible solution: We don't know anything about the solution.
             return JobSolveStatus.UNKNOWN
         elif cpx_status in {cpx_cst.CPXMIP_OPTIMAL,
-                            cpx_cst.CPXMIP_OPTIMAL_TOL}:
+                            cpx_cst.CPXMIP_OPTIMAL_TOL,
+                            DEFAULT_CPX_STAT_MULTIOBJ_OPTIMAL}:
             return JobSolveStatus.OPTIMAL_SOLUTION
         elif cpx_status is cpx_cst.CPXMIP_SOL_LIM:
             #  return hasSolution(env, lp) ? JobSolveStatus.FEASIBLE_SOLUTION : JobSolveStatus.UNKNOWN;
             return JobSolveStatus.FEASIBLE_SOLUTION
-        elif cpx_status is cpx_cst.CPXMIP_INForUNBD:
+        elif cpx_status in {cpx_cst.CPXMIP_INForUNBD,
+                            DEFAULT_CPX_STAT_MULTIOBJ_INForUNBD}:
             return JobSolveStatus.INFEASIBLE_OR_UNBOUNDED_SOLUTION
         elif cpx_status in {cpx_cst.CPXMIP_UNBOUNDED,
-                            cpx_cst.CPXMIP_ABORT_RELAXATION_UNBOUNDED}:
+                            cpx_cst.CPXMIP_ABORT_RELAXATION_UNBOUNDED,
+                            DEFAULT_CPX_STAT_MULTIOBJ_UNBOUNDED}:
             return JobSolveStatus.UNBOUNDED_SOLUTION
-        elif cpx_status is cpx_cst.CPXMIP_INFEASIBLE:  # proven infeasible
+        elif cpx_status in {cpx_cst.CPXMIP_INFEASIBLE,
+                            DEFAULT_CPX_STAT_MULTIOBJ_INFEASIBLE}:  # proven infeasible
             return JobSolveStatus.INFEASIBLE_SOLUTION
-        elif cpx_status is cpx_cst.CPXMIP_OPTIMAL_INFEAS:  # optimal with unscaled infeasibilities
+        elif cpx_status == cpx_cst.CPXMIP_OPTIMAL_INFEAS:  # optimal with unscaled infeasibilities
             # DANIEL: What exactly do we return here? There is an optimal solution but that solution is
             # infeasible after unscaling.
             return JobSolveStatus.OPTIMAL_SOLUTION
@@ -2022,30 +2255,45 @@ class CplexEngine(DummyEngine):
             cpx_cst.CPXMIP_FEASIBLE  # problem feasible after phase I and solution available
         }):
             return JobSolveStatus.FEASIBLE_SOLUTION
+        ## -----------------
+        ## relaxation (feasopt) there is a relaxed (but infeasible) solution
+        ## for now we choose to return INFEASIBLE_SOLUTION
+        ##
         elif cpx_status in {cpx_cst.CPXMIP_FEASIBLE_RELAXED_INF,
                             cpx_cst.CPXMIP_FEASIBLE_RELAXED_QUAD,
                             cpx_cst.CPXMIP_FEASIBLE_RELAXED_SUM
                             }:
-            return JobSolveStatus.UNKNOWN
+            return relaxed_solution_status
         elif cpx_status in {cpx_cst.CPXMIP_OPTIMAL_RELAXED_INF,
                             cpx_cst.CPXMIP_OPTIMAL_RELAXED_QUAD,
                             cpx_cst.CPXMIP_OPTIMAL_RELAXED_SUM
                             }:
-            return JobSolveStatus.INFEASIBLE_SOLUTION
+            return relaxed_solution_status
+        elif cpx_status in {cpx_cst.CPX_STAT_FEASIBLE_RELAXED_INF,
+                            cpx_cst.CPX_STAT_FEASIBLE_RELAXED_QUAD,
+                            cpx_cst.CPX_STAT_FEASIBLE_RELAXED_SUM,
+                            }:
+            return relaxed_solution_status
+        elif cpx_status in {cpx_cst.CPX_STAT_OPTIMAL_RELAXED_INF,
+                            cpx_cst.CPX_STAT_OPTIMAL_RELAXED_QUAD,
+                            cpx_cst.CPX_STAT_OPTIMAL_RELAXED_SUM}:
+            return relaxed_solution_status
+
+        ## -------------------
 
         # populate status values
         elif cpx_status in {cpx_cst.CPXMIP_OPTIMAL_POPULATED
                             # ,cpx_cst.CPXMIP_OPTIMAL_POPULATED_TO
                             }:
             return JobSolveStatus.OPTIMAL_SOLUTION
-        elif cpx_status is cpx_cst.CPXMIP_POPULATESOL_LIM:
+        elif cpx_status == cpx_cst.CPXMIP_POPULATESOL_LIM:
             # minimal value for CPX_PARAM_POPULATE_LIM is 1! So there must be a solution
             return JobSolveStatus.FEASIBLE_SOLUTION
 
-        elif cpx_status is cpx_cst.CPX_STAT_OPTIMAL:
+        elif cpx_status == cpx_cst.CPX_STAT_OPTIMAL:
             return JobSolveStatus.OPTIMAL_SOLUTION
 
-        elif cpx_status is cpx_cst.CPX_STAT_INFEASIBLE:
+        elif cpx_status == cpx_cst.CPX_STAT_INFEASIBLE:
             return JobSolveStatus.INFEASIBLE_SOLUTION
 
         # cpx_cst.CPX_STAT_ABORT_USER:
@@ -2077,7 +2325,7 @@ class CplexEngine(DummyEngine):
         #   // See IloCplexI::CplexToAlgorithmStatus()
         #   return primalFeasible(env, lp) ? JobSolveStatus.FEASIBLE_SOLUTION : JobSolveStatus.UNKNOWN;
 
-        elif cpx_status is cpx_cst.CPX_STAT_CONFLICT_ABORT_CONTRADICTION:
+        elif cpx_status == cpx_cst.CPX_STAT_CONFLICT_ABORT_CONTRADICTION:
             # Numerical trouble in conflict refiner.
             #  DANIEL: C++ and Java both return Error here although a conflict is
             #          available (but nor proven to be minimal). This looks like a bug
@@ -2106,35 +2354,26 @@ class CplexEngine(DummyEngine):
             #  *         conflict refiner anyway.
             #  */
             return JobSolveStatus.UNKNOWN
-        elif cpx_status is cpx_cst.CPX_STAT_CONFLICT_FEASIBLE:
+        elif cpx_status == cpx_cst.CPX_STAT_CONFLICT_FEASIBLE:
             return JobSolveStatus.FEASIBLE_SOLUTION
-        elif cpx_status is cpx_cst.CPX_STAT_CONFLICT_MINIMAL:
-            return JobSolveStatus.INFEASIBLE_SOLUTION
-        elif cpx_status in {cpx_cst.CPX_STAT_FEASIBLE_RELAXED_INF,
-                            cpx_cst.CPX_STAT_FEASIBLE_RELAXED_QUAD,
-                            cpx_cst.CPX_STAT_FEASIBLE_RELAXED_SUM,
-                            }:
-            return JobSolveStatus.UNKNOWN
-
-        elif cpx_status is cpx_cst.CPX_STAT_FEASIBLE:
-            return JobSolveStatus.FEASIBLE_SOLUTION
-        elif cpx_status in {cpx_cst.CPX_STAT_OPTIMAL_RELAXED_INF,
-                            cpx_cst.CPX_STAT_OPTIMAL_RELAXED_QUAD,
-                            cpx_cst.CPX_STAT_OPTIMAL_RELAXED_SUM}:
+        elif cpx_status == cpx_cst.CPX_STAT_CONFLICT_MINIMAL:
             return JobSolveStatus.INFEASIBLE_SOLUTION
 
-        elif cpx_status is cpx_cst.CPX_STAT_NUM_BEST:
+        elif cpx_status == cpx_cst.CPX_STAT_FEASIBLE:
+            return JobSolveStatus.FEASIBLE_SOLUTION
+
+        elif cpx_status == cpx_cst.CPX_STAT_NUM_BEST:
             #  Solution available but not proved optimal (due to numeric difficulties)
             # assert(hasSolution(env, lp));
             return JobSolveStatus.UNKNOWN
 
-        elif cpx_status is cpx_cst.CPX_STAT_OPTIMAL_INFEAS:  # infeasibilities after unscaling
+        elif cpx_status == cpx_cst.CPX_STAT_OPTIMAL_INFEAS:  # infeasibilities after unscaling
             # assert(hasSolution(env, lp));
             return JobSolveStatus.OPTIMAL_SOLUTION
 
-        elif cpx_status is cpx_cst.CPX_STAT_INForUNBD:  # Infeasible or unbounded in presolve.
+        elif cpx_status == cpx_cst.CPX_STAT_INForUNBD:  # Infeasible or unbounded in presolve.
             return JobSolveStatus.INFEASIBLE_OR_UNBOUNDED_SOLUTION
-        elif cpx_status is cpx_cst.CPX_STAT_OPTIMAL_FACE_UNBOUNDED:
+        elif cpx_status == cpx_cst.CPX_STAT_OPTIMAL_FACE_UNBOUNDED:
             #    unbounded optimal face (barrier only)
             # // CPX_STAT_OPTIMAL_FACE_UNBOUNDED is explicitly an error in Java and implicitly (fallthrough)
             # // an error in C++. So it should be fine to produce an error here as well.
@@ -2142,9 +2381,16 @@ class CplexEngine(DummyEngine):
             # // In case of ERROR we should have seen a non-zero status anyway and the
             # // user should not care too much about the returned status.
             return JobSolveStatus.UNKNOWN
-        elif cpx_status is cpx_cst.CPX_STAT_UNBOUNDED:
+        elif cpx_status == cpx_cst.CPX_STAT_UNBOUNDED:
             # definitely unbounded
             return JobSolveStatus.UNBOUNDED_SOLUTION
+        elif cpx_status == DEFAULT_CPX_STAT_MULTIOBJ_NON_OPTIMAL:
+            # Solution available but not proved optimal
+            return JobSolveStatus.FEASIBLE_SOLUTION
+        elif cpx_status == DEFAULT_CPX_STAT_MULTIOBJ_STOPPED:
+            # The solve of a multi-objective problem was interrupted (a global work limit was hit or solution process
+            # was aborted)
+            return JobSolveStatus.UNKNOWN
         else:
             return JobSolveStatus.UNBOUNDED_SOLUTION
 

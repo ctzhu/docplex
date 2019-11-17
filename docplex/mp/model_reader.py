@@ -12,6 +12,7 @@ from docplex.mp.utils import DOcplexException
 
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.constants import ComparisonType
+
 # cplex
 try:
     from cplex import Cplex
@@ -24,7 +25,6 @@ except ImportError:  # pragma: no cover
 
 from docplex.mp.compat23 import izip
 from docplex.mp.quad import VarPair
-from docplex.mp.xcounter import FastOrderedDict
 
 
 class ModelReaderError(DOcplexException):
@@ -58,14 +58,12 @@ class _CplexReaderFileContext(object):
             del cpx
             raise ModelReaderError("*CPLEX error {0!s} reading file {1} - exiting".format(cpx_e, self._filename))
 
-
     # noinspection PyUnusedLocal
     def __exit__(self, exc_type, exc_val, exc_tb):
         cpx = self._cplex
         if cpx is not None:
             del cpx
             self._cplex = None
-
 
 
 class ModelReader(object):
@@ -112,10 +110,35 @@ class ModelReader(object):
         return expr
 
     def __init__(self, **kwargs):
-        self.model_class = kwargs.get('model_class', Model)
-        self.debug = kwargs.get('debug', False)
+        pass
 
-    def read_prm(self, filename):
+    @classmethod
+    def read(cls, pathname, model_name=None, verbose=False, model_class=None, **kwargs):
+        """
+        A class method to read a model from a file.
+
+        :param pathname: a path to the file to read
+        :param model_name: An optional string to use as name for the returned model.
+            If None, the basename of the path is used.
+        :param verbose: An optional flag to print informative messages, default is False.
+        :param model_class: An optional class type; must be a subclass of Model.
+            The returned model is built using this model_class and the keyword arguments kwargs, if any.
+            By default, the model is class is `Model`.
+
+        kwargs: A dict of keyword-based arguments that are used when creating the model
+            instance.
+
+        :return: a model instance, or None, if an error occurred.
+
+        Note:
+            This class method calls `ModelReader.read_model()`, without requesting to create an explicit instance
+            of `ModelReader`.
+        """
+        mri = ModelReader()
+        return mri.read_model(pathname, model_name, verbose, model_class, **kwargs)
+
+    @classmethod
+    def read_prm(cls, filename):
         """ Reads a CPLEX PRM file.
 
         Reads a CPLEX parameters file and returns a DOcplex parameter group
@@ -146,6 +169,24 @@ class ModelReader(object):
                 return None
 
     @staticmethod
+    def _safe_call_get_names(interface, fallback_names=None):
+        # cplex crashes when calling get_names on some files (e.g. SAV)
+        # in this case filter out error 1219
+        # and return a fallback list with None or ""
+        try:
+            names = interface.get_names()
+            return names
+        except CplexSolverError as cpxse:  # pragma: no cover
+            errcode = cpxse.args[2]
+            # when all indicators have no names, cplex raises this error
+            # CPLEX Error  1219: No names exist.
+            if errcode == 1219:
+                return fallback_names or []
+            else:
+                # this is something else
+                raise
+
+    @staticmethod
     def _cplex_read(filename, verbose=False):
         # print("-> start reading file: {0}".format(filename))
         cpx = _safe_cplex()
@@ -161,7 +202,7 @@ class ModelReader(object):
         except CplexError as cpx_e:
             raise ModelReaderError("*CPLEX error {0!s} reading file {1} - exiting".format(cpx_e, filename))
 
-    def read_model(self, filename, model_name=None, verbose=True, **kwargs):
+    def read_model(self, filename, model_name=None, verbose=False, model_class=None, **kwargs):
         """ Reads a model from a CPLEX export file.
 
         Accepts all formats exported by CPLEX: LP, SAV, MPS.
@@ -173,7 +214,10 @@ class ModelReader(object):
             filename: The file to read.
             model_name: An optional name for the newly created model. If None,
                 the model name will be the path basename.
-            verbose: Flag.
+            verbose: An optional flag to print informative messages, default is False.
+            model_class: An optional class type; must be a subclass of Model.
+                The returned model is built using this model_class and the keyword arguments kwargs, if any.
+                By default, the model is class is `Model` (see
             kwargs: A dict of keyword-based arguments that are used when creating the model
                 instance.
 
@@ -183,6 +227,9 @@ class ModelReader(object):
         Returns:
             An instance of Model, or None if an exception is raised.
 
+        See Also:
+            :class:`docplex.mp.model.Model`
+
         """
         if not Cplex:  # pragma: no cover
             raise RuntimeError("read_prm() requires CPLEX to run")
@@ -190,8 +237,7 @@ class ModelReader(object):
         if not os.path.exists(filename):
             raise IOError("* file not found: {0}".format(filename))
 
-
-        # extract pure basename
+        # extract basename
         if model_name:
             name_to_use = model_name
         else:
@@ -202,18 +248,21 @@ class ModelReader(object):
             else:
                 name_to_use = basename
 
+        model_class = model_class or Model
+
         if 0 == os.stat(filename).st_size:
             print("* file is empty: {0} - exiting".format(filename))
-            return Model(name=name_to_use, **kwargs)
-
+            return model_class(name=name_to_use, **kwargs)
 
         # print("-> start reading file: {0}".format(filename))
         cpx = self._cplex_read(filename, verbose=verbose)
+
         if not cpx:  # pragma: no cover
             return None
 
         range_map = {}
         final_output_level = kwargs.get("output_level", "info")
+        debug_read = kwargs.get("debug", False)
 
         try:
             # force no tck
@@ -225,7 +274,7 @@ class ModelReader(object):
             kwargs['checker'] = 'off'
             # -------------
 
-            mdl = self.model_class(name=name_to_use, **kwargs)
+            mdl = model_class(name=name_to_use, **kwargs)
             lfactory = mdl._lfactory
             qfactory = mdl._qfactory
             mdl.set_quiet()  # output level set to ERROR
@@ -236,7 +285,8 @@ class ModelReader(object):
                            'S': mdl.semicontinuous_vartype}
             # 1 upload variables
             cpx_nb_vars = cpx.variables.get_num()
-            cpx_var_names = cpx.variables.get_names()
+            cpx_var_names = self._safe_call_get_names(cpx.variables)
+
             if cpx._is_MIP():
                 cpx_vartypes = [vartype_map.get(cpxt, vartype_cont) for cpxt in cpx.variables.get_types()]
             else:
@@ -254,9 +304,9 @@ class ModelReader(object):
             model_ubs = []
             model_types = []
             for v in range(cpx_nb_vars):
-                varname = cpx_var_names[v]
+                varname = cpx_var_names[v] if cpx_var_names else None
 
-                if varname.startswith("Rg"):
+                if varname and varname.startswith("Rg"):
                     # generated var for ranges
                     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=cpx_var_ubs[v])
                 else:
@@ -284,7 +334,7 @@ class ModelReader(object):
             all_rhs = cpx_linearcts.get_rhs()
             all_senses = cpx_linearcts.get_senses()
             all_range_values = cpx_linearcts.get_range_values()
-            cpx_ctnames = cpx_linearcts.get_names()
+            cpx_ctnames = self._safe_call_get_names(cpx_linearcts)
 
             has_range = range_map or any(s == "R" for s in all_senses)
             deferred_cts = []
@@ -309,6 +359,7 @@ class ModelReader(object):
 
                 else:
                     expr = lfactory.linear_expr()
+                    rcoef = 1
                     for idx, koef in izip(indices, coefs):
                         var = cpx_var_index_to_docplex.get(idx, None)
                         if var:
@@ -316,8 +367,10 @@ class ModelReader(object):
                         elif idx in range_map:
                             # this is a range: coeff must be 1 or -1
                             abscoef = koef if koef >= 0 else -koef
+                            rcoef = koef
                             assert abscoef == 1, "range var has coef different from 1: {}".format(koef)
-                            assert range_data is None, "range_data is not None: {0!s}".format(range_data)  # cannot use two range vars
+                            assert range_data is None, "range_data is not None: {0!s}".format(
+                                range_data)  # cannot use two range vars
                             range_data = range_map[idx]
                         else:  # pragma: no cover
                             # this is an internal error.
@@ -327,14 +380,14 @@ class ModelReader(object):
                         label = ctname or 'c#%d' % (c + 1)
                         if sense not in "EL":  # pragma: no cover
                             raise ModelReaderError("{0} range sense is not E: {1!s}".format(label, sense))
-                        if koef < 0:  # -1 actually
+                        if rcoef < 0:  # -1 actually
                             rng_lb = rhs
                             rng_ub = rhs + range_data.ub
-                        elif koef > 0:  # koef is 1 here
+                        elif rcoef > 0:  # koef is 1 here
                             rng_lb = rhs - range_data.ub
                             rng_ub = rhs
                         else:  # pragma: no cover
-                            raise ModelReaderError("unexpected range coef: {}".format(koef))
+                            raise ModelReaderError("unexpected range coef: {}".format(rcoef))
 
                         mdl.add_range(lb=rng_lb, expr=expr, ub=rng_ub, rng_name=ctname)
                     else:
@@ -360,7 +413,7 @@ class ModelReader(object):
             all_quadratic_nb_non_zeros = cpx_quadraticcts.get_quad_num_nonzeros()
             all_quadratic_components = cpx_quadraticcts.get_quadratic_components()
             all_senses = cpx_quadraticcts.get_senses()
-            cpx_ctnames = cpx_quadraticcts.get_names()
+            cpx_ctnames = self._safe_call_get_names(cpx_quadraticcts)
 
             for c in range(nb_quadratic_cts):
                 rhs = all_rhs[c]
@@ -396,22 +449,7 @@ class ModelReader(object):
             # 4. upload indicators
             cpx_indicators = cpx.indicator_constraints
             nb_indicators = cpx_indicators.get_num()
-            try:
-                all_ind_names = cpx_indicators.get_names()
-
-            except CplexSolverError as cpxse:  # pragma: no cover
-                errcode = cpxse.args[2]
-                # when all indicators have no names, cplex raises this error
-                # CPLEX Error  1219: No names exist.
-                if errcode == 1219:
-                    # seems cplex raises this error when no indicator has name
-                    all_ind_names = []
-                else:
-                    raise cpxse  # this is something else.
-
-            except Exception as e:  # pragma: no cover
-                # any other Pythonlayer error is abnormal
-                raise ModelReaderError("Error when reading file: {0}, raised: {1!s}".format(filename, str(e)))
+            all_ind_names = self._safe_call_get_names(cpx_indicators)
 
             all_ind_bvars = cpx_indicators.get_indicator_variables()
             all_ind_rhs = cpx_indicators.get_rhs()
@@ -440,7 +478,8 @@ class ModelReader(object):
             try:
                 cpx_pwl = cpx.pwl_constraints
                 cpx_pwl_defs = cpx_pwl.get_definitions()
-                cpx_pwl_names = cpx_pwl.get_names()
+                pwl_fallback_names = [""] * cpx_pwl.get_num()
+                cpx_pwl_names = self._safe_call_get_names(cpx_pwl, pwl_fallback_names)
                 for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in izip(cpx_pwl_defs,
                                                                                                 cpx_pwl_names):
                     varx = cpx_var_index_to_docplex.get(varx_idx, None)
@@ -452,7 +491,7 @@ class ModelReader(object):
                     pwl_expr._ensure_resolved()
 
             except AttributeError:  # pragma: no cover
-                pass    # Do not check for PWLs if Cplex version does not support them
+                pass  # Do not check for PWLs if Cplex version does not support them
 
             # 6. upload objective
             cpx_obj = cpx.objective
@@ -506,7 +545,6 @@ class ModelReader(object):
                     sos_vars = [cpx_var_index_to_docplex[var_ix] for var_ix in sos_var_indices]
                     mdl.add_sos(dvars=sos_vars, sos_arg=isostype, name=sos_name)
 
-
             mdl.output_level = final_output_level
             if final_checker:
                 # need to restore checker
@@ -515,31 +553,29 @@ class ModelReader(object):
         except CplexError as cpx_e:  # pragma: no cover
             print("* CPLEX error: {0!s} reading file {1}".format(cpx_e, filename))
             mdl = None
-            if self.debug:
+            if debug_read:
                 raise
 
         except ModelReaderError as mre:  # pragma: no cover
             print("! Model reader error: {0!s} while reading file {1}".format(mre, filename))
             mdl = None
-            if self.debug:
+            if debug_read:
                 raise
 
-        except DOcplexException as doe:   # pragma: no cover
+        except DOcplexException as doe:  # pragma: no cover
             print("! Internal DOcplex error: {0!s} while reading file {1}".format(doe, filename))
             mdl = None
-            if self.debug:
+            if debug_read:
                 raise
 
         except Exception as any_e:  # pragma: no cover
             print("Internal exception raised: {0!s} while reading file {1}".format(any_e, filename))
             mdl = None
-            if self.debug:
+            if debug_read:
                 raise
 
         finally:
             # clean up CPLEX instance...
             del cpx
 
-
         return mdl
-

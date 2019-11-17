@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -58,8 +58,10 @@ The following list gives the summary of all public parameters.
    The value is a symbol in ['On', 'Off']. Default value is 'Off'.
  * :attr:`~CpoParameters.UseFileLocations`: Controls whether location information (file, line) is added to the model.
    The value is a symbol in ['On', 'Off']. Default value is 'On'.
- * :attr:`~CpoParameters.LogSearchTags`: Controls the log activation. Possible values are 'On' or 'Off'.
+ * :attr:`~CpoParameters.LogSearchTags`: Controls the log activation.
    The value is a symbol in ['On', 'Off']. Default value is 'Off'.
+ * :attr:`~CpoParameters.KPIDisplay`: Controls the display of the KPI values in the log.
+   The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.
    
 **Presolve**
 
@@ -77,7 +79,7 @@ The following list gives the summary of all public parameters.
  * :attr:`~CpoParameters.Workers`: Number of workers to run in parallel to solve the model.
    The value is a positive integer. Default value is Auto.
  * :attr:`~CpoParameters.SearchType`: Type of search that is applied when solving a problem.
-   The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'Auto']. Default value is 'Auto'.
+   The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Auto']. Default value is 'Auto'.
  * :attr:`~CpoParameters.RandomSeed`: Seed of the random generator used by search strategies.
    The value is a non-negative integer. Default value is 0.
  * :attr:`~CpoParameters.RestartFailLimit`: Controls the number of failures that must occur before restarting search.
@@ -172,7 +174,7 @@ PUBLIC_PARAMETER_NAMES = \
      "OptimalityTolerance", "PrecedenceInferenceLevel", "Presolve", "PrintModelDetailsInMessages", "RandomSeed",
      "RelativeOptimalityTolerance", "RestartFailLimit", "RestartGrowthFactor", "SearchType", "SequenceInferenceLevel",
      "SolutionLimit", "StateFunctionInferenceLevel", "TemporalRelaxation", "TimeLimit", "TimeMode", "UseFileLocations",
-     "WarningLevel", "Workers",}
+     "WarningLevel", "Workers", "KPIDisplay"}
 
 # Set of all private but accepted parameter names
 PRIVATE_PARAMETER_NAMES = {"ObjectiveLimit",}
@@ -181,29 +183,34 @@ PRIVATE_PARAMETER_NAMES = {"ObjectiveLimit",}
 ALL_PARAMETER_NAMES = PUBLIC_PARAMETER_NAMES | PRIVATE_PARAMETER_NAMES
 
 # Symbolic parameter values
-VALUE_AUTO         = 'Auto'
-VALUE_OFF          = 'Off'
-VALUE_ON           = 'On'
-VALUE_DEFAULT      = 'Default'
-VALUE_LOW          = 'Low'
-VALUE_BASIC        = 'Basic'
-VALUE_MEDIUM       = 'Medium'
-VALUE_EXTENDED     = 'Extended'
-VALUE_QUIET        = 'Quiet'
-VALUE_TERSE        = 'Terse'
-VALUE_NORMAL       = 'Normal'
-VALUE_VERBOSE      = 'Verbose'
-VALUE_DEPTH_FIRST  = 'DepthFirst'
-VALUE_RESTART      = 'Restart'
-VALUE_MULTI_POINT  = 'MultiPoint'
-VALUE_DIVERSE      = 'Diverse'
-VALUE_CPU_TIME     = 'CPUTime'
-VALUE_ELAPSED_TIME = 'ElapsedTime'
+VALUE_AUTO             = 'Auto'
+VALUE_OFF              = 'Off'
+VALUE_ON               = 'On'
+VALUE_DEFAULT          = 'Default'
+VALUE_LOW              = 'Low'
+VALUE_BASIC            = 'Basic'
+VALUE_MEDIUM           = 'Medium'
+VALUE_EXTENDED         = 'Extended'
+VALUE_QUIET            = 'Quiet'
+VALUE_TERSE            = 'Terse'
+VALUE_NORMAL           = 'Normal'
+VALUE_VERBOSE          = 'Verbose'
+VALUE_DEPTH_FIRST      = 'DepthFirst'
+VALUE_RESTART          = 'Restart'
+VALUE_MULTI_POINT      = 'MultiPoint'
+VALUE_ITERATIVE_DIVING = 'IterativeDiving'
+VALUE_DIVERSE          = 'Diverse'
+VALUE_CPU_TIME         = 'CPUTime'
+VALUE_ELAPSED_TIME     = 'ElapsedTime'
+VALUE_SINGLE_LINE      = 'SingleLine'
+VALUE_MULTIPLE_LINES   = 'MultipleLines'
 
 # Authorized sets of values
 _INFERENCE_LEVELS = (VALUE_DEFAULT, VALUE_LOW, VALUE_BASIC, VALUE_MEDIUM, VALUE_EXTENDED)
 _ON_OFF_AUTO = (VALUE_ON, VALUE_OFF, VALUE_AUTO)
 _ON_OFF = (VALUE_ON, VALUE_OFF)
+_KPI_DISPLAY = (VALUE_SINGLE_LINE, VALUE_MULTIPLE_LINES)
+_SEARCH_TYPES = (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_ITERATIVE_DIVING, VALUE_AUTO)
 
 
 ###############################################################################
@@ -686,6 +693,20 @@ class CpoParameters(Context):
     LogSearchTags = property(get_LogSearchTags, set_LogSearchTags)
 
 
+    def get_KPIDisplay(self):
+        """
+        This parameter determines how KPIs are displayed in the log during the search.
+
+        The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.
+        """
+        return self.get_attribute('KPIDisplay')
+
+    def set_KPIDisplay(self, val):
+        self._set_value_enum('KPIDisplay', val, _KPI_DISPLAY)
+
+    KPIDisplay = property(get_KPIDisplay, set_KPIDisplay)
+
+
     def get_LogVerbosity(self):
         """
         This parameter determines the verbosity of the search log. The possible values are Quiet, Terse,
@@ -898,24 +919,29 @@ class CpoParameters(Context):
 
     def get_SearchType(self):
         """
-        This parameter determines the type of search that is applied when solving a problem. When set to
-        DepthFirst, a regular depth-first search is applied. When set to Restart, a depth-first search that
-        restarts from time to time is applied. When set to MultiPoint, a method that combines a set of -
-        possibly partial - solutions is applied. When set to Auto in sequential mode, this value chooses the
-        appropriate search method to be used. In general Auto will be the Restart search. The default value
-        is Auto. In parallel mode (i.e, when the number of workers is greater than one - see the Workers
+        This parameter determines the type of search that is applied when solving a problem.
+
+         * When set to *DepthFirst*, a regular depth-first search is applied.
+         * When set to *Restart*, a depth-first search that restarts from time to time is applied.
+         * When set to *IterativeDiving* on scheduling problems (ones with at least one interval variable),
+           a more aggressive diving technique is applied in order to find solutions to large problems more quickly.
+         * When set to *MultiPoint*, a method that combines a set of - possibly partial - solutions is applied.
+         * When set to *Auto* in sequential mode, this value chooses the appropriate search method to be used.
+           In general Auto will be the Restart search. The default value is Auto.
+
+        In parallel mode (i.e, when the number of workers is greater than one - see the Workers
         parameter), the different searches described above are spread over the workers. When the value of
         SearchType is Auto, then the decision of choosing the search type for a worker is automatically
         made; otherwise, all workers execute the same type of search. Note that in the latter case, the
         workers will not do the same exploration due to some randomness introduced to break ties in decision
         making.
 
-        The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'Auto']. Default value is 'Auto'.
+        The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Auto']. Default value is 'Auto'.
         """
         return self.get_attribute('SearchType')
 
     def set_SearchType(self, val):
-        self._set_value_enum('SearchType', val, (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_AUTO))
+        self._set_value_enum('SearchType', val, _SEARCH_TYPES)
 
     SearchType = property(get_SearchType, set_SearchType)
 

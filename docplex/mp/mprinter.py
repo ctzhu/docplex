@@ -305,7 +305,7 @@ class TextModelPrinter(ModelPrinter):
     from docplex.mp.compat23 import mktrans
 
     __raw = " -+/\\<>"
-    __cooked = "_mpd___"
+    __cooked = "_mp____"
 
     _str_translate_table = mktrans(__raw, __cooked)
     _unicode_translate_table = {}
@@ -320,11 +320,7 @@ class TextModelPrinter(ModelPrinter):
         else:
             char_mapping = TextModelPrinter._str_translate_table
         return raw_name.translate(char_mapping)
-        # INTERNAL
-        # return raw_name
-        # from docplex.mp.utils import mktrans
-        # table = mktrans(" -+/\\<>", "_mpd___")
-        # return raw_name.translate(table)
+
 
     @staticmethod
     def _translate_chars3(raw_name):

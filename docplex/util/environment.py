@@ -360,10 +360,7 @@ class Environment(object):
         ``name`` is the name of the input object, as a filename. If a writer
         is not user provided, the writer used depends on the filename extension.
 
-        The default writer used depending on extension are:
-
-            * ``.csv``: ``DataFrame.to_csv()``
-            * ``.msg``: ``DataFrame.to_msgpack()``
+        This currently only supports csv output.
 
         Args:
             name: The name of the input object
@@ -378,15 +375,17 @@ class Environment(object):
         _, ext = os.path.splitext(name)
         if writer is None:
             try:
-                default_writers = {'.csv': df.to_csv,
-                                   '.msg': df.to_msgpack}
+                default_writers = {'.csv': df.to_csv}
                 writer = default_writers.get(ext.lower(), None)
             except AttributeError:
                 raise NotAvailableError('Could not write writer function for extension: %s' % ext)
         if writer is None:
             raise ValueError('no default writer defined for files with extension: \'%s\'' % ext)
         with self.get_output_stream(name) as ost:
-            writer(ost, **kwargs)
+            if sys.version_info[0] < 3:
+                ost.write(writer(index=False, encoding='utf8'))
+            else:
+                ost.write(writer(index=False).encode(encoding='utf8'))
 
     def set_output_attachment(self, name, filename):
         '''Attach the file which filename is specified as an output of the
@@ -649,6 +648,22 @@ class LocalEnvironment(Environment):
         super(LocalEnvironment, self).__init__()
         self.logger = None
 
+        # init number of cores. Default is no limits (engines will use
+        # number of cores reported by system).
+        # On Watson studio runtimes, the system reports the total number
+        # of physical cores but not the number of cores available to the
+        # runtime. The number of cores available to the runtime are
+        # specified in an environment variable instead.
+        self._available_cores = None
+        RUNTIME_HARDWARE_SPEC = os.environ.get('RUNTIME_HARDWARE_SPEC', None)
+        if RUNTIME_HARDWARE_SPEC:
+            try:
+                spec = json.loads(RUNTIME_HARDWARE_SPEC)
+                num = int(spec.get('num_cpu')) if ('num_cpu' in spec) else None
+                self._available_cores = num
+            except:
+                pass
+
     def get_input_stream(self, name):
         return open(name, "rb")
 
@@ -675,6 +690,8 @@ class LocalEnvironment(Environment):
             self.logger = LoggerToFile(sys.stdout)
         return self.logger
 
+    def get_available_core_count(self):
+        return self._available_cores
 
 class OutputFileWrapper(object):
     # Wraps a file object so that on __exit__() and on close(), the wrapped file is closed and

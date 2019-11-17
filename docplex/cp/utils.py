@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -20,6 +20,7 @@ import inspect
 from collections import deque, Iterable
 import json
 import platform
+import importlib
 
 try:
     from StringIO import StringIO
@@ -1208,7 +1209,24 @@ def list_module_public_functions(mod, excepted=()):
     Returns:
         List of public functions declared in this module
     """
-    return [t[1] for t in inspect.getmembers(mod, inspect.isfunction) if not t[0].startswith('_') and inspect.getmodule(t[1]) == mod and not t[0] in excepted]
+    return [t[1] for t in inspect.getmembers(mod, inspect.isfunction) if not t[0].startswith('_')
+            and inspect.getmodule(t[1]) == mod
+            and not t[0] in excepted]
+
+
+def get_module_element_from_path(opath):
+    """ Retrieve an element from a python module using its path <package>.<module>.<object>
+
+    This can be for example a global function or a class.
+
+    Args:
+        opath:  Object path
+    Returns:
+        Module object
+    """
+    module, oname = opath.rsplit('.', 1)
+    mod = importlib.import_module(module)
+    return getattr(mod, oname)
 
 
 #-----------------------------------------------------------------------------
@@ -1671,7 +1689,6 @@ def compare_natural(s1, s2):
         return 0 if s2 is None else -1
     if s2 is None:
         return 1
-
 
     # Skip all identical characters
     len1 = len(s1)

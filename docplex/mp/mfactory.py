@@ -12,17 +12,17 @@ from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
-    IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint
+    IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint, NotEqualConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range, izip_longest
+from docplex.mp.environment import Environment
 from docplex.mp.utils import *
 from docplex.mp.kpi import KPI
 from docplex.mp.solution import SolveSolution
+from docplex.mp.sttck import StaticTypeChecker
 
 from itertools import product, islice
-
-from collections import OrderedDict
 
 
 
@@ -49,12 +49,14 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
     nb_missing = max(0, dimen - actual_nb_slots)
     return fmt + nb_missing * (key_format % '%s')
 
+
 def is_tuple_w_standard_str(z):
     if isinstance(z, tuple):
         zclass = z.__class__
         return zclass is tuple or not ("__str__" in zclass.__dict__)
     else:
         return False
+
 
 def str_flatten_tuple(key, sep="_"):
     if is_tuple_w_standard_str(key):
@@ -112,6 +114,16 @@ class _AbstractModelFactory(object):
     def __init__(self, model):
         self._model = model
         self._checker = model._checker
+        if Environment.env_is_python36:
+            # for python >= 3.6, dict is ordered
+            self._ordered_dict_type = dict
+        else:
+            from collections import OrderedDict
+            self._ordered_dict_type = OrderedDict
+
+    def dict_type(self, ordered):
+        # internal
+        return self._ordered_dict_type if ordered else dict
 
 
 class ModelFactory(_AbstractModelFactory):
@@ -197,7 +209,7 @@ class ModelFactory(_AbstractModelFactory):
             # if name is already taken, use unique index at end to disambiguate
             varname = model._get_non_ambiguous_varname(base_varname)
 
-        svar = Var(model, binary_vartype, lb=0, ub=1, _safe_lb=True, _safe_ub=1, name=varname)
+        svar = Var(model, binary_vartype, lb=0, ub=1, _safe_lb=True, _safe_ub=True, name=varname)
         svar.notify_origin(ct)  # generated
 
         idx = self._engine.create_one_variable(binary_vartype, 0, 1, varname)
@@ -385,7 +397,7 @@ class ModelFactory(_AbstractModelFactory):
         actual_name, key_seq = self.make_key_seq(keys, name)
         ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
         var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
-        _dict_type = OrderedDict if ordered else dict
+        _dict_type = self.dict_type(ordered)
         return _dict_type(izip(key_seq, var_list))
 
     def new_var_multidict(self, seq_of_key_seqs, vartype, lb, ub, name, key_format=None, ordered=False):
@@ -406,7 +418,7 @@ class ModelFactory(_AbstractModelFactory):
         ctn = self._new_var_container(vartype, key_list=fixed_keys, lb=lb, ub=ub, name=name)
         cube_vars = self.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
 
-        _dict_type = OrderedDict if ordered else dict
+        _dict_type = self.dict_type(ordered)
         var_dict = _dict_type(izip(all_key_tuples, cube_vars))
         return var_dict
 
@@ -459,7 +471,7 @@ class ModelFactory(_AbstractModelFactory):
     def _is_operand(arg, accept_numbers=False):
         return isinstance(arg, Operand) or (accept_numbers and is_number(arg))
 
-    def _to_linear_operand(self, e, force_clone=False, context=None):
+    def _to_linear_operand(self, e, force_clone=False, msg=None):
         if isinstance(e, LinearOperand):
             if force_clone:
                 return e.clone()
@@ -473,6 +485,10 @@ class ModelFactory(_AbstractModelFactory):
             except AttributeError:
                 # delegate to the factory
                 return self.linear_expr(e)
+            except DocplexQuadToLinearException as qe:
+                used_msg = msg.format(e) if msg else qe.message
+                raise DOcplexException(used_msg)
+
 
     def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False):
         # TODO: replace by to_linear_operand
@@ -510,8 +526,8 @@ class ModelFactory(_AbstractModelFactory):
 
     def _new_binary_constraint(self, lhs, sense, rhs, name=None):
         # noinspection PyPep8
-        left_expr = self._to_linear_operand(lhs, context="LinearConstraint.left_expr")
-        right_expr = self._to_linear_operand(rhs, context="LinearConstraint.right_expr")
+        left_expr = self._to_linear_operand(lhs, msg="LinearConstraint. expects linear expressions, {0} was passed")
+        right_expr = self._to_linear_operand(rhs, msg="LinearConstraint. expects linear expressions, {0} was passed")
         self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = LinearConstraint(self._model, left_expr, sense, right_expr, name)
         return ct
@@ -524,6 +540,17 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_ge_constraint(self, e, rhs, ctname=None):
         return self._new_binary_constraint(e, ComparisonType.GE, rhs, name=ctname)
+
+    def new_neq_constraint(self, lhs, rhs, ctname=None):
+        m = self._model
+        left_expr  = self._to_linear_operand (lhs, msg="The `!=` operator requires two linear expressions, {0} was passed (left)")
+        right_expr = self._to_linear_operand(rhs, msg="The `!=` operator requires two linear expressions, {0} was passed (right)")
+        StaticTypeChecker.typecheck_discrete_expression(m, msg="NotEqualConstraint", expr=left_expr)
+        StaticTypeChecker.typecheck_discrete_expression(m, msg="NotEqualConstraint", expr=right_expr)
+        self._checker.typecheck_two_in_model(m, left_expr, right_expr, "new_binary_constraint")
+        negated_ct = self.new_eq_constraint(lhs, rhs)
+        ct = NotEqualConstraint(self._model, negated_ct, ctname)
+        return ct
 
     def _check_range_feasibility(self, lb, ub, expr):
         # INTERNAL
@@ -765,7 +792,8 @@ class ModelFactory(_AbstractModelFactory):
         self_model = self._model
         return PwlConstraint(self_model, pwl_expr, name)
 
-    def default_objective_sense(self):
+    @staticmethod
+    def default_objective_sense():
         return ObjectiveSense.Minimize
 
     def new_kpi(self, kpi_arg, name_arg):
@@ -795,7 +823,7 @@ class ModelFactory(_AbstractModelFactory):
             if ct is None:  # izip stops
                 break
 
-            checker.typecheck_linear_constraint(ct, accept_ranges=False)
+            checker.typecheck_linear_constraint(ct, accept_range=False)
             checker.typecheck_string(ctname, accept_none=True, accept_empty=False, header="Model.add_constraints()")
             if prepfn(ct, ctname, check_for_trivial_ct=check_trivials):
                 posted_cts.append(ct)
@@ -823,13 +851,13 @@ class ModelFactory(_AbstractModelFactory):
 
         if tuple_mode:
             for ct, ctname in ctseq:
-                checker.typecheck_linear_constraint(ct, accept_ranges=False)
+                checker.typecheck_linear_constraint(ct, accept_range=False)
                 checker.typecheck_string(ctname, accept_empty=True)
                 if prepfn(ct, ctname, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         else:
             for ct in ctseq:
-                checker.typecheck_linear_constraint(ct, accept_ranges=True)
+                checker.typecheck_linear_constraint(ct, accept_range=True)
                 if prepfn(ct, ctname=None, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         self._post_constraint_block(posted_cts)
@@ -839,7 +867,6 @@ class ModelFactory(_AbstractModelFactory):
         if posted_cts:
             ct_indices = self._engine.create_block_linear_constraints(posted_cts)
             self._model._register_block_cts(self._model._linct_scope, posted_cts, ct_indices)
-
 
     # --- range block
 

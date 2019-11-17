@@ -95,10 +95,10 @@ class SolveDetails(object):
                         12: "node_QCP"}
 
     @staticmethod
-    def _convert_problemtype(probtype, probtype_map=_problemtype_map, unknown_probtype="unknown"):
+    def _convert_problemtype(probtype, unknown_probtype="unknown"):
         try:
             iprobe_type = int(probtype)
-            return probtype_map.get(iprobe_type, unknown_probtype)
+            return SolveDetails._problemtype_map.get(iprobe_type, unknown_probtype)
         except ValueError:
             return unknown_probtype
 
@@ -174,6 +174,15 @@ class SolveDetails(object):
 
     @property
     def status_code(self):
+        """
+        This property returns the CPLEX status code as a number.
+        Possible values for the status code are described in the CPLEX documentation
+        at:
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.8.0/ilog.odms.cplex.help/refcallablelibrary/macros/Solution_status_codes.html
+
+        :return: an integer number (a CPLEX status code)
+
+        """
         return self._solve_status_code
 
     # status string
@@ -214,10 +223,22 @@ class SolveDetails(object):
     def status(self):
         """ This property returns the solve status as a string.
 
+        This string is normally the value returned by the CPLEX callable library method
+        CPXXgetstatstring,
+        see https://www.ibm.com/support/knowledgecenter/SSSA5P_12.8.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getstatstring.html
+
         Example:
             * Returns "optimal" when the solution has been proven optimal.
             * Returns "feasible" for a feasible, but not optimal, solution.
             * Returns "MIP_time_limit_feasible" for a MIP solution obtained before a time limit.
+
+        Note:
+            In certain cases, status may return a string that is not directly passed from CPLEX
+
+                * If an exception occurs during the CPLEX solve phase, status contains the text of the exception.
+                * If solve fails because of a promotional version limitation, the following message is returned
+                    "Promotional version. Problem size limits exceeded., CPLEX code=1016."
+                    The corresponding status  code is 1016.
 
         """
         return self._solve_status

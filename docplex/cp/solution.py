@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -236,7 +236,7 @@ class CpoIntVarSolution(CpoVarSolution):
     """
     __slots__ = ('value',  # Variable value / domain
                 )
-    
+
     def __init__(self, expr, value):
         """ Constructor:
 
@@ -248,6 +248,7 @@ class CpoIntVarSolution(CpoVarSolution):
         super(CpoIntVarSolution, self).__init__(expr)
         self.value = _check_arg_domain(value, 'value')
 
+
     def get_value(self):
         """ Gets the value of the variable.
 
@@ -255,6 +256,7 @@ class CpoIntVarSolution(CpoVarSolution):
             Variable value (integer), or domain (list of integers or intervals)
         """
         return self.value
+
 
     def get_domain_min(self):
         """ Gets the domain lower bound.
@@ -264,6 +266,7 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return _domain_min(self.value)
 
+
     def get_domain_max(self):
         """ Gets the domain upper bound.
 
@@ -272,6 +275,7 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return _domain_max(self.value)
 
+
     def domain_iterator(self):
         """ Iterator on the individual values of an integer variable domain.
 
@@ -279,6 +283,7 @@ class CpoIntVarSolution(CpoVarSolution):
             Value iterator on the domain of this variable.
         """
         return _domain_iterator(self.value)
+
 
     def domain_contains(self, value):
         """ Check whether a given value is in the domain of the variable
@@ -289,6 +294,7 @@ class CpoIntVarSolution(CpoVarSolution):
             True if the value is in the domain, False otherwise
         """
         return _domain_contains(self.value, value)
+
 
     def __str__(self):
         """ Convert this expression into a string """
@@ -308,7 +314,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
                  'presence', # Presence indicator
                 )
     
-    def __init__(self, expr, presence=None, start=None, end=None, size=None):
+    def __init__(self, expr, presence=None, start=None, end=None, size=None, length=None):
         """ Constructor:
 
         Args:
@@ -317,6 +323,8 @@ class CpoIntervalVarSolution(CpoVarSolution):
             start:    Value of start, or tuple representing the start range. Default is None.
             end:      Value of end, or tuple representing the end range. Default is None.
             size:     Value of size, or tuple representing the size range. Default is None.
+            length:   Value of the length, or tuple representing the length range. Default is None.
+                      Not to be used if other values are integers.
         """
         assert isinstance(expr, CpoIntervalVar), "Expression 'expr' should be a CpoIntervalVar expression"
         super(CpoIntervalVarSolution, self).__init__(expr)
@@ -324,7 +332,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
         self.start    = start
         self.end      = end
         self.size     = size
-        self.length   = None
+        self.length   = length
 
 
     def is_present(self):
@@ -419,9 +427,9 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """
         if self.is_present():
             if self.length is None:
-                return self.start, self.end, self.size
+                return (self.start, self.end, self.size, )
             else:
-                return self.start, self.end, self.size, self.length
+                return (self.start, self.end, self.size, self.length, )
         return ()
 
 
@@ -660,7 +668,7 @@ class CpoModelSolution(object):
         self.add_var_solution(CpoIntVarSolution(var, value))
 
 
-    def add_interval_var_solution(self, var, presence=None, start=None, end=None, size=None):
+    def add_interval_var_solution(self, var, presence=None, start=None, end=None, size=None, length=None):
         """ Add a new interval variable solution.
 
         The solution can be complete if all attribute values are integers, or partial if at least one
@@ -672,8 +680,10 @@ class CpoModelSolution(object):
             start:    Value of start, or tuple representing the start range
             end:      Value of end, or tuple representing the end range
             size:     Value of size, or tuple representing the size range
+            length:   Value of the length, or tuple representing the length range. Default is None.
+                      Not to be used if other values are integers.
         """
-        self.add_var_solution(CpoIntervalVarSolution(var, presence, start, end, size))
+        self.add_var_solution(CpoIntervalVarSolution(var, presence, start, end, size, length))
 
 
     def get_var_solution(self, expr):
@@ -713,7 +723,7 @@ class CpoModelSolution(object):
          * :meth:`CpoStateFunctionSolution.get_value`
 
         Args:
-            expr: Variable expression, variable name  or KPI name.
+            expr: Variable expression, variable name or KPI name.
         Returns:
             Variable value, None if variable is not found.
         """
@@ -721,6 +731,47 @@ class CpoModelSolution(object):
         if var is not None:
             return var.get_value()
         return self.get_kpi_value(expr)
+
+
+    def set_value(self, var, value):
+        """ Sets the value of a variable.
+
+        This method allows to set an integer variable or an interval variable with the short representation
+        used to represent it, as returned by :meth:`CpoIntVarSolution.get_value`
+        or :meth:`CpoIntervalVarSolution.get_value`.
+
+        For an integer variable, value can be:
+
+         * If the variable is fully instantiated, a single integer.
+         * If the variable is partially instantiated, a domain expressed as a list of integers or intervals.
+
+
+        For an interval variable, value can be:
+
+         * If the variable is absent, an empty tuple.
+         * If the variable is fully instantiated, a tuple of 3 integers (start, end, size).
+         * If the variable is partially instantiated, a tuple (start, end, size, length) where each
+           individual value can be an integer or an interval expressed as a tuple.
+
+        Args:
+            var: Model variable
+            value: short representation of the variable value
+        """
+        if isinstance(var, CpoIntVar):
+            self.add_integer_var_solution(var, value)
+        elif isinstance(var, CpoIntervalVar):
+            if not value:
+                self.add_interval_var_solution(var, presence=False)
+            elif len(value) == 3:
+                start, end, size = value
+                self.add_interval_var_solution(var, presence=True, start=start, end=end, size=size)
+            elif len(value) == 4:
+                start, end, size, length = value
+                self.add_interval_var_solution(var, presence=True, start=start, end=end, size=size, length=length)
+            else:
+                raise AssertionError("Invalid value format for an interval variable")
+        else:
+            raise AssertionError("Variable that can be set directly are restricted to integer and interval variables")
 
 
     def add_kpi_value(self, name, value):
@@ -843,16 +894,23 @@ class CpoModelSolution(object):
             self.add_var_solution(CpoStateFunctionSolution(fun, lpts))
 
         # Set kpis
-        kpi_values = jsol.get('KPIs', ())
+        kpi_values = jsol.get('KPIs', {})
         kpis = model.get_kpis()
-        for name, (expr, loc) in kpis.items():
-            if isinstance(expr, types.FunctionType):
-                value = expr(self)
-            elif name in kpi_values:
-                value = kpi_values[name]
-            else:
-                value = self.get_value(expr)
-            self.add_kpi_value(name, value)
+        try:
+            for name, (expr, loc) in kpis.items():
+                if isinstance(expr, types.FunctionType):
+                    # KPI is a lambda expression
+                    value = expr(self)
+                elif name in kpi_values:
+                    # KPI is a solver KPI
+                    value = kpi_values[name]
+                else:
+                    # KPI is a model variable
+                    value = self.get_value(expr)
+                self.add_kpi_value(name, value)
+        except:
+            # Solution has no values
+            pass
 
 
     def __getitem__(self, expr):
@@ -864,6 +922,18 @@ class CpoModelSolution(object):
             Variable solution (class CpoVarSolution)
         """
         return self.get_value(expr)
+
+
+    def __setitem__(self, var, value):
+        """ Overloading of [] to set a variable solution in this model solution
+
+        Args:
+            var: Variable expression
+            value:  Variable value
+        Returns:
+            Variable solution (class CpoVarSolution)
+        """
+        return self.set_value(var, value)
 
 
     def __contains__(self, expr):

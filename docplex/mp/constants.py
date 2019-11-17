@@ -452,3 +452,27 @@ class QualityMetric(Enum):
             else:
                 print(fmt.format(txt))
                 return None
+
+
+class BasisStatus(Enum):
+
+    def __new__(cls, code, cpx_codename):
+        obj = object.__new__(cls)
+        # predefined
+        obj._value_ = code
+        obj.codename = cpx_codename
+        return obj
+
+    unknown = -1, "Unknown"
+    AtLowerBound = 0, "CPX_AT_LOWER"
+    Basic = 1, "CPX_BASIC"
+    AtUpperBound = 2, "CPX_AT_UPPER"
+    FreeNonBasic = 3, "CPX_FREE_SUPER"
+
+    @classmethod
+    def parse(cls, code):
+        for bs in cls:
+            if bs.value == code:
+                return bs
+        else:
+            return cls.unknown

@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016
+# (c) Copyright IBM Corp. 2015, 2018
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
@@ -13,7 +13,6 @@ from docplex.mp.params.parameter_hierarchy_12800 import make_root_params_12800
 from docplex.mp.params.parameter_hierarchy_12900 import make_root_params_12900
 
 def _make_default_parameters():
-    # when cloudcplex switches to 12.7.1 use this.
     return make_root_params_12800()
 
 

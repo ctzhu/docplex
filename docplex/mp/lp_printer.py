@@ -6,9 +6,7 @@
 
 
 from __future__ import print_function
-# from six import iteritems, itervalues
 
-import re
 
 from docplex.mp.linear import *
 from docplex.mp.constants import ComparisonType
@@ -22,9 +20,12 @@ from itertools import chain
 
 # gendoc: ignore
 
+def _non_compliant_lp_name_stop_here(name):
+    pass
+
 
 class LPModelPrinter(TextModelPrinter):
-    _lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
+    #_lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
 
     _lp_symbol_map = {ComparisonType.EQ: " = ",  # BEWARE NOT ==
                       ComparisonType.LE: " <= ",
@@ -89,7 +90,6 @@ class LPModelPrinter(TextModelPrinter):
         wrapper.write('=')
         wrapper.write(self._num_to_string(rhs))
 
-
     def _print_logical_ct(self, wrapper, num_printer, var_name_map, logical_ct,
                           logical_symbol):
         wrapper.write(self._var_print_name(logical_ct.binary_var))
@@ -97,7 +97,6 @@ class LPModelPrinter(TextModelPrinter):
         wrapper.write("%d" % logical_ct.active_value)
         wrapper.write(logical_symbol)
         self._print_binary_ct(wrapper, num_printer, var_name_map, logical_ct.linear_constraint)
-
 
     def _print_quadratic_ct(self, wrapper, num_printer, var_name_map, qct):
         q = self._print_qexpr_iter(wrapper, num_printer, var_name_map, qct.iter_net_quads())
@@ -200,34 +199,39 @@ class LPModelPrinter(TextModelPrinter):
 
     TRUNCATE = 200
 
-    @staticmethod
-    def _non_compliant_lp_name_stop_here(name):
-        pass
+    def _notify_new_non_compliant_name(self, non_lp_name):
+        _non_compliant_lp_name_stop_here(non_lp_name)
+        self._nb_noncompliant_ids += 1
+        if not self._noncompliant_justifier:
+            self._noncompliant_justifier = non_lp_name
 
-    def fix_name(self, mobj, prefix, local_index_map, hide_names):
-        raw_name = mobj.get_name()
+    def fix_name(self, mobj, prefix, local_index, hide_names):
+        return LP_format.lp_name(mobj.name, prefix, local_index, hide_names,
+                                 noncompliant_hook=self._notify_new_non_compliant_name)
 
-        # anonymous constraints must be named in a LP (we follow CPLEX here)
-        if hide_names or not raw_name or mobj.is_generated():
-            return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
-        elif not self.is_lp_compliant(raw_name):
-            if raw_name[0] in 'eE':
-                # fixing eE non-LP names
-                fixed_name = '_' + raw_name
-                if  self.is_lp_compliant(fixed_name):
-                    return fixed_name
-            # -- stats
-            self._nb_noncompliant_ids += 1
-            if not self._noncompliant_justifier:
-                self._noncompliant_justifier = raw_name
-            # --
-            self._non_compliant_lp_name_stop_here(raw_name)
-            return self._make_prefix_name(mobj, prefix, local_index_map, offset=1)
-        else:
-            # swap blanks with underscores
-            fixed_name = self._translate_chars(raw_name)
-            # truncate if necessary, again this does nothing if name is too short
-            return fixed_name[:self.TRUNCATE]
+    # def fix_name(self, mobj, prefix, local_index, hide_names):
+    #     raw_name = mobj.get_name()
+    #
+    #     # anonymous constraints must be named in a LP (we follow CPLEX here)
+    #     if hide_names or not raw_name: # or mobj.is_generated():
+    #         return self._make_prefix_name(mobj, prefix, local_index, offset=1)
+    #
+    #     # # swap blanks with underscores
+    #     ws_name = self._translate_chars(raw_name)
+    #     if not self.is_lp_compliant(ws_name, fix_whitespace=False):
+    #         if raw_name[0] in 'eE':
+    #             # fixing eE non-LP names
+    #             fixed_name = '_' + raw_name
+    #             if self.is_lp_compliant(fixed_name, fix_whitespace=False):
+    #                 return fixed_name
+    #         # -- stats
+    #         self._notify_new_non_compliant_name(raw_name)
+    #         # --
+    #         return self._make_prefix_name(mobj, prefix, local_index, offset=1)
+    #     else:
+    #
+    #         # truncate if necessary, again this does nothing if name is too short
+    #         return ws_name[:self.TRUNCATE]
 
     def _print_model_name(self, out, model):
         model_name = None
@@ -242,12 +246,9 @@ class LPModelPrinter(TextModelPrinter):
         out.write("\\Problem name: %s\n" % printed_name)
 
     @staticmethod
-    def is_lp_compliant(name, fix_whitespace=True, _lpname_regexp=_lp_re):
-        if name is None:
-            return True  # pragma: no cover
+    def is_lp_compliant(name, fix_whitespace=True):
         fixed_name = LPModelPrinter.fix_whitespace(name) if fix_whitespace else name
-        lp_match = _lpname_regexp.match(fixed_name)
-        return lp_match and lp_match.start() == 0 and lp_match.end() == len(fixed_name)
+        return LP_format.is_lp_compliant(fixed_name)
 
     @staticmethod
     def _is_injective(name_map):
@@ -280,9 +281,8 @@ class LPModelPrinter(TextModelPrinter):
         for sos in model.iter_sos():
             for sos_var in sos.iter_variables():
                 predeclared_variables.add(sos_var)
-        for pwl in model.iter_pwl_constraints():
-            predeclared_variables.add(pwl.y)
-            for pwv in pwl.expr.iter_variables():
+        for pwlc in model.iter_pwl_constraints():
+            for pwv in pwlc.iter_extended_variables():
                 predeclared_variables.add(pwv)
         return predeclared_variables
 
@@ -291,7 +291,7 @@ class LPModelPrinter(TextModelPrinter):
         if nb_non_compliants:
             try:
                 model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
-                                   nb_non_compliants, self._noncompliant_justifier)
+                               nb_non_compliants, self._noncompliant_justifier)
             except UnicodeEncodeError:  # pragma: no cover
                 model.warning('Some identifiers are not valid LP identifiers: %d (e.g.: "%s")',
                               nb_non_compliants, self._noncompliant_justifier.encode('utf-8'))
@@ -304,7 +304,7 @@ class LPModelPrinter(TextModelPrinter):
 
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
-            sys.__stdout__.write("\DOcplex: refine variable names\n")
+            sys.__stdout__.write("DOcplex: refine variable names\n")
             k = 0
             for dv, lp_varname in iteritems(self._var_name_map):
                 refined_name = "%s#%d" % (lp_varname, k)
@@ -347,7 +347,6 @@ class LPModelPrinter(TextModelPrinter):
 
         printed= self._print_expr_iter(wrapper, self_num_printer, var_name_map, iter_linear_terms,
                               allow_empty=True, accept_zero=True)
-
 
         if objexpr.is_quad_expr() and objexpr.has_quadratic_term():
             self._print_qexpr_obj(wrapper, self_num_printer, var_name_map,

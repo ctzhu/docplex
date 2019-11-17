@@ -90,14 +90,15 @@ Environment representation can be accessed with different ways:
 from collections import deque
 import json
 from functools import partial
+import logging
 import os
+import shutil
+import sys
 import tempfile
 import threading
-import warnings
-import shutil
 import time
-import logging
-import sys
+import uuid
+import warnings
 
 try:
     from string import maketrans, translate
@@ -113,6 +114,17 @@ except ImportError:
 from six import iteritems
 
 from docplex.util.logging_utils import LoggerToFile, LoggerToDocloud
+
+in_ws_nb = None
+
+if in_ws_nb is None:
+    in_notebook = ('ipykernel' in sys.modules)
+    dsx_home_set = 'dsxuser' in os.environ.get('HOME', '').split('/')
+    has_hw_spec = 'RUNTIME_HARDWARE_SPEC' in os.environ
+    rt_region_set = 'RUNTIME_ENV_REGION' in os.environ
+    
+    in_ws_nb = in_notebook and dsx_home_set and has_hw_spec and rt_region_set
+
 
 log_level_mapping = {'OFF': None,
                      'SEVERE': logging.ERROR,
@@ -464,7 +476,7 @@ class Environment(object):
         '''
         return None
 
-    def notify_start_solve(self, solve_details):
+    def notify_start_solve(self, solve_details, engine_type=None):
         # ===============================================================================
         #         '''Notify the solving environment that a solve is starting.
         #
@@ -548,7 +560,7 @@ class Environment(object):
         '''
         pass
 
-    def notify_end_solve(self, status):
+    def notify_end_solve(self, status, solve_time=None):
         # ===============================================================================
         #         '''Notify the solving environment that the solve as ended.
         #
@@ -565,6 +577,7 @@ class Environment(object):
         #
         #         Args:
         #             status: The solve status
+        #             solve_time: The solve time
         #         '''
         # ===============================================================================
         if self.unpublished_details:
@@ -642,11 +655,10 @@ class Environment(object):
         '''
         return None
 
-
-class LocalEnvironment(Environment):
+class AbstractLocalEnvironment(Environment):
     # The environment solving environment using all local input and outputs.
     def __init__(self):
-        super(LocalEnvironment, self).__init__()
+        super(AbstractLocalEnvironment, self).__init__()
         self.logger = None
 
         # init number of cores. Default is no limits (engines will use
@@ -693,6 +705,50 @@ class LocalEnvironment(Environment):
 
     def get_available_core_count(self):
         return self._available_cores
+
+class LocalEnvironment(AbstractLocalEnvironment):
+    def __init__(self):
+        super(LocalEnvironment, self).__init__()
+
+from .ws.util import START_SOLVE_EVENT, END_SOLVE_EVENT, Tracker
+
+class WSNotebookEnvironment(AbstractLocalEnvironment):
+    def __init__(self, tracker=None):
+        super(WSNotebookEnvironment, self).__init__()
+        self._start_time = None
+        self.solve_id = str(uuid.uuid4())  # generate random uuid for each session
+        self.tracker = tracker if tracker else Tracker()
+
+    def notify_start_solve(self, solve_details):
+        super(WSNotebookEnvironment, self).notify_start_solve(solve_details)
+        # Prepare data for WS
+        detail_type = solve_details.get('MODEL_DETAIL_TYPE', None)
+        model_type = "cpo" if detail_type and detail_type.startswith('CPO') else "cplex"
+        num_constraints = solve_details.get('MODEL_DETAIL_CONSTRAINTS', 0)
+        num_variables = solve_details.get('MODEL_DETAIL_CONTINUOUS_VARS', 0) \
+            + solve_details.get('MODEL_DETAIL_INTEGER_VARS', 0) \
+            + solve_details.get('MODEL_DETAIL_BOOLEAN_VARS', 0) \
+            + solve_details.get('MODEL_DETAIL_INTERVAL_VARS', 0) \
+            + solve_details.get('MODEL_DETAIL_SEQUENCE_VARS', 0)
+        model_statistics = {'numConstraints': num_constraints,
+                            'numVariables': num_variables}
+        cplex_edition = _get_cplex_edition()
+        details = {'modelType': model_type,
+                   'modelSize': model_statistics,
+                   'solveId': self.solve_id,
+                   'edition': cplex_edition}
+        self.tracker.notify_ws(START_SOLVE_EVENT, details)
+        self._start_time = time.time()
+        
+    def notify_end_solve(self, status, solve_time=None):
+        super(WSNotebookEnvironment, self).notify_end_solve(status, solve_time=solve_time)
+        # do the watson studio things
+        if (self._start_time and solve_time == None):
+            solve_time = (time.time() - self._start_time)
+        details = {'solveTime': solve_time,
+                   'solveId': self.solve_id}
+        self.tracker.notify_ws(END_SOLVE_EVENT, details)
+        self._start_time = None
 
 class OutputFileWrapper(object):
     # Wraps a file object so that on __exit__() and on close(), the wrapped file is closed and
@@ -774,7 +830,7 @@ class WorkerEnvironment(Environment):
         self.solve_hook.notify_start_solve(None,  # model
                                            solve_details)
 
-    def notify_end_solve(self, status):
+    def notify_end_solve(self, status, solve_time=None):
         super(WorkerEnvironment, self).notify_end_solve(status)
         try:
             from docplex.util.status import JobSolveStatus
@@ -838,9 +894,19 @@ def _get_default_environment():
             return WorkerEnvironment(hook)
     except ImportError:
         pass
+    if in_ws_nb:
+        return WSNotebookEnvironment()
     return LocalEnvironment()
 
 default_environment = _get_default_environment()
+
+def _get_cplex_edition():
+    with OverrideEnvironment(Environment()):
+        import docplex.mp.model
+        import docplex.mp.environment
+        edition = " ce" if docplex.mp.model.Model.is_cplex_ce() else ""
+        version = docplex.mp.environment.Environment().cplex_version
+        return "%s%s" % (version, edition)
 
 
 def get_environment():

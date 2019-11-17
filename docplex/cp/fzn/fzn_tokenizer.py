@@ -50,15 +50,15 @@ PREDEFINED_SYMBOL_TOKENS = [TOKEN_KEYWORD_TRUE, TOKEN_KEYWORD_FALSE, TOKEN_DIV,
 #==============================================================================
 
 class FznTokenizer(Tokenizer):
-    """ Tokenizer for CPO file format """
+    """ Tokenizer for FZN file format """
     __slots__ = ()
 
-    def __init__(self, name, input):
+    def __init__(self, **args):
         """ Create a new tokenizer
         Args:
-            input: Input stream or string
+            See arguments list of :class:`~docplex.cp.utils.Tokenizer`
         """
-        super(FznTokenizer, self).__init__(name, input)
+        super(FznTokenizer, self).__init__(**args)
 
         # Add predefined symbols
         self.add_predefined_symbols(PREDEFINED_SYMBOL_TOKENS)

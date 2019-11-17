@@ -94,9 +94,10 @@ class LPModelPrinter(TextModelPrinter):
     def _print_logical_ct(self, wrapper, num_printer, var_name_map, logical_ct,
                           logical_symbol):
         wrapper.write(self._var_print_name(logical_ct.binary_var))
-        wrapper.write("=")
-        wrapper.write("%d" % logical_ct.active_value)
-        wrapper.write(logical_symbol)
+        # rtc-39773 : write " = 1 -> " as one atomic symbol
+        wrapper.write("= %d %s" % (logical_ct.active_value, logical_symbol))
+        # wrapper.write("%d" % logical_ct.active_value)
+        # wrapper.write(logical_symbol)
         self._print_binary_ct(wrapper, num_printer, var_name_map, logical_ct.linear_constraint)
 
     def _print_quadratic_ct(self, wrapper, num_printer, var_name_map, qct):
@@ -351,7 +352,8 @@ class LPModelPrinter(TextModelPrinter):
         TextModelPrinter.prepare(self, model)
         self_num_printer = self._lp_num_printer
         var_name_map = self._var_name_map
-        wrapper = _ExportWrapper(out, indent_str=self.__expr_indent)
+        line_size = model.lp_line_length
+        wrapper = _ExportWrapper(out, indent_str=self.__expr_indent,line_width=line_size)
 
         self._print_signature(out)
         self._print_encoding(out)
@@ -360,12 +362,21 @@ class LPModelPrinter(TextModelPrinter):
 
         # ---  print objective
         if model.has_multi_objective():
+
             out.write(model.objective_sense.name)
             out.write(' multi-objectives')
             self._newline(out)
-            def make_default_obj_name(o):
-                return 'obj%d' % o if o > 0 else 'obj'
-            wrapper.set_indent(5 * ' ')
+            env = model.environment
+            if env.has_cplex and env.cplex_version.startswith("12.9."):
+                mobj_indent = 5
+                def make_default_obj_name(o):
+                    return 'obj%d' % o if o > 0 else 'obj'
+            else:
+                mobj_indent = 7 # length of 'obj1: '
+                def make_default_obj_name(o):
+                    return 'obj%d' % (o+1)
+
+            wrapper.set_indent(mobj_indent * ' ') # length of 'obj1: '
             for o, ot in enumerate(model.iter_multi_objective_tuples()):
                 expr, prio, w, abstol, reltol, oname = ot
                 name = oname or make_default_obj_name(o)
@@ -503,12 +514,12 @@ class LPModelPrinter(TextModelPrinter):
             wrapper.write('SOS')
             wrapper.flush(print_newline=True)
             name_fn = self._var_print_name
-            for sos in mdl.iter_sos():
-                sos_name = sos.get_name()
-                if sos_name:
-                    wrapper.write('%s:' % sos_name)
+            for s, sos in enumerate(mdl.iter_sos(), start=1):
+                # always print a name string, s1, s2, ... if no name
+                sos_name = sos.get_name() or 's%d' % s
+                wrapper.write('%s:' % sos_name)
                 wrapper.write('S%d ::' % sos.sos_type.value)  # 1 or 2
-                ranks = sos.get_ranks()
+                ranks = sos._get_weights()
                 for rank, sos_var in izip(ranks, sos._variables):
                     wrapper.write('%s : %d' % (name_fn(sos_var), rank))
                 wrapper.flush(print_newline=True)

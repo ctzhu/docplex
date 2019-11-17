@@ -70,9 +70,9 @@ class ComparisonType(Enum):
             if arg == op or arg == op.value:
                 return op
             elif is_string(arg):
-                if arg == str(op.value) \
-                        or arg.lower() == op.name.lower() \
-                        or arg == op._cplex_code:
+                if arg == op._cplex_code\
+                    or arg == str(op.value) \
+                        or arg.lower() == op.name.lower():
                     return op
         else:
             if do_raise:
@@ -192,9 +192,9 @@ class SOSType(Enum):
         # INTERNAL
         return str(self.value)
 
-    def min_size(self):
-        # INTERNAL
-        return self.value + 1
+    @property
+    def size(self):
+        return self.value
 
     def __repr__(self):
         return 'docplex.mp.SOSType.{0}'.format(self.name)
@@ -234,16 +234,17 @@ class UpdateEvent(Enum):
     # INTERNAL
     NoOp = 0
     #
-    # Linear ct
+    # Linear constraint events
     LinearConstraintCoef = 1
     LinearConstraintRhs = 2
     LinearConstraintGlobal = 3  # logical and of Coef + Rhs
-    LinearConstraintType = 4
+    ConstraintSense = 4
 
-    # Range
+    # Range constraint events
     RangeConstraintBounds = 5
     RangeConstraintExpr = 6
-    # Expr
+
+    # Expression events
     ExprConstant = 8
     LinExprCoef = 16
     LinExprGlobal = 24

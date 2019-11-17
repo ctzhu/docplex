@@ -12,22 +12,25 @@ from docplex.mp.compat23 import izip
 from docplex.mp.xcounter import update_dict_from_item_value
 
 from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_series, \
-    is_numpy_ndarray, is_pandas_dataframe, is_numpy_matrix
+    is_numpy_ndarray, is_pandas_dataframe, is_numpy_matrix, is_ordered_sequence
 from docplex.mp.linear import Var, MonomialExpr, AbstractLinearExpr, LinearExpr, ZeroExpr
-from docplex.mp.functional import _IAdvancedExpr
+from docplex.mp.functional import _FunctionalExpr
 from docplex.mp.quad import QuadExpr, VarPair
 
 
 class ModelAggregator(object):
     # what type to use for merging dicts
 
-    def __init__(self, linear_factory, quad_factory, counter_type):
+    def __init__(self, linear_factory, quad_factory):
         self._linear_factory = linear_factory
         self._checker = linear_factory._checker
         self._quad_factory = quad_factory
         self._model = linear_factory._model
         self._generate_transients = True
-        self.counter_type = counter_type
+
+    @property
+    def counter_type(self):
+        return self._linear_factory.term_dict_type
 
     def new_zero_expr(self):
         return ZeroExpr(model=self._model)
@@ -110,31 +113,42 @@ class ModelAggregator(object):
 
         return self._to_expr(qcc, lcc, total_num)
 
-    def _scal_prod_f(self, var_map, coef_fn, assume_alldifferent):
-        if assume_alldifferent:
-            return self._scal_prod_f_alldifferent(var_map, coef_fn)
+    def _scal_prod_f(self, dvars, coef_fn, assume_alldifferent):
+        if isinstance(dvars, dict) and hasattr(dvars, 'items'):
+            var_key_iter = iteritems
+        elif is_ordered_sequence(dvars):
+            var_key_iter = enumerate
         else:
-            # var_map is a dictionary of variables.
-            # coef_fn is a function accepting dictionary keys
-            lcc_type = self.counter_type
-            lcc = lcc_type()
-            number_validation_fn = self._checker.get_number_validation_fn()
-            if number_validation_fn:
-                for k, dvar in iteritems(var_map):
-                    fcoeff = coef_fn(k)
-                    safe_coeff = number_validation_fn(fcoeff)
-                    if safe_coeff:
-                        update_dict_from_item_value(lcc, dvar, safe_coeff)
-            else:
-                for k, dvar in iteritems(var_map):
-                    fcoeff = coef_fn(k)
-                    if fcoeff:
-                        update_dict_from_item_value(lcc, dvar, fcoeff)
+            var_key_iter = None
+            self._model.fatal('Model.dotf expects either a dictionary or an ordered sequence of variables, an instance of {0} was passed',
+                              type(dvars))
 
-            return self._to_expr(qcc=None, lcc=lcc)
+        if assume_alldifferent:
+            return self._scal_prod_f_alldifferent(dvars, coef_fn, var_key_iter)
+        else:
+            return self._scal_prod_f_gen(dvars, coef_fn, var_key_iter=var_key_iter)
 
+    def _scal_prod_f_gen(self, dvars, coef_fn, var_key_iter):
+        # var_map is a dictionary of variables.
+        # coef_fn is a function accepting dictionary keys
+        lcc_type = self.counter_type
+        lcc = lcc_type()
+        number_validation_fn = self._checker.get_number_validation_fn()
+        if number_validation_fn:
+            for k, dvar in var_key_iter(dvars):
+                fcoeff = coef_fn(k)
+                safe_coeff = number_validation_fn(fcoeff)
+                if safe_coeff:
+                    update_dict_from_item_value(lcc, dvar, safe_coeff)
+        else:
+            for k, dvar in var_key_iter(dvars):
+                fcoeff = coef_fn(k)
+                if fcoeff:
+                    update_dict_from_item_value(lcc, dvar, fcoeff)
 
-    def _scal_prod_f_alldifferent(self, var_map, coef_fn):
+        return self._to_expr(qcc=None, lcc=lcc)
+
+    def _scal_prod_f_alldifferent(self, dvars, coef_fn, var_key_iter):
         # var_map is a dictionary of variables.
         # coef_fn is a function accepting dictionary keys
         lcc_type = self.counter_type
@@ -142,13 +156,13 @@ class ModelAggregator(object):
         lcc_setitem = lcc_type.__setitem__
         number_validation_fn = self._checker.get_number_validation_fn()
         if number_validation_fn:
-            for k, dvar in iteritems(var_map):
+            for k, dvar in var_key_iter(dvars):
                 fcoeff = coef_fn(k)
                 safe_coeff = number_validation_fn(fcoeff)
                 if safe_coeff:
                     lcc_setitem(lcc, dvar, safe_coeff)
         else:
-            for k, dvar in iteritems(var_map):
+            for k, dvar in var_key_iter(dvars):
                 fcoeff = coef_fn(k)
                 if fcoeff:
                     lcc_setitem(lcc, dvar, fcoeff)
@@ -190,7 +204,7 @@ class ModelAggregator(object):
                 for lv, lk in item.iter_terms():
                     update_dict_from_item_value(lcc, lv, lk)
                 sum_of_nums += item.get_constant()
-            elif isinstance(item, _IAdvancedExpr):
+            elif isinstance(item, _FunctionalExpr):
                 update_dict_from_item_value(lcc, item.functional_var, 1)
             elif isinstance(item, ZeroExpr):
                 pass
@@ -223,7 +237,7 @@ class ModelAggregator(object):
             return self.sum(dvars.values)
         elif isinstance(dvars, dict):
             # handle dict: sum all values
-            return self._sum_with_iter(itervalues(dvars))
+            return self._sum_vars(itervalues(dvars))
         elif is_iterable(dvars):
             checked_dvars = self._checker.typecheck_var_seq(dvars, caller='Model.sumvars()')
             sumvars_terms = self._varlist_to_terms(checked_dvars)
@@ -232,9 +246,17 @@ class ModelAggregator(object):
             self._model.fatal('Model.sumvars() expects an iterable returning variables, {0!r} was passed',
                               dvars)
 
+    def _sum_vars_all_different(self, dvars):
+        lcc = self._linear_factory._new_term_dict()
+        setitem_fn = lcc.__setitem__
+
+        for v in dvars:
+            setitem_fn(v, 1)
+        return self._to_expr(qcc=None, lcc=lcc)
+
     def _varlist_to_terms(self, var_list):
         # INTERNAL: converts a sum of vars to a dict, sorting if needed.
-        linear_term_dict_type = self._model._term_dict_type
+        linear_term_dict_type = self._linear_factory.term_dict_type
         try:
             assume_no_dups = len(var_list) == len(set(var_list))
         except TypeError:
@@ -296,7 +318,7 @@ class ModelAggregator(object):
 
                     if cst:
                         update_dict_from_item_value(lcc, lv1, 2 * cst * lk1)
-            elif isinstance(item, _IAdvancedExpr):
+            elif isinstance(item, _FunctionalExpr):
                 fvar = item.functional_var
                 update_dict_from_item_value(qcc, VarPair(fvar), 1)
 

@@ -9,7 +9,7 @@
 Parser converting a CPO file to internal model representation.
 """
 
-from docplex.cp.cpo_tokenizer import *
+from docplex.cp.cpo.cpo_tokenizer import *
 from docplex.cp.expression import *
 from docplex.cp.expression import _create_operation
 from docplex.cp.function import *
@@ -29,7 +29,7 @@ import traceback
 MIN_CPO_VERSION_NUMBER = "12.6.0.0"
 
 # Maximum CPO format version number
-MAX_CPO_VERSION_NUMBER = "12.9.0.0"
+MAX_CPO_VERSION_NUMBER = "12.10.0.0"
 
 # Map of all operators. Key is operator, value is list of corresponding operation descriptors
 _ALL_OPERATORS = {}
@@ -143,10 +143,11 @@ class CpoParser(object):
         self.source_file = cfile
         if self.model.source_file is None:
             self.model.source_file = cfile
-        with open_utf8(cfile, mode='r') as f:
-            self.tokenizer = CpoTokenizer(cfile, f)
-            self._read_statement_list()
-            self.tokenizer = None
+
+        self.tokenizer = CpoTokenizer(file=cfile)
+        self._read_statement_list()
+        self.tokenizer = None
+
         return self.model
 
 
@@ -160,7 +161,7 @@ class CpoParser(object):
         Return:
             Model result of the parsing, object of class :class:`~docplex.cp.model.CpoModel`
         """
-        self.tokenizer = CpoTokenizer("String", str)
+        self.tokenizer = CpoTokenizer(input=str)
         self._read_statement_list()
         self.tokenizer = None
         return self.model
@@ -234,7 +235,11 @@ class CpoParser(object):
         Args:
             name:  Directive name
         """
-        if name == "include":
+        if name == "line":
+            # Skip line
+            self.tokenizer._skip_to_end_of_line()
+
+        elif name == "include":
             # Get file name
             fname = self._check_token_string(self._next_token())
             if (os.path.dirname(fname) == "") and (self.source_file is not None):
@@ -246,9 +251,6 @@ class CpoParser(object):
             # Restore context
             self.source_file, self.tokenizer, self.token = old_ctx
 
-        elif name == "line":
-            # Skip line
-            self.tokenizer._skip_to_end_of_line()
         else:
             self._raise_exception("Unknown directive '" + name + "'")
 
@@ -300,6 +302,14 @@ class CpoParser(object):
                 self._raise_exception("'stateFunction' should have 0 or 1 argument")
             expr = CpoStateFunction(trmx, name)
 
+        elif tok.value in("floatVar", "_floatVar"):
+            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
+            if len(args) != 2:
+                self._raise_exception("'_floatVar' should have 2 arguments")
+            expr = CpoFloatVar(args[0], args[1], name)
+            self.model.add(expr)
+
         else:
             # Read expression
             expr = self._read_expression()
@@ -347,9 +357,9 @@ class CpoParser(object):
                 self._next_token()
             else:
                 self._check_token(self._next_token(), TOKEN_ASSIGN)
+                self._next_token()
                 if aname in ("start", "end", "length", "size"):
                     # Read interval
-                    self._next_token()
                     intv = self._read_expression()
                     if isinstance(intv, int):
                         intv = (intv, intv)
@@ -357,12 +367,10 @@ class CpoParser(object):
                         self._raise_exception("'start', 'end', 'length' or 'size' should be an integer or an interval")
                     setattr(res, aname, intv)
                 elif aname == "intensity":
-                    self._next_token()
                     res.set_intensity(self._read_expression())
                 elif aname == "granularity":
-                    tok = self._next_token()
-                    self._check_token_integer(tok)
-                    res.set_granularity(int(tok.value))
+                    self._check_token_integer(self.token)
+                    res.set_granularity(int(self.token.value))
                     self._next_token()
                 else:
                     self._raise_exception("Unknown IntervalVar attribute argument '" + aname + "'")

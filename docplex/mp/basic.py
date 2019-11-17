@@ -51,8 +51,8 @@ class ModelingObjectBase(object):
     def _set_name(self, name):
         self._name = name
 
-    def _get_safe_name(self):
-        # INTERNAL: always return a string
+    @property
+    def safe_name(self):
         return self._name or ''
 
     def check_name(self, new_name):

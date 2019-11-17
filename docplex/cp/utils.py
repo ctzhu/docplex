@@ -17,11 +17,17 @@ import sys
 import threading
 import io
 import inspect
-from collections import deque, Iterable
 import json
 import platform
 import copy
+import gzip
+import zipfile
 import importlib
+
+try:
+    from collections.abc import deque, Iterable  # Python >= 3.7
+except:
+    from collections import deque, Iterable      # Python < 3.7
 
 try:
     from StringIO import StringIO  # Python 2
@@ -715,6 +721,61 @@ class IdentityAccessor(object):
         return key
 
 
+class TextFileLineReader(object):
+    """ Reader for text files, possibly compressed using gzip """
+    __slots__ = ('input',     # Input stream
+                 'encoding',  # Character encoding
+                 )
+
+    def __init__(self, file, encoding='utf-8-sig'):
+        """ Create a text file line reader
+
+        Args:
+            file:      File name
+            encoding:  (Optional) Character encoding, UTF-8 by default
+        """
+        ext = os.path.splitext(file)[1].lower()
+        if ext == '.gz':
+            self.input = gzip.open(file, 'r')
+        elif ext == ".zip":
+            zfile = zipfile.ZipFile(file)
+            lfiles = zfile.infolist()
+            if len(lfiles) != 1:
+                raise IOError("Zip file does not contains a single entry")
+            self.input = zfile.open(lfiles[0])
+        else:
+            self.input = io.open(file, mode='r', encoding=encoding, errors='ignore')
+        self.encoding = encoding
+
+    def __del__(self):
+        """ Release resources """
+        self.close()
+
+    def close(self):
+        """ Close this reader """
+        if self.input is not None:
+            self.input.close()
+            self.input = None
+
+    def readline(self):
+        """ Read next line of text
+
+        Returns:
+            Next line of text, including ending end of line character, empty line if end of file
+        """
+        # Check input already closed
+        if self.input is None:
+            return ''
+        line = self.input.readline()
+        # Process case where read is done in a compressed file
+        if isinstance(line, (bytes, bytearray)):
+            line = line.decode(self.encoding)
+        if not line:
+            self.input.close()
+            self.input = None
+        return line
+
+
 class Chrono(object):
     """ Chronometer """
     __slots__ = ('startTime',  # Chrono start time
@@ -1127,7 +1188,7 @@ def _equals_lists(l1, l2):
 def equals(v1, v2):
     """ Check that two values are logically equal, i.e. with the same attributes with the same values, recursively
 
-    This method does NOT call __eq__ and is then proof to possible overloads of '=='
+    This method does not call __eq__ except on basic types, and is then proof to possible overloads of '=='
 
     Args:
        v1: First value
@@ -1142,6 +1203,8 @@ def equals(v1, v2):
     # Check same type
     t = type(v1)
     if not (t is type(v2)):
+        if is_string(v1) and is_string(v2):
+            return v1 == v2
         return False
 
     # Check basic types
@@ -1273,7 +1336,7 @@ def format_text(txt, size):
 
 
 def open_utf8(file, mode='r'):
-    """ Open a stream with UTF-8 encoding
+    """ Open a stream for read or write with UTF-8 encoding
 
     Args:
         file:  File to open

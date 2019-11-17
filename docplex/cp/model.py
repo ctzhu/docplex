@@ -69,12 +69,13 @@ from docplex.cp.solution import *
 from docplex.cp.expression import *
 from docplex.cp.function import *
 from docplex.cp.solver.solver_listener import CpoSolverListener
+from docplex.cp.solver.cpo_callback import CpoCallback
 
 # Imports required locally
 import docplex.cp.expression as expression
 import docplex.cp.modeler as modeler
 from docplex.cp.solver.solver import CpoSolver
-from docplex.cp.cpo_compiler import CpoCompiler
+from docplex.cp.cpo.cpo_compiler import CpoCompiler
 import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
@@ -131,7 +132,7 @@ class CpoModelStatistics(object):
             self.operation_usage[opname] = self.operation_usage.get(opname, 0) + 1
 
     def write(self, out=None, prefix=""):
-        """ Write the solution
+        """ Write the statistics
 
         Args:
             out (Optional):    Target output, as stream or file name. sys.stdout if not given
@@ -160,6 +161,15 @@ class CpoModelStatistics(object):
         else:
             out.write("None")
         out.write("\n")
+
+    def __str__(self):
+        """ Build a string representing this object
+
+        Returns:
+            String representing this object
+        """
+        return "IntegerVars: {}, IntervalVars: {}, Exprs: {}, Nodes: {}, Ops: {}"\
+            .format(self.nb_integer_var, self.nb_interval_var, self.nb_root_exprs, self.nb_expr_nodes, len(self.operation_usage))
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -197,6 +207,7 @@ class CpoModel(object):
         self.objective        = None          # Objective function
         self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name.
         self.listeners        = []            # Solver listeners
+        self.callbacks        = []            # Solver callbacks
 
         # Set version of the CPO format (None = not given)
         self.format_version   = version
@@ -423,7 +434,7 @@ class CpoModel(object):
             if kwargs:
                 self.parameters.add(**kwargs)
         else:
-            raise AssertionError("argument 'params' should be an object of class CpoParameters, a dictionary, or None.")
+            raise AssertionError("Argument 'params' should be an object of class CpoParameters, a dictionary, or None.")
 
         return self.parameters
 
@@ -443,6 +454,7 @@ class CpoModel(object):
                 self.parameters = CpoParameters()
             for k, v in kwargs.items():
                 self.parameters.__setattr__(k, v)
+
 
     def get_parameters(self):
         """ Get the solving parameters associated to this model.
@@ -1207,6 +1219,29 @@ class CpoModel(object):
         self.listeners.remove(lstnr)
 
 
+    def add_solver_callback(self, cback):
+        """ Add a CPO solver callback.
+
+        A solver callback is an object extending the class :class:`~docplex.cp.solver.cpo_callback.CpoCallback`
+        which provides multiple functions that are called to notify about the different solving steps.
+
+        Args:
+            cback:  Solver callback, object extending :class:`~docplex.cp.solver.cpo_callback.CpoCallback`
+        """
+        assert isinstance(cback, CpoCallback), \
+            "CPO callback should be an object of class docplex.cp.solver.cpo_callback.CpoCallback"
+        self.callbacks.append(cback)
+
+
+    def remove_solver_callback(self, cback):
+        """ Remove a CPO solver callback. previously added with :meth:`~docplex.cp.solver.solver.CpoSolver.add_callback`.
+
+        Args:
+            cback:  Callback to remove.
+        """
+        self.callbacks.remove(cback)
+
+
     def export_model(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
@@ -1240,26 +1275,41 @@ class CpoModel(object):
 
 
     def import_model(self, file):
-        """ Import a model from a file containing a model expressed in CPO or FZN format.
+        """ Import a model from a file containing a model expressed in CPO, FZN or LP format.
 
-        FZN format is supported with restrictions to integer expressions.
-        The full list of supported predicates is given in the documentation of module :mod:`~docplex.cp.fzn.fzn_parser`.
+        FZN and LP formats are supported with restrictions to integer variables.
+        The full list of supported FZN predicates is given in the documentation of module
+        :mod:`~docplex.cp.fzn.fzn_parser`.
+
+        Source files can also be provided compressed, in zip or gzip format.
 
         Args:
-            file: Input file, with extension ".cpo" of ".fzn".
+            file: Name of the input file, with extension ".cpo", ".fzn" or ".lp", optionally followed by ".gz" or ".zip"
         """
-        ext = os.path.splitext(file)[1].lower()
+        felems = os.path.splitext(file)
+        ext = felems[1].lower()
+        if ext in (".gz", ".zip",):
+            ext = os.path.splitext(felems[0])[1].lower()
+
         if ext == ".cpo":
-            import docplex.cp.cpo_parser as cpo_parser
+            import docplex.cp.cpo.cpo_parser as cpo_parser
             prs = cpo_parser.CpoParser(self)
             prs.parse(file)
+
         elif ext == ".fzn":
             import docplex.cp.fzn.fzn_parser as fzn_parser
             prs = fzn_parser.FznParser(self)
             prs.parse(file)
+            # Get model to force compilation
             prs.get_model()
+
+        elif ext == ".lp":
+            import docplex.cp.lp.lp_parser as lp_parser
+            prs = lp_parser.LpParser(self)
+            prs.parse(file)
+
         else:
-            raise CpoException("Unknown {} file format. Only .cpo and .fzn are supported.")
+            raise CpoException("Unknown '{}' file format. Only .cpo, .fzn and .lp are supported.".format(ext))
 
 
     def export_as_cpo(self, out=None, **kwargs):
@@ -1397,8 +1447,12 @@ class CpoModel(object):
             New solver properly initialized.
         """
         slvr = CpoSolver(self, **kwargs)
+        # Add solvers listeners
         for l in self.listeners:
             slvr.add_listener(l)
+        # Add solvers callbacks
+        for l in self.callbacks:
+            slvr.add_callback(l)
         return slvr
 
 

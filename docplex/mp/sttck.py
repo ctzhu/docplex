@@ -48,8 +48,6 @@ class StaticTypeChecker(object):
         elif mdl is not ct.model:
             mdl.fatal("Constraint: {0!s} belongs to a different model".format(ct))
 
-
-
     @classmethod
     def mul_quad_lin_error(cls, logger, f1, f2):
         logger.fatal(
@@ -110,4 +108,12 @@ class StaticTypeChecker(object):
                 logger.fatal('{0}expects a sequence of {3} basis status, {1} was passed at pos {2}',
                              caller_s, stat, s, stat_type)
         return l_stats
+
+    @classmethod
+    def typecheck_logical_op(cls, logger, arg, caller):
+        if not hasattr(arg, 'as_logical_operand') or arg.as_logical_operand() is None:
+            caller_s = resolve_caller_as_string(caller)
+            logger.fatal('{1}Not a logical operand: {0!s} - Expecting binary variable, logical expression or constraint',
+                         arg, caller_s)
+
 

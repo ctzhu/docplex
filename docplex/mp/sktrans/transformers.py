@@ -268,8 +268,9 @@ class CplexRangeTransformer(CplexTransformerBase):
         row_maxs = X["max"].tolist()
         X_new.drop(labels=["min", "max"], inplace=True, axis=1)
         nb_vars = x_cols - 2
+        varnames = X_new.columns.values.tolist()
         return self.build_matrix_range_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,
-                                                       X_new.columns,
+                                                       varnames,
                                                        cts_mat=X_new,
                                                        range_mins=row_mins, range_maxs=row_maxs,
                                                        objsense=self.objsense, costs=y,

@@ -83,6 +83,8 @@ class QuadExpr(_SubscriptionMixin, Expr):
     either by using operators or by using :func:`docplex.mp.model.Model.quad_expr`.
 
     """
+    def _new_term_dict(self):
+        return self._model._lfactory.term_dict_type()
 
     def copy(self, target_model, var_mapping):
         copied_quads = self._quadterms.__class__()
@@ -128,13 +130,13 @@ class QuadExpr(_SubscriptionMixin, Expr):
         self._transient = False
         self._subscribers = []  # used by subscription mixin
         if quads is None:
-            self._quadterms = model._term_dict_type()
+            self._quadterms = self._new_term_dict()
         elif isinstance(quads, dict):
             if safe:
                 self._quadterms = quads
             else:
                 # check
-                safe_quads = model._term_dict_type()
+                safe_quads = self._new_term_dict()
                 for qvp, qk in six_iteritems(quads):
                     model.typecheck_num(qk)
                     if not isinstance(qvp, VarPair):
@@ -150,14 +152,14 @@ class QuadExpr(_SubscriptionMixin, Expr):
                     model.typecheck_var(v1)
                     model.typecheck_var(v2)
                     model.typecheck_num(qk, 'QuadExpr')
-                self._quadterms = model._term_dict_type()
+                self._quadterms = model._lfactory._new_term_dict()
                 self._quadterms[VarPair(v1, v2)] = qk
 
             except ValueError:  # pragma: no cover
                 self.fatal("QuadExpr accepts tuples of len: 3, got: {0!r}", quads)
 
         elif is_iterable(quads):
-            qterms = model._term_dict_type()
+            qterms = model._lfactory.term_dict_type()
             for qv1, qv2, qk in quads:
                 qterms[VarPair(qv1, qv2)] = qk
             self._quadterms = qterms
@@ -607,7 +609,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
         self.notify_modified(event=UpdateEvent.QuadExprGlobal)
         return self
 
-
     def multiply(self, other):
         event = UpdateEvent.QuadExprGlobal
         if is_number(other):
@@ -704,7 +705,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         # INTERNAL
         quadterms = self._quadterms
         if quadterms:
-            to_remove = [qvp for qvp,qk in self.iter_quads() if not qk]
+            to_remove = [qvp for qvp, qk in self.iter_quads() if not qk]
             for rvp in to_remove:
                 del quadterms[rvp]
         self._linexpr.normalize()

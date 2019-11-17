@@ -30,11 +30,6 @@ class ISolver(object):
         raise NotImplementedError  # pragma: no cover
 
     def connect_progress_listeners(self, listeners, model):
-        """
-        Connects progress listeners
-        :param listeners:
-        :return:
-        """
         raise NotImplementedError  # pragma: no cover
 
     def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
@@ -44,11 +39,6 @@ class ISolver(object):
         raise NotImplementedError  # pragma: no cover
 
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        """
-        Runs feasopt-like algorithm with a set of relaxable cts with preferences
-        :param relaxable_groups:
-        :return:
-        """
         raise NotImplementedError  # pragma: no cover
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
@@ -158,18 +148,11 @@ class IEngine(ISolver):
     def create_range_constraint(self, rangect):
         raise NotImplementedError  # pragma: no cover
 
-    def create_indicator_constraint(self, ind):
+    def create_logical_constraint(self, logct, is_equivalence):
         raise NotImplementedError  # pragma: no cover
 
-    def create_equivalence_constraint(self, eqct):
-        raise NotImplementedError  # pragma: no cover
-
-    def create_batch_equivalence_constraints(self, eqcts):
-        # the default is to iterate and append.
-        return [self.create_equivalence_constraint(eqc) for eqc in eqcts]
-
-    def create_batch_indicator_constraints(self, inds):
-        return [self.create_indicator_constraint(ind) for ind in inds]
+    def create_batch_logical_constraints(self, logcts, is_equivalence):
+        return [self.create_logical_constraint(logct, is_equivalence=is_equivalence) for logct in logcts]
 
     def create_quadratic_constraint(self, qct):
         raise NotImplementedError  # pragma: no cover
@@ -208,7 +191,7 @@ class IEngine(ISolver):
     def rename_var(self, var, new_name):
         raise NotImplementedError  # pragam: no cover
 
-    def set_var_type(self, var, new_type):
+    def change_var_types(self, dvars, new_types):
         raise NotImplementedError  # pragam: no cover
 
     def update_objective_epxr(self, expr, event, *args):
@@ -235,15 +218,10 @@ class IEngine(ISolver):
     def set_lp_start(self, var_stats, ct_stats):
         raise NotImplementedError
 
+
 # noinspection PyAbstractClass
 class DummyEngine(IEngine):
     def create_range_constraint(self, rangect):
-        return -1  # pragma: no cover
-
-    def create_indicator_constraint(self, ind):
-        return -1  # pragma: no cover
-
-    def create_equivalence_constraint(self, eqct):
         return -1  # pragma: no cover
 
     def create_quadratic_constraint(self, qct):
@@ -282,10 +260,10 @@ class DummyEngine(IEngine):
     def rename_var(self, var, new_name):
         pass  # nothing to do, except in cplex...
 
-    def rename_linear_constraint(selfself, linct, new_name):
-        pass # nothing to do, except in cplex...
+    def rename_linear_constraint(self, linct, new_name):
+        pass  # nothing to do, except in cplex...
 
-    def set_var_type(self, var, new_type):
+    def change_var_types(self, dvars, new_types):
         pass  # nothing to do, except in cplex...
 
     def create_linear_constraint(self, binaryct):
@@ -356,7 +334,6 @@ class DummyEngine(IEngine):
         # nothing to do except for cplex
         pass  # pragma: no cover
 
-
     def update_constraint(self, ct, event, *args):
         pass  # pragma: no cover
 
@@ -381,7 +358,6 @@ class DummyEngine(IEngine):
     def clear_all_sos(self):
         pass
 
-
     def get_basis(self, mdl):
         return None, None
 
@@ -389,7 +365,7 @@ class DummyEngine(IEngine):
         raise DOcplexException('set_lp_start() requires CPLEX, not available for {0}'.format(self.name))
 
 
-# noinspection PyAbstractClass,PyUnusedLocal
+# noinspection PyAbstractClass,PyUnusedLocal,PyMethodMayBeStatic
 class IndexerEngine(DummyEngine):
     """
     An abstract engine facade which generates unique indices for variables, constraints
@@ -434,7 +410,7 @@ class IndexerEngine(DummyEngine):
 
     def create_batch_cts(self, ct_seq):
         old_ct_count = self._ct_counter
-        size = sum(1 for _ in ct_seq) # iterator is consumed
+        size = sum(1 for _ in ct_seq)  # iterator is consumed
         self._increment_cts(size)
         return range(old_ct_count, self._ct_counter)
 
@@ -444,14 +420,8 @@ class IndexerEngine(DummyEngine):
     def create_range_constraint(self, rangect):
         return self._create_one_ct()
 
-    def create_indicator_constraint(self, ind):
+    def create_logical_constraint(self, logct, is_equivalence):
         return self._create_one_ct()
-
-    def create_equivalence_constraint(self, eqct):
-        return self._create_one_ct()
-
-    def create_batch_indicator_constraints(self, indicators):
-        return self.create_batch_cts(indicators)
 
     def create_quadratic_constraint(self, ind):
         return self._create_one_ct()
@@ -545,6 +515,7 @@ class NoSolveEngine(IndexerEngine):
         return eng
 
 
+# noinspection PyMethodMayBeStatic
 class ZeroSolveEngine(IndexerEngine):
     # INTERNAL: a dummy engine that says it can solve
     # but returns an all-zero solution.
@@ -640,6 +611,9 @@ class FakeFailEngine(IndexerEngine):
 
 
 class TerminatedEngine(IndexerEngine):
+    def get_name(self):
+        return "terminated"
+
     # INTERNAL: a dummy engine that says it can solve
     # but always fail, and returns None.
     def terminate(self):

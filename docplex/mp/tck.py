@@ -135,6 +135,12 @@ class DocplexTypeCheckerI(object):
     def typecheck_var_seq(self, seq, vtype=None, caller=None):
         return seq  # pragma: no cover
 
+    def typecheck_logical_op_seq(self, seq):
+        return seq  # pragma: no cover
+
+    def typecheck_logical_op(self, arg, caller):
+        raise NotImplementedError  # pragma: no cover
+
     def typecheck_var_seq_all_different(self, seq):
         raise NotImplementedError  # pragma: no cover
 
@@ -147,10 +153,10 @@ class DocplexTypeCheckerI(object):
     def typecheck_constraint(self, obj):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_ct_to_add(self, ct, mdl, header):
+    def typecheck_ct_to_add(self, ct, mdl, caller):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
+    def typecheck_ct_not_added(self, ct, do_raise=False, caller=None):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
@@ -159,6 +165,10 @@ class DocplexTypeCheckerI(object):
     def typecheck_constraint_seq(self, cts, check_linear=False, accept_range=True):
         # must return sequence unchanged
         return cts  # pragma: no cover
+
+    def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
+        # must return sequence unchanged
+        return ct_ctname_seq  # pragma: no cover
 
     def typecheck_zero_or_one(self, arg):
         raise NotImplementedError  # pragma: no cover
@@ -175,10 +185,13 @@ class DocplexTypeCheckerI(object):
     def check_var_domain(self, lbs, ubs, names):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, caller=''):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_in_model(self, model, mobj, header=''):
+    def typecheck_string_seq(self, arg, accept_empty=False, accept_none=False, caller=''):
+        raise NotImplementedError  # pragma: no cover
+
+    def typecheck_in_model(self, model, mobj, caller=''):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
@@ -260,17 +273,32 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_var_seq(self, seq, vtype=None, caller=None):
         # build a list to avoid consuming an iterator
         checked_var_list = list(seq)
-        type_msg = ''
         for i, x in enumerate(checked_var_list):
             if not isinstance(x, Var):
                 caller_s = resolve_caller_as_string(caller)
                 self.fatal("{2}Expecting an iterable returning variables, {0!r} was passed at position {1}", x, i, caller_s)
-            if vtype and x.vartype != vtype:
+            if vtype and x.vartype.get_cplex_typecode() != vtype:
                 caller_s = resolve_caller_as_string(caller)
                 self.fatal("{3}Expecting an iterable returning variables of type {0}, {1!r} was passed at position {2}",
                            vtype.short_name, x, i, caller_s)
 
         return checked_var_list
+
+    def typecheck_logical_op_seq(self, seq, caller=None):
+        checked_args = list(seq)
+        for i, x in enumerate(checked_args):
+            if caller is None:
+                loop_caller = None
+            else:
+                def loop_caller():
+                    return '%s, arg#%d' % (resolve_caller_as_string(caller, sep=''), i)
+            self.typecheck_logical_op(x, caller=loop_caller)
+        return checked_args
+
+    def typecheck_logical_op(self, arg, caller):
+        if not hasattr(arg, 'as_logical_operand') or arg.as_logical_operand() is None:
+            caller_s = resolve_caller_as_string(caller)
+            self.fatal('{1}Not a logical operand: {0!r}. Expecting binary variable, logical expression', arg, caller_s)
 
     def typecheck_num_seq(self, seq, caller=None):
         return DocplexNumericCheckerMixin.typecheck_num_seq(self._logger, seq, check_math=False, caller=caller)
@@ -294,21 +322,21 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if not isinstance(obj, AbstractConstraint):
             self.fatal("Expecting constraint, got: {0!s} with type: {1!s}", obj, type(obj))
 
-    def typecheck_ct_to_add(self, ct, mdl, header):
+    def typecheck_ct_to_add(self, ct, mdl, caller):
         if not isinstance(ct, AbstractConstraint):
             self.fatal("Expecting constraint, got: {0!r} with type: {1!s}", ct, type(ct))
-        self.typecheck_in_model(mdl, ct, header)
+        self.typecheck_in_model(mdl, ct, caller)
 
-    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
+    def typecheck_ct_not_added(self, ct, do_raise=False, caller=None):
         if ct.is_added():
-            header = '%s ' % context if context else ''
+            s_caller = resolve_caller_as_string(caller, sep=' ')
             if do_raise:
                 self.fatal('{0}expects a non-added constraint, {1} is added (index={2})',
-                           header, ct, ct.get_index()
+                           s_caller, ct, ct.get_index()
                            )
             else:
                 self.warning('{0}expects a non-added constraint, {1} is added (index={2})',
-                             header, ct, ct.get_index()
+                             s_caller, ct, ct.get_index()
                              )
 
     def typecheck_linear_constraint(self, obj, accept_range=True):
@@ -333,6 +361,16 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                     self.fatal("Expecting sequence of linear constraints (not ranges), got: {0!r} at position {1}", ct,
                                i)
         return checked_cts_list
+
+    def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
+        # must return sequence unchanged
+        checked_list = list(ct_ctname_seq)
+        for c, (ct, ctname) in enumerate(ct_ctname_seq):
+            self.typecheck_linear_constraint(ct, accept_range=accept_range)
+            # noinspection PyArgumentEqualDefault
+            self.typecheck_string(ctname, accept_empty=True, accept_none=False)
+
+        return checked_list
 
     def typecheck_zero_or_one(self, arg):
         if arg != 0 and arg != 1:
@@ -365,17 +403,29 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if lb is not None and ub is not None and lb > ub:
             self.fatal('Empty variable domain, name={0}, lb={1}, ub={2}'.format(varname, lb, ub))
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, caller=''):
         if is_string(arg):
             if not accept_empty and 0 == len(arg):
-                self.fatal("{0}Expecting a non-empty string", header)
+                s_caller = resolve_caller_as_string(caller)
+                self.fatal("{0}Expecting a non-empty string", s_caller)
         elif not (arg is None and accept_none):
-            self.fatal("{0}Expecting string, got: {1!r}", header, arg)
+            s_caller = resolve_caller_as_string(caller)
+            self.fatal("{0}Expecting string, got: {1!r}", s_caller, arg)
 
-    def typecheck_in_model(self, model, mobj, header=''):
+    def typecheck_string_seq(self, arg, accept_empty=False, accept_none=False, caller=''):
+        checked_strings = list(arg)
+        # do not accept a string
+        if is_string(arg):
+            s_caller = resolve_caller_as_string(caller)
+            self.fatal("{0}Expecting list of strings, a string was passed: '{1}'", s_caller, arg)
+        for s in checked_strings:
+            self.typecheck_string(s, accept_empty=accept_empty, accept_none=accept_none, caller=caller)
+        return checked_strings
+
+    def typecheck_in_model(self, model, mobj, caller=''):
         # produces message of the type: "constraint ... does not belong to model
         if mobj.model != model:
-            self.fatal("{0} ({2!s}) is not in model '{1:s}'".format(header, model.name, mobj))
+            self.fatal("{0} ({2!s}) is not in model '{1:s}'".format(caller, model.name, mobj))
 
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
         if any(k is None for k in keys):
@@ -480,10 +530,10 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_constraint(self, obj):
         pass  # pragma: no cover
 
-    def typecheck_ct_to_add(self, ct, mdl, header):
+    def typecheck_ct_to_add(self, ct, mdl, caller):
         pass  # pragma: no cover
 
-    def typecheck_ct_not_added(self, ct, do_raise=False, context=None):
+    def typecheck_ct_not_added(self, ct, do_raise=False, caller=None):
         pass
 
     def typecheck_linear_constraint(self, obj, accept_range=True):
@@ -492,6 +542,10 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_constraint_seq(self, cts, check_linear=False, accept_range=True):
         # must return sequence unchanged
         return cts  # pragma: no cover
+
+    def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
+        # must return sequence unchanged
+        return ct_ctname_seq  # pragma: no cover
 
     def typecheck_zero_or_one(self, arg):
         pass  # pragma: no cover
@@ -509,10 +563,13 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
     def check_var_domain(self, lb, ub, varname):
         pass
 
-    def typecheck_string(self, arg, accept_empty=False, accept_none=False, header=''):
+    def typecheck_string(self, arg, accept_empty=False, accept_none=False, caller=''):
         pass  # pragma: no cover
 
-    def typecheck_in_model(self, model, mobj, header=''):
+    def typecheck_string_seq(self, arg, accept_empty=False, accept_none=False, caller=''):
+        return arg
+
+    def typecheck_in_model(self, model, mobj, caller=''):
         pass  # pragma: no cover
 
     def typecheck_key_seq(self, keys, accept_empty_seq=False):
@@ -540,6 +597,9 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
         pass
 
     def check_duplicate_name(self, name, name_table, qualifier):
+        pass
+
+    def typecheck_logical_op(self, arg, caller):
         pass
 
 

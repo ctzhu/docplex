@@ -25,7 +25,7 @@ def get_name_if_debug(name):
 
 
 # noinspection PyAbstractClass
-class _IAdvancedExpr(Expr, LinearOperand):
+class _FunctionalExpr(Expr, LinearOperand):
     # INTERNAL class
     # parent class for all nonlinear expressions.
     __slots__ = ('_f_var', '_resolved')
@@ -56,17 +56,17 @@ class _IAdvancedExpr(Expr, LinearOperand):
         return self._new_generated_continuous_var(lb=-inf, ub=inf, name=name)
 
     def _new_generated_continuous_var(self, lb=None, ub=None, name=None):
-        # INTERNAL
-        m = self._model
-        var = m._lfactory.new_safe_var(m.continuous_vartype, lb=lb, ub=ub, varname=name)
-        var.notify_origin(self)
-        return var
+        return self._new_generated_var(vartype=self._model.continuous_vartype, lb=lb, ub=ub, name=name)
 
     def _new_generated_binary_var(self, name=None):
+        return self._new_generated_var(self._model.binary_vartype, name=name)
+
+    def _new_generated_var(self, vartype, lb=None, ub=None, name=None):
+        # INTERNAL
         m = self._model
-        bvar = m._lfactory.new_safe_var(m.binary_vartype, varname=name)
-        bvar.notify_origin(self)
-        return bvar
+        gvar = m._lfactory.new_safe_var(vartype, lb=lb, ub=ub, varname=name)
+        gvar.notify_origin(self)
+        return gvar
 
     def _new_generated_binary_varlist(self, keys, name=None):
         bvars = self.model.binary_var_list(keys, name)
@@ -212,18 +212,15 @@ class _IAdvancedExpr(Expr, LinearOperand):
 
 
 # noinspection PyAbstractClass
-class FunctionalExpr(_IAdvancedExpr):
+class UnaryFunctionalExpr(_FunctionalExpr):
     def __init__(self, model, argument_expr, name=None):
-        _IAdvancedExpr.__init__(self, model, name)
+        _FunctionalExpr.__init__(self, model, name)
         self._argument_expr = model._lfactory._to_linear_operand(argument_expr)
         self._x_var = self._allocate_arg_var_if_necessary(argument_expr)
 
     @property
     def argument_expr(self):
         return self._argument_expr
-
-    def eval(self, numarg):
-        raise NotImplementedError  # pragma: no cover
 
     def is_discrete(self):
         return self._argument_expr.is_discrete()
@@ -232,13 +229,13 @@ class FunctionalExpr(_IAdvancedExpr):
         return "{0:s}({1!s})".format(self.function_symbol, self._argument_expr)
 
 
-class AbsExpr(FunctionalExpr):
+class AbsExpr(UnaryFunctionalExpr):
     def copy(self, target_model, var_mapping):
         copied_arg_expr = self._argument_expr.copy(target_model, var_mapping)
         return AbsExpr(model=target_model, argument_expr=copied_arg_expr)
 
     def __init__(self, model, argument_expr):
-        FunctionalExpr.__init__(self, model, argument_expr)
+        UnaryFunctionalExpr.__init__(self, model, argument_expr)
 
     def _get_function_symbol(self):
         return "abs"
@@ -268,9 +265,6 @@ class AbsExpr(FunctionalExpr):
         self.positive_var = positive_var
         self.negative_var = negative_var
 
-    def eval(self, numarg):
-        return abs(numarg)
-
     def _get_solution_value(self, s=None):
         raw = abs(self._argument_expr._get_solution_value(s))
         return self._round_if_discrete(raw)
@@ -280,11 +274,11 @@ class AbsExpr(FunctionalExpr):
 
 
 # noinspection PyAbstractClass
-class _SequenceExpr(_IAdvancedExpr):
+class _SequenceExpr(_FunctionalExpr):
     # INTERNAL: base class for functional exprs with a sequence argument (e.g. min/max)
 
     def __init__(self, model, exprs, name=None):
-        _IAdvancedExpr.__init__(self, model, name)
+        _FunctionalExpr.__init__(self, model, name)
         if is_iterable(exprs) or is_iterator(exprs):
             self._exprs = exprs
         else:
@@ -431,7 +425,61 @@ class MaximumExpr(_SequenceExpr):
         return max(expr._get_solution_value(s) for expr in self._exprs)
 
 
+class LogicalNotExpr(UnaryFunctionalExpr):
+    def _create_functional_var(self, named=True):
+        # the resulting variable is a binary variable...
+        bvar = self._new_generated_binary_var(name=None)
+        self._name_functional_var_name(bvar)
+        return bvar
+
+    def is_discrete(self):
+        return True
+
+    def _get_function_symbol(self):
+        return "not"
+
+    def as_logical_operand(self):
+        return self._get_resolved_f_var()
+
+    def copy(self, target_model, var_mapping):
+        copied_arg_expr = self._argument_expr.copy(target_model, var_mapping)
+        return LogicalNotExpr(model=target_model, argument_expr=copied_arg_expr)
+
+    def __init__(self, model, argument_expr):
+        UnaryFunctionalExpr.__init__(self, model, argument_expr)
+        self._logical_op_arg = argument_expr.as_logical_operand()
+        assert self._logical_op_arg is not None
+        self._actual_arg_s = str(argument_expr)
+
+    def to_string(self):
+        return "{0:s}({1!s})".format(self.function_symbol, self._actual_arg_s)
+
+    def clone(self):
+        return LogicalNotExpr(self.model, self._argument_expr)
+
+    # noinspection PyArgumentEqualDefault,PyArgumentEqualDefault
+    def _resolve(self):
+        not_var = self._f_var
+        assert not_var
+
+        # not_x + x == 1
+        ct1 = (not_var + self._logical_op_arg == 1)
+        self._post_generated_cts([ct1])
+        # store
+        self.not_ct = ct1
+
+    def _get_solution_value(self, s=None):
+        arg_val = self._argument_expr._get_solution_value(s)
+        return 0 if arg_val else 1
+
+    def __repr__(self):
+        return "docplex.mp.NotExpr({0:s})".format(self._argument_expr.truncated_str())
+
+
 class _LogicalSequenceExpr(_SequenceExpr):
+
+    def as_logical_operand(self):
+        return self._get_resolved_f_var()
 
     def _create_functional_var(self, named=True):
         # the resulting variable is a binary variable...
@@ -440,11 +488,17 @@ class _LogicalSequenceExpr(_SequenceExpr):
         return bvar
 
     def __init__(self, model, exprs, name=None):
-        _IAdvancedExpr.__init__(self, model, name)
+        _FunctionalExpr.__init__(self, model, name)
         assert is_iterable(exprs) or is_iterator(exprs)
         self._exprs = exprs
         # never allocate vars: arguments --are-- binary variables.
         self._xvars = exprs
+
+    def _get_args_string(self, sep=","):
+        s = sep.join(str(b.origin()) if b.is_generated() else str(b) for b in self._xvars)
+        return s
+
+
 
     def is_discrete(self):
         return True
@@ -506,10 +560,10 @@ class LogicalOrExpr(_LogicalSequenceExpr):
         self._resolved = True
 
 
-class PwlExpr(FunctionalExpr):
+class PwlExpr(UnaryFunctionalExpr):
 
     def __init__(self, model, pwl_func, argument_expr, usage_counter, y_var=None,  add_counter_suffix=True, resolve=True):
-        FunctionalExpr.__init__(self, model, argument_expr)
+        UnaryFunctionalExpr.__init__(self, model, argument_expr)
         self._pwl_func = pwl_func
         self._usage_counter = usage_counter
         self._f_var = y_var

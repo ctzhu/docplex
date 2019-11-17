@@ -248,7 +248,7 @@ class BinaryConstraint(AbstractConstraint):
 
     def __repr__(self):
         classname = self.__class__.__name__
-        user_name = self._get_safe_name()
+        user_name = self.safe_name
         typename = self._ctsense.short_name
         sleft = self._left_expr.truncated_str()
         sright = self._right_expr.truncated_str()
@@ -689,11 +689,19 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     as_var = status_var
 
-    def _check_is_discrete(self, ct):
-        StaticTypeChecker.typecheck_discrete_constraint(self, ct,
-                                                        msg='Conversion from constraint to expression is available only for discrete constraint')
+    def as_logical_operand(self):
+        if not self.is_discrete():
+            return None
+        else:
+            return self.get_resolved_status_var\
+                (caller_msg='Conversion to logical operand is available only for discrete constraints')
 
-    def get_resolved_status_var(self):
+    def _check_is_discrete(self, ct, msg=None):
+        err_msg = msg or "Conversion from constraint to expression is available only for discrete constraints"
+        StaticTypeChecker.typecheck_discrete_constraint\
+            (self, ct, msg=err_msg)
+
+    def get_resolved_status_var(self, caller_msg=None):
         status_var = self._get_status_var()  # always use the getter!
         if status_var is not None:
             return status_var
@@ -701,7 +709,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         self._model.check_logical_constraint_support()
 
         # TODO: issue a meaningful message on why the ct is not discrete
-        self._check_is_discrete(self)
+        self._check_is_discrete(self, msg=caller_msg)
         # lock it discrete
         self.lock_discrete()
 
@@ -783,18 +791,17 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def __and__(self, other):
         return self.logical_and(other)
 
-    def _check_logical_operand(self, banner, other):
-        if not isinstance(other, LinearConstraint):
-            self.fatal('{0} expects another linear constraint, {1!r} was passed', banner, other)
-        self._check_is_discrete(other)
+    def _check_logical_operator(self, other, caller=None):
+        self._check_is_discrete(self, msg="Logical operators require discrete constraints")
+        StaticTypeChecker.typecheck_logical_op(self, other, caller=caller)
 
     def logical_or(self, other):
-        self._check_logical_operand("LinearConstraint.or()", other)
-        return self.get_linear_factory().new_constraint_or(self, other)
+        self._check_logical_operator(other, "LinearConstraint.or")
+        return self.get_linear_factory().new_binary_constraint_or(self, other)
 
     def logical_and(self, other):
-        self._check_logical_operand("LinearConstraint.and()", other)
-        return self.get_linear_factory().new_constraint_and(self, other)
+        self._check_logical_operator(other, "LinearConstraint.and")
+        return self.get_linear_factory().new_binary_constraint_and(self, other)
 
     def __rshift__(self, other):
         """ Redefines the right-shift operator to define if-then constraints.
@@ -1031,7 +1038,7 @@ class RangeConstraint(AbstractConstraint):
         return self.to_string()
 
     def __repr__(self):
-        printable_name = self._get_safe_name()
+        printable_name = self.safe_name
         return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".\
             format(printable_name, self.lb, self._expr, self.ub)
 
@@ -1188,7 +1195,7 @@ class LogicalConstraint(AbstractConstraint):
         return self.to_string()
 
     def __repr__(self):
-        printable_name = self._get_safe_name()
+        printable_name = self.safe_name
         clazzname = self.__class__.__name__
         return "docplex.mp.constr.{0:s}[{1}]({2!s},{3!s},true={4})" \
             .format(clazzname, printable_name, self._binary_var, self._linear_ct, self._active_value)
@@ -1574,6 +1581,6 @@ class PwlConstraint(AbstractConstraint):
         return self.to_string()
 
     def __repr__(self):
-        printable_name = self._get_safe_name()
+        printable_name = self.safe_name
         return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})".\
             format(printable_name, self.y, self.pwl_func, self.expr)

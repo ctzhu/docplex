@@ -27,9 +27,7 @@ To be able to process multiple solutions, the model should be solved:
  * or using the method :meth:`docplex.cp.model.CpoModel.solve`
    but setting the parameter *context.solver.solve_with_start_next* to True.
 
-
 *New in version 2.8.*
-
 
 Detailed description
 --------------------
@@ -41,7 +39,7 @@ Detailed description
 ###############################################################################
 
 class CpoSolverListener(object):
-    """ Solve listener allowing to be warned about different solving steps.
+    """ Solve listener allows to be warned about different solving steps.
 
     This class is an 'abstract' class that must be extended by actual listener implementation.
     All method of this class are empty.
@@ -123,7 +121,7 @@ class CpoSolverListener(object):
 
 
     def new_log_data(self, solver, data):
-        """ Signal a new peace of log data.
+        """ Signal a new piece of log data.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
@@ -597,7 +595,7 @@ else:
             self.progress_panel.notify_solution(msol)
 
         def new_log_data(self, solver, data):
-            """ Signal a new peace of log data. """
+            """ Signal a new piece of log data. """
             if not self.parse_log:
                 return
             # Search for solve infos

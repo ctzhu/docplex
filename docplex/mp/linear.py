@@ -170,6 +170,12 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def is_free(self):
         return self.has_free_lb() and self.has_free_ub()
 
+    def _reset_bounds(self):
+        vartype = self._vartype
+        vtype_lb, vtype_ub = vartype.get_default_lb(), vartype.get_default_ub()
+        self.set_lb(vtype_lb)
+        self.set_ub(vtype_ub)
+
     @property
     def vartype(self):
         """ This property returns the variable type, an instance of :class:`VarType`.
@@ -181,13 +187,8 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return self._vartype
 
     def set_vartype(self, new_vartype):
-        self._model._checker.typecheck_vartype(new_vartype)
-        old_vartype = self._vartype
-        if new_vartype != old_vartype:
-            nlb = new_vartype.resolve_lb(self._lb)
-            nub = new_vartype.resolve_ub(self._ub)
-            # maybe update bounds?
-            self._model.change_var_type(self, new_vartype)
+        # INTERNAL
+        self._model._set_var_type(self, new_vartype)
 
     def _set_vartype_internal(self, new_vartype):
         # INTERNAL
@@ -601,6 +602,38 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
                 other.number_of_terms() == 1 and
                 other.unchecked_get_coef(self) == 1)
 
+    def as_logical_operand(self):
+        # INTERNAL
+        return self if self.is_binary() else None
+
+    def _check_binary_variable_for_logical_op(self, op_name):
+        if not self.is_binary():
+            self.fatal("Logical {0} is available only for binary variables, {1} has type {2}",
+                       op_name, self, self.vartype.short_name)
+
+    def logical_and(self, other):
+        self._check_binary_variable_for_logical_op(op_name="and")
+        StaticTypeChecker.typecheck_logical_op(self, other, caller="Var.logical_and")
+        return self.get_linear_factory().new_logical_and_expr([self, other])
+
+    def logical_or(self, other):
+        self._check_binary_variable_for_logical_op(op_name="or")
+        StaticTypeChecker.typecheck_logical_op(self, other, caller="Var.logical_or")
+        return self.get_linear_factory().new_logical_or_expr([self, other])
+
+    def logical_not(self):
+        self._check_binary_variable_for_logical_op(op_name="not")
+        return self.get_linear_factory().new_logical_not_expr(self)
+
+    def __and__(self, other):
+        return self.logical_and(other)
+
+    def __or__(self, other):
+        return self.logical_or(other)
+
+    # no unary not in magic methods...
+
+
 
 # noinspection PyAbstractClass
 class AbstractLinearExpr(Expr, LinearOperand):
@@ -920,11 +953,11 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     @staticmethod
     def _new_terms_dict(model, *args, **kwargs):
-        return model._term_dict_type(*args, **kwargs)
+        return model._lfactory.term_dict_type(*args, **kwargs)
 
     @staticmethod
     def _new_empty_terms_dict(model):
-        return model._term_dict_type()
+        return model._lfactory.term_dict_type()
 
     def to_linear_expr(self):
         return self
@@ -947,7 +980,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         if assume_normalized:
             self.__terms = terms
         else:
-            self.__terms = self._model._term_dict_type([(k, v) for k, v in iteritems(terms)])
+            self.__terms = self._model._lfactory.term_dict_type([(k, v) for k, v in iteritems(terms)])
         return self
 
     __slots__ = ('_constant', '__terms', '_transient', '_subscribers')
@@ -968,7 +1001,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             if safe:
                 self.__terms = e
             else:
-                self_terms = model._term_dict_type()
+                self_terms = model._lfactory.term_dict_type()
                 for (v, k) in iteritems(e):
                     model.typecheck_var(v)
                     model.typecheck_num(k, 'LinearExpr')
@@ -977,7 +1010,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                 self.__terms = self_terms
             return
         else:
-            self.__terms = model._term_dict_type()
+            self.__terms = model._lfactory._new_term_dict()
 
         if e is None:
             pass
@@ -1942,7 +1975,7 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
     def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
         return '{0}'.format(self._constant)
 
-    def to_stringio(self, oss, nb_digits, prod_symbol, use_space, var_namer=lambda v: v.name):
+    def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.name):
         self._num_to_stringio(oss, self._constant, nb_digits)
 
     # arithmetic

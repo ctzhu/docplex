@@ -36,6 +36,7 @@ CMD_END_SEARCH      = "EndSearch"      # End search (no data)
 CMD_REFINE_CONFLICT = "RefineConflict" # Refine conflict (no data)
 CMD_PROPAGATE       = "Propagate"      # Propagate (no data)
 CMD_RUN_SEEDS       = "RunSeeds"       # Run with multiple seeds.
+CMD_ADD_CALLBACK    = "AddCallback"    # Add callback proxy to the solver
 
 # List of events received from solver
 EVT_VERSION_INFO       = "VersionInfo"     # Local solver version info (String in JSON format)
@@ -49,6 +50,8 @@ EVT_SOLVE_RESULT       = "SolveResult"     # Solver result in JSON format
 EVT_CONFLICT_RESULT    = "ConflictResult"  # Conflict refiner result in JSON format
 EVT_PROPAGATE_RESULT   = "PropagateResult" # Propagate result in JSON format
 EVT_RUN_SEEDS_RESULT   = "RunSeedsResult"  # Run seeds result (no data, all is in log)
+EVT_CALLBACK_EVENT     = "CallbackEvent"   # Callback event. Data is event name.
+EVT_CALLBACK_DATA      = "CallbackData"    # Callback data, following event. Data is JSON document.
 
 # Max possible received data size in one message
 _MAX_RECEIVED_DATA_SIZE = 1000000
@@ -142,6 +145,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         self._send_cpo_model(cpostr)
         context.log(3, "Model sent.")
 
+        # Initialize CPO callback setting
+        self.callback_added = False
+
 
     def __del__(self):
         # End solve
@@ -163,6 +169,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             Model solve result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
 
         # Start solve
         self._write_message(CMD_SOLVE_MODEL)
@@ -177,6 +185,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
     def start_search(self):
         """ Start a new search. Solutions are retrieved using method search_next().
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         self._write_message(CMD_START_SEARCH)
 
 
@@ -226,7 +237,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
     def refine_conflict(self):
         """ This method identifies a minimal conflict for the infeasibility of the current model.
 
-        See documentation of CpoSolver.refine_conflict() for details.
+        See documentation of :meth:`~docplex.cp.solver.solver.CpoSolver.refine_conflict` for details.
 
         Returns:
             Conflict result,
@@ -247,6 +258,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
             self._wait_event(EVT_SUCCESS)
 
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Request refine conflict
         self._write_message(CMD_REFINE_CONFLICT)
 
@@ -260,12 +274,15 @@ class CpoSolverLocal(solver.CpoSolverAgent):
     def propagate(self):
         """ This method invokes the propagation on the current model.
 
-        See documentation of CpoSolver.propagate() for details.
+        See documentation of :meth:`~docplex.cp.solver.solver.CpoSolver.propagate` for details.
 
         Returns:
             Propagation result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Request propagation
         self._write_message(CMD_PROPAGATE)
 
@@ -293,6 +310,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         Raises:
             CpoNotSupportedException: method not available in local solver.
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Check command availability
         if CMD_RUN_SEEDS not in self.available_command:
             raise CpoNotSupportedException("Method 'run_seeds' is not available in local solver '{}'".format(self.context.execfile))
@@ -375,14 +395,17 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         while True:
             # Read and process next message
             evt, data = self._read_message()
+
             if evt == xevt:
                 return data
+
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
                 if data:
                     # Warn parent solver
                     # Store log if required
                     if self.log_enabled:
                         self._add_log_data(data.decode('utf-8'))
+
             elif evt == EVT_SOLVER_ERR_STREAM:
                 if data:
                     ldata = data.decode('utf-8')
@@ -391,14 +414,26 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                     out = self.log_output if self.log_output is not None else sys.stdout
                     out.write("ERROR: {}\n".format(ldata))
                     out.flush()
+
             elif evt == EVT_TRACE:
-                self.context.log(4, data.decode('utf-8'))
+                self.context.log(4, "ANGEL: " + data.decode('utf-8'))
+
             elif evt == EVT_ERROR:
                 errmsg = data.decode('utf-8')
                 if firsterror is not None:
                     errmsg += " (" + firsterror + ")"
                 self.end()
                 raise LocalSolverException("Solver error: " + errmsg)
+
+            elif evt == EVT_CALLBACK_EVENT:
+                event = data.decode('utf-8')
+                # Read data
+                evt, data = self._read_message()
+                assert evt == EVT_CALLBACK_DATA
+                jsol = data.decode('utf-8')
+                jsol = self._create_result_object(CpoSolveResult, jsol)
+                self.solver._notify_callback_event(event, jsol)
+
             else:
                 self.end()
                 raise LocalSolverException("Unknown event received from local solver: " + str(evt))
@@ -418,8 +453,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Decode json result
         stime = time.time()
-        self.last_json_result = data.decode('utf-8')
+        jsol = data.decode('utf-8')
         self.process_infos[CpoProcessInfos.RESULT_DECODE_TIME] = time.time() - stime
+        self._set_last_json_result_string(jsol)
+        self.context.log(3, "JSON result:\n", jsol)
 
         return self.last_json_result
 
@@ -468,9 +505,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         # Read message header
         frame = self._read_frame(6)
         if (frame[0] != 0xCA) or (frame[1] != 0xFE):
-            # print("Wrong input: {}{}".format(frame, self._read_frame(150)))
+            erline = frame + self._read_error_message()
+            erline = erline.decode()
             self.end()
-            raise LocalSolverException("Invalid message header '{}'. Probable wrong destination or desynchronization of stream.".format(frame))
+            raise LocalSolverException("Invalid message header. Possible error generated by solver: " + erline)
 
         # Read message data
         tsize = (frame[2] << 24) | (frame[3] << 16) | (frame[4] << 8) | frame[5]
@@ -525,8 +563,44 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Return
         if IS_PYTHON_2:
-            return bytearray(data)
+            data = bytearray(data)
         return data
+
+
+    def _read_error_message(self):
+        """ Read stream to search for error line end. Called when wrong input is detected,
+        to try to read an "Assertion failed" message for example.
+        Returns:
+            Byte array
+        """
+        data = []
+        bv = self.pin.read(1)
+        if IS_PYTHON_2:
+            while (bv != '') and (bv != '\n'):
+                data.append(ord(bv))
+                bv = self.pin.read(1)
+                data = bytearray(data)
+        else:
+            while (bv != b'') and (bv != b'\n'):
+                data.append(ord(bv))
+                bv = self.pin.read(1)
+
+        return bytearray(data)
+
+
+    def _add_callback_if_needed(self):
+        """ Ask solver to add callback if needed. """
+        if not self.callback_added and self.solver.callbacks:
+            # Check solver version
+            aver = self.version_info.get('AngelVersion', 0)
+            sver = self.version_info.get('SolverVersion', "1")
+            if (compare_natural(sver, "12.10") >= 0) and (aver >= 8):
+                self._write_message(CMD_ADD_CALLBACK)
+                self._wait_event(EVT_SUCCESS)
+                self.callback_added = True
+                self.context.log(3, "CPO callback created.")
+            else:
+                raise LocalSolverException("This version of the CPO solver does not support solver callbacks. Solver: {}, agent: {}".format(sver, aver))
 
 
 ###############################################################################

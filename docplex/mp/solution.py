@@ -113,7 +113,8 @@ class SolveSolution(object):
                             solved_by=solved_by,
                             rounding=True,
                             keep_zeros=False)
-        sol._solve_details = copy.copy(solve_details)
+        if solve_details is not None:
+            sol._solve_details = copy.copy(solve_details)
         # trust engines
         roundfn = sol._roundfn
         for dvar, value in iteritems(var_value_map):
@@ -146,7 +147,6 @@ class SolveSolution(object):
                 if dvi.is_discrete() and dvi not in self._var_value_map:
                     mipstart._set_var_value_internal(dvi, 0, rounding=False)
         return mipstart
-
 
     def clear(self):
         """ Clears all solve result data.
@@ -190,6 +190,15 @@ class SolveSolution(object):
         return self._solved_by
 
     def get_name(self):
+        return self._name
+
+    def set_name(self, solution_name):
+        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True,
+                                       caller='SolveSolution.set_name(): ')
+        self._name = solution_name
+
+    @property
+    def name(self):
         """ This property allows to get/set a name on the solution.
 
         In some cases , it might be interesting to build different solutions for the same model,
@@ -198,12 +207,9 @@ class SolveSolution(object):
         """
         return self._name
 
-    def set_name(self, solution_name):
-        self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True,
-                                       header='SolveSolution.set_name(): ')
-        self._name = solution_name
-
-    name = property(get_name, set_name)
+    @name.setter
+    def name(self, sol_name):
+        self.set_name(sol_name)
 
     def _resolve_var(self, var_key, do_raise):
         # INTERNAL: accepts either strings or variable objects
@@ -636,10 +642,12 @@ class SolveSolution(object):
         else:  # One solution is for multi-objective, and not the other
             return False
 
+        # noinspection PyPep8
         this_triplets  = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
                                                                                   self.iter_var_values())]
         other_triplets = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
                                                                                   other.iter_var_values())]
+        # noinspection PyArgumentList
         for this_triple, other_triple in izip(this_triplets, other_triplets):
             this_index, this_name, this_val = this_triple
             other_index, other_name, other_val = other_triple
@@ -881,11 +889,12 @@ class SolveSolution(object):
                                      basename_fmt=basename)
         if mst_path:
             kwargs2 = kwargs.copy()
-            kwargs2['write_level'] =  WriteLevel.parse(write_level)
+            kwargs2['write_level'] = WriteLevel.parse(write_level)
             SolutionMSTPrinter.print_to_stream(self, mst_path, **kwargs2)
             return mst_path
 
-    def get_printer(self, key):
+    @classmethod
+    def get_printer(cls, key):
         # INTERNAL
         printers = {'json': SolutionJSONPrinter,
                     'xml': SolutionMSTPrinter,
@@ -904,9 +913,9 @@ class SolveSolution(object):
             file_or_filename: If ``file_or_filename`` is a string, this argument contains the filename to
                 write to. If this is a file object, this argument contains the file object to write to.
             format: The format of the solution. The format can be:
-                - json
-                - mst: the MST cplex format for MIP starts
-                - xml: same as MST
+                - "json"
+                - "mst": the MST cplex format for MIP starts
+                - "xml": same as MST
             kwargs: The kwargs passed to the actual exporter
         """
 
@@ -933,7 +942,6 @@ class SolveSolution(object):
         """
         return self._export_as_string(fmt='json', **kwargs)
 
-
     def check_as_mip_start(self):
         """Checks that this solution is a valid MIP start.
 
@@ -951,10 +959,10 @@ class SolveSolution(object):
         for dv, dvv in self.iter_var_values():
             if dv.is_discrete() and not dv.is_generated():
                 count_values += 1
-                if not dv.accept_initial_value(dvv):
+                if not dv.accept_initial_value(dvv):  # pragma: no cover
                     count_errors += 1
-                    m.warning("Solution value {1} is outside the domain of variable {0!r}: {1}, type: {2!s}",  # pragma: no cover
-                                  dv, dvv, dv.vartype.short_name)  # pragma: no cover
+                    m.warning("Solution value {1} is outside the domain of variable {0!r}: {1}, type: {2!s}",
+                              dv, dvv, dv.vartype.short_name)
         if count_values == 0:
             docplex_fatal("MIP start contains no discrete variable")  # pragma: no cover
         return True

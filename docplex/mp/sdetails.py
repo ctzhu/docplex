@@ -267,13 +267,19 @@ class SolveDetails(object):
         """ This property returns the number of iterations at the end of the solve.
 
         Note:
-            The nature of the iterations depend on the algorithm usd to solve the model.
+            - The nature of the iterations depend on the algorithm usd to solve the model.
+            - For multi-objective models, this property returns a tuple of numbers,
+                one for each objective solved.
+
         """
         return self._n_iterations
 
     @property
     def nb_nodes_processed(self):
         """ This property returns the number of nodes processed at the end of solve.
+
+        Note: for multi-objective problems, this property returns a tuple of numbers,
+            one for each objective solved.
 
         """
         return self._n_nodes_processed

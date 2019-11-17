@@ -90,12 +90,19 @@ class EnvSolverListener(CpoSolverListener):
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
         """
         if self.publish_context.get_attribute('solve_details', True):
+            # Build solve details from model
+            mstats = solver.get_model().get_statistics()
+            sdetails = {}
+            sdetails["MODEL_DETAIL_INTEGER_VARS"] = mstats.nb_integer_var
+            sdetails["MODEL_DETAIL_INTERVAL_VARS"] = mstats.nb_interval_var
+            sdetails["MODEL_DETAIL_TYPE"] = "CPO CP" if mstats.nb_interval_var == 0 else "CPO Scheduling"
+
             # Set ordered list of KPIs in solve details
             kpis = solver.get_model().get_kpis()
             if kpis:
                 # Add ordered list of kpi names
                 sdetails = {'MODEL_DETAIL_KPIS': json.dumps(list(kpis.keys()))}
-                self.env.notify_start_solve(sdetails)
+            self.env.notify_start_solve(sdetails)
 
 
     def end_solve(self, solver):
@@ -105,12 +112,19 @@ class EnvSolverListener(CpoSolverListener):
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
         """
         if self.publish_context.get_attribute('solve_details', True):
+            # Determine status
             res = solver.get_last_result()
             if res is None:
                 status = _STATUS_UNKNOWN
             else:
                 status = _SOLVE_STATUS_MAP.get(res.get_solve_status(), _STATUS_UNKNOWN)
-            self.env.notify_end_solve(status)
+            # Determine solve time
+            stime = None
+            lres = solver.get_last_result()
+            if lres:
+                stime = lres.get_infos().get_solve_time()
+            # Notify end of solve
+            self.env.notify_end_solve(status, solve_time=stime)
 
 
     def result_found(self, solver, msol):
@@ -128,7 +142,7 @@ class EnvSolverListener(CpoSolverListener):
         if self.publish_context.get_attribute('solve_details', True):
             self.publish_context.log(2, "Publish solve details")
 
-            # Build solve details
+            # Build solve details from infos
             infos = msol.get_infos()
             sdetails = {}
             nbintvars = infos.get("NumberOfIntegerVariables")
@@ -219,10 +233,9 @@ class EnvSolverListener(CpoSolverListener):
             True if listener is OK, False if should be removed from solver.
         """
         # Check if environment package not present
-        env = get_environment()
-        if env is None:
+        self.env = None if runenv is None else runenv.get_environment()
+        if self.env is None:
             return False
-        self.env = env
 
         # Retrieve auto_publish context
         pctx = solver.context.solver.auto_publish
@@ -234,7 +247,7 @@ class EnvSolverListener(CpoSolverListener):
         self.publish_context = pctx
 
         # Check no local publish
-        if isinstance(env, runenv.LocalEnvironment) and not pctx.local_publish:
+        if isinstance(self.env, runenv.LocalEnvironment) and not pctx.local_publish:
             return False
 
         # Keep as listener
@@ -274,57 +287,5 @@ class EnvSolverListener(CpoSolverListener):
                                      encode_csv_string(str(name)) if name is not None else '""',
                                      encode_csv_string(var))
         return res
-
-
-#==============================================================================
-# Public functions
-#==============================================================================
-
-
-def get_environment():
-    """ Get the environment descriptor
-
-    Returns:
-        Environment descriptor, None if none
-    """
-    return None if runenv is None else runenv.get_environment()
-
-
-def is_environment_present():
-    """ Check whether environment is present
-    Returns:
-        True if environment is present, false otherwise
-    """
-    return get_environment() is not None
-
-
-def new_solver_created(solver):
-    """ Add environment solver listener if needed
-    Args:
-        solver:  Solver to update
-    """
-    # Check if environment package not present
-    if runenv is None:
-        return
-
-    # Check no environment
-    env = runenv.get_environment()
-    if env is None:
-        return
-
-    # Retrieve auto_publish context
-    pctx = solver.context.solver.auto_publish
-    if pctx is True:
-        # Create default context to retrieve always default values
-        pctx = Context()
-    elif not isinstance(pctx, Context):
-        return
-
-    # Check no local publish
-    if isinstance(env, runenv.LocalEnvironment) and not pctx.local_publish:
-        return
-
-    # Add solver listener
-    solver.add_listener(EnvSolverListener(env, pctx))
 
 

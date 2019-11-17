@@ -474,13 +474,11 @@ class CpoCompiler(object):
                         self._compile_integer_var_domain(vals, cout)
                         cout.append(']')
                 elif t is Type_Bool:
-                    cout.append("true()" if e.value else "false()")
-                elif t in _INTEGER_TYPES:
-                    cout.append(_number_value_string(e.value))
+                    self._compile_boolean_constant(e, cout)
                 elif t is Type_TransitionMatrix:
                     self._compile_transition_matrix(e, cout)
                 elif t is Type_TupleSet:
-                    self._compile_tuple_set(e.value, cout)
+                    self._compile_tuple_set(e, cout)
                 elif t is Type_StepFunction:
                     self._compile_step_function(e, cout)
                 elif t is Type_SegmentedFunction:
@@ -499,6 +497,8 @@ class CpoCompiler(object):
                     self._compile_sequence_var(e, cout)
                 elif t is Type_StateFunction:
                     self._compile_state_function(e, cout)
+                elif t is Type_FloatVar:
+                    self._compile_float_var(e, cout)
 
             # Check array
             elif t.is_array:
@@ -590,8 +590,18 @@ class CpoCompiler(object):
 
         # Check output exists
         if not cout:
-            raise CpoException("Internal error: unable to compile expression: " + str(expr))
+            # Raise exception without calling str on expr (recursion)
+            raise CpoException("Internal error: unable to compile expression of type {}".format(type(expr)))
         return u''.join(cout)
+
+
+    def _compile_boolean_constant(self, v, cout):
+        """ Compile a boolean constant in a string in CPO format
+        Args:
+            v:    Constant value
+            cout: Output string list
+        """
+        cout.append("true()" if v.value else "false()")
 
 
     def _compile_integer_var(self, v, cout):
@@ -602,6 +612,19 @@ class CpoCompiler(object):
         """
         cout.append("intVar(")
         self._compile_integer_var_domain(v.get_domain(), cout)
+        cout.append(")")
+
+
+    def _compile_float_var(self, v, cout):
+        """ Compile a float variable in a string in CPO format
+        Args:
+            v:    Variable
+            cout: Output string list
+        """
+        cout.append("floatVar(")
+        cout.append(_number_value_string(v.get_domain_min()))
+        cout.append(", ")
+        cout.append(_number_value_string(v.get_domain_max()))
         cout.append(")")
 
 
@@ -720,21 +743,25 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _compile_tuple_set(self, tplset, cout):
+    def _compile_tuple_set(self, e, cout):
         """ Compile a TupleSet in a string in CPO format
 
         Args:
-           tplset: Tuple set as tuple of tuples
-           cout:   Output string list
+           e:    Tuple set expression
+           cout: Output string list
         """
-        cout.append("[")
-        for i, tpl in enumerate(tplset):
-            if i > 0:
-                cout.append(", ")
+        tplset = e.value
+        if tplset:
             cout.append("[")
-            self._compile_integer_var_domain(tpl, cout)
+            for i, tpl in enumerate(tplset):
+                if i > 0:
+                    cout.append(", ")
+                cout.append("[")
+                self._compile_integer_var_domain(tpl, cout)
+                cout.append("]")
             cout.append("]")
-        cout.append("]")
+        else:
+            cout.append("tupleSet[]")
 
 
     @staticmethod
@@ -997,7 +1024,7 @@ def expr_to_string(expr):
 
 _NUMBER_CONSTANTS = {INT_MIN: "intmin", INT_MAX: "intmax",
                      INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax",
-                     INFINITY: "inf", -INFINITY: "-inf", True: "1", False: "0"}
+                     POSITIVE_INFINITY: "inf", NEGATIVE_INFINITY: "-inf", True: "1", False: "0"}
 
 def _number_value_string(val):
     """ Build the string representing a number value
@@ -1011,11 +1038,11 @@ def _number_value_string(val):
     """
     try:
         s = _NUMBER_CONSTANTS.get(val)
+        return s if s else str(val)
     except:
         # Case where value is not hashable, like numpy.ndarray that can be the value type
         # when numpy operand appears in the left of an overloaded operator.
-        s = None
-    return s if s else str(val)
+        return str(val)
 
 
 def _int_var_value_string(ibv):

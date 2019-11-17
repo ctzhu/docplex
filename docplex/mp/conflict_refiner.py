@@ -4,29 +4,21 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from collections import namedtuple, Iterable
+from collections import namedtuple
+from docplex.mp.utils import is_string
 from docplex.mp.constants import ComparisonType
 from docplex.mp.context import check_credentials
 from docplex.mp.cloudutils import context_must_use_docloud
 
-from docplex.mp.utils import PublishResultAsDf
+from docplex.mp.utils import PublishResultAsDf, str_holo
 
 import warnings
-
-
-try:
-    import pandas
-except ImportError:
-    pandas = None
-
 
 TConflictConstraint = namedtuple("_TConflictConstraint", ["name", "element", "status"])
 
 
 def trim_field(element):
-    s = str(element)
-    suffix = '...' if len(s) > 100 else ''
-    return s[:100] + suffix
+    return str_holo(element, maxlen=50)
 
 
 def to_output_table(conflicts, use_df=True):
@@ -35,65 +27,140 @@ def to_output_table(conflicts, use_df=True):
     columns = ['Type', 'Status', 'Name', 'Expression']
     TOutputTables = namedtuple('TOutputTables', columns)
 
-    def data_for_df(c):
+    def convert_to_pandas_df(c):
         return {'Type': 'Constraint',
                 'Status': c.status.name if c.status is not None else '',
-                'Name': c.name if c.name else '',
+                'Name': c.name or '',
                 'Expression': trim_field(c.element)}
 
-    def data_for_namedtuples(c):
+    def convert_to_namedtuples(c):
         return TOutputTables('Constraint',
                              c.status,
-                             c.name if c.name else '',
+                             c.name or '',
                              trim_field(c.element))
 
-    output_data = []
-    data_converter = data_for_df if pandas and use_df else data_for_namedtuples
-    for c in conflicts:
-        output_data.append(data_converter(c))
-    if pandas and use_df:
-        output_data = pandas.DataFrame(columns=columns,
-                                       data=output_data)
-    return output_data
+    pandas = None
+    if use_df:
+        try:
+            import pandas
+        except ImportError:  # pragma: no cover
+            print("pandas module not found...")
+            pandas = None
+
+    data_converter = convert_to_pandas_df if pandas and use_df else convert_to_namedtuples
+    output_data = list(map(data_converter, conflicts))
+
+    if use_df:
+        return pandas.DataFrame(columns=columns, data=output_data)
+    else:
+        return output_data
 
 
-class VarUbConstraintWrapper(object):
+class ConflictRefinerResult(object):
+    """ This class contains all conflicts as returned by the conflict refiner.
+
+    A conflict refiner result contains a list of named tuples of type ``TConflictConstraint``,
+    the fields of which are:
+
+        - an enumerated value of type  ``docplex.mp.constants.ConflictStatus`` that indicates the
+                  conflict status type (Excluded, Possible_member, Member...).
+        - the name of the constraint or None if the constraint corresponds to a variable lower or upper bound.
+        - a modeling object involved in the conflict:
+            can be either a constraint or a wrapper representing a variable upper or lower bound.
+
+
+        *New in version 2.11*
     """
-    This class is a wrapper for a model variable and its associated upper bound.
 
-    Instances of this class are created by the ``refine_conflict`` method when the conflict involves
-    a variable upper bound. Each of these instances is then referenced by a ``TConflictConstraint`` namedtuple
-    in the conflict list returned by ``refine_conflict``.
-    
-    To check whether the upper bound of a variable causes a conflict, wrap the variable and
-    include the resulting constraint in a ConstraintsGroup.
-    """
-    def __init__(self, var):
-        self._var = var
+    def __init__(self, conflicts, refined_by=None):
+        self._conflicts = conflicts
+        assert refined_by is None or is_string(refined_by)
+        self._refined_by = refined_by
 
-    def get_var(self):
+    @property
+    def refined_by(self):
+        '''
+        Returns a string indicating how the conflicts were produced.
+
+        - If the conflicts are created by a program, this field returns None.
+        - If the conflicts originated from a local CPLEX run, this method returns 'cplex_local'.
+        - If the conflicts originated from a DOcplexcloud run, this method returns 'cplex_cloud'.
+
+        Returns:
+            A string, or None.
+
+        '''
+        return self._refined_by
+
+    def __iter__(self):
+        return self.iter_conflicts()
+
+    def __len__(self):
+        """ Redefintion of maguic method __len__.
+
+        Allows calling len() on an instance of ConflictRefinerResult
+        to get the number of conflicts
+
+        :return: the number of conflicts.
+        """
+        return len(self._conflicts)
+
+    def iter_conflicts(self):
+        """ Returns an iterator on conflicts (named tuples)
+
+        :return: an iterator
+        """
+        return iter(self._conflicts)
+
+    @property
+    def number_of_conflicts(self):
+        """ This property returns the number of conflicts. """
+        return len(self._conflicts)
+
+    def display(self):
+        """ Displays all conflicts.
+
+        :return:
+        """
+        print('conflict(s): {0}'.format(self.number_of_conflicts))
+        for conflict in self.iter_conflicts():
+            st = conflict.status
+            elt = conflict.element
+            if hasattr(conflict.element, 'as_constraint'):
+                ct = conflict.element.as_constraint()
+                label = elt.short_name()
+            else:
+                ct = elt
+                label = ct.__class__.__name__
+            print("  - status: {1}, {0}: {2!s}".format(label, st.name, str_holo(ct, maxlen=40)))
+
+    def as_output_table(self, use_df=True):
+        return to_output_table(self, use_df)
+
+
+class VarBoundWrapper(object):
+    # INTERNAL
+
+    def __init__(self, dvar):
+        self._var = dvar
+
+    @property
+    def var(self):
         return self._var
 
-    def get_ub(self):
-        return self._var._get_ub()
+    @property
+    def index(self):
+        return self._var.index
 
-    def get_index(self):
-        return self._var.get_index()
+    @classmethod
+    def short_name(cls):
+        return "Variable Bound"
 
-    def get_name(self):
-        return self._var.get_name()
-
-    index = property(get_index)
-    name = property(get_name)
-
-    def get_constraint(self):
-        var_ub = self.get_ub()
-        op = ComparisonType.cplex_ctsense_to_python_op('L')
-        ct = op(self.get_var(), var_ub)
-        return ct
+    def as_constraint(self):  # pragma: no cover
+        raise NotImplementedError
 
 
-class VarLbConstraintWrapper(object):
+class VarLbConstraintWrapper(VarBoundWrapper):
     """
     This class is a wrapper for a model variable and its associated lower bound.
 
@@ -104,28 +171,47 @@ class VarLbConstraintWrapper(object):
     To check whether the lower bound of a variable causes a conflict, wrap the variable and
     include the resulting constraint in a ConstraintsGroup.
     """
-    def __init__(self, var):
-        self._var = var
 
-    def get_var(self):
-        return self._var
+    def __init__(self, dvar):
+        super(VarLbConstraintWrapper, self).__init__(dvar)
+        self._var = dvar
 
-    def get_lb(self):
-        return self._var._get_lb()
+    @classmethod
+    def short_name(cls):
+        return "Variable Lower Bound"
 
-    def get_index(self):
-        return self._var.get_index()
-
-    def get_name(self):
-        return self._var.get_name()
-
-    index = property(get_index)
-    name = property(get_name)
-
-    def get_constraint(self):
-        var_lb = self.get_lb()
+    def as_constraint(self):
+        self_var = self.var
+        var_lb = self.var.lb
         op = ComparisonType.cplex_ctsense_to_python_op('G')
-        ct = op(self.get_var(), var_lb)
+        ct = op(self_var, var_lb)
+        return ct
+
+
+class VarUbConstraintWrapper(VarBoundWrapper):
+    """
+    This class is a wrapper for a model variable and its associated upper bound.
+
+    Instances of this class are created by the ``refine_conflict`` method when the conflict involves
+    a variable upper bound. Each of these instances is then referenced by a ``TConflictConstraint`` namedtuple
+    in the conflict list returned by ``refine_conflict``.
+
+    To check whether the upper bound of a variable causes a conflict, wrap the variable and
+    include the resulting constraint in a ConstraintsGroup.
+    """
+
+    def __init__(self, var):
+        super(VarUbConstraintWrapper, self).__init__(var)
+
+    @classmethod
+    def short_name(cls):
+        return "Variable Upper Bound"
+
+    def as_constraint(self):
+        self_var = self.var
+        var_ub = self_var.ub
+        op = ComparisonType.cplex_ctsense_to_python_op('L')
+        ct = op(self_var, var_ub)
         return ct
 
 
@@ -160,10 +246,10 @@ class ConstraintsGroup(object):
         self._cts.append(ct)
 
     def add_constraints(self, cts):
-        if isinstance(cts, Iterable):
+        try:
             for ct in cts:
                 self.add_constraint(ct)
-        else:
+        except TypeError:
             self.add_constraint(cts)
 
     def get_group_constraints(self):
@@ -179,13 +265,15 @@ class ConflictRefiner(PublishResultAsDf, object):
     conflict to arrive at a minimal conflict.
     '''
 
+    # static variables for output
+    output_table_property_name = 'conflicts_output'
+    default_output_table_name = 'conflicts.csv'
+    output_table_using_df = True
+
     def __init__(self, output_processing=None):
         self.output_table_customizer = output_processing
-        self.output_table_property_name = 'conflicts_output'
-        self.default_output_table_name = 'conflicts.csv'
-        self.output_table_using_df = True
 
-    def refine_conflict(self, mdl, preferences=None, groups=None, **kwargs):
+    def refine_conflict(self, mdl, preferences=None, groups=None, display=False, **kwargs):
         """ Starts the conflict refiner on the model.
 
         Args:
@@ -195,16 +283,12 @@ class ConflictRefiner(PublishResultAsDf, object):
             kwargs: Accepts named arguments similar to solve.
 
         Returns:
-            A list of ``TConflictConstraint`` namedtuples, each tuple corresponding to a constraint that is
-            involved in the conflict.
-            The fields of the ``TConflictConstraint`` namedtuple are:
+            An object of type `ConflictRefinerResut` which holds all information about
+            the minimal conflict.
 
-                - the name of the constraint or None if the constraint corresponds to a variable lower or upper bound.
-                - a reference to the constraint or to a wrapper representing a Var upper or lower bound.
-                - a ``docplex.mp.constants.ConflictStatus`` object that indicates the
-                  conflict status type (Excluded, Possible_member, Member...).
+        See Also:
+            :class:`ConflictRefinerResult`
 
-            This list is empty if no conflict is found by the conflict refiner.
         """
 
         if mdl.has_multi_objective():
@@ -233,8 +317,7 @@ class ConflictRefiner(PublishResultAsDf, object):
                 if have_credentials:
                     results = self._refine_conflict_cloud(mdl, context, preferences, groups)
                 else:
-                    mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
-                               context.solver.docloud)
+                    mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}", context.solver.docloud)
             # from now on docloud_context is None
             elif mdl.environment.has_cplex:
                 # if CPLEX is installed go for it
@@ -249,7 +332,9 @@ class ConflictRefiner(PublishResultAsDf, object):
             # write conflicts table.write_output_table() handles everything related to
             # whether the table should be published etc...
             if self.is_publishing_output_table(mdl.context):
-                self.write_output_table(to_output_table(results, self.output_table_using_df), mdl.context)
+                self.write_output_table(results.as_output_table(self.output_table_using_df), mdl.context)
+            if display:
+                results.display()
             return results
         finally:
             if saved_log_output_stream != mdl.log_output:
@@ -257,6 +342,7 @@ class ConflictRefiner(PublishResultAsDf, object):
             if saved_context_log_output != mdl.context.solver.log_output:
                 mdl.context.solver.log_output = saved_context_log_output
 
+    # noinspection PyMethodMayBeStatic
     def _refine_conflict_cloud(self, mdl, context, preferences=None, groups=None):
         """ This method handles invocation of the conflict refiner feature by configuring and submitting a job
         to DOcplexcloud and then parsing the result file that is returned.
@@ -279,12 +365,8 @@ class ConflictRefiner(PublishResultAsDf, object):
         #
         return conflict
 
+    # noinspection PyMethodMayBeStatic
     def _refine_conflict_local(self, mdl, context, preferences=None, groups=None):
-        """ TODO: add documentation
-
-        :param context:
-        :return:
-        """
         parameters = context.cplex_parameters
         self_engine = mdl.get_engine()
         return self_engine.refine_conflict(mdl, preferences, groups, parameters)
@@ -295,19 +377,7 @@ class ConflictRefiner(PublishResultAsDf, object):
         This method displays a formatted representation of the conflicts that are provided.
 
         Args:
-           conflicts: A list of ``TConflictConstraint`` namedtuples, one that was returned
-                      by the `refine_conflict()` method.
+           conflicts: An instance of ``ConflictRefinerResult``
         """
-        print('Conflict set:')
-        for conflict in conflicts:
-            st = conflict.status
-            ct = conflict.element
-            label = type(conflict.element)
-            if isinstance(conflict.element, VarLbConstraintWrapper) \
-                    or isinstance(conflict.element, VarUbConstraintWrapper):
-                ct = conflict.element.get_constraint()
-
-            if conflict.name is None:
-                print("\t{} (status code: {}): {}".format(label, st, ct))
-            else:
-                print("\t{} (status code: {}) - {}: {}".format(label, st, conflict.name, ct))
+        warnings.warn("deprecated: use ConflictRefinerresult.display", DeprecationWarning)
+        conflicts.display()

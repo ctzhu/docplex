@@ -11,7 +11,7 @@ from docplex.mp.utils import is_ordered_sequence, is_number, is_string
 from docplex.mp.compat23 import izip
 from docplex.mp.constants import ComparisonType
 from docplex.mp.aggregator import ModelAggregator
-from docplex.mp.cplex_engine import fast_add_linear, static_fast_set_linear_obj
+from docplex.mp.cplex_engine import add_linear, static_fast_set_linear_obj
 from docplex.mp.sktrans.pd_utils import make_solution
 from cplex._internal._procedural import setintparam
 
@@ -113,7 +113,7 @@ class CpxModeler(object):
             ctsense = ComparisonType.parse(transform_params.get('sense', 'le'))
             cpx_senses = ctsense.cplex_code * nb_rows
             cpx_rhss = [float(r) for r in rhs] if cast_to_float else rhs
-            fast_add_linear(cpx, cpx_rows, cpx_senses, cpx_rhss, names=[])
+            add_linear(cpx, cpx_rows, cpx_senses, cpx_rhss, names=[])
         if costs is not None:
             # set linear objective for all variables.
             fcosts = [float(k) for k in costs]
@@ -203,7 +203,7 @@ class CpxModeler(object):
             cpx_ranges = [float(rmin - rmax) for rmin, rmax in izip(range_mins, range_maxs)]
             # rhs is UB
             cpx_rhss = [float(rmax) for rmax in range_maxs]
-            fast_add_linear(cpx, cpx_rows, cpx_senses, rhs=cpx_rhss, names=[], ranges=cpx_ranges)
+            add_linear(cpx, cpx_rows, cpx_senses, rhs=cpx_rhss, names=[], ranges=cpx_ranges)
         if costs is not None:
             # set linear objective for all variables.
             fcosts = [float(k) for k in costs]

@@ -84,7 +84,6 @@ Following functions allow to construct general purpose expressions and constrain
  * :meth:`sequence`:  Constrains the number of occurrences of the values taken by the different subsets of consecutive *k* variables.
  * :meth:`constant`: Creates an expression from a numeric constant.
  * :meth:`element`: Access to an element of an array using an integer expression.
- * :meth:`member`: Checks if an integer expression is member of an array of expressions.
  * :meth:`range`: Restricts the bounds of an integer or floating-point expression.
  * :meth:`all_min_distance`: Constraint on the minimum absolute distance between a pair of integer expressions in an array.
  * :meth:`if_then`: Creates and returns the new constraint e1 => e2.
@@ -127,13 +126,18 @@ Following functions allow to construct expressions concerning interval variables
  * :meth:`end_at_end`:  Constrains the delay between the ends of two interval variables.
  * :meth:`end_before_start`: Constrains minimum delay between the end of one interval variable and start of another one.
  * :meth:`end_before_end`: Constrains the minimum delay between the ends of two interval variables.
+ * :meth:`forbid_start`: Forbids an interval variable to start during specified regions.
+ * :meth:`forbid_end`: Forbids an interval variable to end during specified regions.
+ * :meth:`forbid_extent`: Forbids an interval variable to overlap with specified regions.
+ * :meth:`overlap_length`: Length of the overlap of two interval variables.
+ * :meth:`start_eval`: Evaluates a segmented function at the start of an interval variable.
+ * :meth:`end_eval`: Evaluates a segmented function at the end of an interval variable.
+ * :meth:`size_eval`: Evaluates a segmented function on the size of an interval variable.
+ * :meth:`length_eval`: Evaluates segmented function on the length of an interval variable.
  * :meth:`span`: Creates a span constraint between interval variables.
  * :meth:`alternative`: Creates an alternative constraint between interval variables.
  * :meth:`synchronize`: Creates a synchronization constraint between interval variables.
  * :meth:`isomorphism`: Creates a isomorphism constraint between two sets of interval variables.
- * :meth:`forbid_start`: Forbids an interval variable to start during specified regions.
- * :meth:`forbid_end`: Forbids an interval variable to end during specified regions.
- * :meth:`forbid_extent`: Forbids an interval variable to overlap with specified regions.
 
 **Sequence variables**
 
@@ -154,11 +158,6 @@ Following functions allow to construct expressions concerning sequence variables
  * :meth:`type_of_next`: Type of the interval variable that is next in a sequence.
  * :meth:`type_of_prev`: Type of the interval variable that is previous in a sequence.
  * :meth:`no_overlap`: Constrains a set of interval variables not to overlap each others
- * :meth:`overlap_length`: Length of the overlap of two interval variables.
- * :meth:`start_eval`: Evaluates a segmented function at the start of an interval variable.
- * :meth:`end_eval`: Evaluates a segmented function at the end of an interval variable.
- * :meth:`size_eval`: Evaluates a segmented function on the size of an interval variable.
- * :meth:`length_eval`: Evaluates segmented function on the length of an interval variable.
  * :meth:`same_sequence`: creates a same-sequence constraint between two sequence variables.
  * :meth:`same_common_subsequence`: Creates a same-common-subsequence constraint between two sequence variables.
 
@@ -264,10 +263,8 @@ Detailed description
 from docplex.cp.catalog import *
 from docplex.cp.expression import CpoExpr, CpoFunctionCall, CpoValue, build_cpo_expr, build_cpo_tupleset, \
                                   build_cpo_transition_matrix, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY
-import docplex.cp.expression as expression
 from docplex.cp.utils import *
-import docplex.cp.config as config
-import collections
+import warnings
 
 try:
    from collections.abc import Iterator
@@ -1312,12 +1309,15 @@ def element(array, index):
 def member(element, array):
     """ Checks if an integer expression is member of an array of expressions.
 
+    DEPRECATED: use :meth:`allowed_assignments`: instead.
+
     Args:
         element:  Integer expression whose value is to check in the array.
         array:    Array of integer values
     Returns:
         A boolean expression denoting the presence of the value in the array.
     """
+    warnings.warn("Modeling function 'member' is deprecated. Use allowed_assignments instead", DeprecationWarning)
     return CpoFunctionCall(Oper_member, Type_BoolExpr, (_convert_arg(element, "element", Type_IntExpr),
                                                         _convert_arg(array, "array", Type_IntArray),
                                                         ))
@@ -1425,8 +1425,8 @@ def inverse(f, invf):
     the arrays *f* and *invf* is *n*, then this function returns a
     constraint that ensures that:
 
-     * for all *i* in the interval *[0, n-1]*, *invf[f[i* == i*
-     * for all *j* in the interval *[0, n-1]*, *f[invf[j* == j*
+     * for all *i* in the interval *[0, n-1]*, *invf[f[i]]* == i*
+     * for all *j* in the interval *[0, n-1]*, *f[invf[j]]* == j*
 
     Args:
         f:    An integer expression array.
@@ -1496,7 +1496,9 @@ def allowed_assignments(exprs, values):
     # 'expr' is an array of expressions, and 'values' a tupleset
     assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
     tset = build_cpo_tupleset(values)
-    assert len(exprs.children) == len(tset.value[0]), "Arity of tupleset should match the number of expressions"
+    tvals = tset.value
+    if tvals:
+        assert len(exprs.children) == len(tvals[0]), "Arity of tupleset should match the number of expressions"
     return CpoFunctionCall(Oper_allowed_assignments, Type_BoolExpr, (exprs, tset))
 
 
@@ -1528,7 +1530,11 @@ def forbidden_assignments(exprs, values):
 
     # 'expr' is an array of expressions, and 'values' a tupleset
     assert exprs.is_kind_of(Type_IntExprArray), "Argument 'exprs' should be an array of integer or an array of integer expressions"
-    return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, build_cpo_tupleset(values)))
+    tset = build_cpo_tupleset(values)
+    tvals = tset.value
+    if tvals:
+        assert len(exprs.children) == len(tvals[0]), "Arity of tupleset should match the number of expressions"
+    return CpoFunctionCall(Oper_forbidden_assignments, Type_BoolExpr, (exprs, tset))
 
 
 def lexicographic(x, y):
@@ -2079,6 +2085,198 @@ def end_before_end(a, b, delay=None):
     return CpoFunctionCall(Oper_end_before_end, Type_Constraint, (a, b, _convert_arg(delay, "delay", Type_IntExpr)))
 
 
+def forbid_start(interval, function):
+    """ Forbids an interval variable to start during specified regions.
+
+    This constraint restricts possible start times of interval variable using a step function.
+    The interval variable can start only at points where the function value is not zero.
+    When the interval variable is absent then this constraint is automatically satisfied,
+    since such interval variable does not have any start at all.
+
+    In declaration of an interval variable it is only possible to specify a range of possible start times.
+    This function allows more precise specification of when the interval variable can start.
+
+    Args:
+        interval: Interval variable being restricted.
+        function: If the function has value 0 at point *t* then the interval variable interval cannot start at *t*.
+    Returns:
+        Constraint expression
+    """
+    return CpoFunctionCall(Oper_forbid_start, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
+                                                                _convert_arg(function, "function", Type_StepFunction)))
+
+def forbid_end(interval, function):
+    """ Forbids an interval variable to end during specified regions.
+
+    In the declaration of an interval variable it is only possible to specify a range of possible end times.
+    This function allows the user to specify more precisely when the interval variable can end.
+    In particular, the interval variable can end only at point *t* such that the function has non-zero value at
+    *t-1*.
+    When the interval variable is absent then this constraint is automatically satisfied,
+    since such interval variable does not't have any start at all.
+
+    Note the difference between *t* (end time of the interval variable) and *t-1*
+    (the point when the function value is checked). It simplifies the sharing of the same function
+    in constraints *forbid_start* and *forbid_end*.
+    It also allows one to use the same function as *intensity* parameter of interval variable.
+
+    Args:
+        interval: Interval variable being restricted.
+        function: If the function has value 0 at point *t*-1 then the interval variable interval cannot end at *t*.
+    Returns:
+        Constraint expression
+    """
+    return CpoFunctionCall(Oper_forbid_end, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
+                                                              _convert_arg(function, "function", Type_StepFunction)))
+
+
+def forbid_extent(interval, function):
+    """ Forbids an interval variable to overlap with specified regions.
+
+    This function allows specification of forbidden regions that the interval variable *interval* cannot overlap with.
+    In particular, if interval variable *interval* is present and if *function* has value 0 during
+    interval *[a,b)* (i.e. *[a,b)* is a forbidden region) then either *end <= a* (*interval* ends before the
+    forbidden region) or *b <= start* (*interval* starts after the forbidden region).
+
+    If the interval variable *interval* is absent then the constraint is automatically satisfied
+    (the interval does not exist therefore it cannot overlap with any region).
+
+    Args:
+        interval: Interval variable being restricted.
+        function: Forbidden regions corresponds to step of the function that have value 0.
+    Returns:
+        Constraint expression
+    """
+    return CpoFunctionCall(Oper_forbid_extent, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
+                                                                 _convert_arg(function, "function", Type_StepFunction)))
+
+
+def overlap_length(interval, interval2, absentValue=None):
+    """ Returns the length of the overlap of two interval variables.
+
+    This function returns an integer expression that represents the length of the overlap
+    of interval variable *interval* and the interval variable *interval2* whenever the interval
+    variables *interval* and *interval2* are present.
+    When one of the interval variables *interval* or *interval2* is absent, the function returns
+    the constant integer value *absentValue* (zero by default).
+
+    Optionally, *interval2* can be a constant interval [*start*, *end*) expressed as a tuple of two
+    integers.
+    When the interval variable *interval* is absent, the function returns the constant integer value
+    *absentValue* (zero by default).
+
+    Args:
+        interval: Interval variable
+        interval2: Another interval variable, or fixed interval expressed as a tuple of 2 integers.
+        absentValue (Optional): Value to return if some interval variable is absent.
+    Returns:
+        An integer expression
+    """
+    interval = _convert_arg(interval, "interval", Type_IntervalVar)
+
+    # Interval2 is fixed
+    if is_array(interval2):
+        assert (len(interval2) == 2) and is_int(interval2[0]) and is_int(interval2[1]), \
+            "To express a fixed interval, 'interval2' should be a tuple of two integers"
+        t1 = _convert_arg(interval2[0], "interval2[0]", Type_TimeInt)
+        t2 = _convert_arg(interval2[1], "interval2[1]", Type_TimeInt)
+        if absentValue is None:
+            return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2))
+        return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2,
+                                                                   _convert_arg(absentValue, "absentValue", Type_Int)))
+
+    # Interval2 is an interval variable
+    interval2 = _convert_arg(interval2, "interval2", Type_IntervalVar)
+    if absentValue is None:
+        return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2))
+    return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2,
+                                                               _convert_arg(absentValue, "absentValue", Type_Int)))
+
+
+def start_eval(interval, function, absentValue=None):
+    """ Evaluates a segmented function at the start of an interval variable.
+
+    Evaluates *function* at the start of interval variable *interval*.
+    If *interval* is absent, it does not have any defined start and *absentValue* is returned.
+
+    Args:
+        interval: Interval variable.
+        function: Function to evaluate.
+        absentValue (Optional): Value to return if interval variable interval is absent.
+                     If not given, absent value is zero.
+    Returns:
+        A float expression
+    """
+    interval = _convert_arg(interval, "interval", Type_IntervalVar)
+    function = _convert_arg(function, "function", Type_SegmentedFunction)
+    if absentValue is None:
+        return CpoFunctionCall(Oper_start_eval, Type_FloatExpr, (interval, function))
+    return CpoFunctionCall(Oper_start_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
+
+
+def end_eval(interval, function, absentValue=None):
+    """ Evaluates a segmented function at the end of an interval variable.
+
+    Evaluates *function* at the start of interval variable *interval*.
+    If *interval* is absent, it does not have any defined end and *absentValue* is returned.
+
+    Args:
+        interval: Interval variable.
+        function: Function to evaluate.
+        absentValue (Optional): Value to return if interval variable interval is absent.
+                     If not given, absent value is zero.
+    Returns:
+        A float expression
+    """
+    interval = _convert_arg(interval, "interval", Type_IntervalVar)
+    function = _convert_arg(function, "function", Type_SegmentedFunction)
+    if absentValue is None:
+        return CpoFunctionCall(Oper_end_eval, Type_FloatExpr, (interval, function))
+    return CpoFunctionCall(Oper_end_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
+
+
+def size_eval(interval, function, absentValue=None):
+    """ Evaluates a segmented function on the size of an interval variable.
+
+    Evaluate *function* for the x value equal to the size of interval variable *interval*.
+    If *interval* is absent then it does not have any defined size and *absentValue* is returned.
+
+    Args:
+        interval: Interval variable.
+        function: Function to evaluate.
+        absentValue (Optional): Value to return if interval variable interval is absent.
+                     If not given, absent value is zero.
+    Returns:
+        A float expression
+    """
+    interval = _convert_arg(interval, "interval", Type_IntervalVar)
+    function = _convert_arg(function, "function", Type_SegmentedFunction)
+    if absentValue is None:
+        return CpoFunctionCall(Oper_size_eval, Type_FloatExpr, (interval, function))
+    return CpoFunctionCall(Oper_size_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
+
+
+def length_eval(interval, function, absentValue=None):
+    """ Evaluates segmented function on the length of an interval variable.
+
+    Evaluate *function* for the x value equal to the length of interval variable *interval*.
+    If *interval* is absent then it does not have any defined length and *absentValue* is returned.
+
+    Args:
+        interval: Interval variable.
+        function: Function to evaluate.
+        absentValue (Optional): Value to return if interval variable interval is absent.
+                     If not given, absent value is zero.
+    Returns:
+        A float expression
+    """
+    interval = _convert_arg(interval, "interval", Type_IntervalVar)
+    function = _convert_arg(function, "function", Type_SegmentedFunction)
+    if absentValue is None:
+        return CpoFunctionCall(Oper_length_eval, Type_FloatExpr, (interval, function))
+    return CpoFunctionCall(Oper_length_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
+
+
 def span(interval, array):
     """ Creates a span constraint between interval variables.
 
@@ -2106,7 +2304,7 @@ def alternative(interval, array, cardinality=None):
     *interval* and the set of interval variables in *array*.
     If no *cardinality* expression is specified, if *interval* is present, then one and only
     one of the intervals in *array* will be selected by the alternative constraint
-    to be present and the start and end values of *interval* will be the same as the
+    to be present, and the start and end values of *interval* will be the same as the
     ones of the selected interval.
     If a *cardinality* expression is specified, *cardinality* intervals in *array* will be selected by the
     alternative constraint to be present and the selected intervals will have the
@@ -2179,73 +2377,6 @@ def isomorphism(array1, array2, map=None, absentValue=None):
     return CpoFunctionCall(Oper_isomorphism, Type_Constraint, (array1, array2,
                                                                _convert_arg(map, "map", Type_IntExprArray),
                                                                _convert_arg(absentValue, "absentValue", Type_Int)))
-
-
-def forbid_start(interval, function):
-    """ Forbids an interval variable to start during specified regions.
-
-    This constraint restricts possible start times of interval variable using a step function.
-    The interval variable can start only at points where the function value is not zero.
-    When the interval variable is absent then this constraint is automatically satisfied,
-    since such interval variable does not have any start at all.
-
-    In declaration of an interval variable it is only possible to specify a range of possible start times.
-    This function allows more precise specification of when the interval variable can start.
-
-    Args:
-        interval: Interval variable being restricted.
-        function: If the function has value 0 at point *t* then the interval variable interval cannot start at *t*.
-    Returns:
-        Constraint expression
-    """
-    return CpoFunctionCall(Oper_forbid_start, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                                _convert_arg(function, "function", Type_StepFunction)))
-
-def forbid_end(interval, function):
-    """ Forbids an interval variable to end during specified regions.
-
-    In the declaration of an interval variable it is only possible to specify a range of possible end times.
-    This function allows the user to specify more precisely when the interval variable can end.
-    In particular, the interval variable can end only at point *t* such that the function has non-zero value at
-    *t-1*.
-    When the interval variable is absent then this constraint is automatically satisfied,
-    since such interval variable does not't have any start at all.
-
-    Note the difference between *t* (end time of the interval variable) and *t-1*
-    (the point when the function value is checked). It simplifies the sharing of the same function
-    in constraints *forbid_start* and *forbid_end*.
-    It also allows one to use the same function as *intensity* parameter of interval variable.
-
-    Args:
-        interval: Interval variable being restricted.
-        function: If the function has value 0 at point *t*-1 then the interval variable interval cannot end at *t*.
-    Returns:
-        Constraint expression
-    """
-    return CpoFunctionCall(Oper_forbid_end, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                              _convert_arg(function, "function", Type_StepFunction)))
-
-
-def forbid_extent(interval, function):
-    """ Forbids an interval variable to overlap with specified regions.
-
-    This function allows specification of forbidden regions that the interval variable *interval* cannot overlap with.
-    In particular, if interval variable *interval* is present and if *function* has value 0 during
-    interval *[a,b)* (i.e. *[a,b)* is a forbidden region) then either *end <= a* (*interval* ends before the
-    forbidden region) or *b <= start* (*interval* starts after the forbidden region).
-
-    If the interval variable *interval* is absent then the constraint is automatically satisfied
-    (the interval does not exist therefore it cannot overlap with any region).
-
-    Args:
-        interval: Interval variable being restricted.
-        function: Forbidden regions corresponds to step of the function that have value 0.
-    Returns:
-        Constraint expression
-    """
-    return CpoFunctionCall(Oper_forbid_extent, Type_Constraint, (_convert_arg(interval, "interval", Type_IntervalVar),
-                                                                 _convert_arg(function, "function", Type_StepFunction)))
-
 
 
 #==============================================================================
@@ -2595,132 +2726,6 @@ def no_overlap(sequence, distance_matrix=None, is_direct=None):
         return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix))
     return CpoFunctionCall(Oper_no_overlap, Type_Constraint, (sequence, distance_matrix, _convert_arg_bool_int(is_direct, "is_direct")))
     
-
-
-def overlap_length(interval, interval2, absentValue=None):
-    """ Returns the length of the overlap of two interval variables.
-
-    This function returns an integer expression that represents the length of the overlap
-    of interval variable *interval* and the interval variable *interval2* whenever the interval
-    variables *interval* and *interval2* are present.
-    When one of the interval variables *interval* or *interval2* is absent, the function returns
-    the constant integer value *absentValue* (zero by default).
-
-    Optionally, *interval2* can be a constant interval [*start*, *end*) expressed as a tuple of two
-    integers.
-    When the interval variable *interval* is absent, the function returns the constant integer value
-    *absentValue* (zero by default).
-
-    Args:
-        interval: Interval variable
-        interval2: Another interval variable, or fixed interval expressed as a tuple of 2 integers.
-        absentValue (Optional): Value to return if some interval variable is absent.
-    Returns:
-        An integer expression
-    """
-    interval = _convert_arg(interval, "interval", Type_IntervalVar)
-
-    # Interval2 is fixed
-    if is_array(interval2):
-        assert (len(interval2) == 2) and is_int(interval2[0]) and is_int(interval2[1]), \
-            "To express a fixed interval, 'interval2' should be a tuple of two integers"
-        t1 = _convert_arg(interval2[0], "interval2[0]", Type_TimeInt)
-        t2 = _convert_arg(interval2[1], "interval2[1]", Type_TimeInt)
-        if absentValue is None:
-            return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2))
-        return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, t1, t2,
-                                                                   _convert_arg(absentValue, "absentValue", Type_Int)))
-
-    # Interval2 is an interval variable
-    interval2 = _convert_arg(interval2, "interval2", Type_IntervalVar)
-    if absentValue is None:
-        return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2))
-    return CpoFunctionCall(Oper_overlap_length, Type_IntExpr, (interval, interval2,
-                                                               _convert_arg(absentValue, "absentValue", Type_Int)))
-
-
-def start_eval(interval, function, absentValue=None):
-    """ Evaluates a segmented function at the start of an interval variable.
-
-    Evaluates *function* at the start of interval variable *interval*.
-    If *interval* is absent, it does not have any defined start and *absentValue* is returned.
-
-    Args:
-        interval: Interval variable.
-        function: Function to evaluate.
-        absentValue (Optional): Value to return if interval variable interval is absent.
-                     If not given, absent value is zero.
-    Returns:
-        A float expression
-    """
-    interval = _convert_arg(interval, "interval", Type_IntervalVar)
-    function = _convert_arg(function, "function", Type_SegmentedFunction)
-    if absentValue is None:
-        return CpoFunctionCall(Oper_start_eval, Type_FloatExpr, (interval, function))
-    return CpoFunctionCall(Oper_start_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
-
-
-def end_eval(interval, function, absentValue=None):
-    """ Evaluates a segmented function at the end of an interval variable.
-
-    Evaluates *function* at the start of interval variable *interval*.
-    If *interval* is absent, it does not have any defined end and *absentValue* is returned.
-
-    Args:
-        interval: Interval variable.
-        function: Function to evaluate.
-        absentValue (Optional): Value to return if interval variable interval is absent.
-                     If not given, absent value is zero.
-    Returns:
-        A float expression
-    """
-    interval = _convert_arg(interval, "interval", Type_IntervalVar)
-    function = _convert_arg(function, "function", Type_SegmentedFunction)
-    if absentValue is None:
-        return CpoFunctionCall(Oper_end_eval, Type_FloatExpr, (interval, function))
-    return CpoFunctionCall(Oper_end_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
-
-
-def size_eval(interval, function, absentValue=None):
-    """ Evaluates a segmented function on the size of an interval variable.
-
-    Evaluate *function* for the x value equal to the size of interval variable *interval*.
-    If *interval* is absent then it does not have any defined size and *absentValue* is returned.
-
-    Args:
-        interval: Interval variable.
-        function: Function to evaluate.
-        absentValue (Optional): Value to return if interval variable interval is absent.
-                     If not given, absent value is zero.
-    Returns:
-        A float expression
-    """
-    interval = _convert_arg(interval, "interval", Type_IntervalVar)
-    function = _convert_arg(function, "function", Type_SegmentedFunction)
-    if absentValue is None:
-        return CpoFunctionCall(Oper_size_eval, Type_FloatExpr, (interval, function))
-    return CpoFunctionCall(Oper_size_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
-
-
-def length_eval(interval, function, absentValue=None):
-    """ Evaluates segmented function on the length of an interval variable.
-
-    Evaluate *function* for the x value equal to the length of interval variable *interval*.
-    If *interval* is absent then it does not have any defined length and *absentValue* is returned.
-
-    Args:
-        interval: Interval variable.
-        function: Function to evaluate.
-        absentValue (Optional): Value to return if interval variable interval is absent.
-                     If not given, absent value is zero.
-    Returns:
-        A float expression
-    """
-    interval = _convert_arg(interval, "interval", Type_IntervalVar)
-    function = _convert_arg(function, "function", Type_SegmentedFunction)
-    if absentValue is None:
-        return CpoFunctionCall(Oper_length_eval, Type_FloatExpr, (interval, function))
-    return CpoFunctionCall(Oper_length_eval, Type_FloatExpr, (interval, function, _convert_arg(absentValue, "absentValue", Type_Float)))
 
 
 def same_sequence(seq1, seq2, array1=None, array2=None):

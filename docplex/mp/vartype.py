@@ -148,14 +148,14 @@ class BinaryVarType(VarType):
     def compute_lb(self, candidate_lb, logger):
         # INTERNAL
         if candidate_lb >= 1 + 1e-6:
-            logger.error('Infeasible lower bound for a binary variable: {0} -expecting >= 0'.format(candidate_lb))
+            logger.fatal('Lower bound for binary variable should be less than 1, {0} was passed '.format(candidate_lb))
         # return the user bound anyway
         return candidate_lb
 
     def compute_ub(self, candidate_ub, logger):
         # INTERNAL
         if candidate_ub <= -1e-6:
-            logger.error('Infeasible upper bound for a binary variable: {0} -expecting >= 0'.format(candidate_ub))
+            logger.fatal('Upper bound for binary variable should be greater than 0, {0} was passed'.format(candidate_ub))
         # return the user bound anyway
         return candidate_ub
 

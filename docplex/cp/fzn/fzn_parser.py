@@ -133,7 +133,6 @@ class FznParameter(FznObject):
         return ''.join(lstr)
 
 
-
 class FznVariable(FznObject):
     """ Descriptor of a FZN variable
     """
@@ -338,10 +337,9 @@ class FznReader(object):
         """
         # Store file name if first file
         self.source_file = cfile
-        with open_utf8(cfile, mode='r') as f:
-            self.tokenizer = FznTokenizer(cfile, f)
-            self._read_document()
-            self.tokenizer = None
+        self.tokenizer = FznTokenizer(file=cfile)
+        self._read_document()
+        self.tokenizer = None
 
 
     def parse_string(self, str):
@@ -352,7 +350,7 @@ class FznReader(object):
         Args:
             str: String to parse
         """
-        self.tokenizer = FznTokenizer("String", str)
+        self.tokenizer = FznTokenizer(input=str)
         self._read_document()
         self.tokenizer = None
 
@@ -875,7 +873,7 @@ class FznParser(object):
                  )
 
     def __init__(self, mdl=None):
-        """ Create a new CPO format parser
+        """ Create a new FZN format parser
 
         Args:
             mdl:  Model to fill, None (default) to create a new one.

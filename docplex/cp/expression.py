@@ -211,21 +211,21 @@ class CpoExpr(object):
         Returns:
             Expression node count
         """
-        # Initialize stack of expressions to parse
-        estack = [self]
-        result = 0
-        doneset = set()  # Set of ids of expressions already processed
+        return get_node_count(self)
 
-        # Loop while expression stack is not empty
-        while estack:
-            e = estack.pop()
-            eid = id(e)
-            if not eid in doneset:
-                doneset.add(eid)
-                # Stack children expressions
-                estack.extend(e.children)
 
-        return len(doneset)
+    def pretty_print(self, out=None, mxdepth=None, mxargs=None, adsize=False, indent="", curdepth=0):
+        """ Pretty print expression in a way that shows its structure.
+
+        Args:
+            out:      (optional) Print output (stream or file name, None for stdout)
+            mxdepth:  (optional) Max print depth. Default is None (no limit)
+            mxargs:   (optional) Max number of function or array arguments. Default is None (no limit)
+            adsize:   (optional) Add size of expressions in  nodes
+            indent:   (optional) Indentation string
+            curdepth: (internal) Current print depth
+        """
+        pretty_print(self, out, mxdepth, mxargs, adsize, indent, curdepth)
 
 
     def __nonzero__(self):
@@ -646,16 +646,15 @@ class CpoIntVar(CpoVariable):
     * :meth:`integer_var`, :meth:`integer_var_list`, :meth:`integer_var_dict` to create integer variable(s),
     * :meth:`binary_var`, :meth:`binary_var_list`, :meth:`binary_var_dict` to create integer variable(s)
       with value in [0..1],
-
     """
     __slots__ = ('domain',  # Variable domain
                  )
-    
+
     def __init__(self, dom, name=None):
         # Private constructor
         super(CpoIntVar, self).__init__(Type_IntVar, name)
         self.domain = dom
-        
+
     def set_domain(self, domain):
         """ Sets the domain of the variable.
 
@@ -741,6 +740,58 @@ class CpoIntVar(CpoVariable):
             True if 'other' is semantically identical to this object, False otherwise.
         """
         return super(CpoIntVar, self).equals(other) and (self.domain == other.domain)
+
+
+class CpoFloatVar(CpoVariable):
+    # """ This class represents a *float variable* that can be used in a CPO model.
+    # """
+    __slots__ = ('min',  # Domain min value
+                 'max',  # Domain max value
+                 )
+
+    def __init__(self, min, max, name=None):
+        # Private constructor
+        super(CpoFloatVar, self).__init__(Type_FloatVar, name)
+        self.min = min
+        self.max = max
+
+
+    def get_domain_min(self):
+        # """ Gets the domain lower bound.
+        #
+        # Returns:
+        #     Domain lower bound.
+        # """
+        return self.min
+
+
+    def get_domain_max(self):
+        # """ Gets the domain upper bound.
+        #
+        # Returns:
+        #     Domain upper bound.
+        # """
+        return self.max
+
+
+    def get_domain(self):
+        # """ Gets the variable domain as a tuple (min, max)
+        #
+        # Returns:
+        #     Variable domain as a tuple (min, max)
+        # """
+        return (self.min, self.max,)
+
+
+    def equals(self, other):
+        # """ Checks if this expression is equivalent to another
+        #
+        # Args:
+        #     other: Other object to compare with.
+        # Return:
+        #     True if 'other' is semantically identical to this object, False otherwise.
+        # """
+        return super(CpoFloatVar, self).equals(other) and (self.min == other.min) and (self.max == self.max)
 
 
 ###############################################################################
@@ -1617,6 +1668,96 @@ def sequence_var(vars, types=None, name=None):
     return CpoSequenceVar(vars, types, name)
 
 
+def float_var(min=NEGATIVE_INFINITY, max=POSITIVE_INFINITY, name=None):
+    # """ Creates a float variable.
+    #
+    # Args:
+    #     min:   (Optional) Domain min value. Default value is negative infinity.
+    #     max:   (Optional) Domain max value. Default value is positive infinity.
+    #     name:  (Optional) Name of the variable
+    # Returns:
+    #     CpoFloatVar expression
+    # """
+    # Check arguments
+    assert is_number(min) and is_number(max), "Float var bounds should be numbers"
+    assert min <= max, "Float var lower bound should be lower than upper bound"
+
+    return CpoFloatVar(min, max, name)
+
+
+def float_var_list(size, min=NEGATIVE_INFINITY, max=POSITIVE_INFINITY, name=None):
+    # """ Creates a list of float variables.
+    #
+    # This methods creates a list of float variables whose size is given as first parameter.
+    # All other parameters are identical to those requested by the method float_var()
+    # that allows to create a single float variable.
+    # See the documentation of :meth:`float_var` for details.
+    #
+    # If a name is given, each variable of the list is created with this
+    # name concatenated with the index of the variable in the list, starting by zero.
+    #
+    # Args:
+    #     size:   Size of the list of variables
+    #     min:    (Optional) Domain min value. Default value is negative infinity.
+    #     max:    (Optional) Domain max value. Default value is positive infinity.
+    #     name:   (Optional) variable name prefix.
+    # Returns:
+    #     List of float variables (CpoFloatVar objects).
+    # """
+    # Check arguments
+    assert is_number(min) and is_number(max), "Float var bounds should be numbers"
+    assert min <= max, "Float var lower bound should be lower than upper bound"
+
+    res = []
+    if name is None:
+        for i in range(size):
+            res.append(CpoFloatVar(min, max))
+    else:
+        name = name + "_"
+        for i in range(size):
+            res.append(CpoFloatVar(min, max, name + str(i)))
+    return res
+
+
+def float_var_dict(keys, min=None, max=None, name=None):
+    # """ Creates a dictionary of float variables.
+    #
+    # This methods creates a dictionary of float variables associated to a list of keys given as first parameter.
+    # All other parameters are identical to those requested by the method float_var()
+    # that allows to create a single float variable.
+    # See the documentation of :meth:`float_var` for details.
+    #
+    # If a name is given, each variable of the list is created with this
+    # name concatenated with the string representation of the corresponding key.
+    # The parameter 'name' can also be a function that is called to build the variable name
+    # with the variable key as parameter.
+    #
+    # Args:
+    #     keys:   Iterable of variable keys.
+    #     min:    Domain min value. Optional if domain is given extensively.
+    #     max:    Domain max value. Optional if domain is given extensively.
+    #     name:   Optional variable name. If not given, a name is automatically generated.
+    # Returns:
+    #     Dictionary of float variables (CpoFloatVar objects).
+    # """
+    # Check arguments
+    assert is_number(min) and is_number(max), "Float var bounds should be numbers"
+    assert min <= max, "Float var lower bound should be lower than upper bound"
+
+    res = {}
+    if name is None:
+        for k in keys:
+            res[k] = CpoFloatVar(min, max)
+    elif is_string(name):
+        name = name + "_"
+        for i, k in enumerate(keys):
+            res[k] = CpoFloatVar(min, max, name + str(i))
+    else:
+        for k in keys:
+            res[k] = CpoFloatVar(min, max, name=name(k))
+    return res
+
+
 def transition_matrix(szvals, name=None):
     """ Creates a new transition matrix (square matrix of integers).
 
@@ -1711,6 +1852,144 @@ def is_cpo_expr(expr, type=None):
         True if parameter is a CPO expression, of the expected type if given
     """
     return isinstance(expr, CpoExpr) and (type is None or expr.type == type)
+
+
+def get_node_count(expr):
+    """ Get the number of model expression nodes in an expression or list of expressions
+
+    Args:
+        expr:   Expression or list of expressions
+    Returns:
+        Total number of nodes
+    """
+    # Initialize stack of expressions to parse
+    estack = []
+    try:
+        estack.extend(expr)
+    except:
+        estack.append(expr)
+    doneset = set()  # Set of ids of expressions already processed
+
+    # Loop while expression stack is not empty
+    while estack:
+        e = estack.pop()
+        eid = id(e)
+        if not eid in doneset:
+            doneset.add(eid)
+            # Stack children expressions
+            try:
+               estack.extend(e.children)
+            except:
+                pass
+
+    return len(doneset)
+
+
+def pretty_print(expr, out=None, mxdepth=None, mxargs=None, adsize=False, indent="", curdepth=0):
+    """ Pretty print expression in a way that shows its structure.
+
+    Args:
+        expr:     Expression to print
+        out:      (optional) Print output (stream or file name, None for stdout)
+        mxdepth:  (optional) Max print depth. Default is None (no limit)
+        mxargs:   (optional) Max number of function or array arguments. Default is None (no limit)
+        adsize:   (optional) Add size of expressions in nodes
+        indent:   (optional) Indentation string
+        curdepth: (internal) Current print depth
+    """
+    # Check file output
+    if is_string(out):
+        with open_utf8(os.path.abspath(out), mode='w') as f:
+            pretty_print(expr, out, mxdepth, mxargs, adsize, indent, curdepth)
+            return
+    # Check default output
+    if out is None:
+        out = sys.stdout
+
+    # Write start banner
+    out.write(indent)
+
+    # Check max depth reached
+    if (mxdepth is not None) and (curdepth >= mxdepth):
+        out.write("...")
+        return
+
+    # Check if tuple
+    if isinstance(expr, tuple):
+        _pretty_print_children('(', ')', expr, out, mxdepth, mxargs, adsize, indent, curdepth)
+        return
+
+    # Check list
+    if isinstance(expr, list):
+        _pretty_print_children('[', ']', expr, out, mxdepth, mxargs, adsize, indent, curdepth)
+        return
+
+    # Check if expression is not CpoExpr
+    if not isinstance(expr, CpoExpr):
+        out.write(str(expr))
+        return
+
+    # Check if expression has a name
+    if expr.has_name():
+        out.write(expr.get_name())
+        return
+
+    # Check expression type
+    t = expr.type
+    if t.is_constant:
+        out.write(str(expr))
+    elif t.is_variable:
+        out.write(str(expr))
+    elif t.is_array:
+        _pretty_print_children('[', ']', expr.children, out, mxdepth, mxargs, adsize, indent, curdepth)
+    else:
+        _pretty_print_children(str(expr.operation.cpo_name) + '(', ')', expr.children, out, mxdepth, mxargs, adsize, indent, curdepth)
+
+
+def _pretty_print_children(lstart, lend, lexpr, out, mxdepth, mxargs, adsize, indent, curdepth):
+    """ Pretty print list of expression
+
+    Args:
+        lstart:   List start banner
+        lend:     List end banner
+        lexpr:    List of expression to take children from
+        out:      Print output (stream or file name, None for stdout)
+        mxdepth:  Max print depth. Default is None (no limit)
+        mxargs:   Max number of function or array arguments. Default is None (no limit)
+        adsize:   Add size of expressions in nodes
+        indent:   Indentation string
+        curdepth: Current print depth
+    """
+    # Write start banner
+    out.write(lstart)
+    nindent = indent + " | "
+    if adsize:
+        out.write(" size:" + str(get_node_count(lexpr)))
+
+    # Write expressions
+    nbargs = len(lexpr)
+    curdepth += 1
+    if (mxargs is None) or (nbargs <= mxargs):
+        for x in lexpr:
+            out.write('\n')
+            pretty_print(x, out, mxdepth, mxargs, adsize, nindent, curdepth)
+    else:
+        eargs = mxargs // 2
+        bargs = mxargs - eargs
+        for x in lexpr[:bargs]:
+            out.write('\n')
+            pretty_print(x, out, mxdepth, mxargs, adsize, nindent, curdepth)
+        out.write('\n')
+        out.write(nindent)
+        out.write("...(+" + str(nbargs - mxargs) + ")...")
+        for x in lexpr[-eargs:]:
+            out.write('\n')
+            pretty_print(x, out, mxdepth, mxargs, adsize, nindent, curdepth)
+
+    # Write end banner
+    # out.write('\n')
+    # out.write(indent)
+    out.write(lend)
 
 
 def _domain_min(d):
@@ -1897,10 +2176,11 @@ def build_cpo_tupleset(val):
             cpval = _CPO_VALUES_FROM_PYTHON.get(key)
             if cpval is None:
                 # Verify new tuple set
-                assert len(tset) > 0, "Tuple set should not be empty"
-                size = len(tset[0])
-                assert all(len(t) == size for t in tset), "All tuples in 'tset' should have the same length"
-                assert all(all(is_int(v) for v in r) for r in tset), "All tupleset values should be integer"
+                if tset:
+                    #assert len(tset) > 0, "Tuple set should not be empty"
+                    size = len(tset[0])
+                    assert all(len(t) == size for t in tset), "All tuples in 'tset' should have the same length"
+                    assert all(all(is_int(v) for v in r) for r in tset), "All tupleset values should be integer"
                 # Put tuple set in cache
                 cpval = CpoValue(tset, Type_TupleSet)
                 _CPO_VALUES_FROM_PYTHON.set(key, cpval)
@@ -2462,15 +2742,12 @@ def _is_equal_values(v1, v2):
     return v1 == v2
 
 
-
-
 def _reset_cache():
     """ Reset expression cache (for testing purpose).
     """
     _CPO_VALUES_FROM_PYTHON.clear()
 
 
-import docplex.cp.cpo_compiler as compiler
 def _to_string(expr):
     """ Build a string representing an expression.
     Args:
@@ -2478,4 +2755,5 @@ def _to_string(expr):
     Returns:
         String representing this expression
     """
+    import docplex.cp.cpo.cpo_compiler as compiler
     return compiler.expr_to_string(expr)

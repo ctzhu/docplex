@@ -57,9 +57,10 @@ Detailed description
 """
 
 import docplex.cp.config as config
-from docplex.cp.cpo_compiler import CpoCompiler
+from docplex.cp.cpo.cpo_compiler import CpoCompiler
 from docplex.cp.solution import *
 from docplex.cp.solver.solver_listener import CpoSolverListener
+from docplex.cp.solver.cpo_callback import CpoCallback
 
 import time, importlib, inspect
 import traceback
@@ -331,7 +332,6 @@ class CpoSolverAgent(object):
         Args:
             json: JSON result string
         """
-        self.context.log(3, "JSON result:\n", json)
         self.last_json_result = json
 
 
@@ -356,7 +356,7 @@ class CpoSolverAgent(object):
         res.process_infos.update(self.process_infos)
 
         # Process JSON solution
-        self.context.log(3, "JSON result:\n", jsol)
+        self.context.log(3, "JSON data:\n", jsol)
         self.last_json_result = jsol
 
         # Parse JSON solution
@@ -395,6 +395,7 @@ class CpoSolver(object):
                  'last_result',  # Last returned solution
                  'listeners',    # List of solve listeners
                  'status_lock',  # Lock protecting status change
+                 'callbacks',    # List of CPO solver callbacks
                 )
 
     def __init__(self, model, **kwargs):
@@ -429,6 +430,7 @@ class CpoSolver(object):
         self.status = STATUS_IDLE
         self.status_lock = threading.Lock()
         self.listeners = []
+        self.callbacks = []
 
         # Build effective context from args
         context = config._get_effective_context(**kwargs)
@@ -863,6 +865,7 @@ class CpoSolver(object):
         # Add listener
         self.add_listener(lclass())
 
+
     def remove_listener(self, lstnr):
         """ Remove a solver listener previously added with :meth:`~docplex.cp.solver.solver.CpoSolver.add_listener`.
 
@@ -870,6 +873,29 @@ class CpoSolver(object):
             lstnr:  Listener to remove.
         """
         self.listeners.remove(lstnr)
+
+
+    def add_callback(self, cback):
+        """ Add a CPO solver callback.
+
+        A solver callback is an object extending the class :class:`~docplex.cp.solver.cpo_callback.CpoCallback`
+        which provides multiple functions that are called to notify about the different solving steps.
+
+        Args:
+            cback:  Solver callback
+        """
+        assert isinstance(cback, CpoCallback), \
+            "CPO callback should be an object of class docplex.cp.solver.cpo_callback.CpoCallback"
+        self.callbacks.append(cback)
+
+
+    def remove_callback(self, cback):
+        """ Remove a CPO solver callback. previously added with :meth:`~docplex.cp.solver.solver.CpoSolver.add_callback`.
+
+        Args:
+            cback:  Callback to remove.
+        """
+        self.callbacks.remove(cback)
 
 
     def _set_status(self, status):
@@ -892,6 +918,18 @@ class CpoSolver(object):
         # Notify listeners
         for lstnr in self.listeners:
             lstnr.new_log_data(self, data)
+
+
+    def _notify_callback_event(self, event, data):
+        """ Notify a CPO callback event (called by agent)
+
+        Args:
+            event:  Event id
+            data:   JSON document associated to this event
+        """
+        # Notify callbacks
+        for cback in self.callbacks:
+            cback.invoke(self, event, data)
 
 
     def _solve_with_start_next(self):

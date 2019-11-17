@@ -1,8 +1,28 @@
 Changelog
 ---------
 
-Changed in 2.10.155:
+Changed in 2.11.176:
 ````````````````````
+* Added support for CPLEX 12.10
+* In ``docplex.mp``:
+  * Logical expressions, binary variables, and constraints can now be freely nested with logical operators.
+  * Fixed a print of 'CPLEX Error 1217' in log for multi-objective problems.
+  * Fixed a bug when setting log_output to a file name: file was created, but empty.
+    
+
+Changed in 2.10.155 (2019.08):
+``````````````````````````````
+
+* Fixed bug in logical_and() when result var is set to 0.
+
+Changed in 2.10.154 (2019.07):
+``````````````````````````````
+
+* Fixed TypeError occuring in python 3.7 in progressData initialization.
+
+Changed in 2.10.151 (2019.07):
+``````````````````````````````
+
 * In ``docplex.mp``:
    * fixed a bug in ModelReader when reading SAV files with no names
    * fixed a bug in mip starts, which prevented mip starts with piecewise
@@ -37,11 +57,16 @@ Changed in 2.10.155:
    * Enable iterators to specify the domain of an integer variable
    * Add global methods get_version_info() and get_solver_verion() in docplex.cp.solver.
    * By default, generate CPO model without explicit format version.
+   * Add a method reset() on CpoParameters object.
+   * Modeling method allowed_assignments() and forbidden_assignments() can now accept an empty list of tuples.
+   * On CpoModelSolution object, add a function map_solution() thar replace variables by their value in a python object.
+   * Add parser for LP models
+   * Add possibility to import CPO, MZN and LP models in gzip and zip format.
+   * Enhance management of unexpected errors thrown by cpoptimizer.exe
 
-     
 
-Changed in 2.9.141:
-```````````````````
+Changed in 2.9.141 (2019.03):
+`````````````````````````````
 
 * In ``docplex.mp``:
    * Removed links to rawgit.com as this service is going end of life.
@@ -56,8 +81,8 @@ Changed in 2.9.141:
    * Add new examples with KPIs.
 
 
-Changed in 2.8.125:
-```````````````````
+Changed in 2.8.125 (2018.10):
+`````````````````````````````
 * Solving with solver agent 'docloud' is deprecated. 
   Models are now preferably solved with local solver, or the python source can be submitted to DOcplexcloud solve service. 
   See https://ibm.biz/BdYhhK.
@@ -72,8 +97,8 @@ Changed in 2.8.125:
    * Default solver agent is now 'local' instead of 'docloud'. All examples modified consequently.
 
 
-Changed in 2.7.113:
-```````````````````
+Changed in 2.7.113 (2018.07):
+`````````````````````````````
 
 * In ``docplex.mp``:
    * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the
@@ -92,8 +117,8 @@ Changed in 2.7.113:
    * Enhance FZN parser and save 30% time
 
 
-Changed in 2.6.94:
-``````````````````
+Changed in 2.6.94 (2018.04):
+````````````````````````````
 
 * In ``docplex.cp``:
    * Allow CpoModel.add() to accept list of constraints.
@@ -109,8 +134,8 @@ Changed in 2.6.94:
    * Remove default configuration settings for parameters TimeLimit and Workers.
 
 
-Changed in 2.5.92:
-``````````````````
+Changed in 2.5.92 (2018.03):
+````````````````````````````
 
 * ``docplex.cli`` gains new features:
    * option ``--details`` will display solve details as they are published on
@@ -138,8 +163,8 @@ Changed in 2.5.92:
    * When called on a model, export_model() and get_cpo_string() disable all model optimization options.
 
 
-Changed in 2.4.61:
-``````````````````
+Changed in 2.4.61 (2017.11):
+````````````````````````````
 
 * Both ``docplex.mp`` & ``docplex.cp``:
    * Support for CPLEX engines 12.8. Some features of docplex2.4 are available only with engines >= 12.8.

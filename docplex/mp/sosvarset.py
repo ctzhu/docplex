@@ -17,10 +17,24 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         
     '''
 
-    def __init__(self, model, variable_sequence, sos_type, name=None):
+    def __init__(self, model, variable_sequence, sos_type, weights=None, name=None):
         ModelingObject.__init__(self, model, name)
         self._sos_type = sos_type
         self._variables = variable_sequence[:]  # copy sequence
+        self._set_weights(weights)
+
+    def _set_weights(self, new_weights):
+        if new_weights is None:
+            self._weights = None
+        else:
+            checker = self._model._checker
+            checked_weights = checker.typecheck_num_seq(new_weights)
+            weight_list = list(checked_weights)
+            nb_vars = len(self._variables)
+            if len(weight_list) != nb_vars:
+                self._model.fatal("Expecting {0} SOS weights, a list with size {1} was passed",
+                            nb_vars, len(weight_list))
+            self._weights = weight_list[:]
 
     @property
     def cplex_scope(self):
@@ -77,9 +91,27 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         name_s = '(\'%s\')' % self._name if self._name else ''
         return '{0!s}{2}[{1:s}]'.format(self._sos_type.name, vars_s, name_s)
 
-    def get_ranks(self):
+    def _get_weights(self):
         # INTERNAL
-        return list(range(1, len(self) + 1))
+        self_weights = self._weights
+        return self_weights if self_weights is not None else list(range(1, len(self) + 1))
+
+    @property
+    def weights(self):
+        return self._get_weights()
+
+    @weights.setter
+    def weights(self, new_weights):
+        self._set_weights(new_weights)
+
+
+    def as_constraint(self):
+        mdl = self._model
+        lfactory = mdl._lfactory
+        lhs = mdl.sum_vars(self._variables)
+        rhs = lfactory.constant_expr(self.sos_type.value)
+        return lfactory.new_binary_constraint(lhs, "eq", rhs, name=self.name)
+
 
     def __str__(self):
         ''' Redefine the standard __str__ method of Python objects to customize string conversion.
@@ -100,6 +132,7 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         return SOSVariableSet(model=target_model,
                               variable_sequence=copy_variables,
                               sos_type=self.sos_type,
+                              weights=self._weights,
                               name=self.name)
 
     @property

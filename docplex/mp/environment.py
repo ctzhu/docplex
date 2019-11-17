@@ -119,6 +119,10 @@ class Environment(object):
         return self._cplex_version
 
     @property
+    def cplex_version_as_tuple(self):
+        return tuple(float(x) for x in self._cplex_version.split('.'))
+
+    @property
     def has_matplotlib(self):
         """True if the `matplotlib` libraries are available.
         """
@@ -155,6 +159,11 @@ class Environment(object):
         """True if running on a 64-bit platform.
         """
         return self._is64bit
+
+    @property
+    def python_version(self):
+        """ Returns the Python version as a string"""
+        return platform.python_version()
 
     def auto_configure(self):
         self.check_cplex()

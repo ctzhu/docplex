@@ -61,69 +61,69 @@ except ImportError:
 def init_cplex_parameters(x):
     return x.init_cplex_parameters()
 
+class StreamWithCustomClose(object):
+    # wrapper for streams, so that we can keep track of those who need
+    # to be closed by us.
+    def __init__(self, target):
+        self._target = target
+        
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+    def custom_close(self):
+        return self._target.close()
+
 
 # some utility methods
-def _get_value_as_int(d, option):
-    try:
-        value = int(d[option])
-    except Exception:
-        value = None
-    return value
+# def _get_value_as_int(d, option):
+#     try:
+#         value = int(d[option])
+#     except Exception:
+#         value = None
+#     return value
+#
+#
+# def _convert_to_int(value):
+#     if str(value).lower() == 'none':
+#         return None
+#     try:
+#         value = int(value)
+#     except Exception:
+#         value = None
+#     return value
+#
+#
+# def _get_value_as_string(d, option):
+#     return d.get(option, None)
+#
+#
+# def _get_value_as_boolean(d, option):
+#     try:
+#         value = _convert_to_bool(d[option])
+#     except Exception:
+#         value = None
+#     return value
 
 
-def _convert_to_int(value):
-    if str(value).lower() == 'none':
-        return None
-    try:
-        value = int(value)
-    except Exception:
-        value = None
-    return value
-
-
-def _get_value_as_string(d, option):
-    return d.get(option, None)
-
-
-def _get_value_as_boolean(d, option):
-    try:
-        value = _convert_to_bool(d[option])
-    except Exception:
-        value = None
-    return value
-
-
-_BOOLEAN_STATES = {'1': True, 'yes': True, 'true': True, 'on': True,
+_boolean_map = {'1': True, 'yes': True, 'true': True, 'on': True,
                    '0': False, 'no': False, 'false': False, 'off': False}
 
 
 def _convert_to_bool(value):
     if value is None:
         return None
-    svalue = str(value).lower()
-    if svalue == "none":
-        return None
-    if svalue not in _BOOLEAN_STATES:
-        raise ValueError('Not a boolean: %s' % value)
-    return _BOOLEAN_STATES[svalue]
-
-
-# class open_filename_universal(object):
-#     def __init__(self, filename, *args, **kwargs):
-#         self.closing = kwargs.pop('closing', False)
-#         if isinstance(filename, six.string_types):
-#             self.fh = open_universal_newline(filename, "r")
-#             self.closing = True
-#         else:
-#             self.fh = filename
-#
-#     def __enter__(self):
-#         return self.fh
-#
-#     def __exit__(self, exc_type, exc_val, exc_tb):
-#         if self.closing:
-#             self.fh.close()
-#         return False
+    elif is_string(value):
+        svalue = str(value).lower()
+        if svalue == "none":
+            return None
+        else:
+            bvalue = _boolean_map.get(svalue)
+            if bvalue is not None:
+                return bvalue
+            else:
+                raise ValueError('Not a boolean: {0}'.format(value))
+    else:
+        raise ValueError('Not a boolean: {0}'.format(value))
 
 
 class InvalidSettingsFileError(Exception):
@@ -131,7 +131,6 @@ class InvalidSettingsFileError(Exception):
 
     *New in version 2.8*
     '''
-
     def __init__(self, mesg, filename=None, source=None, *args, **kwargs):
         super(InvalidSettingsFileError, self).__init__(mesg)
         self.filename = filename
@@ -238,6 +237,20 @@ class BaseContext(dict):
         res = self.get(name, default)
         return res
 
+    def display(self):
+        # prints the context.
+        def print_r(node, prefix):
+            for n in sorted(node):
+                if not n.startswith('_'):
+                    path = ".".join([prefix, n] if prefix else [n])
+                    if isinstance(node.get(n), (dict, SolverContext)):
+                        print("%s  # type: %s" % (path, type(node.get(n)).__name__))
+                        print_r(node.get(n), path)
+                    else:
+                        print("%s = %s # type: %s" % (path, node.get(n), type(node.get(n)).__name__))
+
+        print_r(self, "context")
+
 
 class SolverContext(BaseContext):
     # for internal use
@@ -265,12 +278,13 @@ class SolverContext(BaseContext):
                 value = deepcopy(v, memo)
             setattr(result, k, value)
         return result
-
+    
+  
+    
     def get_log_output_as_stream(self):
-        log_output = None
         try:
             log_output = self.log_output
-        except AttributeError:
+        except AttributeError:  # pragma: no cover
             return None
 
         output_stream = None
@@ -278,20 +292,23 @@ class SolverContext(BaseContext):
         # as string.lower and check for some known string values
         if hasattr(log_output, "lower"):
             k = log_output.lower()
-            if k in _BOOLEAN_STATES:
+            if k in _boolean_map:
                 if _convert_to_bool(k):
                     output_stream = sys.stdout
                 else:
                     output_stream = None
-            if k in ["stdout", "sys.stdout"]:
+            elif k in ["stdout", "sys.stdout"]:
                 output_stream = sys.stdout
-            if k in ["stderr", "sys.stderr"]:
+            elif k in ["stderr", "sys.stderr"]:
                 output_stream = sys.stderr
+            else:
+                output_stream = open(log_output, 'w')
+                output_stream = StreamWithCustomClose(output_stream)
         # if log_output is == to True, just use stdout
         if log_output is True:
             output_stream = sys.stdout
         # if it has a write() attribute, just return it
-        if hasattr(log_output, "write"):
+        elif hasattr(log_output, "write"):
             output_stream = log_output
 
         return output_stream
@@ -355,10 +372,13 @@ class Context(BaseContext):
         # initial value
         self['_lazy_members'] = \
             {'cplex_parameters': init_cplex_parameters}
-        # initialize fields of this
-        super(Context, self).__init__(solver=SolverContext(docloud=create_default_docloud_context()),
-                                      # cplex_parameters=cplex_parameters,
-                                      docplex_tests=BaseContext())
+        # initialize fields
+        if 'solver_context' in kwargs:
+            solver_context = kwargs.pop('solver_context')
+        else:
+            solver_context = SolverContext(docloud=create_default_docloud_context())
+
+        super(Context, self).__init__(solver=solver_context, docplex_tests=BaseContext())
         # update will also ensure compatibility with older kwargs like
         # 'url' and 'api_key'
         self.update(kwargs, create_missing_nodes=True)
@@ -411,7 +431,7 @@ class Context(BaseContext):
             for v in shlex.split(os.environ['DOCPLEX_CONTEXT']):
                 s = v.split('=', 1)  # max 1 split
                 # convert values to bool if relevant
-                value = _BOOLEAN_STATES.get(s[1].strip().lower(), s[1])
+                value = _boolean_map.get(s[1].strip().lower(), s[1])
                 values_pairs.append((s[0], value))
                 if logger:
                     logger.info('Setting context value %s to %s (from DOCPLEX_CONTEXT env)' % (s[0], value))
@@ -431,6 +451,9 @@ class Context(BaseContext):
         # Returns:
         #   A deep copy of the context.
         return deepcopy(self)
+
+    def override(self):
+        return ContextOverride(self)
 
     def update_from_list(self, values, logger=None):
         # For each pair of `(name, value)` in values, try to set the
@@ -644,8 +667,8 @@ def create_default_auto_publish_context(defaults=True):
         auto_publish.conflicts_output = None
     return auto_publish
 
-
 def create_default_docloud_context():
+    # for internal use.
     # Returns a context to use as the context.solver.docloud member.
     #
     # This is a Context with predefined fields.
@@ -684,3 +707,102 @@ def create_default_docloud_context():
     # mangle names into x<...?>
     dctx.mangle_names = False
     return dctx
+
+
+class ContextOverride(Context):
+
+    def __init__(self, initial_context):
+        soc2 = deepcopy(initial_context.solver)
+        super(ContextOverride, self).__init__(solver_context=soc2)
+        self._initial_context = initial_context  # unchanged
+        self.cplex_parameters = initial_context.cplex_parameters
+
+    # @property
+    # def solver(self):
+    #     if self._solver is None:
+    #         self._solver = deepcopy(self._initial_context.solver)
+    #     return self._solver
+
+    def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
+        if k is 'docloud_context':
+            warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
+            self.solver.docloud = value
+        elif k is 'cplex_parameters':
+            if isinstance(value, RootParameterGroup):
+                self.cplex_parameters = value
+            else:
+                self.update_cplex_parameters(value)
+
+        elif k is 'url':
+            self.solver.docloud.url = value
+        elif k is 'api_key' or k is 'key':
+            self.solver.docloud.key = value
+        elif k is 'log_output':
+            self.solver.log_output = value
+        elif k is 'override':
+            self.update_from_list(iteritems(value))
+        elif k is 'proxies':
+            self.solver.docloud.proxies = value
+        elif k is '_env':
+            # do nothing this is just here to avoid creating too many envs
+            pass
+        elif k is 'agent':
+            self.solver.agent = value
+        else:
+            if create_missing_nodes:
+                self.k = value
+            elif warn:
+                warnings.warn("Unknown quick-setting in Context: {0:s}, value: {1!s}".format(k, value),
+                              stacklevel=2)
+
+    def update_cplex_parameters(self, arg_params):
+        # INTERNAL
+        new_params = self.cplex_parameters.copy()
+        # try a dictionary of parameter qualified names, parameter values
+        # e.g. cplex_parameters={'mip.tolerances.mipgap': 0.01, 'timelimit': 180}
+        try:
+            for pk, pv in iteritems(arg_params):
+                p = new_params.find_parameter(key=pk)
+                if not p:
+                    docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))
+                else:
+                    p.set(pv)
+            self.cplex_parameters = new_params
+
+        except (TypeError, AttributeError):
+            docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(arg_params))
+
+    def update_from_list(self, key_value_pairs, logger=None):
+        # For each pair of `(name, value)` in values, try to set the
+        # attribute.
+        for name, value in key_value_pairs:
+            try:
+                self._set_value(self, name, value)
+            except AttributeError:
+                if logger is not None:
+                    logger.warning("Ignoring undefined attribute : {0}".format(name))
+
+    def _set_value(self, root, property_spec, property_value):
+        property_list = property_spec.split('.')
+        property_chain = property_list[:-1]
+        to_be_set = property_list[-1]
+        o = root
+        for c in property_chain:
+            o = getattr(o, c)
+        try:
+            target_attribute = getattr(o, to_be_set)
+        except AttributeError:
+            target_attribute = None
+        if target_attribute is None:
+            # Simply set the attribute
+            try:
+                setattr(o, to_be_set, property_value)
+            except DOcplexException:
+                print('attribute not found: {0}'.format(to_be_set))
+        else:
+            # try a set_converted_value if it's a Parameter
+            try:
+                target_attribute.set(property_value)
+            except (AttributeError, TypeError):
+                # no set(), just setattr
+                setattr(o, to_be_set, property_value)

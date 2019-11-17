@@ -5,7 +5,7 @@ import sys
 
 required = ['requests',
             'six',
-            'docloud>=1.0.369']
+            'docloud>=1.0.375']
 if ((sys.version_info[0]) < 3) or \
    ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
     required.append('futures')
@@ -22,7 +22,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.10'
+    readme = 'DOcplex 2.11'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -35,7 +35,9 @@ setup(
     packages=['docplex',
                'docplex.cp',
                'docplex.cp.solver',
+               'docplex.cp.cpo',
                'docplex.cp.fzn',
+               'docplex.cp.lp',
                'docplex.mp',
                'docplex.mp.callbacks',
                'docplex.mp.internal',
@@ -44,15 +46,17 @@ setup(
                'docplex.mp.sparktrans',
                'docplex.mp.worker',
                'docplex.util',
-               'docplex.util.dods'],
-    version = '2.10.155',  # replaced at build time
+               'docplex.util.dods',
+               'docplex.util.ws'],
+    version = '2.11.176',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',
     long_description='%s\n' % ss,
+    long_description_content_type='text/x-rst',
     url = 'https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/',
     keywords = ['docloud', 'optimization', 'cplex', 'cpo'],
-    license = read('LICENSE.txt'),
+    license = 'Apache 2.0',
     install_requires=required,
     classifiers = ["Development Status :: 5 - Production/Stable",
                    "Intended Audience :: Developers",
@@ -70,8 +74,8 @@ setup(
                    "License :: OSI Approved :: Apache Software License",
                    "Programming Language :: Python",
                    "Programming Language :: Python :: 2.7",
-                   "Programming Language :: Python :: 3.5",
-                   "Programming Language :: Python :: 3.6"
+                   "Programming Language :: Python :: 3.6",
+                   "Programming Language :: Python :: 3.7"
                    ],
 )
 

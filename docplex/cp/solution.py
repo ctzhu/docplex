@@ -43,7 +43,7 @@ Detailed description
 
 import docplex.cp.utils as utils
 from docplex.cp.utils import *
-from docplex.cp.expression import CpoVariable, CpoIntVar, CpoIntervalVar, CpoSequenceVar, CpoStateFunction, \
+from docplex.cp.expression import CpoVariable, CpoIntVar, CpoFloatVar, CpoIntervalVar, CpoSequenceVar, CpoStateFunction, \
     INT_MIN, INT_MAX, INTERVAL_MIN, INTERVAL_MAX, POSITIVE_INFINITY, NEGATIVE_INFINITY, \
     _domain_iterator, _domain_min, _domain_max, _domain_contains, \
     compare_expressions
@@ -215,6 +215,11 @@ class CpoVarSolution(object):
         return not self.__eq__(other)
 
 
+    def __str__(self):
+        """ String representing this object """
+        return "{}={}".format(self.expr.get_name(), self.get_value())
+
+
     def __hash__(self):
         return id(self)
 
@@ -235,7 +240,7 @@ class CpoIntVarSolution(CpoVarSolution):
      * (2, 3, (5, 7), 9, (11, 13))
     """
     __slots__ = ('value',  # Variable value / domain
-                )
+                 )
 
     def __init__(self, expr, value):
         """ Constructor:
@@ -248,7 +253,6 @@ class CpoIntVarSolution(CpoVarSolution):
         super(CpoIntVarSolution, self).__init__(expr)
         self.value = _check_arg_domain(value, 'value')
 
-
     def get_value(self):
         """ Gets the value of the variable.
 
@@ -256,7 +260,6 @@ class CpoIntVarSolution(CpoVarSolution):
             Variable value (integer), or domain (list of integers or intervals)
         """
         return self.value
-
 
     def get_domain_min(self):
         """ Gets the domain lower bound.
@@ -266,7 +269,6 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return _domain_min(self.value)
 
-
     def get_domain_max(self):
         """ Gets the domain upper bound.
 
@@ -275,7 +277,6 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return _domain_max(self.value)
 
-
     def domain_iterator(self):
         """ Iterator on the individual values of an integer variable domain.
 
@@ -283,7 +284,6 @@ class CpoIntVarSolution(CpoVarSolution):
             Value iterator on the domain of this variable.
         """
         return _domain_iterator(self.value)
-
 
     def domain_contains(self, value):
         """ Check whether a given value is in the domain of the variable
@@ -296,10 +296,55 @@ class CpoIntVarSolution(CpoVarSolution):
         return _domain_contains(self.value, value)
 
 
+class CpoFloatVarSolution(CpoVarSolution):
+    # """ This class represents a solution to a float variable.
+    #
+    # The solution can be:
+    #  * *complete* when the value is a single value,
+    #  * *partial* when the value is an interval.
+    # """
+    __slots__ = ('value',  # Variable value or tuple (interval)
+                 )
+
+    def __init__(self, expr, value):
+        """ Constructor:
+
+        Args:
+            expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoFloatVar`.
+            value: Variable value, or domain if not completely instantiated
+        """
+        assert isinstance(expr, CpoFloatVar), "Expression 'expr' should be a CpoIntVar expression"
+        super(CpoFloatVarSolution, self).__init__(expr)
+        self.value = value
+
+    def get_value(self):
+        """ Gets the value of the variable.
+
+        Returns:
+            Variable value (integer), or domain (list of integers or intervals)
+        """
+        return self.value
+
+    def get_domain_min(self):
+        """ Gets the domain lower bound.
+
+        Returns:
+            Domain lower bound.
+        """
+        return self.value if is_number(self.value) else self.value[0]
+
+    def get_domain_max(self):
+        """ Gets the domain upper bound.
+
+        Returns:
+            Domain upper bound.
+        """
+        return self.value if is_number(self.value) else self.value[-1]
+
     def __str__(self):
         """ Convert this expression into a string """
         return str(self.get_name()) + ": " + str(self.get_value())
-        
+
 
 class CpoIntervalVarSolution(CpoVarSolution):
     """ This class represents a solution to an interval variable.
@@ -881,6 +926,12 @@ class CpoModelSolution(object):
             var = _get_expr_from_map(expr_map, vname)
             self.add_var_solution(CpoIntVarSolution(var, _get_domain(vars[vname])))
 
+        # Add integer variables
+        vars = jsol.get('floatVars', ())
+        for vname in vars:
+            var = _get_expr_from_map(expr_map, vname)
+            self.add_var_solution(CpoFloatVarSolution(var, _get_domain(vars[vname])))
+
         # Add interval variables
         vars = jsol.get('intervalVars', ())
         for vname in vars:
@@ -1258,7 +1309,7 @@ class CpoSolveResult(CpoRunResult):
         """ Get the model solution
 
         Returns:
-            Model solution, object of class CpoModelSolution.
+            Model solution, object of class :class:`CpoModelSolution`:.
         """
         return self.solution
 

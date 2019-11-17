@@ -1,233 +1,31 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.10.155
+Version: 2.11.176
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
 Author-email: dofeedback@wwpdl.vnet.ibm.com
-License: 
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-   1. Definitions.
-
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
-
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
-
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
-
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
-
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
-
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
-
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
-
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
-
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
-
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
-
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
-
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
-
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
-
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
-
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
-
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
-
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
-
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
-
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
-
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
-
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
-
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
-
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
-
-   END OF TERMS AND CONDITIONS
-
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [2015] [IBM Corporation]
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-
-Description: DOcplex, IBM® Decision Optimization Modeling for Python
-        =======================================================
+License: Apache 2.0
+Description: DOcplex, IBM Decision Optimization Modeling for Python
+        ======================================================
         
-        Welcome to the IBM® Decision Optimization CPLEX Modeling for Python.
+        Welcome to the IBM Decision Optimization CPLEX Modeling for Python.
         Licensed under the Apache License v2.0.
         
         With this library, you can quickly and easily add the power of optimization to
         your application. You can model your problems by using the Python API and solve
-        them on the cloud with the IBM® Decision Optimization on Cloud service or on
-        your computer with IBM® ILOG CPLEX Optimization Studio.
+        them on the cloud with the IBM Decision Optimization on Cloud service or on
+        your computer with IBM ILOG CPLEX Optimization Studio.
         
         This library is composed of 2 modules:
         
-            * IBM® Decision Optimization CPLEX Optimizer Modeling for Python - with namespace docplex.mp
-            * IBM® Decision Optimization CP Optimizer Modeling for Python - with namespace docplex.cp
+            * IBM Decision Optimization CPLEX Optimizer Modeling for Python - with namespace docplex.mp
+            * IBM Decision Optimization CP Optimizer Modeling for Python - with namespace docplex.cp
         
-        Solving with CPLEX locally requires that IBM® ILOG CPLEX Optimization Studio V12.8 or V12.9
+        Solving with CPLEX locally requires that IBM ILOG CPLEX Optimization Studio V12.8 or V12.9
         is installed on your machine.
         
-        Solving with the IBM® Decision Optimization on Cloud service requires that you
+        Solving with the IBM Decision Optimization on Cloud service requires that you
         register for an account and get the API key.
         
         This library is `numpy` friendly.
@@ -244,8 +42,28 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        Changed in 2.10.155:
+        Changed in 2.11.176:
         ````````````````````
+        * Added support for CPLEX 12.10
+        * In ``docplex.mp``:
+          * Logical expressions, binary variables, and constraints can now be freely nested with logical operators.
+          * Fixed a print of 'CPLEX Error 1217' in log for multi-objective problems.
+          * Fixed a bug when setting log_output to a file name: file was created, but empty.
+            
+        
+        Changed in 2.10.155 (2019.08):
+        ``````````````````````````````
+        
+        * Fixed bug in logical_and() when result var is set to 0.
+        
+        Changed in 2.10.154 (2019.07):
+        ``````````````````````````````
+        
+        * Fixed TypeError occuring in python 3.7 in progressData initialization.
+        
+        Changed in 2.10.151 (2019.07):
+        ``````````````````````````````
+        
         * In ``docplex.mp``:
            * fixed a bug in ModelReader when reading SAV files with no names
            * fixed a bug in mip starts, which prevented mip starts with piecewise
@@ -280,11 +98,16 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Enable iterators to specify the domain of an integer variable
            * Add global methods get_version_info() and get_solver_verion() in docplex.cp.solver.
            * By default, generate CPO model without explicit format version.
+           * Add a method reset() on CpoParameters object.
+           * Modeling method allowed_assignments() and forbidden_assignments() can now accept an empty list of tuples.
+           * On CpoModelSolution object, add a function map_solution() thar replace variables by their value in a python object.
+           * Add parser for LP models
+           * Add possibility to import CPO, MZN and LP models in gzip and zip format.
+           * Enhance management of unexpected errors thrown by cpoptimizer.exe
         
-             
         
-        Changed in 2.9.141:
-        ```````````````````
+        Changed in 2.9.141 (2019.03):
+        `````````````````````````````
         
         * In ``docplex.mp``:
            * Removed links to rawgit.com as this service is going end of life.
@@ -299,8 +122,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Add new examples with KPIs.
         
         
-        Changed in 2.8.125:
-        ```````````````````
+        Changed in 2.8.125 (2018.10):
+        `````````````````````````````
         * Solving with solver agent 'docloud' is deprecated. 
           Models are now preferably solved with local solver, or the python source can be submitted to DOcplexcloud solve service. 
           See https://ibm.biz/BdYhhK.
@@ -315,8 +138,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Default solver agent is now 'local' instead of 'docloud'. All examples modified consequently.
         
         
-        Changed in 2.7.113:
-        ```````````````````
+        Changed in 2.7.113 (2018.07):
+        `````````````````````````````
         
         * In ``docplex.mp``:
            * Multiplying a constant expression by a quadratic expression raised an exception. Now returns the
@@ -335,8 +158,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Enhance FZN parser and save 30% time
         
         
-        Changed in 2.6.94:
-        ``````````````````
+        Changed in 2.6.94 (2018.04):
+        ````````````````````````````
         
         * In ``docplex.cp``:
            * Allow CpoModel.add() to accept list of constraints.
@@ -352,8 +175,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * Remove default configuration settings for parameters TimeLimit and Workers.
         
         
-        Changed in 2.5.92:
-        ``````````````````
+        Changed in 2.5.92 (2018.03):
+        ````````````````````````````
         
         * ``docplex.cli`` gains new features:
            * option ``--details`` will display solve details as they are published on
@@ -381,8 +204,8 @@ Description: DOcplex, IBM® Decision Optimization Modeling for Python
            * When called on a model, export_model() and get_cpo_string() disable all model optimization options.
         
         
-        Changed in 2.4.61:
-        ``````````````````
+        Changed in 2.4.61 (2017.11):
+        ````````````````````````````
         
         * Both ``docplex.mp`` & ``docplex.cp``:
            * Support for CPLEX engines 12.8. Some features of docplex2.4 are available only with engines >= 12.8.
@@ -554,5 +377,5 @@ Classifier: Topic :: Other/Nonlisted Topic
 Classifier: License :: OSI Approved :: Apache Software License
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 2.7
-Classifier: Programming Language :: Python :: 3.5
 Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7

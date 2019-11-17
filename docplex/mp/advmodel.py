@@ -4,7 +4,7 @@
 # (c) Copyright IBM Corp. 2016
 # --------------------------------------------------------------------------
 
-from six import iteritems
+from six import iteritems, itervalues
 
 from docplex.mp.model import Model
 from docplex.mp.aggregator import ModelAggregator
@@ -16,11 +16,10 @@ from docplex.mp.constants import ComparisonType
 from docplex.mp.compat23 import izip
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.xcounter import update_dict_from_item_value
-from docplex.mp.sttck import StaticTypeChecker
 
 class AdvAggregator(ModelAggregator):
-    def __init__(self, linear_factory, quad_factory, counter_type):
-        ModelAggregator.__init__(self, linear_factory, quad_factory, counter_type)
+    def __init__(self, linear_factory, quad_factory):
+        ModelAggregator.__init__(self, linear_factory, quad_factory)
 
     def _scal_prod_vars_all_different(self, terms, coefs):
         checker = self._checker
@@ -131,14 +130,6 @@ class AdvAggregator(ModelAggregator):
             update_dict_from_item_value(qcc, VarPair(v), 1)
         return self._to_expr(qcc=qcc)
 
-    def _sum_vars_all_different(self, dvars):
-        lcc = self._linear_factory.term_dict_type()
-        setitem_fn = lcc.__setitem__
-
-        for v in dvars:
-            setitem_fn(v, 1)
-        return self._to_expr(qcc=None, lcc=lcc)
-
     def quad_matrix_sum(self, matrix, lvars, symmetric=False):
         # assume matrix is a NxN matrix
         # vars is a N-vector of variables
@@ -204,8 +195,7 @@ class AdvModel(Model):
                 kwargs[k] = v
 
         Model.__init__(self, name=name, context=context, **kwargs)
-        self._aggregator = AdvAggregator(self._lfactory, self._qfactory,
-                                         counter_type=self._term_dict_type)
+        self._aggregator = AdvAggregator(self._lfactory, self._qfactory)
 
     def _prepare_constraint(self, ct, ctname, check_for_trivial_ct, arg_checker=None):
         # INTERNAL
@@ -231,29 +221,6 @@ class AdvModel(Model):
             ct.name = ctname
         # ---
         return True
-
-    def sum_vars_all_different(self, terms):
-        """
-        Creates a linear expression equal to sum of a list of decision variables.
-        The variable sequence is a list or an iterator of variables.
-
-        This method is faster than the standard generic summation method due to the fact that it takes only
-        variables and does not take expressions as arguments.
-
-        :param terms: A list or an iterator on variables only, with no duplicates.
-
-        :return: A linear expression or 0.
-
-        Note:
-           If the list or iterator is empty, this method returns zero.
-
-        Note:
-            To improve performance, the check for duplicates can be turned off by setting
-            `checker='none'` in the `kwargs` of the :class:`docplex.mp.model.Model` object. As this argument
-            turns off checking everywhere, it should be used with extreme caution.
-        """
-        var_seq = self._checker.typecheck_var_seq_all_different(terms)
-        return self._aggregator._sum_vars_all_different(var_seq)
 
     def sumsq_vars(self, terms):
         return self._aggregator._sumsq_vars(terms)

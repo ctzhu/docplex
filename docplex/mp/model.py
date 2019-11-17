@@ -11,7 +11,7 @@ import os
 import sys
 import warnings
 import six
-from six import iteritems
+from six import iteritems, itervalues
 
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.compat23 import StringIO, izip
@@ -37,13 +37,14 @@ from docplex.mp.printer_factory import ModelPrinterFactory
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.tck import get_typechecker
 from docplex.mp.sttck import StaticTypeChecker
-from docplex.mp.utils import DOcplexException, MultiObjective
+from docplex.mp.utils import DOcplexException, MultiObjective,\
+    DOcplexLimitsExceeded
 from docplex.mp.utils import is_indexable, is_iterable, is_int, is_string, \
     make_output_path2, generate_constant, _AutomaticSymbolGenerator, _IndexScope, _to_list, \
     compute_is_index, is_number, str_holo, normalize_basename, izip2_filled
 from docplex.mp.utils import apply_thread_limitations, write_kpis_table, \
     write_result_output
-from docplex.mp.vartype import BinaryVarType, IntegerVarType, \
+from docplex.mp.vartype import VarType, BinaryVarType, IntegerVarType, \
     ContinuousVarType, SemiContinuousVarType, SemiIntegerVarType
 from docplex.util.environment import get_environment
 from docplex.mp.xcounter import FastOrderedDict
@@ -167,13 +168,16 @@ class Model(object):
                 self._semicontinuous_vartype, self._semiinteger_vartype]
 
     def parse_vartype(self, arg):
-        self._checker.typecheck_string(arg, accept_empty=False, accept_none=False)
-        for vt in iter(self._vartypes()):
-            argl = arg.lower()
-            if argl == vt.short_name.lower() or argl == vt.cplex_typecode.lower():
-                return vt
+        if isinstance(arg, VarType):
+            return arg
         else:
-            self.fatal("Cannot parse this as a variable type: {0!r}", arg)
+            self._checker.typecheck_string(arg, accept_empty=False, accept_none=False)
+            argl = arg.lower()
+            for vt in iter(self._vartypes()):
+                if argl == vt.short_name.lower() or argl == vt.cplex_typecode.lower():
+                    return vt
+            else:
+                self.fatal("Cannot convert as a variable type: {0!r}", arg)
 
     def _make_environment(self):
         env = Environment.get_default_env()
@@ -324,7 +328,9 @@ class Model(object):
                 self._checker_key = arg_val.lower() if is_string(arg_val) else 'default'
             elif arg_name == 'full_obj':
                 self._print_full_obj = bool(arg_val)
-            elif arg_name in frozenset({'deploy', 'ignore_names'}):
+            elif arg_name == 'lp_line_size':
+                self._lp_line_length = int(arg_val)
+            elif arg_name == 'ignore_names':
                 self._ignore_names = bool(arg_val)
             elif arg_name == 'clean_before_solve':
                 self.clean_before_solve = arg_val
@@ -350,7 +356,8 @@ class Model(object):
                       'keep_all_exprs': self._keep_all_exprs,
                       'checker': self._checker_key,
                       'full_obj': self._print_full_obj,
-                      'deploy': self._ignore_names,
+                      'lp_line_size': self._lp_line_length,
+                      'ignore_names': self._ignore_names,
                       'clean_before_solve': self._clean_before_solve
                       }
         return kwargs_map
@@ -409,7 +416,7 @@ class Model(object):
         self._solution_hook = None
         self._mipstarts = []
 
-        # by default, deploy model is off
+        # by default, ignore_names is off
         self._ignore_names = False
 
         # clean engine before solve (mip starts)
@@ -454,6 +461,9 @@ class Model(object):
         # full objective lp
         self._print_full_obj = False
 
+        # lp line size
+        self._lp_line_length = 80
+
         # checker key
         self._checker_key = 'default'
 
@@ -467,7 +477,6 @@ class Model(object):
 
         self._cts_by_name = {} if _enable_cts_by_name else None
 
-        self._set_term_dict_type(self._keep_ordering)
 
         self._checker = get_typechecker(arg=self._checker_key, logger=self.error_handler)
 
@@ -492,13 +501,11 @@ class Model(object):
         engine = self._make_new_engine_from_agent(self.solver_agent, self.context)
         self.__engine = engine
 
-        self_keep_ordering = self.keep_ordering
-        self_term_dict_type = self._term_dict_type
-        self._lfactory = ModelFactory(self, engine, ordered=self_keep_ordering, term_dict_type=self_term_dict_type)
+        self._lfactory = ModelFactory(self, engine)
         from docplex.mp.quadfact import QuadFactory
-        self._qfactory = QuadFactory(self, engine, ordered=self_keep_ordering, term_dict_type=self_term_dict_type)
+        self._qfactory = QuadFactory(self, engine)
         # after parse kwargs
-        self._aggregator = ModelAggregator(self._lfactory, self._qfactory, counter_type=self_term_dict_type)
+        self._aggregator = ModelAggregator(self._lfactory, self._qfactory)
 
         self._solution = None
         self._solve_details = None
@@ -520,12 +527,6 @@ class Model(object):
 
         self.set_objective(sense=self._lfactory.default_objective_sense(),
                            expr=self._new_default_objective_expr())
-
-    def _set_term_dict_type(self, ordered):
-        if not ordered or Environment.env_is_python36:
-            self._term_dict_type = dict
-        else:
-            self._term_dict_type = FastOrderedDict
 
     def _sync_params(self, params):
         # INTERNAL: execute only once
@@ -671,10 +672,10 @@ class Model(object):
     @keep_ordering.setter
     def keep_ordering(self, ordered):  # pragma: no cover
         # INTERNAL
-        self._keep_ordering = bool(ordered)
-        self._set_term_dict_type(self._keep_ordering)
-        new_term_dict_type = self._term_dict_type
-        self._lfactory.set_ordering(ordered, new_term_dict_type)
+        b_ordered = bool(ordered)
+        self._keep_ordering = b_ordered
+        self._lfactory.update_ordering(b_ordered)
+        self._qfactory.update_ordering(b_ordered)
 
     @property
     def ignore_names(self):
@@ -698,7 +699,6 @@ class Model(object):
     @property
     def deploy(self):
         return self._ignore_names
-
 
     @property
     def float_precision(self):
@@ -758,6 +758,14 @@ class Model(object):
         self._ensure_cts_name_dir()
 
     @property
+    def time_limit(self):
+        return self.time_limit_parameter.get()
+
+    @time_limit.setter
+    def time_limit(self, new_time_limit):
+        self.set_time_limit(new_time_limit)
+
+    @property
     def time_limit_parameter(self):
         # INTERNAL
         return self.parameters.timelimit
@@ -787,6 +795,25 @@ class Model(object):
             pass
 
         self.time_limit_parameter.set(time_limit)
+
+    @property
+    def lp_line_length(self):
+        """ This property lets you get or set the maximum line length of LP files generated by DOcplex.
+        The default is 80.
+
+         *New in version 2.11*
+
+        """
+        return self._lp_line_length
+
+    @lp_line_length.setter
+    def lp_line_length(self, new_length):
+        if new_length >= 70 and new_length <= 512:
+            self._lp_line_length = new_length
+        else:
+            lpz = min(128, max(new_length, 70))
+            print(" LP line size set to: {0}, should be in [70..512], {1} was passed".format(lpz, new_length))
+            self._lp_line_length = lpz
 
     @property
     def solver_agent(self):
@@ -843,6 +870,7 @@ class Model(object):
 
     @solution_hook.setter
     def solution_hook(self, sol_hook):
+        warnings.warn("solution_hook is deprecated, use progress listeners instead", DeprecationWarning)
         self._checker.check_solution_hook(self, sol_hook)
         if not self.has_cplex():
             self._solution_hook_warn_no_cplex()
@@ -851,8 +879,6 @@ class Model(object):
     def _solution_hook_warn_no_cplex(self):
         # INTERNAL
         self.warning('Solution hook requires a local CPLEX, is ignored on cloud.')
-
-
 
     def fatal(self, msg, *args):
         self._error_handler.fatal(msg, args)
@@ -928,6 +954,13 @@ class Model(object):
         if not terminate:
             self.set_objective(sense=self._lfactory.default_objective_sense(),
                                expr=self._new_default_objective_expr())
+            # set a brand new engine....
+            old_engine = self.get_engine()
+            if old_engine:
+                old_engine.end()
+            self._set_engine(self._make_new_engine_from_agent(self.solver_agent, self.context))
+        else:
+            self._terminate_engine()
 
     def _clear_scopes(self):
         for a_scope in self._scopes:
@@ -952,7 +985,7 @@ class Model(object):
         self.__engine = e2
         self._lfactory.update_engine(e2)
 
-    def _clear_engine(self):
+    def _terminate_engine(self):
         # INTERNAL
         old_engine = self.__engine
         if old_engine:
@@ -1017,7 +1050,14 @@ class Model(object):
             cpx_probtype = cpx.get_problem_type()
             print(" - problem type is: {0}".format(int_probtype_to_string(cpx_probtype)))
 
-
+    def _get_cplex_problem_type(self, fallback="unknown"):
+        # INTERNAL
+        cpx = self.get_cplex(do_raise=False)
+        if cpx:
+            cpx_probtype_code = cpx.get_problem_type()  # this is an int
+            return int_probtype_to_string(cpx_probtype_code)
+        else:
+            return fallback
 
     def _is_empty(self):
         # INTERNAL
@@ -1386,7 +1426,7 @@ class Model(object):
 
     def _find_matching_objs(self, obj_iter, pattern, match_case=False):
         # internal
-        self._checker.typecheck_string(pattern, accept_empty=False, accept_none=False, header="Model.find_matching_vars")
+        self._checker.typecheck_string(pattern, accept_empty=False, accept_none=False, caller="Model.find_matching_vars")
         key_pattern = pattern if match_case else pattern.lower()
         matches = []
         for obj in obj_iter():
@@ -1412,17 +1452,6 @@ class Model(object):
         """
         return self._find_matching_objs(self.generate_user_linear_constraints, pattern, match_case)
 
-    # index management
-    def _build_index_dict(self, mobj_it, raise_on_invalid_index=False):
-        #  INTERNAL
-        idx_dict = {}
-        for mobj in mobj_it:
-            if mobj.has_valid_index():
-                idx_dict[mobj.index] = mobj
-            elif raise_on_invalid_index:  # pragma: no cover
-                self.fatal("Object has invalid index: {0!s}", mobj)  # pragma: no cover
-        return idx_dict
-
     def get_var_by_index(self, idx):
         # INTERNAL
         return self._var_scope.get_object_by_index(idx, self._checker)
@@ -1431,14 +1460,16 @@ class Model(object):
         # INTERNAL
         return self._var_scope.get_object_by_index(idx)
 
-    def set_var_type(self, dvar, new_vartype):
+    def _set_var_type(self, dvar, new_vartype_):
         # INTERNAL
+        new_vartype = self.parse_vartype(new_vartype_)
         self._checker.typecheck_vartype(new_vartype)
         if new_vartype != dvar.vartype:
-            self.__engine.set_var_type(dvar, new_vartype)
+            self.__engine.change_var_types([dvar], [new_vartype])
             # change type in the Var object.
             dvar._set_vartype_internal(new_vartype)
-        return self
+            self._update_var_bounds_from_type(dvar, new_vartype)
+        return dvar
 
     def set_var_name(self, dvar, new_name):
         # INTERNAL: use var.name to set variable names
@@ -1455,14 +1486,39 @@ class Model(object):
     def set_var_lb(self, var, candidate_lb):
         # INTERNAL: use var.lb to set lb
         new_lb = var.vartype.resolve_lb(candidate_lb, self)
+        self._set_var_lb(var, new_lb)
+        return new_lb
+
+    def _set_var_lb(self, var, new_lb):
+        # INTERNAL
         self.__engine.set_var_lb(var, new_lb)
         var._internal_set_lb(new_lb)
 
     def set_var_ub(self, var, candidate_ub):
         # INTERNAL: use var.ub to set ub
         new_ub = var.vartype.resolve_ub(candidate_ub, self)
+        self._set_var_ub(var, new_ub)
+        return new_ub
+
+    def _set_var_ub(self, var, new_ub):
+        # INTERNAL
         self.__engine.set_var_ub(var, new_ub)
         var._internal_set_ub(new_ub)
+
+
+    def _update_var_bounds_from_type(self, dvar, new_vartype, force_binary01=False):
+        # INTERNAL
+        old_lb, old_ub = dvar._get_lb() , dvar._get_ub()
+        if new_vartype == self.binary_vartype and force_binary01:
+            new_lb, new_ub = 0, 1
+        else:
+            new_lb = new_vartype.resolve_lb(old_lb, logger=self)
+            new_ub = new_vartype.resolve_ub(old_ub, logger=self)
+        if new_lb != old_lb:
+            self._set_var_lb(dvar, new_lb)
+        if new_ub != old_ub:
+            self._set_var_ub(dvar, new_ub)
+
 
     def get_constraint_by_name(self, name):
         """ Searches for a constraint from a name.
@@ -1588,6 +1644,15 @@ class Model(object):
             An iterator object.
         """
         return self.gen_constraints_with_type(IndicatorConstraint)
+
+    def iter_equivalence_constraints(self):
+        """ Returns an iterator on equivalence constraints in the model.
+
+        Returns:
+            An iterator object.
+        """
+        return self.gen_constraints_with_type(EquivalenceConstraint)
+
 
     @property
     def number_of_indicator_constraints(self):
@@ -2472,40 +2537,78 @@ class Model(object):
     def logical_and(self, *args):
         """ Builds an expression equal to the logical AND value of its arguments.
 
-        This method accepts a non-empty variable number of binary variables.
+        This method takes a variable number of arguments, and accepts
+        binary variables, other logical expressions, or discrete constraints.
 
         Args:
-            args: A variable list of binary variables, that is, decision variables with type BinaryVarType.
-            
+            args: A variable list of logical operands.
+
         Note:
-            If passed an empty number of arguments, this method returns an expression equal to 1.
-            
+            If passed an empty number of arguments, this method an expression equal to 1.
+
         Returns:
-            An expression, equal to 1 if and only if all argument variables are equal to 1,
-            else equal to 0.
+            An expression, equal to 1 if and only if all of its
+            arguments are equal to 1, else equal to 0.
+
+        See Also:
+            :func:`logical_or`
+            :func:`logical_not`
+
+        Example::
+        
+            # return logical XOR or two binary variables.
+            def logxor(m, b1, b2):
+                return m.logical_and(m.logical_or(b1, b2), m.logical_not(m.logical_and(b1, b2)))
 
         """
-        bvars = self._checker.typecheck_var_seq(args, vtype=self.binary_vartype, caller='Model.logical_and')
+        bvars = self._checker.typecheck_logical_op_seq(args, caller='Model.logical_and')
         return self._lfactory.new_logical_and_expr(bvars)
 
     def logical_or(self, *args):
         """ Builds an expression equal to the logical OR value of its arguments.
 
-        This method accepts a non-empty variable number of binary variables.
+        This method takes a variable number of arguments, and accepts
+            binary variables, other logical expressions, or discrete constraints.
 
         Args:
-            args: A variable list of binary variables, that is, decision variables with type BinaryVarType.
+            args: A variable list of logical operands.
 
         Note:
             If passed an empty number of arguments, this method a zero expression.
 
         Returns:
             An expression, equal to 1 if and only if at least one of its
-             argument variables is equal to 1, else equal to 0.
+             arguments is equal to 1, else equal to 0.
+
+        See Also:
+            :func:`logical_and`
+            :func:`logical_not`
+
+        *New in version 2.11*
 
         """
-        bvars = self._checker.typecheck_var_seq(args, vtype=self.binary_vartype, caller='Model.logical_or')
+        bvars = self._checker.typecheck_logical_op_seq(args, caller='Model.logical_or')
         return self._lfactory.new_logical_or_expr(bvars)
+
+    def logical_not(self, arg):
+        """ Builds an expression equal to the logical negation of its argument.
+
+        This method accepts either a binary variable, or another logical expression.
+
+        Args:
+            arg: A binary variable, or a logical expression,
+                e.g. an expression built by logical_and, logical_or, logical_not
+
+        Returns:
+            An expression, equal to 1 if its argument is 0, else 0.
+
+        See Also:
+            :func:`logical_and`
+            :func:`logical_or`
+
+        """
+        StaticTypeChecker.typecheck_logical_op(self, arg, 'Model.logical_not')
+        return self._lfactory.new_logical_not_expr(arg)
 
     def scal_prod(self, terms, coefs):
         """
@@ -2523,7 +2626,7 @@ class Model(object):
 
         Note:
             - both iterables are iterated at the same time, so the order in which terms and numbers
-            are returned must be consistent: using unordered collections (e.g. sets) could lead to unexpected results.
+              are returned must be consistent: using unordered collections (e.g. sets) could lead to unexpected results.
 
            - Iteration stops as soon as one iterable stops. If both iterables are empty, the method returns 0.
 
@@ -2613,6 +2716,29 @@ class Model(object):
         *New in version 2.10*
         """
         return self._aggregator._sum_vars(dvars)
+
+
+    def sum_vars_all_different(self, terms):
+        """
+        Creates a linear expression equal to sum of a list of decision variables.
+        The variable sequence is a list or an iterator of variables.
+
+        This method is faster than the standard generic summation method due to the fact that it takes only
+        variables and does not take expressions as arguments.
+
+        :param terms: A list or an iterator on variables only, with no duplicates.
+
+        :return: a linear expression equal to the sum of the variables.
+
+        Note:
+           If the variable iteration contains duplicates, this function returns an incorrect result.
+
+        """
+        if isinstance(terms, dict):
+            return self.sum_vars_all_different(itervalues(terms))
+        else:
+            var_seq = self._checker.typecheck_var_seq_all_different(terms)
+            return self._aggregator._sum_vars_all_different(var_seq)
 
     def le_constraint(self, lhs, rhs, name=None):
         """ Creates a "less than or equal to" linear constraint.
@@ -2715,9 +2841,9 @@ class Model(object):
                         indicator)
                     indicator.invalidate()
                     return -4
-            return eng.create_indicator_constraint(ct)
+            return eng.create_logical_constraint(ct, is_equivalence=False)
         elif isinstance(ct, EquivalenceConstraint):
-            return eng.create_equivalence_constraint(ct)
+            return eng.create_logical_constraint(ct, is_equivalence=True)
 
         elif isinstance(ct, QuadraticConstraint):
             return eng.create_quadratic_constraint(ct)
@@ -2795,14 +2921,13 @@ class Model(object):
                 elif ct._is_trivially_infeasible():
                     self._notify_trivial_constraint(ct, ctname, is_feasible=False)
 
-        # --- name management ---
-        self._register_ct_name(ct, ctname, checker)
-        # ---
-
         # check for already posted cts.
         if ct._index >= 0:
             self.warning("constraint has already been posted: {0!s}, index is: {1}", ct, ct.index)  # pragma: no cover
             return False  # pragma: no cover
+        # --- name management ---
+        self._register_ct_name(ct, ctname, checker)
+        # ---
         return True
 
     def _add_constraint_internal(self, ct, ctname=None):
@@ -2922,7 +3047,7 @@ class Model(object):
         """
         ct = self._resolve_ct(ct_arg, silent=False, context="remove_constraint")
         if ct is not None:
-            self._checker.typecheck_in_model(self, ct, header="constraint")
+            self._checker.typecheck_in_model(self, ct, caller="constraint")
             self._remove_constraint_internal(ct)
 
     def clear_constraints(self):
@@ -3024,8 +3149,8 @@ class Model(object):
         self._checker.typecheck_binary_var(binary_var)
         self._checker.typecheck_linear_constraint(linear_ct)
         self._checker.typecheck_zero_or_one(active_value)
-        self._checker.typecheck_in_model(self, binary_var, header="binary variable")
-        self._checker.typecheck_in_model(self, linear_ct, header="linear_constraint")
+        self._checker.typecheck_in_model(self, binary_var, caller="binary variable")
+        self._checker.typecheck_in_model(self, linear_ct, caller="linear_constraint")
         return self._lfactory.new_indicator_constraint(binary_var, linear_ct, active_value, name)
 
 
@@ -3111,8 +3236,8 @@ class Model(object):
         checker.typecheck_binary_var(binary_var)
         checker.typecheck_linear_constraint(linear_ct)
         checker.typecheck_zero_or_one(true_value)
-        checker.typecheck_in_model(self, binary_var, header="binary variable")
-        checker.typecheck_in_model(self, linear_ct, header="linear_constraint")
+        checker.typecheck_in_model(self, binary_var, caller="binary variable")
+        checker.typecheck_in_model(self, linear_ct, caller="linear_constraint")
         checker.typecheck_string(name, accept_empty=True, accept_none=True)
         StaticTypeChecker.typecheck_discrete_constraint(self, linear_ct,
                                                         msg='Model.add_equivalence() requires a discrete constraint')
@@ -3134,7 +3259,8 @@ class Model(object):
 
         :return: a list of equivalence constraints.
         """
-        return self._add_batch_logical_cts(binary_vars, cts, names, true_values, is_equivalence=True)
+        return self._add_batch_logical_cts(binary_vars, cts, names, true_values, is_equivalence=True,
+                                           caller='Model.add_equivalences')
 
     def add_indicators(self, binary_vars, cts, true_values=1, names=None):
         """ Adds a batch of indicator constraints to the model.
@@ -3150,12 +3276,13 @@ class Model(object):
 
         :return: a list of indicator constraints.
         """
-        return self._add_batch_logical_cts(binary_vars, cts, names, true_values, is_equivalence=False)
+        return self._add_batch_logical_cts(binary_vars, cts, names, true_values, is_equivalence=False,
+                                           caller='Model.add_indicators')
 
-    def _add_batch_logical_cts(self, binary_vars, cts, names, true_values, is_equivalence):
+    def _add_batch_logical_cts(self, binary_vars, cts, names, true_values, is_equivalence, caller=''):
         # internal
         checker = self._checker
-        bvars = checker.typecheck_var_seq(binary_vars, vtype=self.binary_vartype)
+        bvars = checker.typecheck_var_seq(binary_vars, vtype='B', caller=caller)
         ctseq = checker.typecheck_constraint_seq(cts, check_linear=True)
         try:
             n_vars = len(bvars)
@@ -3184,12 +3311,12 @@ class Model(object):
             self.fatal('Model.add_equivalence(): true_values expects 0|1 or sequence of {{0, 1}}, got: {0!r}'.format(true_values))
 
         if names is not None and not self._ignore_names:
-            used_names = []
-            for n in names:
-                checker.typecheck_string(n, accept_empty=False, accept_none=True)
-                used_names.append(n or '')
+            c_names = checker.typecheck_string_seq(names, accept_none=True, accept_empty=True, caller=caller)
+            used_names = [n or '' for n in c_names]
+            #     checker.typecheck_string(n, accept_empty=False, accept_none=True)
+            #     used_names.append(n or '')
         else:
-            used_names = generate_constant('', n_vars)
+            used_names = generate_constant(None, n_vars)
 
         if is_equivalence:
             eqcts = self._lfactory.new_batch_equivalence_constraints(bvars, ctseq, actual_true_values, used_names)
@@ -3209,7 +3336,7 @@ class Model(object):
             :func:`indicator_constraint`
         """
         ind_cts_list_ = list(indcts)
-        ind_indices = self.__engine.create_batch_indicator_constraints(ind_cts_list_)
+        ind_indices = self.__engine.create_batch_logical_constraints(ind_cts_list_, is_equivalence=False)
         self._register_block_cts(self._logical_scope, ind_cts_list_, ind_indices)
         return ind_cts_list_
 
@@ -3224,7 +3351,7 @@ class Model(object):
             :func:`equivalence_constraint`
         """
         eqcts_list_ = list(eqcts)  # the list is traversed twice
-        eq_indices = self.__engine.create_batch_equivalence_constraints(eqcts_list_)
+        eq_indices = self.__engine.create_batch_logical_constraints(eqcts_list_, is_equivalence=True)
         self._register_block_cts(self._logical_scope, eqcts_list_, eq_indices)
         return eqcts_list_
 
@@ -3602,7 +3729,7 @@ class Model(object):
             Boolean: True, if the model has a non-constant objective expression.
 
         """
-        return not self._objective_expr.is_constant()
+        return self.has_multi_objective() or not self._objective_expr.is_constant()
 
     def set_multi_objective(self, sense, exprs, priorities=None, weights=None,
                             abstols=None, reltols=None,
@@ -3931,7 +4058,7 @@ class Model(object):
                 pass
             elif argname != "context" and argval is not None:
                 if not cloned:
-                    context = context.clone()
+                    context = context.override()
                     cloned = True
                 context.update_key_value(argname, argval)
 
@@ -3994,9 +4121,13 @@ class Model(object):
         # log stuff
         saved_context_log_output = self.context.solver.log_output
         saved_log_output_stream = self.log_output
-
+        # because self.log_output is a property, if we want to keep track
+        # of the actual object returned, we need to store it in a variable instead
+        # of calling self.log_output again
+        a_stream = None
         try:
-            self.log_output = context.solver.log_output
+            a_stream = context.solver.log_output_as_stream
+            self.log_output = a_stream
 
             forced_docloud = context_must_use_docloud(context, **kwargs)
             have_credentials = context_has_docloud_credentials(context, do_warn=True)
@@ -4020,6 +4151,15 @@ class Model(object):
                 # no way to solve.. really
                 return self.fatal("CPLEX runtime not found: please install CPLEX or solve this model on DOcplexcloud")
         finally:
+            try:
+                if a_stream:
+                    a_stream.flush()
+            except AttributeError:
+                pass
+            if a_stream and hasattr(a_stream, "flush"):
+                a_stream.flush()
+            if a_stream and hasattr(a_stream, "custom_close"):
+                a_stream.custom_close()
             if saved_log_output_stream != self.log_output:
                 self.set_log_output_as_stream(saved_log_output_stream)
             if saved_context_log_output != self.context.solver.log_output:
@@ -4028,6 +4168,7 @@ class Model(object):
     def _connect_progress_listeners(self):
         # INTERNAL... connect progre        if self._solved_as_mip():
         self.__engine.connect_progress_listeners(self._progress_listeners, self)
+        # elif self._progress_listeners:
         # elif self._progress_listeners:
         #     self.warning("Model: \"{}\" is not a MIP problem, progress listeners are disabled", self.name)
 
@@ -4089,20 +4230,24 @@ class Model(object):
         # notify hooks only on solve_local
 
         self_solve_hooks = self._solve_hooks
+        # The following block used to be published only if auto_publish_details.
+        # It is now modified so that notify start is always performed,
+        # then we update solve details only if they need to be published
+        # [[[
+        self_stats = self.get_statistics()
+        kpis = make_new_kpis_dict(self._allkpis,
+                                  self_stats.number_of_integer_variables,
+                                  self_stats.number_of_continuous_variables,
+                                  self_stats.number_of_linear_constraints,
+                                  self_stats.number_of_binary_variables)
+        # self_solve_hooks if for backward compatibility only. Should
+        # really use env instead
+        for h in self_solve_hooks:
+            h.notify_start_solve(self, kpis)  # pragma: no cover
+        the_env.notify_start_solve(kpis)
         if auto_publish_details:
-            self_stats = self.get_statistics()
-            kpis = make_new_kpis_dict(self._allkpis,
-                                      self_stats.number_of_integer_variables,
-                                      self_stats.number_of_continuous_variables,
-                                      self_stats.number_of_linear_constraints,
-                                      self_stats.number_of_binary_variables)
-            # self_solve_hooks if for backward compatibility only. Should
-            # really use env instead
-            for h in self_solve_hooks:
-                h.notify_start_solve(self, kpis)  # pragma: no cover
-            the_env.notify_start_solve(kpis)
             get_environment().update_solve_details(kpis)
-
+        # ]]]
         # --- solve is protected in try/except block
         has_solution = False
         reported_obj = 0
@@ -4142,6 +4287,7 @@ class Model(object):
 
         except Exception as e:
             self._set_solution(None)
+            print("----------------- Python exception: {}".format(str(e)))
             raise e
 
         finally:
@@ -4154,6 +4300,7 @@ class Model(object):
                 self.remove_progress_listener(automatic_solution_listener)
 
             # call hooks
+            get_environment().notify_end_solve(engine_status)
             if auto_publish_details:
                 # Only kept for backward compatibility
                 for h in self_solve_hooks:
@@ -4161,7 +4308,6 @@ class Model(object):
                                        self._make_end_infodict())  # pragma: no cover
                     h.update_solve_details(solve_details.as_worker_dict())  # pragma: no cover
                 # actual right mean to do it
-                get_environment().notify_end_solve(engine_status)
                 details = {}
                 details.update(solve_details.as_worker_dict())
                 if new_solution:
@@ -5191,6 +5337,26 @@ class Model(object):
         # INTERNAL
         ok, _ = self.__engine.supports_logical_constraints()
         return ok
+    
+    _is_cplex_ce = None
+    
+    @classmethod
+    def is_cplex_ce(cls):
+        if cls._is_cplex_ce is None:
+            m = Model()
+            if m.has_cplex() == None:
+                _is_cplex_ce = False
+            else:
+                try:
+                    for i in range(1001):
+                        v = m.integer_var()
+                        m.add_constraint(v <= 0)
+                    m.solve()
+                    cls._is_cplex_ce = False
+                except DOcplexLimitsExceeded as e:
+                    cls._is_cplex_ce = True
+        return cls._is_cplex_ce
+        
 
     def check_logical_constraint_support(self):
         # INTERNAL
@@ -5456,7 +5622,7 @@ class Model(object):
             :class:`docplex.mp.kpi.KPI`,
             :class:`docplex.mp.kpi.DecisionKPI`
         """
-        self._checker.typecheck_string(publish_name, accept_empty=False, accept_none=True, header="Model.add_kpi(): ")
+        self._checker.typecheck_string(publish_name, accept_empty=False, accept_none=True, caller="Model.add_kpi(): ")
         new_kpi = self._lfactory.new_kpi(kpi_arg, publish_name)
         new_kpi_name = new_kpi.get_name()
         if new_kpi_name in set(kp.name for kp  in self._allkpis):
@@ -5745,7 +5911,6 @@ class Model(object):
 
         """
         self._clear_internal(terminate=True)
-        self._clear_engine()
 
     @property
     def parameters(self):
@@ -5873,7 +6038,7 @@ class Model(object):
         '''
         return self.add_sos(dvars, sos_arg=SOSType.SOS2, name=name)
 
-    def add_sos(self, dvars, sos_arg, name=None):
+    def add_sos(self, dvars, sos_arg, weights=None, name=None):
         ''' Adds  an SOS to the model.
 
         Args:
@@ -5893,15 +6058,19 @@ class Model(object):
         self._checker.check_ordered_sequence(arg=dvars, caller=msg)
         var_seq = self._checker.typecheck_var_seq(dvars, caller="Model.add_sos")
         var_list = list(var_seq)  # we need len here.
-        if len(var_list) < sos_type.min_size():
+        nb_vars = len(var_list)
+        if nb_vars < sos_type.size:
             self.fatal("A {0:s} variable set must contain at least {1:d} variables, got: {2:d}",
-                       sos_type.name, sos_type.min_size(), len(var_list))
-        # creates a new sos object
-        return self._add_sos(dvars, sos_type, name)
+                       sos_type.name, sos_type.size, nb_vars)
+        elif nb_vars == sos_type.size:
+            self.warning("{0:s} variable is trivial, conrtains {1} variable(s): all variables set to 1",
+                       sos_type.name, sos_type.size)
 
-    def _add_sos(self, dvars, sos_type, name=None):
+        return self._add_sos(dvars, sos_type, weights=weights, name=name)
+
+    def _add_sos(self, dvars, sos_type, weights=None, name=None):
         # INTERNAL
-        new_sos = self._lfactory.new_sos(dvars, sos_type=sos_type, name=name)
+        new_sos = self._lfactory.new_sos(dvars, sos_type=sos_type, weights=weights, name=name)
         sos_index = self.__engine.create_sos(new_sos)
         self._register_sos(new_sos)
         new_sos.set_index(sos_index)
@@ -5915,6 +6084,13 @@ class Model(object):
 
     def _register_sos(self, new_sos):
         self._allsos.append(new_sos)
+
+    def _get_sos_by_index(self, sos_idx):
+        # INTERNAL
+        try:
+            return self._allsos[sos_idx]
+        except IndexError:
+            return None
 
     def iter_sos(self):
         ''' Iterates over all SOS sets in the model.
@@ -6182,7 +6358,7 @@ class Model(object):
         # extend
         lncts = list(new_cts)
         for nc in lncts:
-            checker.typecheck_ct_not_added(nc, do_raise=False, context=caller)
+            checker.typecheck_ct_not_added(nc, do_raise=False, caller=caller)
 
         collector.extend(new_cts)
 

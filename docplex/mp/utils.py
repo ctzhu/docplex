@@ -258,7 +258,7 @@ def is_function(e):
     if platform.python_version() >= '3.7':
         from collections.abc import Callable
     else:
-        from collections import Callable
+        from collections import Callable  # @UnresolvedImport
     return isinstance(e, Callable)
 
 
@@ -1220,3 +1220,5 @@ def resolve_caller_as_string(caller, sep=': '):
             return "%s%s" % (caller(), sep)
         except TypeError:
             return "%s%s" % (caller, sep)
+
+    

@@ -32,12 +32,12 @@ class CpoTokenizer(Tokenizer):
     """ Tokenizer for CPO file format """
     __slots__ = ()
 
-    def __init__(self, name, input):
+    def __init__(self, **args):
         """ Create a new tokenizer
         Args:
-            input: Input stream or string
+            See arguments list of :class:`~docplex.cp.utils.Tokenizer`
         """
-        super(CpoTokenizer, self).__init__(name, input)
+        super(CpoTokenizer, self).__init__(**args)
 
         # Add predefined symbols
         self.symbols = {}

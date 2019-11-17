@@ -219,7 +219,7 @@ class FunctionalKPI(KPI):
         return False
 
     def copy(self, new_model, var_map):
-        return FunctionalKPI(fn=self._function, model=self._model, name=self._name)
+        return FunctionalKPI(fn=self._function, model=new_model, name=self._name)
 
     def clone(self):
         return FunctionalKPI(fn=self._function, model=self._model, name=self._name)

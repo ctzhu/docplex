@@ -12,8 +12,8 @@ from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr, Con
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
-    IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint, NotEqualConstraint
-from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr
+    IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint, NotEqualConstraint, QuadraticConstraint
+from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr, LogicalNotExpr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range, izip_longest
 from docplex.mp.environment import Environment
@@ -114,44 +114,58 @@ class _AbstractModelFactory(object):
     def __init__(self, model):
         self._model = model
         self._checker = model._checker
-        if Environment.env_is_python36:
-            # for python >= 3.6, dict is ordered
-            self._ordered_dict_type = dict
-        else:  # pragma: no cover
+        ordered = model.keep_ordering
+        self.term_dict_type = self._term_dict_type_from_ordering(model.keep_ordering)
+        self._var_dict_type = dict
+        if ordered and not Environment.env_is_python36:
+            # FastOrderedDict does not accept zip argument...
             from collections import OrderedDict
-            self._ordered_dict_type = OrderedDict
+            self._var_dict_type = OrderedDict
 
-    def dict_type(self, ordered):
-        # internal
-        return self._ordered_dict_type if ordered else dict
+    def var_dict_type(self, ordered):
+        return self._var_dict_type if ordered else dict
+
+
+    @classmethod
+    def _term_dict_type_from_ordering(cls, ordered):
+        if not ordered or Environment.env_is_python36:
+            return dict
+        else:
+            from docplex.mp.xcounter import FastOrderedDict
+            return FastOrderedDict
+
+    @property
+    def ordered(self):
+        return self._model._keep_ordering
+
+    def update_ordering(self, ordered):
+        self.term_dict_type = self._term_dict_type_from_ordering(ordered)
 
 
 class ModelFactory(_AbstractModelFactory):
 
-    status_var_fmt = '[{0:s}]'
+    status_var_fmt = '_{{{0:s}}}'
 
 
     @staticmethod
     def float_or_default(bound, default_bound):
         return default_bound if bound is None else float(bound)
 
-    def __init__(self, model, engine, ordered, term_dict_type):
+    def __init__(self, model, engine):
         _AbstractModelFactory.__init__(self, model)
 
         self._var_container_counter = 0
         self.number_validation_fn = model._checker.get_number_validation_fn()
         self._engine = engine
-        self.ordered = ordered
-        self.term_dict_type = term_dict_type
         self.stringifier = str_flatten_tuple
 
     @property
     def infinity(self):
         return self._engine.get_infinity()
 
-    def set_ordering(self, ordered, dict_type):
-        self.ordered = ordered
-        self.term_dict_type = dict_type
+    def _new_term_dict(self):
+        # INTERNAL
+        return self.term_dict_type()
 
     def new_zero_expr(self):
         return ZeroExpr(self._model)
@@ -394,12 +408,16 @@ class ModelFactory(_AbstractModelFactory):
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
+    def _make_var_dict(self, keys, var_list, ordered):
+        _dict_type = self.var_dict_type(ordered)
+        vdict =  _dict_type(izip(keys, var_list))
+        return vdict
+
     def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
         actual_name, key_seq = self.make_key_seq(keys, name)
         ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
         var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
-        _dict_type = self.dict_type(ordered)
-        return _dict_type(izip(key_seq, var_list))
+        return self._make_var_dict(key_seq, var_list, ordered)
 
     def new_var_multidict(self, seq_of_key_seqs, vartype, lb, ub, name, key_format=None, ordered=False):
         # ---
@@ -419,9 +437,7 @@ class ModelFactory(_AbstractModelFactory):
         ctn = self._new_var_container(vartype, key_list=fixed_keys, lb=lb, ub=ub, name=name)
         cube_vars = self.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
 
-        _dict_type = self.dict_type(ordered)
-        var_dict = _dict_type(izip(all_key_tuples, cube_vars))
-        return var_dict
+        return self._make_var_dict(keys=all_key_tuples, var_list=cube_vars, ordered=ordered)
 
     def new_var_df(self, keys1, keys2, vartype, lb=None, ub=None, name=None):  # pragma: no cover
         try:
@@ -445,16 +461,16 @@ class ModelFactory(_AbstractModelFactory):
         return vdtf
 
     def _new_constant_expr(self, cst, safe_number=True):
-        if safe_number:
-            k = cst
-        else:
+        k = cst
+        if not safe_number:
             self_number_validation_fn = self.number_validation_fn
-            k = self_number_validation_fn(cst) if self_number_validation_fn else cst
+            if self_number_validation_fn:
+                k = self_number_validation_fn(cst)
         return ConstantExpr(self._model, k)
 
     use_constant_expr = True
     def constant_expr(self, cst, safe_number=False):
-        if 0 == cst:
+        if not cst:
             return self.new_zero_expr()
         elif self.use_constant_expr:
             return self._new_constant_expr(cst, safe_number=safe_number)
@@ -571,9 +587,9 @@ class ModelFactory(_AbstractModelFactory):
         linexpr.notify_used(rng)
         return rng
 
-    def new_indicator_constraint(self, binary_var, linear_ct, active_value=1, name=None):
+    def new_indicator_constraint(self, binary_var, linear_ct, true_value=1, name=None):
         # INTERNAL
-        indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, active_value, name)
+        indicator_ct = IndicatorConstraint(self._model, binary_var, linear_ct, true_value, name)
         return indicator_ct
 
     def new_equivalence_constraint(self, binary_var, linear_ct, true_value=1, name=None):
@@ -594,19 +610,15 @@ class ModelFactory(_AbstractModelFactory):
         return [self.new_indicator_constraint(bv, lct, active, name)
                 for bv, lct, active, name in izip(bvars, linear_cts, active_values, names)]
 
-    def new_constraint_or(self, ct1, ct2):
-        status1 = ct1.get_resolved_status_var()
-        status2 = ct2.get_resolved_status_var()
-        orexpr = self.new_logical_or_expr([status1, status2])
-        orct = self._new_binary_constraint(lhs=orexpr, sense=ComparisonType.EQ, rhs=1)
-        return orct
+    def new_binary_constraint_or(self, ct1, arg2):
+        orexpr = self.new_logical_or_expr([ct1, arg2])
+        return orexpr
 
-    def new_constraint_and(self, ct1, ct2):
-        status1 = ct1.get_resolved_status_var()
-        status2 = ct2.get_resolved_status_var()
-        and_expr = self.new_logical_and_expr([status1, status2])
-        and_ct = self._new_binary_constraint(lhs=and_expr, rhs=1, sense=ComparisonType.EQ)
-        return and_ct
+    def new_binary_constraint_and(self, ct, other):
+        and_expr = self.new_logical_and_expr([ct, other])
+        return and_expr
+
+
 
     # updates
 
@@ -676,7 +688,7 @@ class ModelFactory(_AbstractModelFactory):
     def set_linear_constraint_sense(self, ct, arg_newsense):
         new_sense = ComparisonType.parse(arg_newsense)
         if new_sense != ct.sense:
-            self._engine.update_constraint(ct, UpdateEvent.LinearConstraintType, new_sense)
+            self._engine.update_constraint(ct, UpdateEvent.ConstraintSense, new_sense)
             ct._internal_set_sense(new_sense)
 
     def set_range_constraint_lb(self, rngct, new_lb):
@@ -704,25 +716,25 @@ class ModelFactory(_AbstractModelFactory):
         old_expr.notify_unsubscribed(rngct)
 
     # ---------------------
-    def new_logical_and_expr(self, bvars):
+    def _new_logical_expr(self, args, ctor, empty_value):
+        bvars = [arg.as_logical_operand() for arg in args]
         # assume bvars is a sequence of binary vars
         nb_args = len(bvars)
         if not nb_args:
-            return self._new_constant_expr(cst=1, safe_number=True)
+            return self._new_constant_expr(cst=empty_value, safe_number=True)
         elif 1 == nb_args:
             return bvars[0]
         else:
-            return LogicalAndExpr(self._model, bvars)
+            return ctor(self._model, bvars)
 
-    def new_logical_or_expr(self, bvars):
-        # assume bvars is a sequence of binary vars
-        nb_args = len(bvars)
-        if not nb_args:
-            return self.new_zero_expr()
-        elif 1 == nb_args:
-            return bvars[0]
-        else:
-            return LogicalOrExpr(self._model, bvars)
+    def new_logical_and_expr(self, args):
+        return self._new_logical_expr(args, ctor=LogicalAndExpr, empty_value=1)
+
+    def new_logical_or_expr(self, args):
+        return self._new_logical_expr(args, ctor=LogicalOrExpr, empty_value=0)
+
+    def new_logical_not_expr(self, arg):
+        return LogicalNotExpr(self._model, arg)
 
     def _new_min_max_expr(self, expr_class, builtin_fn, empty_value, *args):
         nb_args = len(args)
@@ -767,9 +779,13 @@ class ModelFactory(_AbstractModelFactory):
             elif isinstance(ct, RangeConstraint):
                 self_engine.create_range_constraint(ct)
             elif isinstance(ct, IndicatorConstraint):
-                self_engine.create_indicator_constraint(ct)
+                self_engine.create_logical_constraint(ct, is_equivalence=False)
+            elif isinstance(ct, EquivalenceConstraint):
+                self_engine.create_logical_constraint(ct, is_equivalence=True)
+            elif isinstance(ct, QuadraticConstraint):
+                self_engine.create_quadratic_constraint(ct)
             else:
-                self_model.error("Unexpected constraint type: {0!s} - ignored", type(ct))  # pragma: no cover
+                self_model.fatal("Unexpected constraint type: {0!s} - ignored", type(ct))  # pragma: no cover
 
         # send objective
         self_engine.set_objective_sense(self_model.objective_sense)
@@ -789,9 +805,9 @@ class ModelFactory(_AbstractModelFactory):
         else:
             self_engine.set_objective_expr(self_model.objective_expr, old_objexpr=None)
 
-    def new_sos(self, dvars, sos_type, name):
+    def new_sos(self, dvars, sos_type, weights, name):
         # INTERNAL
-        new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, name=name)
+        new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, weights=weights, name=name)
         return new_sos
 
     def new_piecewise(self, pwl_def, name):
@@ -843,7 +859,7 @@ class ModelFactory(_AbstractModelFactory):
                 break
 
             checker.typecheck_linear_constraint(ct, accept_range=False)
-            checker.typecheck_string(ctname, accept_none=True, accept_empty=False, header="Model.add_constraints()")
+            checker.typecheck_string(ctname, accept_none=True, accept_empty=False, caller="Model.add_constraints()")
             if prepfn(ct, ctname, check_for_trivial_ct=check_trivials):
                 posted_cts.append(ct)
         self._post_constraint_block(posted_cts)
@@ -869,9 +885,8 @@ class ModelFactory(_AbstractModelFactory):
             tuple_mode = False
 
         if tuple_mode:
-            for ct, ctname in ctseq:
-                checker.typecheck_linear_constraint(ct, accept_range=False)
-                checker.typecheck_string(ctname, accept_empty=True)
+            ctseq2 = self._checker.typecheck_linear_constraint_name_tuple_seq(ctseq)
+            for ct, ctname in ctseq2:
                 if filterfn(ct, ctname, check_for_trivial_ct=check_trivial, arg_checker=checker):
                     posted_cts.append(ct)
         else:
@@ -1024,7 +1039,7 @@ class _VariableContainer(object):
         if self.nb_dimensions == 1:
             try:
                 return self._keyss[0][relative_offset]
-            except IndexError:
+            except IndexError:  # pragma: no cover
                 return None
         else:
             return next(islice(product(*self._keyss), relative_offset, None), None)

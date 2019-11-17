@@ -251,6 +251,14 @@ class CpoParameters(Context):
             self.set_attribute(name, value)
 
 
+    def reset_to_default(self):
+        """ Reset all the parameters to their default value.
+
+        Parameters are reset to their default value by being removed from this object.
+        """
+        self.clear()
+
+
     def get_AllDiffInferenceLevel(self):
         """
         This parameter specifies the inference level for every constraint AllDiff extracted to the invoking

@@ -33,7 +33,7 @@ from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException, make_path
 from docplex.mp.utils import normalize_basename
 from docplex.mp.constants import ConflictStatus
-from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrapper, VarUbConstraintWrapper
+from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrapper, VarUbConstraintWrapper, ConflictRefinerResult
 from docplex.mp.constr import LinearConstraint, QuadraticConstraint, IndicatorConstraint
 
 from docplex.util.environment import make_attachment_name
@@ -538,7 +538,7 @@ class DOcloudEngine(IndexerEngine):
 
     def _get_conflicts_cloud(self, conflicts_handler):
         conflict_grps = conflicts_handler.get_conflict_grps_list()
-        result = []
+        conflicts = []
 
         for index, elems, c_status in conflict_grps:
             if c_status is None:
@@ -549,15 +549,15 @@ class DOcloudEngine(IndexerEngine):
 
             for elem in elems:
                 if isinstance(elem, VarLbConstraintWrapper):
-                    result.append(TConflictConstraint(None, elem, c_status))
+                    conflicts.append(TConflictConstraint(None, elem, c_status))
 
                 elif isinstance(elem, VarUbConstraintWrapper):
-                    result.append(TConflictConstraint(None, elem, c_status))
+                    conflicts.append(TConflictConstraint(None, elem, c_status))
 
                 else:
-                    result.append(TConflictConstraint(elem.name, elem, c_status))
+                    conflicts.append(TConflictConstraint(elem.name, elem, c_status))
 
-        return result
+        return ConflictRefinerResult(conflicts, refined_by=self.get_name())
 
     def _make_attachment_name(self, basename, extension):
         return make_attachment_name(basename + extension)

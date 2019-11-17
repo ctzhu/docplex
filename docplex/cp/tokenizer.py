@@ -11,7 +11,8 @@ Abstract tokenizer that can be extended to be specialized in different languages
 This tokenizer is already initialized to read integers, floats, strings and basic punctuation.
 """
 
-from docplex.cp.utils import to_internal_string, is_string, StringIO
+from docplex.cp.utils import to_internal_string, is_string, StringIO, TextFileLineReader
+import os
 
 
 ###############################################################################
@@ -55,7 +56,7 @@ class Token(object):
         Returns:
             True if 'other' is a token with the same value then this one, False otherwise
         """
-        return other is self or (isinstance(other, Token) and (other.type == self.type) and (other.value == self.value))
+        return (other is self) or (isinstance(other, Token) and (other.type == self.type) and (other.value == self.value))
 
     def __ne__(self, other):
         """ Check if this token is different than another object
@@ -119,6 +120,8 @@ TOKEN_BANG           = Token(TOKEN_TYPE_PUNCTUATION, '!')
 TOKEN_KEYWORD_TRUE   = Token(TOKEN_TYPE_KEYWORD, "true")
 TOKEN_KEYWORD_FALSE  = Token(TOKEN_TYPE_KEYWORD, "false")
 
+_SYMBOL_START_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+_SYMBOL_BODY_CHARS  = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789")
 
 ###############################################################################
 ## Public classes
@@ -126,42 +129,61 @@ TOKEN_KEYWORD_FALSE  = Token(TOKEN_TYPE_KEYWORD, "false")
 
 class Tokenizer(object):
     """ Tokenizer for CPO file format """
-    __slots__ = ('name',            # Input name (for error string build)
-                 'input',           # Input stream
-                 'line',            # Current input line
-                 'token_start',     # Index of token start in current line
-                 'line_length',     # Current input line length
-                 'read_index',      # Current read index in the line
-                 'line_number',     # Current line number
-                 'skip_comments',   # Skip comments indicator
-                 'symbols',         # Map of symbols. Key is name, value is symbol token
-                 'char_handlers',   # Map of functions processing characters
+    __slots__ = ('name',                 # Input name (for error string build)
+                 'input',                # Input stream
+                 'line',                 # Current input line
+                 'current_char',         # Last read character
+                 'token_start',          # Index of token start in current line
+                 'line_length',          # Current input line length
+                 'read_index',           # Current read index in the line
+                 'line_number',          # Current line number
+                 'skip_comments',        # Skip comments indicator
+                 'symbols',              # Map of symbols. Key is name, value is symbol token
+                 'char_handlers',        # Map of functions processing characters
+                 'default_char_handler', # Default character handler
+                 'first_in_line',        # First token in line indicator
                  )
 
-    def __init__(self, name, input):
+    def __init__(self, name=None, input=None, file=None, encoding='utf-8-sig'):
         """ Create a new tokenizer
         Args:
-            input: Input stream or string
+            name:     (Optional) Name of the stream
+            input:    (Optional) Input stream or string
+            file:     (Optional) Input file
+            encoding: (Optional) Character encoding, utf-8 by default
         """
         super(Tokenizer, self).__init__()
+
+        # Open file if any
+        if file is not None:
+            self.input = TextFileLineReader(file, encoding)
+        # Or get input if any
+        elif input is not None:
+            if is_string(input):
+                self.input = StringIO(input)
+            else:
+                self.input = input
+        # Set name
         self.name = name
-        if is_string(input):
-            self.input = StringIO(input)
-        else:
-            self.input = input
-        self.line = self.input.readline()
-        self.line_length = len(self.line)
+        if name is None:
+            self.name = file
+
+        # Initialize reading
+        self.line = ""
+        self.current_char = ''
+        self.line_length = 0
         self.read_index = 0
-        self.line_number = 1
+        self.line_number = 0
         self.token_start = 0
         self.skip_comments = True
+        self.default_char_handler = None
 
         # Initialize symbols table (allows use of 'is' instead of '==')
         self.symbols = {}
 
         # Initialize array of character processors
-        self.char_handlers = [None] * 127
-        for c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_":
+        self.char_handlers = [None] * 128
+        for c in _SYMBOL_START_CHARS:
             self.add_char_handler(c, self._read_symbol)
         for c in "0123456789":
             self.add_char_handler(c, self._read_number)
@@ -204,21 +226,38 @@ class Tokenizer(object):
             self.symbols[t.value] = t
 
 
+    def clear_all_char_handlers(self):
+        """ Clear all character handlers.
+        """
+        self.char_handlers = [None] * 127
+
+
     def add_char_handler(self, c, chdl):
         """ Add a character handler.
 
         Character handlers are used to properly process a character read from the input stream.
         By default, this tokenizer process symbols, strings, integer, floats, version, and basic
-        ponctuation tokens that are defined.
+        punctuation tokens that are defined.
         Character handlers should be added or overwritten to handle properly specific tokens, including comments.
 
-        A character handler takes this tokenizer as parameters (self) and returns the read token. 
+        A character handler takes this tokenizer as parameters (self) and returns the read token.
 
         Args:
             c:     Character starting the token
             chdl:  Character handler
         """
         self.char_handlers[ord(c)] = chdl
+
+
+    def set_default_char_handler(self, c, chdl):
+        """ Set the default character handler.
+
+        Default character handler is called if no character handler is found. By default, it raises an exception.
+
+        Args:
+            chdl:  Character handler
+        """
+        self.default_char_handler = chdl
 
 
     def set_skip_comment(self, skc):
@@ -228,7 +267,7 @@ class Tokenizer(object):
         When skip comment is False, comments are returned as TOKEN_COMMENT tokens.
 
         Args:
-            skc:  Skip commet indicator
+            skc:  Skip comment indicator
         """
         self.skip_comments = skc
 
@@ -239,6 +278,9 @@ class Tokenizer(object):
         Returns:
             Next available token, TOKEN_EOF if end of input
         """
+        # Set first in line indicator
+        self.first_in_line = self.read_index == 0
+
         # Read token loop
         skc = self.skip_comments
         while True:
@@ -253,9 +295,20 @@ class Tokenizer(object):
             # Reset current token
             self.token_start = self.read_index - 1
 
-            # Retrieve and call character processor
+            # Retrieve character handler
+            oc = ord(c)
+            if oc < 128:
+                chld = self.char_handlers[oc]
+                if chld is None:
+                    chld = self.default_char_handler
+            else:
+                chld = self.default_char_handler
+            if chld is None:
+                raise SyntaxError(self.build_error_string("No possible token starting by character '{}'".format(c)))
+
+            # Call character handler
             try:
-                tk = self.char_handlers[ord(c)]()
+                tk = chld()
                 if not skc or tk.type != TOKEN_TYPE_COMMENT:
                     return tk
             except Exception as err:
@@ -266,7 +319,7 @@ class Tokenizer(object):
         """ Read and return next symbol """
         # Read symbol
         c = self._peek_char()
-        while c and (((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or ((c >= '0') and (c <= '9')) or (c == '_')):
+        while c and (c in _SYMBOL_BODY_CHARS):
             c = self._skip_and_peek_char()
         s = self._get_token()
         t = self.symbols.get(s)
@@ -414,12 +467,13 @@ class Tokenizer(object):
 
     def _next_char(self):
         """ Get next input character
+        This function sets the variable current_char with the returned character
         Returns:
             Next available character, None if end of input
         """
         # Check end of stream
         line = self.line
-        if not line:
+        if line is None:
             return None
 
         # Check end of line
@@ -430,22 +484,40 @@ class Tokenizer(object):
             self.line = line
             self.line_length = len(line)
             self.read_index = 0
+            self.first_in_line = True
             # Check end of input
             if line == '':
+                self.current_char = None
                 return None
         c = line[self.read_index]
         self.read_index += 1
+        self.current_char = c
         return c
+
+
+    def _back_char(self):
+        """ Go back to previous character """
+        if self.read_index > 0:
+            self.read_index -= 1
+
+
+    def _current_char(self):
+        """ Get last read character
+        Returns:
+            Last read character, None if end of input
+        """
+        return self.current_char
+
 
     def build_error_string(self, msg):
         """ Build error string for exception
         """
         # return "Error in '{}' at line {} (\"{}\") index {}: {}".format(self.name, self.line_number, self.rline, self.read_index, msg)
         # Insert error token in current line
-        rline = self.line[:self.read_index] + " ### " + self.line[self.read_index:]
-        if rline.endswith("\n"):
-            rline = rline[:-1]
-        return "Error in '{}' at line {}-{}: {} (\"{}\")".format(self.name, self.line_number, self.read_index, msg, rline)
+        rline = self.line[:self.read_index] + " ### " + self.line[self.read_index:].rstrip()
+        ermsg = "Error in '{}' at line {}:{} : {} (\"{}\")".format(self.name, self.line_number, self.read_index, msg, rline)
+        return ermsg
+
 
     def __iter__(self):
         """  Define tokenizer as an iterator """

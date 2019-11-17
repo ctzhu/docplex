@@ -33,18 +33,12 @@ class IQuadFactory(_AbstractModelFactory):
 
 
 class QuadFactory(IQuadFactory):
-    def __init__(self, model, engine, ordered, term_dict_type):
+    def __init__(self, model, engine):
         _AbstractModelFactory.__init__(self, model)
         self._model = model
         self._engine = engine
         self._lfactory = model._lfactory
         self._quad_count = 0
-        self.ordered = ordered
-        self.term_dict_type = term_dict_type
-
-    def set_ordering(self, ordered, dict_type):
-        self.ordered = ordered
-        self.term_dict_type = dict_type
 
     def new_zero_expr(self):
         return ZeroExpr(self._model)
@@ -181,7 +175,7 @@ class QuadFactory(IQuadFactory):
     def set_quadratic_constraint_sense(self, qct, arg_newsense):
         new_sense = ComparisonType.parse(arg_newsense)
         if new_sense != qct.sense:
-            self._engine.update_constraint(qct, UpdateEvent.LinearConstraintType, new_sense)
+            self._engine.update_constraint(qct, UpdateEvent.ConstraintSense, new_sense)
             qct._internal_set_sense(new_sense)
 
     def update_quadratic_constraint(self, qct, expr, event):

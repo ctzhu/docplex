@@ -502,7 +502,6 @@ class _SubscriptionMixin(object):
 
     def notify_unsubscribed(self, subscriber):
         # 1 find index
-        sx = None
         for s, sc in enumerate(self._subscribers):
             if sc is subscriber:
                 del self._subscribers[s]

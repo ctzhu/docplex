@@ -22,6 +22,8 @@ TOKEN_OR        = Token(TOKEN_TYPE_OPERATOR, '||')
 TOKEN_NOT       = Token(TOKEN_TYPE_OPERATOR, '!')
 TOKEN_INTERVAL  = Token(TOKEN_TYPE_OPERATOR, '..')
 TOKEN_DIV       = Token(TOKEN_TYPE_OPERATOR, 'div')
+TOKEN_LET       = Token(TOKEN_TYPE_SYMBOL,   'let')
+TOKEN_SET       = Token(TOKEN_TYPE_SYMBOL,   'set')
 
 
 #==============================================================================
@@ -42,6 +44,8 @@ class CpoTokenizer(Tokenizer):
         # Add predefined symbols
         self.symbols = {}
         self.add_predefined_symbols([TOKEN_DIV])
+        self.add_predefined_symbols([TOKEN_LET])
+        self.add_predefined_symbols([TOKEN_SET])
 
         # Add character handlers
         self.add_char_handler('.', self._read_dot)

@@ -100,6 +100,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
                         name=self.name,
                         safe=True)
 
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='quadratic')
+
     def is_quad_expr(self):
         return True
 

@@ -7,14 +7,14 @@
 # pylint: disable=too-many-lines
 from __future__ import print_function
 
-from six import iteritems
+from six import iteritems, PY3
 
 from docplex.mp.constants import ComparisonType, UpdateEvent, CplexScope
 from docplex.mp.compat23 import unitext
 from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _SubscriptionMixin, _BendersAnnotatedMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
-from docplex.mp.utils import *
+from docplex.mp.utils import is_int, is_string, is_number, iter_emptyset
 from docplex.mp.format import LP_format
 from docplex.mp.sttck import StaticTypeChecker
 
@@ -59,6 +59,8 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def copy(self, new_model, var_mapping):
         return var_mapping[self]
 
+    relaxed_copy = copy
+
     # linear operand api
 
     def as_variable(self):
@@ -98,7 +100,6 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def __hash__(self):
         return self._index
-
 
     def set_name(self, new_name):
         # INTERNAL
@@ -303,6 +304,58 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def __add__(self, e):
         return self.plus(e)
 
+    @staticmethod
+    def _extract_calling_ct_xhs():
+        _searched_patterns = [("lhs", 0),  ("left_expr", 0), ("rhs", 1), ("right_expr", 1) ]
+        import inspect
+        # need to get 2 steps higher to find caller to add/sub
+        frame = inspect.stack()[2]
+        code_context = frame.code_context if PY3 else frame[4]
+
+        def find_in_line(line_):
+            for xhs_s, xhs_p in _searched_patterns:
+                if xhs_s in line_:
+                    return line_.find(xhs_s), xhs_p
+            else:
+                return -1, -1
+        if code_context:
+            line = code_context[0]
+            if line:
+                spos, lr = find_in_line(line)
+
+                if spos > 1:
+                    assert lr >= 0
+                    # strip whitespace before code...
+                    ct_varname = line[:spos-1].lstrip()
+                    # evaluate ct in caller locals dict
+                    subframe = frame.frame if PY3 else frame[0]
+                    ct_object = subframe.f_locals.get(ct_varname)
+                    # returns a constraint (or None if that fails), plus 0-1 (0 for lhs, 1 for rhs)
+                    return ct_object, lr
+        return None, -1
+
+    def _perform_arithmetic_to_self(self, self_arithmetic_method, e):
+        # INTERNAL
+        res = self_arithmetic_method(e)
+        ct, xhs_pos = self._extract_calling_ct_xhs()
+        if ct is not None:
+            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+        return res
+
+    def add(self, e):
+        res = self.plus(e)
+        ct, xhs_pos = self._extract_calling_ct_xhs()
+        if ct is not None:
+            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+        return res
+
+    def subtract(self, e):
+        res = self.minus(e)
+        ct, xhs_pos = self._extract_calling_ct_xhs()
+        if ct is not None:
+            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+        return res
+
     def plus(self, e):
         if isinstance(e, Var):
             expr = self._make_linear_expr()
@@ -344,10 +397,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             return self.to_linear_expr().subtract(e)
 
     def __rsub__(self, e):
-        # e - self
-        # if is_number(e):
-        #     return self._make_linear_expr(e=(self, -1), constant=e, safe=True)
-        # else:
+
         expr = self.get_linear_factory()._to_linear_operand(e, force_clone=True)  # makes a clone.
         return expr.subtract(self)
 
@@ -672,6 +722,9 @@ class AbstractLinearExpr(Expr, LinearOperand):
     def check_discrete_lock_frozen(self, item=None):
         self.get_linear_factory().check_expr_discrete_lock(self, item)
 
+    def relaxed_copy(self, relaxed_model, var_map):
+        return self.copy(relaxed_model, var_map)
+
 
 class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     # INTERNAL
@@ -827,9 +880,6 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     def __rdiv__(self, e):
         self.model.cannot_be_used_as_denominator_error(self, e)
 
-    subtract = minus
-    add = plus
-
     # changing a coef
     def set_coefficient(self, dvar, coef):
         checker = self._model._checker
@@ -854,6 +904,9 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     # -- arithmetic to self
     def __iadd__(self, other):
+        return self._add_to_self(other)
+
+    def _add_to_self(self, other):
         self.check_discrete_lock_frozen(item=other)
         if isinstance(other, LinearOperand) or is_number(other):
             added = self.to_linear_expr().add(other)
@@ -862,7 +915,14 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         self.notify_replaced(added)
         return added
 
+    def add(self, other):
+        return self._add_to_self(other)
+
     def __isub__(self, other):
+        return self._sub_to_self(other)
+
+    def _sub_to_self(self, other):
+        # INTERNAL
         self.check_discrete_lock_frozen(item=other)
         if isinstance(other, LinearOperand) or is_number(other):
             expr = self.to_linear_expr()
@@ -872,6 +932,9 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
             subtracted = other.rminus(self)
         self.notify_replaced(subtracted)
         return subtracted
+
+    def subtract(self, other):
+        return self._sub_to_self(other)
 
     def __imul__(self, e):
         return self.multiply(e)
@@ -900,6 +963,8 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
             product = self.to_linear_expr().multiply(e)
             self.notify_replaced(product)
         return product
+
+    mul = multiply
 
     def __idiv__(self, other):
         return self.divide(other)
@@ -1883,7 +1948,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
 
 
 class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
-    __slots__ = ('_constant','_subscribers')
+    __slots__ = ('_constant', '_subscribers')
 
     def __init__(self, model, cst):
         ModelingObjectBase.__init__(self, model=model, name=None)
@@ -2023,9 +2088,6 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self._make_new_constant(self._constant ** 2)
 
     # arithmetci to self
-    #add = plus
-    subtract = minus
-    multiply = times
 
     def _scale(self, factor):
         return self._make_new_constant(self._constant * factor)
@@ -2086,7 +2148,7 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
             return self
         else:
             # replace self by (-other) + self.K
-            multiplied = other * (self._constant)
+            multiplied = other * self._constant
             self.notify_replaced(multiplied)
             return multiplied
 

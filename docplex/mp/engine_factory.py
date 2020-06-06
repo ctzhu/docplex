@@ -6,22 +6,20 @@
 
 # gendoc: ignore
 
-from docplex.mp.engine import NoSolveEngine, ZeroSolveEngine, FakeFailEngine, RaiseErrorEngine
+from docplex.mp.engine import NoSolveEngine, ZeroSolveEngine
 from docplex.mp.docloud_engine import DOcloudEngine
-from docplex.mp.utils import DOcplexException, is_string
+from docplex.mp.utils import is_string
 from docplex.mp.context import has_credentials
+from docplex.mp.error_handler import docplex_fatal
+
 
 class EngineFactory(object):
     """ A factory class that manages creation of solver instances.
     """
-    _default_engine_map = {"local": NoSolveEngine,
-                           "nosolve": NoSolveEngine,
+    _default_engine_map = {"nosolve": NoSolveEngine,
                            "zero": ZeroSolveEngine,
-                           "fail": FakeFailEngine,
-                           "raise": RaiseErrorEngine,
-                           "docloud": DOcloudEngine}
-
-    cplex_engine_type = None
+                           "docloud": DOcloudEngine,
+                           "cplexcloud": DOcloudEngine}
 
     def __init__(self, env=None):
         self._engine_types_by_agent = self._default_engine_map.copy()
@@ -29,7 +27,7 @@ class EngineFactory(object):
         if env is not None:
             self._resolve_cplex(env)
 
-    def _get_engine_from_agent(self, agent, default_engine, default_engine_name):
+    def _get_engine_type_from_agent(self, agent, default_engine, default_engine_name):
         if agent is None:
             return default_engine
         elif is_string(agent):
@@ -39,14 +37,34 @@ class EngineFactory(object):
                 return engine_type
             elif 'cplex' == agent_key:
                 print('* warning: CPLEX DLL not found in path, using {0} instead'.format(default_engine_name))
-
+                return self._engine_types_by_agent.get(default_engine_name)
+            elif '.' in agent:
+                # assuming a qualified name, e.g. com.ibm.docplex.quantum.QuantumEngine
+                from docplex.mp.internal.mloader import import_class
+                try:
+                    agent_class = import_class(agent)
+                    return agent_class
+                except ValueError as ve:
+                    print(
+                        "Cannot load agent class {0}, expecting 'cplex', 'docloud' or valid class path, error: {1}".format(
+                            agent, str(ve)))
+                    raise ve
             else:
-                print('* warning: unrecognized solver agent value: {0!r}'.format(agent))
+                docplex_fatal("Unexpected agent name: {0}, expecting 'cplex', 'docloud' or valid class path", agent)
 
         else:
-            print('* warning: incorrect solver agent value: {0!r} -expecting string or None'.format(agent))
+            # try a class type
+            try:
+                # noinspection PyUnresolvedReferences
+                from inspect import isclass
+                if isclass(agent):
+                    return agent
+            except ImportError:
+                if type(agent) == type:
+                    return agent
 
-        return default_engine
+            # agent cannot be mapped to any class.
+            docplex_fatal("* unexpected agent: {0!r} -expecting 'cplex', 'docloud', class or class name", agent)
 
     def _is_cplex_resolved(self):
         return hasattr(self, "_cplex_engine_type")
@@ -54,12 +72,13 @@ class EngineFactory(object):
     def _resolve_cplex(self, env):
         # INTERNAL
         if env is None:
-            raise DOcplexException("need an environment to resolve cplex, got None")
+            docplex_fatal("need an environment to resolve cplex, got None")
         if not self._is_cplex_resolved():
             if env.has_cplex:
                 from docplex.mp.cplex_engine import CplexEngine
 
                 self._cplex_engine_type = CplexEngine
+                # noinspection PyTypeChecker
                 self._engine_types_by_agent["cplex"] = CplexEngine
             else:
                 self._cplex_engine_type = None
@@ -69,8 +88,7 @@ class EngineFactory(object):
             self._resolve_cplex(env)
         assert self._is_cplex_resolved()
 
-
-    def new_engine(self, solver_agent, env, model, context=None):
+    def new_engine(self, agent, env, model, context=None):
         self._ensure_cplex_resolved(env)
 
         # compute a default engine and kwargs to use..
@@ -96,20 +114,22 @@ class EngineFactory(object):
         if has_credentials(context.solver.docloud):
             kwargs['docloud_context'] = context.solver.docloud
 
-        engine_type = self._get_engine_from_agent(agent=solver_agent,
-                                                  default_engine=default_engine_type,
-                                                  default_engine_name=default_engine_name)
+        engine_type = self._get_engine_type_from_agent(agent=agent,
+                                                       default_engine=default_engine_type,
+                                                       default_engine_name=default_engine_name)
         assert engine_type is not None
-        # all engine types have a (model, kwargs) ctor.
-        return engine_type(model, **kwargs)
+        try:
+            return engine_type(model, **kwargs)
+        except TypeError:
+            docplex_fatal("agent: {0!s} failed to create instance from model, kwargs.", agent)
 
     # noinspection PyMethodMayBeStatic
     def new_docloud_engine(self, model, **kwargs):
+        # noinspection PyDeprecation
         return DOcloudEngine(model, **kwargs)
+
 
     def extend(self, new_agent, new_engine):
         # INTERNAL
         assert new_engine is not None
         self._engine_types_by_agent[new_agent] = new_engine
-
-

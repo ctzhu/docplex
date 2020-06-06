@@ -245,9 +245,6 @@ class DOcloudEngine(IndexerEngine):
 
     @property
     def name(self):
-        return self.get_name()
-
-    def get_name(self):
         return 'cplex_cloud'
 
     def can_solve(self):
@@ -557,7 +554,7 @@ class DOcloudEngine(IndexerEngine):
                 else:
                     conflicts.append(TConflictConstraint(elem.name, elem, c_status))
 
-        return ConflictRefinerResult(conflicts, refined_by=self.get_name())
+        return ConflictRefinerResult(conflicts, refined_by=self.name)
 
     def _make_attachment_name(self, basename, extension):
         return make_attachment_name(basename + extension)
@@ -692,7 +689,7 @@ class DOcloudEngine(IndexerEngine):
                                                  obj=docloud_obj,
                                                  blended_obj_by_priority=[docloud_obj],
                                                  var_value_map=docloud_values_by_vars,
-                                                 solved_by=self.get_name(),
+                                                 solved_by=self.name,
                                                  solve_details=self._solve_details,
                                                  job_solve_status=self.get_solve_status())
 

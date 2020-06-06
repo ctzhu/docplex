@@ -4,7 +4,7 @@
 # (c) Copyright IBM Corp. 2016
 # --------------------------------------------------------------------------
 
-from six import iteritems, itervalues
+from six import iteritems
 
 from docplex.mp.model import Model
 from docplex.mp.aggregator import ModelAggregator

@@ -404,7 +404,7 @@ class ModelFactory(_AbstractModelFactory):
                        _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
 
         # query the engine for a list of indices.
-        indices = self._engine.create_variables(key_seq, vartype, xlbs, xubs, all_names)
+        indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, all_names)
         mdl._register_block_vars(allvars, indices, all_names)
         return allvars
 
@@ -918,10 +918,10 @@ class ModelFactory(_AbstractModelFactory):
         self._post_constraint_block(ranges)
         return ranges
 
-    def new_solution(self, var_value_dict=None, name=None, keep_zeros=True, **kwargs):
+    def new_solution(self, var_value_dict=None, name=None, objective_value=None, keep_zeros=True, **kwargs):
         rounding = kwargs.get('rounding', False)
-        obj = kwargs.get('objectiveValue', None)
-        return SolveSolution(model=self._model, obj=obj,
+
+        return SolveSolution(model=self._model, obj=objective_value,
                              var_value_map=var_value_dict, name=name,
                              keep_zeros=keep_zeros, rounding=rounding)
 

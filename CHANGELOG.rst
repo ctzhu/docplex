@@ -1,13 +1,26 @@
 Changelog
 ---------
 
-Changed in 2.11.176:
+Changed in 2.12.182:
 ````````````````````
+* In ``docplex.mp``:
+    * Added a LinearRelaxer class to make a linearized copy of a MIP model (if possible).
+      see class `docplex.mp.relax_linear.LinearRelaxer`
+    * Conflict refiner default behavior is now identical to CPLEX interactive
+      (the new behavior is much faster).
+    * Bug fixed: expressions of the form a*x did not notify constraints when modified.
+    * Fixed: message "ignored keyword argument was incorrectly printed when setting
+      `cts_by_name=True` in model constructor.
+
+
+Changed in 2.11.176 (2019.11):
+``````````````````````````````
+
 * Added support for CPLEX 12.10
 * In ``docplex.mp``:
-  * Logical expressions, binary variables, and constraints can now be freely nested with logical operators.
-  * Fixed a print of 'CPLEX Error 1217' in log for multi-objective problems.
-  * Fixed a bug when setting log_output to a file name: file was created, but empty.
+   * Logical expressions, binary variables, and constraints can now be freely nested with logical operators.
+   * Fixed a print of 'CPLEX Error 1217' in log for multi-objective problems.
+   * Fixed a bug when setting log_output to a file name: file was created, but empty.
     
 
 Changed in 2.10.155 (2019.08):

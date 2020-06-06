@@ -564,7 +564,11 @@ def _eval_file(file):
     """
     for f in filter(os.path.isfile, [dir + "/" + file for dir in sys.path]):
         try:
-            exec(open(f).read())
+            global context
+            l = {'context': context, '__file__': os.path.abspath(f) }
+            exec(open(f).read(), globals(), l)
+            # Restore context in case its value has been modified.
+            context = l['context']
         except Exception as e:
             if context.log_exceptions:
                 traceback.print_exc()

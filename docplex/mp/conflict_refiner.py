@@ -4,13 +4,14 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from docplex.mp.utils import is_string
-from docplex.mp.constants import ComparisonType
+from docplex.mp.constants import ComparisonType, VarBoundType
 from docplex.mp.context import check_credentials
 from docplex.mp.cloudutils import context_must_use_docloud
 
-from docplex.mp.utils import PublishResultAsDf, str_holo
+from docplex.mp.utils import str_holo
+from docplex.mp.publish import PublishResultAsDf
 
 import warnings
 
@@ -120,7 +121,6 @@ class ConflictRefinerResult(object):
     def display(self):
         """ Displays all conflicts.
 
-        :return:
         """
         print('conflict(s): {0}'.format(self.number_of_conflicts))
         for conflict in self.iter_conflicts():
@@ -128,11 +128,32 @@ class ConflictRefinerResult(object):
             elt = conflict.element
             if hasattr(conflict.element, 'as_constraint'):
                 ct = conflict.element.as_constraint()
-                label = elt.short_name()
+                label = elt.short_typename
             else:
                 ct = elt
                 label = ct.__class__.__name__
             print("  - status: {1}, {0}: {2!s}".format(label, st.name, str_holo(ct, maxlen=40)))
+
+    def display_stats(self):
+        """ Displays statistics on conflicts.
+
+        Display show many conflict elements per type.
+        """
+        def elt_typename(elt):
+            try:
+                return elt.short_typename.lower()
+            except AttributeError:  # pragma: no cover
+                return elt.__class__.__name__.lower()
+
+        ncf = self.number_of_conflicts
+        print('conflict{1}: {0}'.format(ncf, "s" if ncf > 1 else ""))
+        cf_stats = defaultdict(lambda: 0)
+        for conflict in self.iter_conflicts():
+            elt_type = elt_typename(conflict.element)
+            cf_stats[elt_type] += 1
+        for eltt, count in cf_stats.items():
+            if count:
+                print("  - {0}{2}: {1}".format(eltt, count, ("s" if count > 1 else "")))
 
     def as_output_table(self, use_df=True):
         return to_output_table(self, use_df)
@@ -153,11 +174,27 @@ class VarBoundWrapper(object):
         return self._var.index
 
     @classmethod
-    def short_name(cls):
+    def short_typename(cls):  # pragma: no cover
         return "Variable Bound"
 
     def as_constraint(self):  # pragma: no cover
         raise NotImplementedError
+
+    def as_constraint_from_symbol(self, op_symbol):
+        self_var = self.var
+        var_lb = self.var.lb
+        op = ComparisonType.cplex_ctsense_to_python_op(op_symbol)
+        ct = op(self_var, var_lb)
+        return ct
+
+    @classmethod
+    def make_wrapper(cls, var, bound_type):
+        if bound_type == VarBoundType.LB:
+            return VarLbConstraintWrapper(var)
+        elif bound_type == VarBoundType.UB:
+            return VarUbConstraintWrapper(var)
+        else:
+            return None
 
 
 class VarLbConstraintWrapper(VarBoundWrapper):
@@ -176,16 +213,12 @@ class VarLbConstraintWrapper(VarBoundWrapper):
         super(VarLbConstraintWrapper, self).__init__(dvar)
         self._var = dvar
 
-    @classmethod
-    def short_name(cls):
-        return "Variable Lower Bound"
+    @property
+    def short_typename(self):
+        return "Lower Bound"
 
     def as_constraint(self):
-        self_var = self.var
-        var_lb = self.var.lb
-        op = ComparisonType.cplex_ctsense_to_python_op('G')
-        ct = op(self_var, var_lb)
-        return ct
+        return self.as_constraint_from_symbol('G')
 
 
 class VarUbConstraintWrapper(VarBoundWrapper):
@@ -203,16 +236,12 @@ class VarUbConstraintWrapper(VarBoundWrapper):
     def __init__(self, var):
         super(VarUbConstraintWrapper, self).__init__(var)
 
-    @classmethod
-    def short_name(cls):
-        return "Variable Upper Bound"
+    @property
+    def short_typename(self):
+        return "Upper Bound"
 
     def as_constraint(self):
-        self_var = self.var
-        var_ub = self_var.ub
-        op = ComparisonType.cplex_ctsense_to_python_op('L')
-        ct = op(self_var, var_ub)
-        return ct
+        return self.as_constraint_from_symbol('L')
 
 
 class ConstraintsGroup(object):
@@ -230,17 +259,37 @@ class ConstraintsGroup(object):
                     higher the preference.
     """
 
-    def __init__(self, preference=1.0):
+    __slots__ = ('_preference', '_cts')
+
+    def __init__(self, preference=1.0, cts=None):
         self._preference = preference
         self._cts = []
+        if cts is not None:
+            self.add_constraints(cts)
 
-    def get_preference(self):
+    @classmethod
+    def from_var(cls, dvar, bound_type, pref):
+        """ A class method to build a group fromone variable.
+
+        :param dvar: The variable whose bound is part of the conflict.
+        :param bound_type: An enumerated value of type `VarBoundType`
+        :param pref: a numerical preference.
+
+        :return: an instance of ConstraintsGroup.
+
+        See Also:
+            :class:`docplex.mp.constants.VarBoundType`
+        """
+        cgg = cls(preference=pref, cts=VarBoundWrapper.make_wrapper(dvar, bound_type))
+        return cgg
+
+    @property
+    def preference(self):
         return self._preference
 
-    def set_preference(self, value):
-        self._preference = value
-
-    preference = property(get_preference, set_preference)
+    def add_one(self, x):
+        if x is not None:
+            self._cts.append(x)
 
     def add_constraint(self, ct):
         self._cts.append(ct)
@@ -248,12 +297,12 @@ class ConstraintsGroup(object):
     def add_constraints(self, cts):
         try:
             for ct in cts:
-                self.add_constraint(ct)
-        except TypeError:
-            self.add_constraint(cts)
+                self.add_one(ct)
+        except TypeError:  # not iterable.
+            self.add_one(cts)
 
-    def get_group_constraints(self):
-        return self._cts
+    def iter_constraints(self):
+        return iter(self._cts)
 
 
 class ConflictRefiner(PublishResultAsDf, object):
@@ -273,6 +322,61 @@ class ConflictRefiner(PublishResultAsDf, object):
     def __init__(self, output_processing=None):
         self.output_table_customizer = output_processing
 
+    @classmethod
+    def _make_atomic_ct_groups(cls, mdl_iter, pref):
+        # returns a list of singleton groups from a model iterator and a numerical preference.
+        lcgrps = [ConstraintsGroup(pref, ct) for ct in mdl_iter]
+        return lcgrps
+
+    @classmethod
+    def var_bounds(cls, mdl, pref=4.0, include_infinity_bounds=True):
+        """ Returns a list of singleton groups with variable bounds.
+
+        This method a list of ConstraintGroup objects, each of which contains a variabel bound.
+        It replicate sthe behavior of the CPLEX interactive optimizer, that is, it returns
+
+        - lower bounds for non-binary variables if different from 0
+        - upper bound for non-binary-variables if non-default
+
+        For binary variables, bounds are not considered, unless the variable is bound; more precisely:
+            - lower bound is included if >= 0.5
+            - upper bound is included if <= 0.5
+
+        :param mdl: The model being analyzed for conflicts,
+        :param pref: the preference for variable bounds, the defaut is 4.0
+        :param include_infinity_bounds: a flag indicating whether infi
+
+        :return: a list of `ConstraintsGroup` objects.
+        """
+        grps = []
+        mdl_inf = mdl.infinity
+        for dv in mdl.iter_variables():
+            lb, ub = dv.lb, dv.ub
+            if not dv.is_binary():
+                if lb != 0:
+                    if include_infinity_bounds or lb > - mdl_inf:
+                        grps.append(ConstraintsGroup.from_var(dv, VarBoundType.LB, pref))
+                if include_infinity_bounds or ub < mdl_inf:
+                    grps.append(ConstraintsGroup.from_var(dv, VarBoundType.UB, pref))
+            else:
+                if lb >= 0.5:
+                    grps.append(ConstraintsGroup.from_var(dv, VarBoundType.LB, pref))
+                if ub <= 0.5:
+                    grps.append(ConstraintsGroup.from_var(dv, VarBoundType.UB, pref))
+        return grps
+
+    @classmethod
+    def linear_constraints(cls, mdl, pref=2.0):
+        return cls._make_atomic_ct_groups(mdl.iter_linear_constraints(), pref)
+
+    @classmethod
+    def logical_constraints(cls, mdl, pref=1.0):
+        return cls._make_atomic_ct_groups(mdl.iter_logical_constraints(), pref)
+
+    @classmethod
+    def quadratic_constraints(cls, mdl, pref=1.0):
+        return cls._make_atomic_ct_groups(mdl.iter_quadratic_constraints(), pref)
+
     def refine_conflict(self, mdl, preferences=None, groups=None, display=False, **kwargs):
         """ Starts the conflict refiner on the model.
 
@@ -280,6 +384,7 @@ class ConflictRefiner(PublishResultAsDf, object):
             mdl: The model to be relaxed.
             preferences: A dictionary defining constraint preferences.
             groups: A list of ConstraintsGroups.
+            display: a boolean flag (default is True); if True, displays the result at the end.
             kwargs: Accepts named arguments similar to solve.
 
         Returns:
@@ -334,7 +439,7 @@ class ConflictRefiner(PublishResultAsDf, object):
             if self.is_publishing_output_table(mdl.context):
                 self.write_output_table(results.as_output_table(self.output_table_using_df), mdl.context)
             if display:
-                results.display()
+                results.display_stats()
             return results
         finally:
             if saved_log_output_stream != mdl.log_output:
@@ -344,12 +449,7 @@ class ConflictRefiner(PublishResultAsDf, object):
 
     # noinspection PyMethodMayBeStatic
     def _refine_conflict_cloud(self, mdl, context, preferences=None, groups=None):
-        """ This method handles invocation of the conflict refiner feature by configuring and submitting a job
-        to DOcplexcloud and then parsing the result file that is returned.
-
-        :param context:
-        :return:
-        """
+        # INTERNAL
         docloud_context = context.solver.docloud
         parameters = context.cplex_parameters
         # see if we can reuse the local docloud engine if any?

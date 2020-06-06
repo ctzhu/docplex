@@ -16,7 +16,7 @@ from docplex.mp.sdetails import SolveDetails
 
 from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
 from docplex.util import as_df
-from docplex.mp.utils import PublishResultAsDf
+from docplex.mp.publish import PublishResultAsDf
 
 try:
     import pandas as pd

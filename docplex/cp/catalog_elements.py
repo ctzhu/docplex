@@ -170,7 +170,11 @@ class CpoParam(object):
         """ Check inequality of this object with another """
         return not self.__eq__(other)
 
-            
+
+# Marker to signal any type and number of arguments
+TYPE_ANY = CpoType("Any")
+ANY_ARGUMENTS = (CpoParam(TYPE_ANY),)
+
 class CpoSignature(object):
     """ Descriptor of a signature of a CPO operation """
     __slots__ = ('return_type',  # Return type
@@ -189,13 +193,16 @@ class CpoSignature(object):
         self.return_type = rtyp
         
         # Build list of parameters
-        lpt = []
-        for pt in ptyps:
-            if isinstance(pt, CpoParam):
-                lpt.append(pt)
-            else:
-                lpt.append(CpoParam(pt)) 
-        self.parameters = tuple(lpt)
+        if ptyps is ANY_ARGUMENTS:
+            self.parameters = ANY_ARGUMENTS
+        else:
+            lpt = []
+            for pt in ptyps:
+                if isinstance(pt, CpoParam):
+                    lpt.append(pt)
+                else:
+                    lpt.append(CpoParam(pt))
+            self.parameters = tuple(lpt)
         
     def __str__(self):
         return str(self.return_type) + "[" + ", ".join(map(str, self.parameters)) + "]"

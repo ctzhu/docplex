@@ -315,6 +315,14 @@ class Tokenizer(object):
                 raise SyntaxError(self.build_error_string("Error parsing token starting by '{}': {}".format(c, err)))
 
 
+    def close(self):
+        """ Close this tokenizer
+        """
+        self.input.close()
+        self.line = None
+        self.current_char = None
+
+
     def _read_symbol(self):
         """ Read and return next symbol """
         # Read symbol
@@ -487,7 +495,7 @@ class Tokenizer(object):
             self.first_in_line = True
             # Check end of input
             if line == '':
-                self.current_char = None
+                self.close()
                 return None
         c = line[self.read_index]
         self.read_index += 1

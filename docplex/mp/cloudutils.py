@@ -11,7 +11,6 @@ import six
 import warnings
 import json
 
-from enum import Enum
 
 from docplex.mp.context import check_credentials
 

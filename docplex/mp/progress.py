@@ -51,9 +51,8 @@ from six import iteritems
 from enum import Enum
 from collections import namedtuple
 
-from docplex.mp.context import auto_publising_kpis_table_names
-from docplex.util.environment import get_environment
-from docplex.mp.utils import write_kpis_table, is_string, is_number
+
+from docplex.mp.utils import is_string, is_number
 from docplex.mp.error_handler import docplex_fatal
 
 _TProgressData_ = namedtuple('_TProgressData',
@@ -326,6 +325,8 @@ class Watcher(object):
         ws = '--' if self._watched is None else self._watched
         return 'W_{0}[{1}]'.format(self.name, ws)
 
+def clock_filter_accept_stop_here():
+    pass
 
 class ClockFilter(object):
 
@@ -362,6 +363,7 @@ class ClockFilter(object):
         if poke is None:
             return False
         else:
+            clock_filter_accept_stop_here()
             # print("- accepting event #{0}, reason: {1}".format(progress_data.id, poke.name))
             for w in self._watchers:
                 w.sync(progress_data)
@@ -634,71 +636,3 @@ class KpiPrinter(KpiListener):
             kps = k_format.format(max_kpi_name_len, kn, kv, itcnt)
             print(kps)
 
-
-class _KpiRecorder(SolutionListener):
-    # '''A specialized subclass of :class:`~SolutionListener` that stores the KPI values
-    # at each intermediate solution.
-    #
-    # The `clock` argument defines which events are listened to.
-    #
-    # See Also:
-    #     the enumerated class :class:`~ProgressClock`
-    # '''
-
-    def __init__(self, model, clock=ProgressClock.Gap,
-                 publish_hook=None,
-                 kpi_publish_format=None, absdiff=None, reldiff=None):
-        super(_KpiRecorder, self).__init__(clock, absdiff, reldiff)
-        self.model = model
-        self._context = model.context
-        self.publish_hook = publish_hook
-        self.kpi_publish_format = kpi_publish_format or 'KPI.%s'
-        self.publish_name_fn = lambda kn: self.kpi_publish_format % kn
-
-        # stored dictionaries of kpi values (name: value)
-        self._kpi_dicts = []
-
-    def notify_start(self):
-        super(_KpiRecorder, self).notify_start()
-        self._kpi_dicts = []
-
-    @property
-    def nb_reported(self):
-        return len(self._kpi_dicts)
-
-    def notify_solution(self, sol):
-        pdata = self.current_progress_data
-
-        publish_name_fn = self.publish_name_fn
-        # 1. build a dict from formatted names to kpi values.
-        name_values = {publish_name_fn(kp.name): kp.compute(sol) for kp in self.model.iter_kpis()}
-        # 2. add predefined keys for obj, time.
-        name_values['PROGRESS_CURRENT_OBJECTIVE'] = sol.objective_value
-        name_values[publish_name_fn('_time')] = pdata.time
-
-        # 3. store it (why???)
-        self._kpi_dicts.append(name_values)
-
-        # usually publish kpis in environment...
-        if self.publish_hook is not None:
-            self.publish_hook(name_values)
-
-        # save kpis.csv table
-        context = self._context
-        if auto_publising_kpis_table_names(context) is not None:
-            write_kpis_table(env=get_environment(),
-                             context=context,
-                             model=self.model,
-                             solution=sol)
-
-    def iter_kpis(self):
-        return iter(self._kpi_dicts)
-
-    def __as_df__(self, **kwargs):
-        try:
-            from pandas import DataFrame
-        except ImportError:
-            raise RuntimeError("convert as DataFrame: This feature requires pandas")
-
-        df = DataFrame(self._kpi_dicts, **kwargs)
-        return df

@@ -8,7 +8,6 @@
 from __future__ import print_function
 
 
-from docplex.mp.linear import *
 from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint, RangeConstraint, QuadraticConstraint, PwlConstraint
 from docplex.mp.environment import env_is_64_bit
@@ -17,6 +16,8 @@ from docplex.mp.utils import fix_whitespace
 
 from docplex.mp.format import LP_format
 from itertools import chain
+from six import iteritems, PY3
+from docplex.mp.compat23 import izip
 
 
 # gendoc: ignore
@@ -240,7 +241,7 @@ class LPModelPrinter(TextModelPrinter):
         if model.name:
             # make sure model name is ascii
             encoded = model.name.encode('ascii', 'backslashreplace')
-            if sys.version_info[0] == 3:  # pragma: no cover
+            if PY3:  # pragma: no cover
                 # in python 3, encoded is a bytes at this point. Make it a string again
                 encoded = encoded.decode('ascii')
             model_name = encoded.replace('\\\\', '_').replace('\\', '_')
@@ -342,6 +343,7 @@ class LPModelPrinter(TextModelPrinter):
 
         if not self._is_injective(self._var_name_map):
             # use indices to differentiate names
+            import sys
             sys.__stdout__.write("DOcplex: refine variable names\n")
             k = 0
             for dv, lp_varname in iteritems(self._var_name_map):
@@ -369,12 +371,12 @@ class LPModelPrinter(TextModelPrinter):
             env = model.environment
             if env.has_cplex and env.cplex_version.startswith("12.9."):
                 mobj_indent = 5
-                def make_default_obj_name(o):
-                    return 'obj%d' % o if o > 0 else 'obj'
+                def make_default_obj_name(o_):
+                    return 'obj%d' % o_ if o_ > 0 else 'obj'
             else:
                 mobj_indent = 7 # length of 'obj1: '
-                def make_default_obj_name(o):
-                    return 'obj%d' % (o+1)
+                def make_default_obj_name(o_):
+                    return 'obj%d' % (o_+1)
 
             wrapper.set_indent(mobj_indent * ' ') # length of 'obj1: '
             for o, ot in enumerate(model.iter_multi_objective_tuples()):
@@ -519,7 +521,8 @@ class LPModelPrinter(TextModelPrinter):
                 sos_name = sos.get_name() or 's%d' % s
                 wrapper.write('%s:' % sos_name)
                 wrapper.write('S%d ::' % sos.sos_type.value)  # 1 or 2
-                ranks = sos._get_weights()
+                ranks = sos.weights
+                # noinspection PyArgumentList
                 for rank, sos_var in izip(ranks, sos._variables):
                     wrapper.write('%s : %d' % (name_fn(sos_var), rank))
                 wrapper.flush(print_newline=True)

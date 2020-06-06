@@ -5,8 +5,9 @@
 # --------------------------------------------------------------------------
 
 import json
+import uuid
 try:
-    from IPython.display import Javascript, display, clear_output
+    from IPython.display import Javascript, HTML, display
 except ImportError:
     Javascript = None
 
@@ -52,5 +53,8 @@ class Tracker(object):
         '''
         if Javascript:
             js = generate_js(CATEGORY, event, details)
-            display(Javascript(js))
+            uid = str(uuid.uuid4())
+            display(Javascript(js), display_id=uid)
+            display(HTML('<div></div>'), update=True, display_id=uid)
+
             

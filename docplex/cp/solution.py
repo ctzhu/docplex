@@ -506,6 +506,7 @@ class CpoSequenceVarSolution(CpoVarSolution):
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoSequenceVar`.
             lvars: List of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
+                   or list of interval variables (object of class CpoIntervalVar)
         """
         assert isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
         super(CpoSequenceVarSolution, self).__init__(expr)

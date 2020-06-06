@@ -114,6 +114,10 @@ class DocplexNumericCheckerMixin(object):
 
 
 class DocplexTypeCheckerI(object):
+
+    def check_sync_indices(self):
+        return True
+
     def typecheck_iterable(self, arg):
         raise NotImplementedError  # pragma: no cover
 
@@ -158,6 +162,9 @@ class DocplexTypeCheckerI(object):
 
     def typecheck_ct_not_added(self, ct, do_raise=False, caller=None):
         raise NotImplementedError  # pragma: no cover
+
+    def typecheck_cts_added_to_model(self, mdl, cts, caller=None):
+        return cts  # pragma: no cover
 
     def typecheck_linear_constraint(self, obj, accept_ranges=True):
         raise NotImplementedError  # pragma: no cover
@@ -339,6 +346,25 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                              s_caller, ct, ct.get_index()
                              )
 
+    def typecheck_cts_added_to_model(self, mdl, cts, caller=None):
+        lcts = list(cts)
+        for ct in lcts:
+            if not ct.is_added():
+                s_caller = resolve_caller_as_string(caller, sep=' ')
+                mdl.fatal("{0}Constraint: {1!s} has not been added to any model".format(s_caller, ct))
+            elif mdl is not ct.model:
+                s_caller = resolve_caller_as_string(caller, sep=' ')
+                mdl.fatal("{0}Constraint: {1!s} belongs to a different model".format(s_caller, ct))
+        return lcts
+
+    def typecheck_ct_added_to_model(self, mdl, ct, caller=None):
+        if not ct.is_added():
+            s_caller = resolve_caller_as_string(caller, sep=' ')
+            mdl.fatal("{0}Constraint: {1!s} has not been added to any model".format(s_caller, ct))
+        elif mdl is not ct.model:
+            s_caller = resolve_caller_as_string(caller, sep=' ')
+            mdl.fatal("{0}Constraint: {1!s} belongs to a different model".format(s_caller, ct))
+
     def typecheck_linear_constraint(self, obj, accept_range=True):
         if accept_range:
             if not isinstance(obj, AbstractConstraint):
@@ -495,6 +521,10 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
 
 class DummyTypeChecker(DOcplexLoggerTypeChecker):
+
+    def check_sync_indices(self):
+        return False
+
     # noinspection PyUnusedLocal
     def __init__(self, logger):
         super(DummyTypeChecker, self).__init__(logger)
@@ -534,6 +564,12 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
         pass  # pragma: no cover
 
     def typecheck_ct_not_added(self, ct, do_raise=False, caller=None):
+        pass
+
+    def typecheck_cts_added_to_model(self, mdl, cts, caller=None):
+        return cts
+
+    def typecheck_ct_added_to_model(self, mdl, ct, caller=None):
         pass
 
     def typecheck_linear_constraint(self, obj, accept_range=True):

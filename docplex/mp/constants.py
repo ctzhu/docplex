@@ -12,6 +12,17 @@ from docplex.mp.utils import is_string, is_int
 import operator
 
 
+class VarBoundType(Enum):
+    """This enumerated class renages over the two types of variable bounds:
+        - LB is for lower bound
+        - UB is for uupper bound
+
+    This enumerated type is used in conflict refiner.
+    """
+    LB = 0
+    UB = 1
+
+
 class ComparisonType(Enum):
     """This enumerated class defines the various types of linear constraints:
 
@@ -70,8 +81,8 @@ class ComparisonType(Enum):
             if arg == op or arg == op.value:
                 return op
             elif is_string(arg):
-                if arg == op._cplex_code\
-                    or arg == str(op.value) \
+                if arg == op._cplex_code \
+                        or arg == str(op.value) \
                         or arg.lower() == op.name.lower():
                     return op
         else:
@@ -368,7 +379,6 @@ class QualityMetric(Enum):
     def int_key(self):
         return '%s.int' % self.codename.lower()
 
-
     max_primal_infeasibility = 1, 1, 'MAX_PRIMAL_INFEAS'
     max_scaled_primal_infeasibility = 2, 1, 'MAX_SCALED_PRIMAL_INFEAS'
     sum_primal_infeasibilities = 3, 0, 'SUM_PRIMAL_INFEAS'
@@ -524,8 +534,8 @@ class WriteLevel(Enum):
     Auto = 0, "auto"  # same as DiscreteVars: filter discrete, keep zeros
     AllVars = 1, "all"  # write all variables and their value, zero or nonzero
     DiscreteVars = 2, "discrete"  # write all discrete variables and their value
-    NonZeroVars = 3, "nonzero"   # write only nonzero variables
-    NonZeroDiscreteVars = 4 , "nonzero_discrete" # write nonzero discrete variables
+    NonZeroVars = 3, "nonzero"  # write only nonzero variables
+    NonZeroDiscreteVars = 4, "nonzero_discrete"  # write nonzero discrete variables
 
     def filter_zeros(self):
         return self in {WriteLevel.NonZeroVars, WriteLevel.NonZeroDiscreteVars}
@@ -550,7 +560,6 @@ class WriteLevel(Enum):
 
 
 class EffortLevel(Enum):
-
     """
     This enumerated class controls the effort level used for a MIP start.
     The numeric value is identical to the CPLEX EffortLevel parameter values.
@@ -580,6 +589,7 @@ class EffortLevel(Enum):
                     return eff
             else:
                 return fallback
+
 
 # problem type conversion
 _problemtype_map = {0: "LP",

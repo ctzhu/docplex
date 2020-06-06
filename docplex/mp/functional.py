@@ -11,7 +11,7 @@ from docplex.mp.basic import Expr
 from docplex.mp.constants import SOSType
 from docplex.mp.operand import LinearOperand
 
-from docplex.mp.utils import is_iterable, is_iterator
+from docplex.mp.utils import is_iterable, is_iterator, DocplexLinearRelaxationError
 
 # do NOT import Model -> circular
 
@@ -155,6 +155,9 @@ class _FunctionalExpr(Expr, LinearOperand):
     def function_symbol(self):
         return self._get_function_symbol()
 
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause=self.function_symbol)
+
     def __str__(self):
         return self.to_string()
 
@@ -233,6 +236,9 @@ class AbsExpr(UnaryFunctionalExpr):
     def copy(self, target_model, var_mapping):
         copied_arg_expr = self._argument_expr.copy(target_model, var_mapping)
         return AbsExpr(model=target_model, argument_expr=copied_arg_expr)
+
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='abs')
 
     def __init__(self, model, argument_expr):
         UnaryFunctionalExpr.__init__(self, model, argument_expr)
@@ -619,3 +625,6 @@ class PwlExpr(UnaryFunctionalExpr):
             # Need to set the _origin attribute of the copied var
             copied_pwl_expr_f_var._origin = copied_pwl_expr
         return copied_pwl_expr
+
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='pwl')

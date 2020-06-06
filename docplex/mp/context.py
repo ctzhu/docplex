@@ -45,7 +45,7 @@ from os.path import isfile, isabs
 
 from docplex.util.environment import get_environment
 
-from docplex.mp.utils import is_string, open_universal_newline, get_auto_publish_names
+from docplex.mp.utils import is_string, open_universal_newline
 from docplex.mp.environment import Environment
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.params.parameters import RootParameterGroup
@@ -72,6 +72,9 @@ class StreamWithCustomClose(object):
 
     def custom_close(self):
         return self._target.close()
+
+    def __str__(self):
+        return "<{0}>".format(self._target.name or "input")
 
 
 # some utility methods
@@ -148,14 +151,6 @@ def is_auto_publishing_solve_details(context):
     return auto_publish_details
 
 
-def auto_publishing_result_output_names(context):
-    # Return the list of result output names for saving
-    return get_auto_publish_names(context, 'result_output', 'solution.json')
-
-
-def auto_publising_kpis_table_names(context):
-    # Return the list of kpi table names for saving
-    return get_auto_publish_names(context, 'kpis_output', 'kpis.csv')
 
 
 def check_credentials(context):
@@ -639,9 +634,9 @@ class Context(BaseContext):
         try:
             if os.path.isfile(filename):
                 with open_universal_newline(filename, 'r') as f:
-                    # This is so that there is a context in the scope of the exec 
-                    context = self
-                    exec(f.read())
+                    l = {'context': self,
+                         '__file__': os.path.abspath(filename)}
+                    exec(f.read(), globals(), l)
         except Exception as exc:
             raise InvalidSettingsFileError('Error occured while reading file: %s' % filename,
                                            filename=filename, source=exc)

@@ -10,6 +10,7 @@ from docplex.mp.constants import BasisStatus
 
 import math
 
+
 class StaticTypeChecker(object):
 
     @staticmethod
@@ -40,13 +41,6 @@ class StaticTypeChecker(object):
     def typecheck_discrete_constraint(cls, logger, ct, msg):
         if not ct.is_discrete():
             logger.fatal('{0}, {1!s} is not discrete', msg, ct)
-
-    @classmethod
-    def typecheck_added_constraint(cls, mdl, ct):
-        if not ct.is_added():
-            mdl.fatal("Constraint: {0!s} has not been added to any model".format(ct))
-        elif mdl is not ct.model:
-            mdl.fatal("Constraint: {0!s} belongs to a different model".format(ct))
 
     @classmethod
     def mul_quad_lin_error(cls, logger, f1, f2):
@@ -95,7 +89,6 @@ class StaticTypeChecker(object):
             caller_string = '' if not caller else caller + ' '
             logger.warning("{0}Unexpected file extension: {1}, expecting one of {2}", caller_string,
                            file_extension, "|".join(x for x in expected_extensions))
-
 
     @classmethod
     def typecheck_initial_lp_stats(cls, logger, stats, stat_type, caller=None):

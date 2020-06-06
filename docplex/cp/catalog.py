@@ -15,36 +15,52 @@ from docplex.cp.catalog_elements import *
 # Descriptors of CPO types
 # ----------------------------------------------------------------------------
 
-Type_Unknown               = CpoType("Unknown")
 Type_FloatExpr             = CpoType("FloatExpr")
+Type_FloatVar              = CpoType("FloatVar", isvar=True, htyps=(Type_FloatExpr,))
 Type_Float                 = CpoType("Float", iscst=True, isatm=True, htyps=(Type_FloatExpr,))
+Type_FloatExprArray        = CpoType("FloatExprArray", eltyp=Type_FloatExpr)
+Type_FloatArray            = CpoType("FloatArray", htyps=(Type_FloatExprArray,), eltyp=Type_Float)
+Type_FloatVarArray         = CpoType("FloatVarArray", htyps=(Type_FloatExprArray,), eltyp=Type_FloatVar)
+
 Type_IntExpr               = CpoType("IntExpr", htyps=(Type_FloatExpr,))
 Type_IntVar                = CpoType("IntVar", isvar=True, htyps=(Type_IntExpr, Type_FloatExpr,))
 Type_Int                   = CpoType("Int", iscst=True, isatm=True, htyps=(Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,))
-Type_FloatVar              = CpoType("FloatVar", isvar=True, htyps=(Type_FloatExpr,))
-Type_CumulExpr             = CpoType("CumulExpr")
-Type_CumulAtom             = CpoType("CumulAtom", htyps=(Type_CumulExpr,))
-Type_CumulFunction         = CpoType("CumulFunction", htyps=(Type_CumulExpr,))
-Type_FloatExprArray        = CpoType("FloatExprArray", eltyp=Type_FloatExpr)
+Type_TimeInt               = CpoType("TimeInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+Type_PositiveInt           = CpoType("PositiveInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
 Type_IntExprArray          = CpoType("IntExprArray", htyps=(Type_FloatExprArray,), eltyp=Type_IntExpr)
-Type_Constraint            = CpoType("Constraint")
-Type_BoolExpr              = CpoType("BoolExpr", htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_IntervalVar           = CpoType("IntervalVar", isvar=True)
-Type_SequenceVar           = CpoType("SequenceVar", isvar=True)
-Type_StateFunction         = CpoType("StateFunction", isvar=True)
-Type_IntervalVarArray      = CpoType("IntervalVarArray", eltyp=Type_IntervalVar)
+Type_IntArray              = CpoType("IntArray", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
 Type_IntVarArray           = CpoType("IntVarArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_IntVar)
+
+Type_Constraint            = CpoType("Constraint")
+
+Type_BoolExpr              = CpoType("BoolExpr", htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_Bool                  = CpoType("Bool", iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_BoolVar               = CpoType("BoolVar", isvar=True, htyps=(Type_IntVar, Type_Bool, Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_BoolInt               = CpoType("BoolInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
+Type_BoolArray             = CpoType("BoolArray", htyps=(Type_IntArray, Type_FloatArray, Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_Bool)
+Type_BoolVarArray          = CpoType("BoolVarArray", htyps=(Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolVar)
+
+Type_IntervalVar           = CpoType("IntervalVar", isvar=True)
+Type_IntervalVarArray      = CpoType("IntervalVarArray", eltyp=Type_IntervalVar)
+
+Type_SequenceVar           = CpoType("SequenceVar", isvar=True)
+Type_SequenceVarArray      = CpoType("SequenceVarArray", eltyp=Type_SequenceVar)
+
+Type_CumulExpr             = CpoType("CumulExpr")
+Type_CumulExprArray        = CpoType("CumulExprArray", eltyp=Type_CumulExpr)
+Type_CumulAtom             = CpoType("CumulAtom", htyps=(Type_CumulExpr,))
+Type_CumulAtomArray        = CpoType("CumulAtomArray", htyps=(Type_CumulExprArray,), eltyp=Type_CumulAtom)
+Type_CumulFunction         = CpoType("CumulFunction", htyps=(Type_CumulExpr,))
+
+Type_StateFunction         = CpoType("StateFunction", isvar=True)
 Type_SegmentedFunction     = CpoType("SegmentedFunction", iscst=True)
 Type_StepFunction          = CpoType("StepFunction", iscst=True)
 Type_TransitionMatrix      = CpoType("TransitionMatrix", iscst=True)
 Type_IntervalArray         = CpoType("IntervalArray")
-Type_FloatArray            = CpoType("FloatArray", htyps=(Type_FloatExprArray,), eltyp=Type_Float)
-Type_IntArray              = CpoType("IntArray", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
-Type_SequenceVarArray      = CpoType("SequenceVarArray", eltyp=Type_SequenceVar)
-Type_CumulExprArray        = CpoType("CumulExprArray", eltyp=Type_CumulExpr)
-Type_CumulAtomArray        = CpoType("CumulAtomArray", htyps=(Type_CumulExprArray,), eltyp=Type_CumulAtom)
 Type_Objective             = CpoType("Objective")
 Type_TupleSet              = CpoType("TupleSet", iscst=True)
+
 Type_IntValueEval          = CpoType("IntValueEval")
 Type_IntValueChooser       = CpoType("IntValueChooser")
 Type_IntValueSelector      = CpoType("IntValueSelector", htyps=(Type_IntValueChooser,))
@@ -54,22 +70,20 @@ Type_IntVarChooser         = CpoType("IntVarChooser")
 Type_IntVarSelector        = CpoType("IntVarSelector", htyps=(Type_IntVarChooser,))
 Type_IntVarSelectorArray   = CpoType("IntVarSelectorArray", htyps=(Type_IntVarChooser,), eltyp=Type_IntVarSelector)
 Type_SearchPhase           = CpoType("SearchPhase")
-Type_TimeInt               = CpoType("TimeInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
-Type_PositiveInt           = CpoType("PositiveInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
-Type_BoolInt               = CpoType("BoolInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+
+Type_Any                   = TYPE_ANY             # Fake type
+Type_Unknown               = CpoType("Unknown")   # Fake type
 Type_Python                = CpoType("Python")
 Type_Identifier            = CpoType("Identifier", isvar=True)
-Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
-Type_Bool                  = CpoType("Bool", iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_BoolArray             = CpoType("BoolArray", htyps=(Type_IntArray, Type_FloatArray, Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_Bool)
 
-ALL_TYPES = (Type_Bool, Type_BoolExpr, Type_BoolArray, Type_BoolExprArray, Type_BoolInt, Type_Constraint, Type_CumulAtom, Type_CumulAtomArray, Type_CumulExprArray, Type_CumulExpr, Type_CumulFunction, Type_Float, Type_FloatArray, Type_FloatExpr, Type_FloatExprArray, Type_FloatVar, Type_Identifier, Type_Int, Type_IntArray, Type_IntExpr, Type_IntExprArray, Type_IntValueChooser, Type_IntValueEval, Type_IntValueSelector, Type_IntValueSelectorArray, Type_IntVar, Type_IntVarArray, Type_IntVarChooser, Type_IntVarEval, Type_IntVarSelector, Type_IntVarSelectorArray, Type_IntervalArray, Type_IntervalVar, Type_IntervalVarArray, Type_Objective, Type_PositiveInt, Type_Python, Type_SearchPhase, Type_SegmentedFunction, Type_SequenceVar, Type_SequenceVarArray, Type_StateFunction, Type_StepFunction, Type_TimeInt, Type_TransitionMatrix, Type_TupleSet, Type_Unknown)
-compute_all_type_links(ALL_TYPES)
 
 # ----------------------------------------------------------------------------
-# Descriptors of CPO operations
+# Descriptors of private CPO operations
 # ----------------------------------------------------------------------------
 
+Oper__added                      = CpoOperation("_added", "_added", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExpr, )),
+                                                                                CpoSignature(Type_Constraint, (Type_BoolExpr, )),) )
+Oper_custom_constraint           = CpoOperation("customConstraint", "custom_constraint", None, -1, ( CpoSignature(Type_BoolExpr, ANY_ARGUMENTS),) )
 Oper__alternative_expr           = CpoOperation("_alternativeExpr", "_alternative_expr", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntervalVar, Type_IntervalVarArray, Type_IntArray)),
                                                                                                      CpoSignature(Type_FloatExpr, (Type_IntervalVar, Type_IntervalVarArray, Type_FloatArray))) )
 Oper__asym_distance              = CpoOperation("_asymDistance", "_asym_distance", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExpr, Type_IntExpr)),) )
@@ -90,7 +104,7 @@ Oper__eq_asym_distance           = CpoOperation("_eqAsymDistance", "_eq_asym_dis
 Oper__equivalence                = CpoOperation("_equivalence", "_equivalence", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVar)),) )
 Oper__explicit_var_eval          = CpoOperation("_explicitVarEval", "_explicit_var_eval", None, -1, ( CpoSignature(Type_IntVarEval, (Type_FloatArray, CpoParam(Type_Float, dval=0))),) )
 Oper__float_to_int               = CpoOperation("_floatToInt", "_float_to_int", None, -1, ( CpoSignature(Type_IntExpr, (Type_FloatExpr,)),) )
-Oper__float_var                  = CpoOperation("_floatVar", "_float_var", None, -1, ( CpoSignature(Type_FloatExpr, (Type_Float, Type_Float)),) )
+Oper__float_var                  = CpoOperation("_floatVar", "_float_var", None, -1, ( CpoSignature(Type_FloatVar, (Type_Float, Type_Float)),) )
 Oper__floor                      = CpoOperation("_floor", "_floor", None, -1, ( CpoSignature(Type_IntExpr, (Type_FloatExpr,)),) )
 Oper__forbid_end                 = CpoOperation("_forbidEnd", "_forbid_end", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalArray)),) )
 Oper__forbid_extent              = CpoOperation("_forbidExtent", "_forbid_extent", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalArray)),) )
@@ -138,6 +152,12 @@ Oper__value_upper_obj_variation  = CpoOperation("_valueUpperObjVariation", "_val
 Oper__var_index                  = CpoOperation("_varIndex", "_var_index", None, -1, ( CpoSignature(Type_IntVarEval, (CpoParam(Type_Float, dval=-1),)),) )
 Oper__var_lower_obj_variation    = CpoOperation("_varLowerObjVariation", "_var_lower_obj_variation", None, -1, ( CpoSignature(Type_IntVarEval, ()),) )
 Oper__var_upper_obj_variation    = CpoOperation("_varUpperObjVariation", "_var_upper_obj_variation", None, -1, ( CpoSignature(Type_IntVarEval, ()),) )
+
+
+# ----------------------------------------------------------------------------
+# Descriptors of public CPO operations
+# ----------------------------------------------------------------------------
+
 Oper_abs                         = CpoOperation("abs", "abs", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExpr,)),
                                                                           CpoSignature(Type_FloatExpr, (Type_FloatExpr,))) )
 Oper_abstraction                 = CpoOperation("abstraction", "abstraction", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray, Type_IntExprArray, Type_IntArray, Type_Int)),) )
@@ -172,7 +192,6 @@ Oper_count                       = CpoOperation("count", "count", None, -1, ( Cp
                                                                               CpoSignature(Type_IntExpr, (Type_Int, Type_IntExprArray))) )
 Oper_count_different             = CpoOperation("countDifferent", "count_different", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExprArray,)),) )
 Oper_cumul_range                 = CpoOperation("cumulRange", "cumul_range", None, -1, ( CpoSignature(Type_Constraint, (Type_CumulExpr, Type_IntExpr, Type_IntExpr)),) )
-Oper_custom_constraint           = CpoOperation("customConstraint", "custom_constraint", None, -1, ( CpoSignature(Type_BoolExpr, ()),) )
 Oper_custom_value_chooser        = CpoOperation("customValueChooser", "custom_value_chooser", None, -1, ( CpoSignature(Type_IntValueChooser, ()),) )
 Oper_custom_value_eval           = CpoOperation("customValueEval", "custom_value_eval", None, -1, ( CpoSignature(Type_IntValueEval, ()),) )
 Oper_custom_var_chooser          = CpoOperation("customVarChooser", "custom_var_chooser", None, -1, ( CpoSignature(Type_IntVarChooser, ()),) )
@@ -262,9 +281,11 @@ Oper_less_or_equal               = CpoOperation("lessOrEqual", "less_or_equal", 
                                                                                            CpoSignature(Type_Constraint, (Type_IntExpr, Type_CumulExpr))) )
 Oper_lexicographic               = CpoOperation("lexicographic", "lexicographic", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray, Type_IntExprArray)),) )
 Oper_log                         = CpoOperation("log", "log", None, -1, ( CpoSignature(Type_FloatExpr, (Type_FloatExpr,)),) )
-Oper_logical_and                 = CpoOperation("and", "logical_and", "&&", 7, ( CpoSignature(Type_BoolExpr, (Type_BoolExpr, Type_BoolExpr)),) )
+Oper_logical_and                 = CpoOperation("and", "logical_and", "&&", 7, ( CpoSignature(Type_BoolExpr, (Type_BoolExpr, Type_BoolExpr)),
+                                                                                 CpoSignature(Type_BoolExpr, (Type_BoolExprArray,)),) )
 Oper_logical_not                 = CpoOperation("not", "logical_not", "!", 1, ( CpoSignature(Type_BoolExpr, (Type_BoolExpr,)),) )
-Oper_logical_or                  = CpoOperation("or", "logical_or", "||", 8, ( CpoSignature(Type_BoolExpr, (Type_BoolExpr, Type_BoolExpr)),) )
+Oper_logical_or                  = CpoOperation("or", "logical_or", "||", 8, ( CpoSignature(Type_BoolExpr, (Type_BoolExpr, Type_BoolExpr)),
+                                                                               CpoSignature(Type_BoolExpr, (Type_BoolExprArray,)),))
 Oper_max                         = CpoOperation("max", "max", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExpr, Type_IntExpr)),
                                                                           CpoSignature(Type_IntExpr, (Type_IntExprArray,)),
                                                                           CpoSignature(Type_FloatExpr, (Type_FloatExpr, Type_FloatExpr)),
@@ -360,7 +381,9 @@ Oper_span                        = CpoOperation("span", "span", None, -1, ( CpoS
 Oper_spread                      = CpoOperation("spread", "spread", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray, Type_FloatExpr, Type_FloatExpr)),) )
 Oper_square                      = CpoOperation("square", "square", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExpr,)),
                                                                                 CpoSignature(Type_FloatExpr, (Type_FloatExpr,))) )
-Oper_standard_deviation          = CpoOperation("standardDeviation", "standard_deviation", None, -1, ( CpoSignature(Type_FloatExpr, (Type_IntExprArray, Type_Float, Type_Float)),) )
+Oper_standard_deviation          = CpoOperation("standardDeviation", "standard_deviation", None, -1, ( CpoSignature(Type_FloatExpr, (Type_IntExprArray, Type_Float, Type_Float)),
+                                                                                                       CpoSignature(Type_FloatExpr, (Type_IntExprArray,)),) )
+
 Oper_start_at_end                = CpoOperation("startAtEnd", "start_at_end", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVar, CpoParam(Type_IntExpr, dval=0))),) )
 Oper_start_at_start              = CpoOperation("startAtStart", "start_at_start", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVar, CpoParam(Type_IntExpr, dval=0))),) )
 Oper_start_before_end            = CpoOperation("startBeforeEnd", "start_before_end", None, -1, ( CpoSignature(Type_Constraint, (Type_IntervalVar, Type_IntervalVar, CpoParam(Type_IntExpr, dval=0))),) )
@@ -404,4 +427,15 @@ Oper_var_index_eval              = CpoOperation("varIndexEval", "var_index_eval"
 Oper_var_local_impact            = CpoOperation("varLocalImpact", "var_local_impact", None, -1, ( CpoSignature(Type_IntVarEval, (CpoParam(Type_Int, dval=-1),)),) )
 Oper_var_success_rate            = CpoOperation("varSuccessRate", "var_success_rate", None, -1, ( CpoSignature(Type_IntVarEval, ()),) )
 
-ALL_OPERATIONS = (Oper__alternative_expr, Oper__asym_distance, Oper__binary_s_p_equal, Oper__bound_pruning, Oper__ceil, Oper__choice, Oper__conditional, Oper__cumul_atom_array, Oper__cumul_function, Oper__degree, Oper__dichotomy, Oper__dist_to_int, Oper__distance, Oper__end_modulo, Oper__eq_asym_distance, Oper__equivalence, Oper__explicit_var_eval, Oper__float_to_int, Oper__float_var, Oper__floor, Oper__forbid_end, Oper__forbid_extent, Oper__forbid_start, Oper__fract, Oper__implies, Oper__implies_not, Oper__interval_array, Oper__length_modulo, Oper__max, Oper__max_distance, Oper__max_size_var_evaluator, Oper__maximize, Oper__maximize_dynamic_lex, Oper__min, Oper__min_distance, Oper__minimize, Oper__minimize_dynamic_lex, Oper__multi_span, Oper__no_overlap, Oper__not_range, Oper__opposite, Oper__or, Oper__piecewise_linear, Oper__random_value, Oper__random_var, Oper__regret_on_max, Oper__regret_on_min, Oper__round, Oper__same_cumul_atom, Oper__same_interval_domain, Oper__sgn, Oper__size_modulo, Oper__size_over_degree, Oper__start_modulo, Oper__state_condition, Oper__sub_circuit, Oper__table_element, Oper__trunc, Oper__value_local_impact, Oper__value_lower_obj_variation, Oper__value_pruning, Oper__value_upper_obj_variation, Oper__var_index, Oper__var_lower_obj_variation, Oper__var_upper_obj_variation, Oper_abs, Oper_abstraction, Oper_all_diff, Oper_all_min_distance, Oper_allowed_assignments, Oper_alternative, Oper_always_constant, Oper_always_equal, Oper_always_in, Oper_always_no_state, Oper_before, Oper_bool_abstraction, Oper_ceil, Oper_conditional, Oper_constant, Oper_coordinate_piecewise_linear, Oper_count, Oper_count_different, Oper_cumul_range, Oper_custom_constraint, Oper_custom_value_chooser, Oper_custom_value_eval, Oper_custom_var_chooser, Oper_custom_var_eval, Oper_diff, Oper_dist_to_int, Oper_distribute, Oper_domain_max, Oper_domain_min, Oper_domain_size, Oper_element, Oper_end_at_end, Oper_end_at_start, Oper_end_before_end, Oper_end_before_start, Oper_end_eval, Oper_end_of, Oper_end_of_next, Oper_end_of_prev, Oper_equal, Oper_equal_or_escape, Oper_equivalence, Oper_exotic_object, Oper_explicit_value_eval, Oper_explicit_var_eval, Oper_exponent, Oper_false, Oper_first, Oper_float_array, Oper_float_div, Oper_float_expr_array, Oper_float_to_int, Oper_floor, Oper_forbid_end, Oper_forbid_extent, Oper_forbid_start, Oper_forbidden_assignments, Oper_fract, Oper_greater, Oper_greater_or_equal, Oper_height_at_end, Oper_height_at_start, Oper_if_then, Oper_impact_of_last_branch, Oper_implies, Oper_implies_not, Oper_int_array, Oper_int_div, Oper_int_expr_array, Oper_int_value_selector_array, Oper_int_var_selector_array, Oper_interval_var_array, Oper_inverse, Oper_isomorphism, Oper_last, Oper_length_eval, Oper_length_of, Oper_length_of_next, Oper_length_of_prev, Oper_less, Oper_less_or_equal, Oper_lexicographic, Oper_log, Oper_logical_and, Oper_logical_not, Oper_logical_or, Oper_max, Oper_maximize, Oper_maximize_static_lex, Oper_member, Oper_min, Oper_minimize, Oper_minimize_static_lex, Oper_minus, Oper_mod, Oper_multi_span, Oper_next, Oper_no_overlap, Oper_not_member, Oper_opposite, Oper_overlap_length, Oper_pack, Oper_phase, Oper_piecewise_linear, Oper_plus, Oper_power, Oper_presence_of, Oper_previous, Oper_pulse, Oper_random_value, Oper_range, Oper_round, Oper_same_common_sub_sequence, Oper_same_common_subsequence, Oper_same_sequence, Oper_scal_prod, Oper_search_phase, Oper_search_phase_int, Oper_search_phase_rank, Oper_search_phase_set_times, Oper_segmented_function, Oper_select_largest, Oper_select_random_value, Oper_select_random_var, Oper_select_smallest, Oper_sequence, Oper_sequence_var_array, Oper_sgn, Oper_size_eval, Oper_size_of, Oper_size_of_next, Oper_size_of_prev, Oper_slope_piecewise_linear, Oper_span, Oper_spread, Oper_square, Oper_standard_deviation, Oper_start_at_end, Oper_start_at_start, Oper_start_before_end, Oper_start_before_start, Oper_start_eval, Oper_start_of, Oper_start_of_next, Oper_start_of_prev, Oper_step_at, Oper_step_at_end, Oper_step_at_start, Oper_step_function, Oper_strong, Oper_strong_constraint, Oper_sum, Oper_synchronize, Oper_table_element, Oper_times, Oper_transition_matrix, Oper_true, Oper_trunc, Oper_tuple_set, Oper_type_of_next, Oper_type_of_prev, Oper_value, Oper_value_impact, Oper_value_index, Oper_value_index_eval, Oper_value_local_impact, Oper_value_lower_obj_variation, Oper_value_success_rate, Oper_value_upper_obj_variation, Oper_var_impact, Oper_var_index, Oper_var_index_eval, Oper_var_local_impact, Oper_var_success_rate)
+
+# ----------------------------------------------------------------------------
+# Build working structures
+# ----------------------------------------------------------------------------
+
+import sys
+_module = sys.modules[__name__]
+_attrs = dir(_module)
+ALL_TYPES = tuple(getattr(_module, x) for x in _attrs if x.startswith("Type_"))
+ALL_OPERATIONS = tuple(getattr(_module, x) for x in _attrs if x.startswith("Oper_"))
+compute_all_type_links(ALL_TYPES)
+

@@ -91,19 +91,14 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         name_s = '(\'%s\')' % self._name if self._name else ''
         return '{0!s}{2}[{1:s}]'.format(self._sos_type.name, vars_s, name_s)
 
-    def _get_weights(self):
-        # INTERNAL
-        self_weights = self._weights
-        return self_weights if self_weights is not None else list(range(1, len(self) + 1))
-
     @property
     def weights(self):
-        return self._get_weights()
+        self_weights = self._weights
+        return self_weights if self_weights is not None else list(range(1, len(self) + 1))
 
     @weights.setter
     def weights(self, new_weights):
         self._set_weights(new_weights)
-
 
     def as_constraint(self):
         mdl = self._model

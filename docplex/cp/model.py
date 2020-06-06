@@ -103,18 +103,31 @@ class CpoModelStatistics(object):
     """ This class represents model statistics information.
     """
 
-    def __init__(self, model):
-        """ Initialize statistics
+    def __init__(self, model=None, json=None):
+        """ Create new model statistics
+
+        Can be created either by giving source model, or json object.
 
         Args:
-            model: Source model
+            model: (Optional) Source model
+            json:  (Optional) Json representation of this object
         """
-        self.nb_root_exprs = len(model.expr_list) + len(model.search_phases) + 0 if model.objective is None else 1
-        self.nb_integer_var   = 0     # Number of integer variables
-        self.nb_interval_var  = 0     # Number of interval variables
-        self.nb_expr_nodes    = 0     # Number of expression nodes
-        self.operation_usage  = {}    # Map of operation usage count.
-                                      # Key is the CPO name of the operation, value is the number of times it is used.
+        if json is not None:
+            self.nb_root_exprs = json.get('nb_root_exprs', 0)
+            self.nb_integer_var = json.get('nb_integer_var', 0)
+            self.nb_interval_var = json.get('nb_interval_var', 0)
+            self.nb_expr_nodes = json.get('nb_expr_nodes', 0)
+            self.operation_usage = json.get('operation_usage')
+        else:
+            if model is None:
+                self.nb_root_exprs = 0
+            else:
+                self.nb_root_exprs = len(model.expr_list) + len(model.search_phases) + (0 if model.objective is None else 1)
+            self.nb_integer_var   = 0     # Number of integer variables
+            self.nb_interval_var  = 0     # Number of interval variables
+            self.nb_expr_nodes    = 0     # Number of expression nodes
+            self.operation_usage  = {}    # Map of operation usage count.
+                                          # Key is the CPO name of the operation, value is the number of times it is used.
 
     def _add_expression(self, expr):
         """ Update statistics with an expression node.
@@ -130,6 +143,20 @@ class CpoModelStatistics(object):
         elif isinstance(expr, CpoFunctionCall):
             opname = expr.operation.cpo_name
             self.operation_usage[opname] = self.operation_usage.get(opname, 0) + 1
+
+    def add(self, other):
+        """ Add other model statistics to this one
+
+        Args:
+            other:  Other model statistics, object of class CpoModelStatistics
+        """
+        self.nb_root_exprs   += other.nb_root_exprs
+        self.nb_integer_var  += other.nb_integer_var
+        self.nb_interval_var += other.nb_interval_var
+        self.nb_expr_nodes   += other.nb_expr_nodes
+        for k, v in other.operation_usage.items():
+            self.operation_usage[k] = self.operation_usage.get(k, 0) + other.operation_usage.get(k, 0)
+
 
     def write(self, out=None, prefix=""):
         """ Write the statistics
@@ -161,6 +188,21 @@ class CpoModelStatistics(object):
         else:
             out.write("None")
         out.write("\n")
+
+    def to_json(self):
+        """ Build a json object from this statistics
+
+        Returns:
+            JSON object
+        """
+        # Build json object for stats
+        return {
+            'nb_root_exprs':   self.nb_root_exprs,
+            'nb_integer_var':  self.nb_integer_var,
+            'nb_interval_var': self.nb_interval_var,
+            'nb_expr_nodes':   self.nb_expr_nodes,
+            'operation_usage': self.operation_usage
+        }
 
     def __str__(self):
         """ Build a string representing this object
@@ -295,7 +337,6 @@ class CpoModel(object):
         Raises:
             CpoException in case of error.
         """
-
         # Check simple boolean expressions
         if is_bool(expr):
             # assert expr, "Try to add an expression which is already false"
@@ -304,6 +345,9 @@ class CpoModel(object):
 
         # Check expression type
         if not isinstance(expr, CpoExpr):
+            # Check string
+            if is_string(expr):
+                raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
             # Try as iterable
             try:
                 for x in expr:
@@ -480,8 +524,7 @@ class CpoModel(object):
 
         # Add all new phases
         for p in phases:
-            if not p.is_type(Type_SearchPhase):
-                raise AssertionError("Argument 'phases' should be an array of SearchPhases")
+            assert isinstance(p, CpoExpr) and p.is_type(Type_SearchPhase), "Argument 'phases' should be an array of SearchPhases"
             self.add(p)
 
 

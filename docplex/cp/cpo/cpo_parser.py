@@ -53,8 +53,9 @@ _KNOWN_IDENTIFIERS = {"intmax": INT_MAX, "intmin": INT_MIN,
 
 # Map of array types for each CPO name
 _ARRAY_TYPES = {'intArray': Type_IntArray, 'floatArray': Type_FloatArray,
-                'intExprArray': Type_IntExprArray, 'floatExprArray': Type_FloatExprArray,
+                'boolExprArray' : Type_BoolExprArray, 'intExprArray': Type_IntExprArray, 'floatExprArray': Type_FloatExprArray,
                 'intervalVarArray': Type_IntervalVarArray, 'sequenceVarArray': Type_SequenceVarArray,
+                'tupleSet' : Type_TupleSet,
                 '_cumulAtomArray' : Type_CumulAtomArray}
 
 # Fake operator '..' to read intervals properly
@@ -97,6 +98,7 @@ class CpoParser(object):
                  'tokenizer',      # Reading tokenizer
                  'token',          # Last read token
                  'pushtoken',      # Pushed token
+                 'fun_handlers',   # Special function handlers
                  )
     
     def __init__(self, mdl=None):
@@ -115,6 +117,22 @@ class CpoParser(object):
 
         # Do not store location information (would store parser instead of real lines)
         self.model.source_loc = False
+
+        # Initialize special function handlers
+        self.fun_handlers = {
+            'intVar':            self._read_fun_intVar,
+            '_intVar':           self._read_fun_intVar,
+            'boolVar':           self._read_fun_boolVar,
+            '_boolVar':          self._read_fun_boolVar,
+            'floatVar':          self._read_fun_floatVar,
+            '_floatVar':         self._read_fun_floatVar,
+            'intervalVar':       self._read_fun_intervalVar,
+            'sequenceVar':       self._read_fun_sequenceVar,
+            'stateFunction':     self._read_fun_stateFunction,
+            'stepFunction':      self._read_fun_stepFunction,
+            'segmentedFunction': self._read_fun_segmentedFunction,
+            'transitionMatrix':  self._read_fun_transitionMatrix,
+        }
 
         # TODO: parse and include source information ?
 
@@ -146,6 +164,7 @@ class CpoParser(object):
 
         self.tokenizer = CpoTokenizer(file=cfile)
         self._read_statement_list()
+        self.tokenizer.close()
         self.tokenizer = None
 
         return self.model
@@ -163,6 +182,7 @@ class CpoParser(object):
         """
         self.tokenizer = CpoTokenizer(input=str)
         self._read_statement_list()
+        self.tokenizer.close()
         self.tokenizer = None
         return self.model
 
@@ -198,11 +218,19 @@ class CpoParser(object):
             return False
         tok2 = self._next_token()
 
+        # Check obsolete let and set forms
+        if tok1 in (TOKEN_LET, TOKEN_SET) and tok2.type is TOKEN_TYPE_SYMBOL:
+            tok1 = tok2
+            tok2 = self._next_token()
+
         if tok1 is TOKEN_HASH:
             self._read_directive(tok2.value)
 
         elif tok2 is TOKEN_ASSIGN:
-            self._read_assignment(tok1.get_string())
+            expr = self._read_assignment(tok1.get_string())
+            # Add expression to the model if it is a variable
+            if expr.is_variable():
+                self.model.add(expr)
 
         elif tok2 is TOKEN_SEMICOLON:
             # Get existing expression and re-add it to the model
@@ -222,7 +250,7 @@ class CpoParser(object):
             # Read expression
             self._push_token(tok1)
             expr = self._read_expression()
-            # print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
+            #print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
             self.model.add(expr)
             self._check_token(self.token, TOKEN_SEMICOLON)
 
@@ -261,102 +289,49 @@ class CpoParser(object):
         Args:
             name:  Assignment name
         Returns:
-            Read expression
+            Named expression
         """
+        # Read expression
         tok = self._next_token()
-        if tok.value in ("intVar", "_intVar"):
-            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            expr = CpoIntVar(tuple(args), name)
-            self.model.add(expr)
-
-        elif tok.value == "intervalVar":
-            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-            self._next_token()
-            expr = self._read_interval_var_params(name, TOKEN_PARENT_CLOSE)
-            self.model.add(expr)
-
-        elif tok.value == "sequenceVar":
-            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            if len(args) == 1:
-                lvars = args[0]
-                ltypes = None
-            else:
-                if len(args) != 2:
-                    self._raise_exception("'sequenceVar' should have 1 or 2 arguments")
-                lvars = args[0]
-                ltypes = args[1]
-            expr = CpoSequenceVar(lvars, ltypes, name)
-            self.model.add(expr)
-
-        elif tok.value == "stateFunction":
-            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            nbargs = len(args)
-            if nbargs == 0:
-                trmx = None
-            elif nbargs == 1:
-                trmx = args[0]
-            else:
-                self._raise_exception("'stateFunction' should have 0 or 1 argument")
-            expr = CpoStateFunction(trmx, name)
-
-        elif tok.value in("floatVar", "_floatVar"):
-            self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-            args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            if len(args) != 2:
-                self._raise_exception("'_floatVar' should have 2 arguments")
-            expr = CpoFloatVar(args[0], args[1], name)
-            self.model.add(expr)
-
+        expr = self._read_expression()
+        # Build CPO expression if needed
+        expr = build_cpo_expr(expr)
+        # Add name to the expression
+        if expr.name:
+            # Create an alias if needed
+            if name != expr.name:
+                expr = CpoAlias(expr, name)
         else:
-            # Read expression
-            expr = self._read_expression()
-            self._push_token('')
-            # Build CPO expression if needed
-            expr = build_cpo_expr(expr)
-            # Add name to the expression
-            if expr.name:
-                # Create an alias if needed
-                if name != expr.name:
-                    expr = CpoAlias(expr, name)
-            else:
-                expr.set_name(name)
+            expr.set_name(name)
 
         # Add expression to expressions dictionary
         self.expr_dict[name] = expr
-
-        self._check_token(self._next_token(), TOKEN_SEMICOLON)
-
+        self._check_token(self.token, TOKEN_SEMICOLON)
         return expr
 
 
-    def _read_interval_var_params(self, name, etok):
+    def _read_interval_var(self):
         """ Read a interval_var declaration
-        Args:
-            name:  Variable name
-            etok:  Ending token
+        Returns with token set to the last unexpected token
         Returns:
             CpoIntervalVar variable expression
         """
-        res = interval_var(name=name)
-        tok = self.token
-        while tok is not etok:
+        res = interval_var()
+        while True:
             # Read argument name
-            self._check_token_string(tok)
+            tok = self.token
+            if tok.type is not TOKEN_TYPE_SYMBOL:
+                return res
             aname = tok.value
+            self._next_token()
             if aname == "present":
                 res.set_present()
-                self._next_token()
             elif aname == "absent":
                 res.set_absent()
-                self._next_token()
             elif aname == "optional":
                 res.set_optional()
-                self._next_token()
             else:
-                self._check_token(self._next_token(), TOKEN_ASSIGN)
+                self._check_token(self.token, TOKEN_ASSIGN)
                 self._next_token()
                 if aname in ("start", "end", "length", "size"):
                     # Read interval
@@ -378,7 +353,6 @@ class CpoParser(object):
             tok = self.token
             if tok.value == ',':
                 tok = self._next_token()
-        return res
 
 
     def _read_expression(self):
@@ -431,74 +405,50 @@ class CpoParser(object):
         """
 
         tok = self.token
+        toktyp = tok.type
+        ntok = self._next_token()
 
         # Check int constant
-        if tok.type is TOKEN_TYPE_INTEGER:
-            self._next_token()
+        if toktyp is TOKEN_TYPE_INTEGER:
             return int(tok.value)
         
         # Check float constant
-        if tok.type is TOKEN_TYPE_FLOAT:
-            self._next_token()
+        if toktyp is TOKEN_TYPE_FLOAT:
             return float(tok.value)
 
-        # Check known identifier
-        if tok.value in _KNOWN_IDENTIFIERS:
-            self._next_token()
-            return _KNOWN_IDENTIFIERS[tok.value]
-
         # Check unary operator
-        if tok.type is TOKEN_TYPE_OPERATOR:
+        if toktyp is TOKEN_TYPE_OPERATOR:
             # Retrieve operation descriptor
             op = self._get_and_check_operator(tok)
             # Read next expression
-            self._next_token()
             expr = self._read_sub_expression()
             return self._create_operation_expression(op, (expr,))
         
         # Check symbol
-        if tok.type is TOKEN_TYPE_SYMBOL:
-            ntok = self._next_token()
-            if ntok is TOKEN_PARENT_OPEN:
-                # Read function arguments
-                if tok.value == "transitionMatrix":
-                    # Check arguments list to support presolved version
-                    tok = self._next_token()
-                    self._push_token(tok)
-                    if tok.value == "matrixSize":
-                        args = self._read_arguments_list(TOKEN_PARENT_CLOSE)
-                        for name, mtrx in args:
-                            if name == 'matrix':
-                                break
-                    else:
-                        mtrx = self._read_expression_list(TOKEN_PARENT_CLOSE)
-                    self._next_token()
-                    slen = len(mtrx)
-                    size = int(math.sqrt(slen))
-                    if size * size != slen:
-                        raise CpoParserException("Length of transition matrix values should be a square")
-                    return CpoTransitionMatrix(values=(mtrx[i * size : (i+1) * size] for i in range(size)))
-                else:
-                    args = self._read_expression_list(TOKEN_PARENT_CLOSE)
-                    self._next_token()
-                    # Check predefined functions
-                    if tok.value == "stepFunction":
-                        return CpoStepFunction(args)
-                    if tok.value == "segmentedFunction":
-                        return CpoSegmentedFunction(args[0], args[1:])
-                    if tok.value == "sequenceVar":
-                        return CpoSequenceVar(*args)
-                    # General function call, retrieve operation descriptor
-                    opname = tok.value
-                    op = _ALL_OPERATIONS.get(opname, None)
-                    if op is None:
-                        self._raise_exception("Unknown operation '" + str(tok.value) + "'")
-                    return self._create_operation_expression(op, args)
+        if toktyp is TOKEN_TYPE_SYMBOL:
+            tokval = tok.value
+            # Check known identifier
+            if tokval in _KNOWN_IDENTIFIERS:
+                return _KNOWN_IDENTIFIERS[tok.value]
 
-            elif ntok is TOKEN_HOOK_OPEN:
-                # Read typed array
-                expr = self._read_expression_list(TOKEN_HOOK_CLOSE)
+            if ntok is TOKEN_PARENT_OPEN:
                 self._next_token()
+                # Check special function calls
+                fun = self.fun_handlers.get(tokval)
+                if fun:
+                    return fun()
+
+                # General function call, retrieve operation descriptor
+                op = _ALL_OPERATIONS.get(tokval)
+                if op is None:
+                    self._raise_exception("Unknown operation '" + str(tok.value) + "'")
+                args = self._read_expression_list_up_to_parent_close()
+                return self._create_operation_expression(op, args)
+
+            if ntok is TOKEN_HOOK_OPEN:
+                # Read typed array
+                self._next_token()
+                expr = self._read_expression_list(TOKEN_HOOK_CLOSE)
                 # Search type
                 typ = _ARRAY_TYPES.get(tok.value)
                 if typ is None:
@@ -512,14 +462,12 @@ class CpoParser(object):
                     res.type = typ
                 return res
 
-            else:
-                # Token is an expression id
-                return self._get_identifier_value(tok.value)
+            # Token is an expression id
+            return self._get_identifier_value(tok.get_string())
         
         # Check expression in parenthesis
         if tok is TOKEN_PARENT_OPEN:
-            expr = self._read_expression_list(TOKEN_PARENT_CLOSE)
-            self._next_token()
+            expr = self._read_expression_list_up_to_parent_close()
             if len(expr) == 1:
                 return expr[0]
             return expr
@@ -527,50 +475,188 @@ class CpoParser(object):
         # Check array with no type
         if tok is TOKEN_HOOK_OPEN:
             expr = self._read_expression_list(TOKEN_HOOK_CLOSE)
-            self._next_token()
             return expr
             
         # Check reference to a model expression or variable
-        if tok.type is TOKEN_TYPE_STRING:
-            self._next_token()
+        if toktyp is TOKEN_TYPE_STRING:
             return self._get_identifier_value(tok.get_string())
                 
         # Unknown expression
         self._raise_exception("Invalid start of expression: '" + str(tok) + "'")
 
 
+    def _read_fun_intVar(self):
+        """ Read a function call to 'intVar'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        return CpoIntVar(tuple(args))
+
+
+    def _read_fun_intervalVar(self):
+        """ Read a function call to 'intervalVar'
+        Returns: New expression
+        """
+        expr = self._read_interval_var()
+        self._check_token(self.token, TOKEN_PARENT_CLOSE)
+        self._next_token()
+        return expr
+
+
+    def _read_fun_boolVar(self):
+        """ Read a function call to 'boolVar'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        # Should add some test here to verify the domain
+        return CpoBoolVar(tuple(args))
+
+
+    def _read_fun_floatVar(self):
+        """ Read a function call to 'floatVar'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        if len(args) != 2:
+            self._raise_exception("'_floatVar' should have 2 arguments")
+        return CpoFloatVar(args[0], args[1])
+
+
+    def _read_fun_sequenceVar(self):
+        """ Read a function call to 'sequenceVar'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        if len(args) == 1:
+            lvars = args[0]
+            ltypes = None
+        else:
+            if len(args) != 2:
+                self._raise_exception("'sequenceVar' should have 1 or 2 arguments")
+            lvars = args[0]
+            ltypes = args[1]
+        return CpoSequenceVar(lvars, ltypes)
+
+
+    def _read_fun_stateFunction(self):
+        """ Read a function call to 'stateFunction'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        nbargs = len(args)
+        if nbargs == 0:
+            trmx = None
+        elif nbargs == 1:
+            trmx = args[0]
+        else:
+            self._raise_exception("'stateFunction' should have 0 or 1 argument")
+        return CpoStateFunction(trmx)
+
+
+    def _read_fun_stepFunction(self):
+        """ Read a function call to 'stepFunction'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        return CpoStepFunction(args)
+
+
+    def _read_fun_segmentedFunction(self):
+        """ Read a function call to 'segmentedFunction'
+        Returns: New expression
+        """
+        args = self._read_expression_list_up_to_parent_close()
+        return CpoSegmentedFunction(args[0], args[1:])
+
+
+    def _read_fun_transitionMatrix(self):
+        """ Read a function call to 'transitionMatrix'
+        Returns: New expression
+        """
+        # Check arguments list to support presolved version
+        if self.token.value == "matrixSize":
+            args = self._read_arguments_list_up_to_parent_close()
+            for name, mtrx in args:
+                if name == 'matrix':
+                    break
+        else:
+            mtrx = self._read_expression_list_up_to_parent_close()
+        slen = len(mtrx)
+        size = int(math.sqrt(slen))
+        if size * size != slen:
+            raise CpoParserException("Length of transition matrix values should be a square")
+        return CpoTransitionMatrix(values=(mtrx[i * size : (i+1) * size] for i in range(size)))
+
+
+    def _read_expression_list_in_parenthesis(self):
+        """ Read a list of expressions between parenthesis
+        Opening parenthesis is read and checked by this method.
+        When returning, current token is token after closing parenthesis.
+        Args:
+           etok: Expression list ending token string (for example ')' or ']')
+        Returns:
+            Array of expressions
+        """
+        self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
+        self._next_token()
+        lxpr = []
+        while self.token is not TOKEN_PARENT_CLOSE:
+            lxpr.append(self._read_expression())
+            if self.token is TOKEN_COMMA:
+                self._next_token()
+        self._next_token()
+        return tuple(lxpr)
+
+
     def _read_expression_list(self, etok):
         """ Read a list of expressions
+        This method supposes that the current token is just after list starting character.
+        When returning, current token is token after end of list
 
-        This method supposes that the list start token is read (for example '(' or '[').
-        When returning, current token is list ending token
         Args:
            etok: Expression list ending token string (for example ')' or ']')
         Returns:
             Array of expressions
         """
         lxpr = []
-        self._next_token()
         while self.token is not etok:
             lxpr.append(self._read_expression())
             if self.token is TOKEN_COMMA:
                 self._next_token()
+        self._next_token()
         return tuple(lxpr)
 
 
-    def _read_arguments_list(self, etok):
-        """ Read a list of arguments that are possibly named
+    def _read_expression_list_up_to_parent_close(self):
+        """ Read a list of expressions up to a closing parenthesis
+        This method supposes that current token is first after opening parenthesis.
+        When returning, current token is token after end of list
 
-        This method supposes that the list start token is read (for example '(' or '[').
-        When returning, current token is list ending token
+        Returns:
+            Array of expressions
+        """
+        lxpr = []
+        while self.token is not TOKEN_PARENT_CLOSE:
+            lxpr.append(self._read_expression())
+            if self.token is TOKEN_COMMA:
+                self._next_token()
+        self._next_token()
+        return tuple(lxpr)
+
+
+    def _read_arguments_list_up_to_parent_close(self):
+        """ Read a list of arguments that are possibly named, up to ending closing parenthesis
+
+        This method supposes that the current token is list start (for example '(' or '[').
+        When returning, current token is next to list ending token
+
         Args:
            etok: Expression list ending token (for example ')' or ']')
         Returns:
             Array of couples (name, expression)
         """
         lxpr = []
-        self._next_token()
-        while self.token is not etok:
+        while self.token is not TOKEN_PARENT_CLOSE:
             if self.token.type is TOKEN_TYPE_SYMBOL:
                 name = self.token
                 if self._next_token() is TOKEN_ASSIGN:
@@ -583,6 +669,7 @@ class CpoParser(object):
             lxpr.append((name, self._read_expression()))
             if self.token is TOKEN_COMMA:
                 self._next_token()
+        self._next_token()
         return lxpr
 
 
@@ -602,6 +689,8 @@ class CpoParser(object):
             self._read_section_starting_point()
         elif name == "KPIs":
             self._read_section_kpis()
+        elif name == "phases":
+            self._read_section_phases()
         else:
             self._raise_exception("Unknown section '" + name + "'")
 
@@ -630,15 +719,26 @@ class CpoParser(object):
         while (tok is not TOKEN_EOF) and (tok.value != '}'):
             if self.token.value == "version":
                 self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
-                ver = self._next_token().get_string()
-                self.model.set_format_version(ver)
-                if compare_natural(ver, MIN_CPO_VERSION_NUMBER) < 0:
-                    raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
-                                                               .format(ver, MIN_CPO_VERSION_NUMBER))
-                if compare_natural(ver, MAX_CPO_VERSION_NUMBER) > 0:
-                    raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
-                                                               .format(ver, MAX_CPO_VERSION_NUMBER))
+                vtok = self._next_token()
+                if vtok.type is TOKEN_TYPE_VERSION:
+                    ver = vtok.get_string()
+                    self.model.set_format_version(ver)
+                    if compare_natural(ver, MIN_CPO_VERSION_NUMBER) < 0:
+                        raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
+                                                                   .format(ver, MIN_CPO_VERSION_NUMBER))
+                    if compare_natural(ver, MAX_CPO_VERSION_NUMBER) > 0:
+                        raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
+                                                                   .format(ver, MAX_CPO_VERSION_NUMBER))
                 self._check_token(self._next_token(), TOKEN_PARENT_CLOSE)
+            tok = self._next_token()
+
+
+    def _read_section_phases(self):
+        """ Read a phase section (old CPO versions, ignored)
+        """
+        # Skip all until section end
+        tok = self._next_token()
+        while (tok is not TOKEN_EOF) and (tok.value != '}'):
             tok = self._next_token()
 
 
@@ -686,47 +786,69 @@ class CpoParser(object):
                 self._raise_exception("There is no variable named '{}' in this model".format(vname))
             self._check_token(self._next_token(), TOKEN_ASSIGN)
             tok = self._next_token()
-            is_parent = False
+            vsol = None
 
             # Process integer variable
-            if var.type == Type_IntVar:
+            if var.type is Type_IntVar:
                 if tok.value == "intVar":
                     tok = self._next_token()
-                is_parent = (tok is TOKEN_PARENT_OPEN)
-                if is_parent:
+                if tok is TOKEN_PARENT_OPEN:
                     self._next_token()
                 # Read domain
                 dom = self._read_expression()
+                if self.token is TOKEN_PARENT_CLOSE:
+                    self._next_token()
                 # Add solution to starting point
                 vsol = CpoIntVarSolution(var, (dom, ))
 
-            elif var.type == Type_IntervalVar:
+            # Process interval variable
+            elif var.type is Type_IntervalVar:
                 if tok.value == "absent":
                     vsol = CpoIntervalVarSolution(var, presence=False)
                     self._check_token(self._next_token(), TOKEN_SEMICOLON)
                 else:
                     if tok.value == "intervalVar":
                         tok = self._next_token()
-                    is_parent = (tok is TOKEN_PARENT_OPEN)
-                    if is_parent:
+                    if tok is TOKEN_PARENT_OPEN:
                         self._next_token()
-                    ivar = self._read_interval_var_params(vname, TOKEN_PARENT_CLOSE if is_parent else TOKEN_SEMICOLON)
+                        ivar = self._read_interval_var()
+                        self._check_token(self.token, TOKEN_PARENT_CLOSE)
+                        self._next_token()
+                    else:
+                        ivar = self._read_interval_var()
+                    ivar.set_name(vname)
                     vsol = CpoIntervalVarSolution(ivar,
                                                   presence=True if ivar.is_present() else False if ivar.is_absent() else None,
                                                   start=ivar.get_start() if ivar.get_start() != DEFAULT_INTERVAL else None,
                                                   end=ivar.get_end() if ivar.get_end() != DEFAULT_INTERVAL else None,
                                                   size=ivar.get_size() if ivar.get_size() != DEFAULT_INTERVAL else None)
 
+            # Process sequence variable (not public)
+            elif var.type is Type_SequenceVar:
+                # Read array of variables
+                expr = self._read_expression()
+                if not is_array(expr):
+                    self._raise_exception("In section 'startingPoint', the solution of a sequence variable should be a list of interval variables")
+                vsol = CpoSequenceVarSolution(var, expr)
+
+            # Process state function
+            elif var.type is Type_StateFunction:
+                # Read state function value and ignore
+                expr = self._read_expression()
+
+            # Process pulse function
+            elif var.type is Type_CumulAtom:
+                # Read pulse expression and ignore
+                expr = self._read_expression()
+
             else:
                 self._raise_exception("The section 'startingPoint' should contain only integer and interval variables.")
 
             # Add variable solution to starting point
-            sp.add_var_solution(vsol)
+            if vsol is not None:
+                sp.add_var_solution(vsol)
 
             # Read end of variable starting point
-            if is_parent:
-                self._check_token(self.token, TOKEN_PARENT_CLOSE)
-                self._next_token()
             self._check_token(self.token, TOKEN_SEMICOLON)
             tok = self._next_token()
 
@@ -823,11 +945,10 @@ class CpoParser(object):
         Returns:
             Expression corresponding to this identifier
         """
-        expr = self.expr_dict.get(eid)
-        return eid if expr is None else expr
-        # if expr is None:
-        #     self._raise_exception("Unknown identifier '" + str(eid) + "'")
-        # return expr
+        try:
+            return self.expr_dict[eid]
+        except:
+            self._raise_exception("Unknown identifier '" + str(eid) + "'")
 
 
     def _create_operation_expression(self, op, args):

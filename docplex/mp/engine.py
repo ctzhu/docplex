@@ -8,6 +8,7 @@
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
 from docplex.mp.utils import DOcplexException
+from docplex.mp.error_handler import docplex_fatal
 from docplex.util.status import JobSolveStatus
 from docplex.mp.constants import CplexScope
 
@@ -15,16 +16,7 @@ from docplex.mp.constants import CplexScope
 # gendoc: ignore
 
 
-class ISolver(object):
-    """
-    The pure solving part
-    """
-
-    def can_solve(self):
-        """
-        :return: True if this engine class can truly solve
-        """
-        raise NotImplementedError  # pragma: no cover
+class IEngine(object):
 
     def register_callback(self, cb):
         raise NotImplementedError  # pragma: no cover
@@ -39,6 +31,13 @@ class ISolver(object):
         raise NotImplementedError  # pragma: no cover
 
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
+        """
+        Runs feasopt-like algorithm with a set of relaxable cts with preferences
+
+        :param mdl: The model for which relaxation is performed.
+        :param relaxable_groups:
+        :return:
+        """
         raise NotImplementedError  # pragma: no cover
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
@@ -95,9 +94,6 @@ class ISolver(object):
     def get_solve_details(self):
         raise NotImplementedError  # pragma: no cover
 
-    def get_quality_metrics(self):
-        raise NotImplementedError  # pragma: no cover
-
     def clean_before_solve(self):
         raise NotImplementedError  # pragma: no cover
 
@@ -107,24 +103,8 @@ class ISolver(object):
     def solved_as_mip(self):
         return False
 
-
-# noinspection PyAbstractClass
-class IEngine(ISolver):
-    """ interface for all engine facades
-    """
-
-    def get_name(self):
-        ''' Returns the code to be used in model'''
-        raise NotImplementedError  # pragma: no cover
-
     @property
     def name(self):
-        return self.get_name()
-
-    def get_var_index(self, var):
-        raise NotImplementedError  # pragma: no cover
-
-    def get_ct_index(self, index):
         raise NotImplementedError  # pragma: no cover
 
     def get_infinity(self):
@@ -133,7 +113,7 @@ class IEngine(ISolver):
     def create_one_variable(self, vartype, lb, ub, name):
         raise NotImplementedError  # pragma: no cover
 
-    def create_variables(self, keys, vartype, lb, ub, name):
+    def create_variables(self, nb_vars, vartype, lb, ub, name):
         raise NotImplementedError  # pragma: no cover
 
     def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
@@ -152,7 +132,8 @@ class IEngine(ISolver):
         raise NotImplementedError  # pragma: no cover
 
     def create_batch_logical_constraints(self, logcts, is_equivalence):
-        return [self.create_logical_constraint(logct, is_equivalence=is_equivalence) for logct in logcts]
+        # the default is to iterate and append.
+        return [self.create_logical_constraint(logc, is_equivalence) for logc in logcts]
 
     def create_quadratic_constraint(self, qct):
         raise NotImplementedError  # pragma: no cover
@@ -189,10 +170,10 @@ class IEngine(ISolver):
         raise NotImplementedError  # pragma: no cover
 
     def rename_var(self, var, new_name):
-        raise NotImplementedError  # pragam: no cover
+        raise NotImplementedError  # pragma: no cover
 
     def change_var_types(self, dvars, new_types):
-        raise NotImplementedError  # pragam: no cover
+        raise NotImplementedError  # pragma: no cover
 
     def update_objective_epxr(self, expr, event, *args):
         raise NotImplemented  # pragma: no cover
@@ -220,8 +201,129 @@ class IEngine(ISolver):
 
 
 # noinspection PyAbstractClass
+class MinimalEngine(IEngine):
+    # define as most methods as possible with reasonable defaults.
+
+    def only_cplex(self, mname):
+        raise TypeError("{0} requires CPLEX - not available.")  # pragma: no cover
+
+    def end(self):
+        pass  # pragma: no cover
+
+    def set_streams(self, out):
+        pass  # pragma: no cover
+
+    def register_callback(self, cb):
+        # no callbacks
+        pass   # pragma: no cover
+
+    def connect_progress_listeners(self, listeners, model):
+        # no listeners
+        self.only_cplex(mname="connect_progress_listeners")   # pragma: no cover
+
+    def set_parameter(self, parameter, value):
+        #
+        pass   # pragma: no cover
+
+    def get_parameter(self, parameter):
+        # engine value of a parameter is its own
+        return parameter.get()   # pragma: no cover
+
+    def clean_before_solve(self):
+        pass   # pragma: no cover
+
+    def get_infinity(self):
+        return 1e+20   # pragma: no cover
+
+    def create_one_variable(self, vartype, lb, ub, name):
+        # define create one var in terms of create batch vars
+        xs = self.create_variables(1, vartype, [lb], [ub], [name])
+        return xs[0]   # pragma: no cover
+
+    def set_var_lb(self, var, lb):
+        pass   # pragma: no cover
+
+    def set_var_ub(self, var, ub):
+        pass   # pragma: no cover
+
+    def rename_var(self, var, new_name):
+        pass  # pragma: no cover
+
+    def rename_linear_constraint(self, linct, new_name):
+        pass  # pragma: no cover
+
+    def check_var_indices(self, dvars):
+        pass  # pragma: no cover
+
+    def check_constraint_indices(self, cts):
+        pass  # pragma: no cover
+
+    def remove_constraints(self, cts):
+        pass   # pragma: no cover
+
+    def update_constraint(self, ct, event, *args):
+        self.only_cplex(mname="update_constraint")
+
+    def remove_constraint(self, ct):
+        pass   # pragma: no cover
+
+    def create_sos(self, sos):   # pragma: no cover
+        self.only_cplex("create SOS set")
+
+    def clear_all_sos(self):
+        pass   # pragma: no cover
+
+    def create_linear_constraint(self, ct):
+        return self.create_block_linear_constraints([ct])[0]   # pragma: no cover
+
+    def get_solve_details(self):
+        from docplex.mp.sdetails import SolveDetails
+        return SolveDetails()   # pragma: no cover
+
+    def get_basis(self, mdl):
+        self.only_cplex("get_basis")   # pragma: no cover
+
+    def set_lp_start(self, var_stats, ct_stats):
+        self.only_cplex("set_lp_start")   # pragma: no cover
+
+    def supports_logical_constraints(self):
+        return False   # pragma: no cover
+
+    def change_var_types(self, dvars, new_types):
+        self.only_cplex(mname="change_var_type")   # pragma: no cover
+
+    def get_cplex(self):
+        docplex_fatal("No cplex is available.")   # pragma: no cover
+
+    def create_batch_logical_constraints(self, logcts, is_equivalence):
+        self.only_cplex(mname="create_batch_logical_constraints")   # pragma: no cover
+
+    def create_logical_constraint(self, logct, is_equivalence):
+        self.only_cplex(mname="create_logical_constraint")   # pragma: no cover
+
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
+        self.only_cplex(mname="refine_conflict")   # pragma: no cover
+
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
+        self.only_cplex(mname="solve_relaxed")  # pragma: no cover
+
+    def create_pwl_constraint(self, pwl_ct):
+        self.only_cplex(mname="create_quadratic_constraint")  # pragma: no cover
+
+    def create_quadratic_constraint(self, qct):
+        self.only_cplex(mname="create_quadratic_constraint")  # pragma: no cover
+
+    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
+                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        self.only_cplex(mname="set_multi_objective_exprs")  # pragma: no cover
+
+
+# noinspection PyAbstractClass,PyMethodMayBeStatic
 class DummyEngine(IEngine):
     def create_range_constraint(self, rangect):
+        return -1  # pragma: no cover
+
+    def create_logical_constraint(self, logct, is_equivalence):
         return -1  # pragma: no cover
 
     def create_quadratic_constraint(self, qct):
@@ -236,20 +338,14 @@ class DummyEngine(IEngine):
     def get_infinity(self):
         return 1e+20  # pragma: no cover
 
-    def get_var_index(self, var):
-        return -1  # pragma: no cover
-
-    def get_ct_index(self, index):
-        return -1  # pragma: no cover
-
     def create_one_variable(self, vartype, lb, ub, name):
         return -1  # pragma: no cover
 
-    def create_variables(self, keys, vartype, lb, ub, name):
-        return [-1] * len(keys)  # pragma: no cover
+    def create_variables(self, nb_vars, vartype, lb, ub, name):
+        return [-1] * nb_vars  # pragma: no cover
 
-    def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
-        return [-1] * len(keys)
+    def create_multitype_variables(self, size, vartypes, lbs, ubs, names):
+        return [-1] * size
 
     def set_var_lb(self, var, lb):
         pass
@@ -272,8 +368,8 @@ class DummyEngine(IEngine):
     def create_block_linear_constraints(self, ct_seq):
         return [-1] * len(ct_seq)  # pragma: no cover
 
-    def create_batch_indicator_constraints(self, ind_seq):
-        return [-1] * len(ind_seq)  # pragma: no cover
+    def create_batch_logical_constraints(self, logcts, is_equivalence):
+        return [-1] * len(logcts)  # pragma: no cover
 
     def remove_constraint(self, ct):
         pass  # pragma: no cover
@@ -292,8 +388,6 @@ class DummyEngine(IEngine):
         pass  # pragma: no cover
 
     def end(self):
-        """ terminate the engine
-        """
         pass  # pragma: no cover
 
     def register_callback(self, cb):
@@ -308,9 +402,6 @@ class DummyEngine(IEngine):
 
     def disconnect_progress_listeners(self, listeners):
         pass  # pragma: no cover
-
-    def can_solve(self):
-        return False  # pragma: no cover
 
     def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
         return None  # pragma: no cover
@@ -337,31 +428,28 @@ class DummyEngine(IEngine):
     def update_constraint(self, ct, event, *args):
         pass  # pragma: no cover
 
-    def get_quality_metrics(self):
-        return {}  # pragma: no cover
-
     def supports_logical_constraints(self):
         return True, None
 
     def supports_multi_objective(self):
-        return True, None
+        return True, None  # pragma: no cover
 
     def check_var_indices(self, dvars):
-        pass
+        pass  # pragma: no cover
 
     def check_constraint_indices(self, cts):
-        pass
+        pass  # pragma: no cover
 
     def create_sos(self, sos):
-        pass
+        pass  # pragma: no cover
 
     def clear_all_sos(self):
-        pass
+        pass  # pragma: no cover
 
     def get_basis(self, mdl):
-        return None, None
+        return None, None  # pragma: no cover
 
-    def set_lp_start(self, var_stats, ct_stats):
+    def set_lp_start(self, var_stats, ct_stats):  # pragma: no cover
         raise DOcplexException('set_lp_start() requires CPLEX, not available for {0}'.format(self.name))
 
 
@@ -377,11 +465,11 @@ class IndexerEngine(DummyEngine):
         self.__var_counter = self._initial_index
         self._ct_counter = self._initial_index
 
-    def _increment_vars(self, size=1):
+    def _increment_vars(self, size):
         self.__var_counter += size
         return self.__var_counter
 
-    def _increment_cts(self, size=1):
+    def _increment_cts(self, size):
         self._ct_counter += size
         return self._ct_counter
 
@@ -390,9 +478,9 @@ class IndexerEngine(DummyEngine):
         self._increment_vars(1)
         return old_count
 
-    def create_variables(self, keys, vartype, lb, ub, name):
+    def create_variables(self, nb_vars, vartype, lb, ub, name):
         old_count = self.__var_counter
-        new_count = self._increment_vars(len(keys))
+        new_count = self._increment_vars(nb_vars)
         return list(range(old_count, new_count))
 
     def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
@@ -423,6 +511,9 @@ class IndexerEngine(DummyEngine):
     def create_logical_constraint(self, logct, is_equivalence):
         return self._create_one_ct()
 
+    def create_batch_logical_constraints(self, logcts, is_equivalence):
+        return self.create_batch_cts(logcts)
+
     def create_quadratic_constraint(self, ind):
         return self._create_one_ct()
 
@@ -439,9 +530,6 @@ class IndexerEngine(DummyEngine):
         return {CplexScope.LINEAR_CT_SCOPE: {},
                 CplexScope.QUAD_CT_SCOPE: {},
                 CplexScope.IND_CT_SCOPE: {}}
-
-    def dump(self, path):
-        pass
 
     def set_objective_sense(self, sense):
         pass
@@ -477,45 +565,43 @@ class NoSolveEngine(IndexerEngine):
 
     # INTERNAL: a dummy engine that cannot solve.
 
+    # noinspection PyUnusedLocal
     def __init__(self, mdl, **kwargs):
         IndexerEngine.__init__(self)
 
-    def get_name(self):
-        return "local"
+    @property
+    def name(self):
+        return "nosolve"
 
-    def get_var_index(self, var):
-        return var.index
+    @staticmethod
+    def _no_cplex_error(mdl, method_name):  # pragma: no cover
+        mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: {0} is not available".format(method_name))
 
-    def get_ct_index(self, ct):
-        return ct.index
-
-    def can_solve(self):
-        return False
-
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):  # pragma: no cover
         """
         This solver cannot solve. never ever.
         """
-        mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: model cannot be solved!")
+        self._no_cplex_error(mdl, method_name="solve")
         return None
 
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        mdl.fatal("No CPLEX DLL: model cannot be relaxed!")
+    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):  # pragma: no cover
+        self._no_cplex_error(mdl, method_name="solve_relaxed")
         return None
 
-    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        mdl.fatal("No CPLEX DLL: conflict refiner cannot be invoked on model!")
+    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):  # pragma: no cover
+        self._no_cplex_error(mdl, method_name="refine_conflict")
         return None
 
     @staticmethod
     def make_from_model(mdl):
+        # used in pickle
         eng = NoSolveEngine(mdl)
         eng._increment_vars(mdl.number_of_variables)
         eng._increment_cts(mdl.number_of_constraints)
         return eng
 
 
-# noinspection PyMethodMayBeStatic
+# noinspection PyUnusedLocal
 class ZeroSolveEngine(IndexerEngine):
     # INTERNAL: a dummy engine that says it can solve
     # but returns an all-zero solution.
@@ -537,14 +623,12 @@ class ZeroSolveEngine(IndexerEngine):
     def last_solved_parameters(self):
         return self._last_solved_parameters
 
-    def get_name(self):
-        return "zero_solve"  # pragma: no cover
-
     @property
     def name(self):
-        return self.get_name()
+        return "zero_solve"
 
-    def get_var_zero_solution(self, dvar):
+    @staticmethod
+    def get_var_zero_solution(dvar):
         return max(0, dvar.lb)
 
     def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
@@ -552,15 +636,6 @@ class ZeroSolveEngine(IndexerEngine):
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)
         return self.make_zero_solution(mdl)
-
-    def get_solutions(self, args):
-        if not args:
-            return {}
-        else:
-            return {v: 0 for v in args}
-
-    def can_solve(self):
-        return True  # pragma: no cover
 
     def make_zero_solution(self, mdl):
         # return a feasible value: max of zero and the lower bound
@@ -575,111 +650,7 @@ class ZeroSolveEngine(IndexerEngine):
         return self.make_zero_solution(mdl)
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        return None
+        return None  # pragma: no cover
 
     def get_solve_details(self):
         return SolveDetails.make_fake_details(time=0, feasible=True)
-
-
-class FakeFailEngine(IndexerEngine):
-    # INTERNAL: a dummy engine that says it can solve
-    # but always fail, and returns None.
-    def __init__(self, mdl, **kwargs):
-        IndexerEngine.__init__(self)  # pragma: no cover
-
-    def get_name(self):
-        return "no_solution_solve"  # pragma: no cover
-
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
-        # solve fails equivalent to returning None
-        return None  # pragma: no cover
-
-    def can_solve(self):
-        return True  # pragma: no cover
-
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        return None  # pragma: no cover
-
-    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        return None  # pragma: no cover
-
-    def get_solve_status(self):
-        return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
-
-    def get_solve_details(self):
-        return SolveDetails.make_fake_details(time=0, feasible=False)
-
-
-class TerminatedEngine(IndexerEngine):
-    def get_name(self):
-        return "terminated"
-
-    # INTERNAL: a dummy engine that says it can solve
-    # but always fail, and returns None.
-    def terminate(self):
-        raise DOcplexException("model has been terminated, no solve is possible...")
-
-    def __init__(self, mdl, **kwargs):
-        IndexerEngine.__init__(self)  # pragma: no cover
-
-    def name(self):
-        return "exception"  # pragma: no cover
-
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
-        # solve fails equivalent to returning None
-        self.terminate()
-        return None  # pragma: no cover
-
-    def can_solve(self):
-        return True  # pragma: no cover
-
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        self.terminate()
-        return None  # pragma: no cover
-
-    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        self.terminate()
-        return None  # pragma: no cover
-
-    def get_solve_status(self):
-        return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
-
-    def get_solve_details(self):
-        return SolveDetails.make_fake_details(time=0, feasible=False)
-
-
-class RaiseErrorEngine(IndexerEngine):
-    # INTERNAL: a dummy engine that says it can solve
-    # but always raises an exception, this is for testing
-
-    @staticmethod
-    def _simulate_error():
-        raise DOcplexException("simulate exception")
-
-    def __init__(self, mdl, **kwargs):
-        IndexerEngine.__init__(self)  # pragma: no cover
-
-    def get_name(self):
-        return "raise"  # pragma: no cover
-
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
-        # solve fails equivalent to returning None
-        self._simulate_error()
-        return None  # pragma: no cover
-
-    def can_solve(self):
-        return True  # pragma: no cover
-
-    def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
-        self._simulate_error()
-        return None  # pragma: no cover
-
-    def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        self._simulate_error()
-        return None  # pragma: no cover
-
-    def get_solve_status(self):
-        return JobSolveStatus.INFEASIBLE_SOLUTION  # pragma: no cover
-
-    def get_solve_details(self):
-        return SolveDetails.make_fake_details(time=0, feasible=False)

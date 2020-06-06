@@ -177,6 +177,15 @@ class CpoExpr(object):
         return self.type.is_kind_of(tp)
 
 
+    def is_variable(self):
+        """ Check if this expression is a variable
+
+        Returns:
+            True if this expression is a variable
+        """
+        return False
+
+
     def get_max_depth(self):
         """ Gets the maximum expression depth.
 
@@ -637,6 +646,14 @@ class CpoVariable(CpoExpr):
         """
         super(CpoVariable, self).__init__(type, name)
 
+    def is_variable(self):
+        """ Check if this expression is a variable
+
+        Returns:
+            True if this expression is a variable
+        """
+        return True
+
 
 class CpoIntVar(CpoVariable):
     """ This class represents an *integer variable* that can be used in a CPO model.
@@ -723,7 +740,27 @@ class CpoIntVar(CpoVariable):
         """
         return _domain_contains(self.domain, value)
 
+    @property
+    def lb(self):
+        """ This property is used to get lower bound of the variable domain.
+        """
+        return self.get_domain_min()
+
+    @property
+    def ub(self):
+        """ This property is used to get upper bound of the variable domain.
+        """
+        return self.get_domain_max()
+
     def is_bool_var(self):
+        """ Check if the domain of this variable is reduced to boolean, 0, 1
+
+        Returns:
+            True if this variable is a boolean variable
+        """
+        return self.domain == (0, 1) or self.domain == ((0, 1),)
+
+    def is_binary(self):
         """ Check if the domain of this variable is reduced to boolean, 0, 1
 
         Returns:
@@ -740,6 +777,40 @@ class CpoIntVar(CpoVariable):
             True if 'other' is semantically identical to this object, False otherwise.
         """
         return super(CpoIntVar, self).equals(other) and (self.domain == other.domain)
+
+
+class CpoBoolVar(CpoIntVar):
+    # Currently internal
+    # """ This class represents a *boolean variable* that can be used in a CPO model.
+    #
+    # This object should not be created explicitly, but using one of the following factory method:
+    #
+    # * :meth:`binary_var`, :meth:`binary_var_list`, :meth:`binary_var_dict` to create integer variable(s)
+    #   with value in [0..1],
+    # """
+    __slots__ = ('domain',  # Variable domain
+                 )
+
+    def __init__(self, dom, name=None):
+        # Private constructor
+        super(CpoBoolVar, self).__init__(dom, name)
+        self.type = Type_BoolVar
+
+    def is_bool_var(self):
+        """ Check if the domain of this variable is reduced to boolean, 0, 1
+
+        Returns:
+            True if this variable is a boolean variable
+        """
+        return True
+
+    def is_binary(self):
+        """ Check if the domain of this variable is reduced to boolean, 0, 1
+
+        Returns:
+            True if this variable is a boolean variable
+        """
+        return True
 
 
 class CpoFloatVar(CpoVariable):
@@ -2123,7 +2194,7 @@ def build_cpo_expr(val):
     try:
         val = _CacheKeyTuple(val)
     except TypeError:
-       raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
+       raise CpoException("Impossible to build a CP Optimizer expression with value '{}' of type '{}'".format(to_string(val), type(val)))
 
     # Check if already in the cache
     if _CACHE_ACTIVE:
@@ -2136,7 +2207,7 @@ def build_cpo_expr(val):
                 try:
                     cpval = _CPO_VALUES_FROM_PYTHON.get(val)
                 except TypeError:
-                    raise CpoException("Impossible to build a CPO expression with value '{}' of type '{}'".format(to_string(val), type(val)))
+                    raise CpoException("Impossible to build a CP Optimizer expression with value '{}' of type '{}'".format(to_string(val), type(val)))
             if cpval is None:
                 cpval = _create_cpo_array_expr(val)
                 _CPO_VALUES_FROM_PYTHON.set(val, cpval)
@@ -2277,7 +2348,7 @@ def _create_cpo_array_expr(val):
     # Determine type
     typ = _get_cpo_array_type(val)
     if typ is None:
-        raise CpoException("Impossible to build a CPO expression with value '" + to_string(val) + "'")
+        raise CpoException("Impossible to build a CP Optimizer expression with value '" + to_string(val) + "'")
 
     # Convert array elements if required
     if typ.is_array_of_expr:
@@ -2628,7 +2699,10 @@ def _is_matching_arguments(sgn, args):
     Returns:
         True if the arguments are matching signature
     """
-    for a, p in zip_longest(args, sgn.parameters):
+    params = sgn.parameters
+    if params is ANY_ARGUMENTS:
+        return True
+    for a, p in zip_longest(args, params):
         if a is not None:
             # Accepted if there is a parameter descriptor that is compatible with argument type
             if not (p and a.type.is_kind_of(p.type)):

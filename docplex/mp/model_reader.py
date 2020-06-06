@@ -203,6 +203,10 @@ class ModelReader(object):
         try:
             names = get_names_fn()
             return names
+        # except TypeError:
+        #     print("** type error ignored in call to {0}".format(get_names_fn.__name__))
+        #     return fallback_names or []
+
         except CplexSolverError as cpxse:  # pragma: no cover
             errcode = cpxse.args[2]
             # when all indicators have no names, cplex raises this error
@@ -318,8 +322,11 @@ class ModelReader(object):
             print("* file is empty: {0} - exiting".format(filename))
             return model_class(name=name_to_use, **kwargs)
 
-        # print("-> start reading file: {0}".format(filename))
+        if verbose:
+            print("-> CPLEX starts reading file: {0}".format(filename))
         cpx = self._cplex_read(filename, verbose=verbose)
+        if verbose:
+            print("<- CPLEX finished reading file: {0}".format(filename))
 
         if not cpx:  # pragma: no cover
             return None
@@ -336,6 +343,8 @@ class ModelReader(object):
                 final_checker = 'default'
             # build the model with no checker, then restore final_checker in the end.
             kwargs['checker'] = 'off'
+
+            ignore_names = kwargs.get('ignore_names', False)
             # -------------
 
             mdl = model_class(name=name_to_use, **kwargs)
@@ -349,7 +358,10 @@ class ModelReader(object):
                            'S': mdl.semicontinuous_vartype}
             # 1 upload variables
             cpx_nb_vars = cpx.variables.get_num()
-            cpx_var_names = self._safe_call_get_names(cpx.variables.get_names)
+
+            if verbose:
+                print("-- uploading {0} variables...".format(cpx_nb_vars))
+            cpx_var_names = [] if ignore_names else self._safe_call_get_names(cpx.variables.get_names)
 
             if cpx._is_MIP():
                 cpx_vartypes = [vartype_map.get(cpxt, vartype_cont) for cpxt in cpx.variables.get_types()]
@@ -374,7 +386,6 @@ class ModelReader(object):
                     # generated var for ranges
                     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=cpx_var_ubs[v])
                 else:
-                    # docplex_var = lfactory.new_var(vartype, lb, ub, varname)
                     var_index_map[v] = d
                     model_varnames.append(varname)
                     model_types.append(cpx_vartypes[v])
@@ -399,11 +410,13 @@ class ModelReader(object):
             all_rhs = cpx_linearcts.get_rhs()
             all_senses = cpx_linearcts.get_senses()
             all_range_values = cpx_linearcts.get_range_values()
-            cpx_ctnames = self._safe_call_get_names(cpx_linearcts.get_names)
+            cpx_ctnames = [] if ignore_names else self._safe_call_get_names(cpx_linearcts.get_names)
 
             has_range = range_map or any(s == "R" for s in all_senses)
             deferred_cts = []
 
+            if verbose:
+                print("-- uploading {0} linear constraints...".format(nb_linear_cts))
             for c in range(nb_linear_cts):
                 row = all_rows[c]
                 sense = all_senses[c]
@@ -481,7 +494,7 @@ class ModelReader(object):
                 all_quadratic_nb_non_zeros = cpx_quadraticcts.get_quad_num_nonzeros()
                 all_quadratic_components = cpx_quadraticcts.get_quadratic_components()
                 all_senses = cpx_quadraticcts.get_senses()
-                cpx_ctnames = self._safe_call_get_names(cpx_quadraticcts.get_names)
+                cpx_ctnames = [] if ignore_names else self._safe_call_get_names(cpx_quadraticcts.get_names)
 
                 for c in range(nb_quadratic_cts):
                     rhs = all_rhs[c]
@@ -519,7 +532,7 @@ class ModelReader(object):
             cpx_indicators = cpx.indicator_constraints
             nb_indicators = cpx_indicators.get_num()
             if nb_indicators:
-                all_ind_names = self._safe_call_get_names(cpx_indicators.get_names)
+                all_ind_names = [] if ignore_names else self._safe_call_get_names(cpx_indicators.get_names)
 
                 all_ind_bvars = cpx_indicators.get_indicator_variables()
                 all_ind_rhs = cpx_indicators.get_rhs()
@@ -556,7 +569,7 @@ class ModelReader(object):
                 cpx_pwl = cpx.pwl_constraints
                 cpx_pwl_defs = cpx_pwl.get_definitions()
                 pwl_fallback_names = [""] * cpx_pwl.get_num()
-                cpx_pwl_names = self._safe_call_get_names(cpx_pwl.get_names, pwl_fallback_names)
+                cpx_pwl_names = pwl_fallback_names if ignore_names else self._safe_call_get_names(cpx_pwl.get_names, pwl_fallback_names)
                 for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in izip(cpx_pwl_defs,
                                                                                                 cpx_pwl_names):
                     varx = cpx_var_index_to_docplex.get(varx_idx, None)
@@ -650,7 +663,7 @@ class ModelReader(object):
                     sos_weights = sos_sparse.val
                     isostype = int(sostype)
                     sos_vars = [cpx_var_index_to_docplex[var_ix] for var_ix in sos_var_indices]
-                    mdl.add_sos(dvars=sos_vars, sos_arg=isostype, name=sos_name)
+                    mdl.add_sos(dvars=sos_vars, sos_arg=isostype, name=sos_name, weights=sos_weights)
 
             # upload lazy constraints
             cpx_linear_advanced = cpx.linear_constraints.advanced
@@ -681,14 +694,14 @@ class ModelReader(object):
             if debug_read:
                 raise
 
-        except Exception as any_e:  # pragma: no cover
-            print("Internal exception raised: {0!s} while reading file {1}".format(any_e, filename))
-            mdl = None
-            if debug_read:
-                raise
+        # except Exception as any_e:  # pragma: no cover
+        #     print("Internal exception raised: {0} msg={1!s} while reading file '{2}'".format(type(any_e), any_e, filename))
+        #     mdl = None
+        #     if debug_read:
+        #         raise
 
         finally:
             # clean up CPLEX instance...
-            del cpx
+            cpx.end()
 
         return mdl

@@ -7,7 +7,7 @@ from docplex.mp.basic import ModelingObject, ModelingObjectBase, Priority, _Bend
 from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
-
+from docplex.mp.utils import DocplexLinearRelaxationError
 
 import warnings
 
@@ -84,6 +84,9 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def copy(self, target_model, var_map):
         raise NotImplementedError  # pragma: no cover
 
+    def relaxed_copy(self, relaxed_model, var_map):
+        return self.copy(relaxed_model, var_map)
+
     def compute_infeasibility(self, slack):  # pragma: no cover
         # INTERNAL: only used when json has no infeasibility info.
         return slack
@@ -93,6 +96,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
         # INTERNAL
         self._set_invalid_index()
 
+    @property
     def short_typename(self):
         return "constraint"
 
@@ -129,9 +133,6 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
 
     def is_logical(self):
         return False
-
-    def _get_slack_value(self):
-        return self._model._slack_value1(self)
 
     def _get_dual_value(self):
         # INTERNAL
@@ -407,6 +408,10 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def is_linear(self):
         return True
 
+    @property
+    def short_typename(self):
+        return "linear constraint"
+
     def cplex_range_value(self):
         return 0.0
 
@@ -419,6 +424,12 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def copy(self, target_model, var_map):
         copied_left = self.left_expr.copy(target_model, var_map)
         copied_right = self.right_expr.copy(target_model, var_map)
+        copy_name = None if target_model.ignore_names else self.name
+        return self.__class__(target_model, copied_left, self.sense, copied_right, copy_name)
+
+    def relaxed_copy(self, target_model, var_map):
+        copied_left = self.left_expr.relaxed_copy(target_model, var_map)
+        copied_right = self.right_expr.relaxed_copy(target_model, var_map)
         copy_name = self.name
         return self.__class__(target_model, copied_left, self.sense, copied_right, copy_name)
 
@@ -857,8 +868,9 @@ class RangeConstraint(AbstractConstraint):
     def _get_index_scope(self):
         return self._model._linct_scope
 
+    @property
     def short_typename(self):
-        return "range"
+        return "range constraint"
 
     def is_trivial(self):
         return self._expr.is_constant()
@@ -1018,7 +1030,7 @@ class RangeConstraint(AbstractConstraint):
 
     def copy(self, target_model, var_map):
         copied_expr = self.expr.copy(target_model, var_map)
-        copy_name = self.name
+        copy_name = None if target_model.ignore_names else self.name
         copied_range = RangeConstraint(target_model, copied_expr, self.lb, self.ub, copy_name)
         return copied_range
 
@@ -1125,14 +1137,14 @@ class LogicalConstraint(AbstractConstraint):
     def _get_index_scope(self):
         return self._model._logical_scope
 
-    # def short_typename(self):
-    #     return "equivalence"
-
     def iter_exprs(self):
         return self._linear_ct.iter_exprs()
 
     def is_equivalence(self):
         raise NotImplementedError  # pragma: no cover
+
+    def cplex_num_rhs(self):
+        return self._linear_ct.cplex_num_rhs()
 
     @property
     def active_value(self):
@@ -1169,13 +1181,17 @@ class LogicalConstraint(AbstractConstraint):
     def copy(self, target_model, var_map):
         copied_binary = var_map[self.binary_var]
         copied_linear_ct = self.linear_constraint.copy(target_model, var_map)
-        copy_name = self.name
+        copy_name = None if target_model.ignore_names else self.name
         copied_equiv = self.__class__(target_model,
                                       copied_binary,
                                       copied_linear_ct,
                                       self._active_value,
                                       copy_name)
         return copied_equiv
+
+
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='logical')
 
     def is_logical(self):
         return True
@@ -1203,6 +1219,10 @@ class LogicalConstraint(AbstractConstraint):
     def notify_expr_modified(self, expr, event):
         # INTERNAL
         self.get_linear_factory().update_indicator_constraint_expr(self, event, expr)
+
+    @property
+    def slack_value(self):
+        return self._model._slack_value1(self)
 
     def _symbol(self):
         return '<->' if self.is_equivalence() else '->'
@@ -1245,8 +1265,9 @@ class IndicatorConstraint(LogicalConstraint):
     def __init__(self, model, binary_var, linear_ct, active_value=1, name=None):
         LogicalConstraint.__init__(self, model, binary_var, linear_ct, active_value, name)
 
+    @property
     def short_typename(self):
-        return "indicator"
+        return "indicator constraint"
 
     def is_equivalence(self):
         return False
@@ -1284,6 +1305,7 @@ class IndicatorConstraint(LogicalConstraint):
             return True
 
 
+
 class EquivalenceConstraint(LogicalConstraint):
     """ This class models equivalence constraints.
 
@@ -1304,8 +1326,9 @@ class EquivalenceConstraint(LogicalConstraint):
         # connect exprs
         linear_ct.lock_discrete()
 
+    @property
     def short_typename(self):
-        return "equivalence"
+        return "equivalence constraint"
 
     def is_equivalence(self):
         return True
@@ -1347,11 +1370,18 @@ class QuadraticConstraint(BinaryConstraint):
         # noinspection PyPep8
         copied_left_expr = self.left_expr.copy(target_model, var_map)
         copied_right_expr = self.right_expr.copy(target_model, var_map)
-        copy_name = self.name
+        copy_name = None if target_model.ignore_names else self.name
         return QuadraticConstraint(target_model, copied_left_expr, self.type, copied_right_expr, copy_name)
+
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='quadratic')
 
     def is_quadratic(self):
         return True
+
+    @property
+    def short_typename(self):
+        return "quadratic constraint"
 
     def _get_index_scope(self):
         return self._model._quadct_scope
@@ -1564,8 +1594,13 @@ class PwlConstraint(AbstractConstraint):
         # Internal: copy must not be invoked on PwlConstraint.
         raise NotImplementedError  # pragma: no cover
 
+    def relaxed_copy(self, relaxed_model, var_map):
+        raise DocplexLinearRelaxationError(self, cause='pwl')
+
     def to_string(self):
-        return "{0} == {1!s}({2!s})".format(self.y, self.pwl_func.get_name(), self.expr)
+        pwlf = self.pwl_func
+        pwlf_s = pwlf.name or 'pwl?'
+        return "{0} == {1!s}({2!s})".format(self.y, pwlf_s, self.expr)
 
     def __str__(self):
         """ Returns a string representation of the piecewise linear constraint.

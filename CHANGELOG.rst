@@ -1,26 +1,38 @@
 Changelog
 ---------
 
-Changed in 2.13.184:
+Changed in 2.14.186:
 ````````````````````
+
+* Updated tracking events in Watson studio notebooks.
+* In ``docplex.mp``:
+    * Model.solve() will not use solve on cloud unless `agent` is specifically set to 'docloud`.
+
+
+Changed in 2.13.184 (2020.03):
+``````````````````````````````
+
 * Removed dependency to the `docloud` package. Now you need to explicitely install the package using `pip install docloud` to use DOcplexcloud.
 * In ``docplex.mp``:
-    * registering callbacks on cloud now raises an exception.
-    * added  export_as_mps_string, export_as_sav_string.
-    * fixed a bug with dettime_limit: soling with a deterministic time limit always returned None.
+    * added Model.export_as_mps_string(), Model.export_as_sav_string()
+    * fixed a bug with dettime_limit: solving with a deterministic time limit
+       was mis-interpreted as a solve failure, returning None.
     * fixed bug on cplexcloud solve: number of nodes processed was always zero.
     * repeated solves incorrectly restarted from start of search, now start from where the last solve stopped.
-    * added keyword argument 'time_limit' to Model.solve() to set a temporray time limit.
+    * added keyword argument 'time_limit' to Model.solve() to set a temporary time limit.
     * added new method SolveSolution.is_valid_solution()
     * fixed a bug in ModelReader: ranged constraints bounds were inverted when reading from SAV or MPS.
-    * fixed a bug in Model.set_lex_multiobj() : arguments abstols, reltols were ignored.
-    * added proper type-checking for Model.add_inicator_constraints()
+    * fixed a bug in Model.set_lex_multiobj(): arguments abstols, reltols were ignored.
+    * added proper type-checking for Model.add_indicator_constraints()
     * added docplex.mp.check_list/py to check local installation.
+* In ``docplex.cp``:
+    * Enable reading of #line directives when parsing a CPO file
+    * Remove parameter LogSearchTags from public parameters
+    * Fix a minor problem concerning compilation of KPI expressions in CPO format
 
 
 Changed in 2.12.182 (2019.12):
 ``````````````````````````````
-
 * In ``docplex.mp``:
     * Added a LinearRelaxer class to make a linearized copy of a MIP model (if possible).
       see class `docplex.mp.relax_linear.LinearRelaxer`

@@ -2311,23 +2311,12 @@ class CplexEngine(IEngine):
         if self._is_relaxed_status_ok(feas_status):
             infeas_map = self._decode_infeasibilities(self_cplex, mdl, cpx_relax_groups)
 
-            # all_ct_indices = []
-            # index_extend = all_ct_indices.extend
-            # for _, g in relaxable_groups:
-            #     index_extend(ct.safe_index for ct in g)
-            # raw_infeasibilities = cpx_solution.infeasibility.linear_constraints([], all_ct_indices)
-            # infeas_map = {mdl.get_constraint_by_index(ctx): raw_infeasibilities[c] for c, ctx in enumerate(all_ct_indices)}
             relaxed_sol = self._make_solution(mdl, self.get_solve_status())
             relaxed_sol.store_infeasibilities(infeas_map)
             return relaxed_sol
         else:
             # print('>>>> non-OK status: {0}'.format(feas_status))
             return None
-
-    # def get_infeasibilities(self, cts):
-    #     indices = [ct.index for ct in cts]
-    #     # PCO: Daniel Junglas confirms using [] uses the last solution vector
-    #     return self.__cplex.solution.infeasibility.linear_constraints([], indices)
 
     def _sync_parameter_defaults_from_cplex(self, parameters):
         # used when a more recent CPLEX DLL is present

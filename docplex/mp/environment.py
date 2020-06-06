@@ -262,7 +262,7 @@ class Environment(object):
 
         python_version = '%s.%s.%s' % (version_info[0], version_info[1], version_info[2])
         print("* Python version %s, located at: %s" % (python_version, sys.executable))
-        self._display_feature(True, "docplex", __version_info__)
+        self._display_feature(True, "docplex", "%d.%d.%d" % __version_info__)
         self._display_feature(self._found_cplex, "CPLEX library", self._cplex_version, self._cplex_location)
         self._display_feature(self._found_pandas, "pandas", self._pandas_version)
         self._display_feature(self._found_numpy, "numpy", self._numpy_version)

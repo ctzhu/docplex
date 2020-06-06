@@ -473,9 +473,13 @@ class Model(object):
         # quality_metrics
         self._quality_metrics = False
 
+        # rond solution or not
+        self._round_solution = True
+
         # update from kwargs, before the actual inits.
         # pop cts_by name before parse kwargs
         _enable_cts_by_name = kwargs.pop('cts_by_name', False)
+        # =======================================================
         # parse without cts_by_name
         self._parse_kwargs(kwargs)
         self._cts_by_name = {} if _enable_cts_by_name else None
@@ -751,6 +755,14 @@ class Model(object):
     @clean_before_solve.setter
     def clean_before_solve(self, must_clean):
         self._clean_before_solve = bool(must_clean)
+
+    @property
+    def round_solution(self):
+        return self._round_solution
+
+    @round_solution.setter
+    def round_solution(self, do_round):
+        self._round_solution = bool(do_round)
 
     def has_cts_by_name_dict(self):
         return self._cts_by_name is not None
@@ -5347,11 +5359,32 @@ class Model(object):
         return self._reduced_costs(checked_vars)
 
     def _reduced_costs(self, dvars):
-        #return self._get_engine_attribute(dvars, SolveAttribute.reduced_costs)
         sol = self.solution
         assert sol is not None
         sol.ensure_reduced_costs(model=self, engine= self.get_engine())
         return sol.get_reduced_costs(dvars)
+
+    def quadratic_dual_slacks(self, *args):
+        nb_args = len(args)
+        if 0 == nb_args:
+            qcts = self.iter_quadratic_constraints()
+        elif 1 == nb_args:
+            qcts = args[0]
+        else:
+            qcts = None
+            self.fatal("Model.quadratic_dual_slacks expects either an iteratble on quadratic constraints, or no args.")
+
+        self.check_problem_type('quadratic_dual_slacks', requires_solution=True, accept_qxp=True)
+        cpx = self.get_cplex(do_raise=True, msgfn=lambda: "Quadratic dual slacks require CPLEX library")
+        checked_qcts = self._checker.typecheck_quadratic_constraint_seq(qcts)
+        if checked_qcts:
+            qixs = [qc.index for qc in checked_qcts]
+            cpx_qdss = cpx.solution.get_quadratic_dualslack(qixs)
+            qds_as_dict = {checked_qcts[q]: {self._var_by_index(idx): qds for idx, qds in zip(cpx_sp.ind, cpx_sp.val)} \
+                        for q, cpx_sp in enumerate(cpx_qdss) }
+            return qds_as_dict
+        else:
+            return {}
 
     def _var_basis_status1(self, dvar):
         # internal

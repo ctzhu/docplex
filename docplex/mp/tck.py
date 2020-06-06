@@ -11,7 +11,7 @@ import math
 
 from docplex.mp.compat23 import izip
 from docplex.mp.constr import AbstractConstraint, LinearConstraint,\
-    LogicalConstraint, EquivalenceConstraint, IndicatorConstraint
+    LogicalConstraint, EquivalenceConstraint, IndicatorConstraint, QuadraticConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.linear import Var, Expr
 from docplex.mp.pwl import PwlFunction
@@ -178,6 +178,9 @@ class DocplexTypeCheckerI(object):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
+    def typecheck_quadratic_constraint_seq(self, cts):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
 
     def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
         # must return sequence unchanged
@@ -415,6 +418,14 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
         return checked_cts_list
 
+    def typecheck_quadratic_constraint_seq(self, cts):
+        checked_qcts_list = list(cts)  # listify to avoid consuming iterators....
+        for i, ct in enumerate(checked_qcts_list):
+            if not isinstance(ct, QuadraticConstraint):
+                self.fatal("Expecting sequence of quadratic constraints, got: {0!r} at position {1}", ct, i)
+
+        return checked_qcts_list
+
     def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
         # must return sequence unchanged
         checked_list = list(ct_ctname_seq)
@@ -607,6 +618,10 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
         return cts  # pragma: no cover
 
     def typecheck_logical_constraint_seq(self, cts, true_if_equivalence):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
+
+    def typecheck_quadratic_constraint_seq(self, cts):
         # must return sequence unchanged
         return cts  # pragma: no cover
 

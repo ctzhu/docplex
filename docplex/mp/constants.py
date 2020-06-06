@@ -553,8 +553,10 @@ class WriteLevel(Enum):
             for wl in cls:
                 if wl.value == level:
                     return wl
-                elif is_string(level) and wl.name.lower() == level.lower():
-                    return wl
+                elif is_string(level):
+                    llevel = level.lower()
+                    if llevel == wl.name.lower() or llevel == wl.short_name:
+                        return wl
             else:
                 return cls.Auto
 

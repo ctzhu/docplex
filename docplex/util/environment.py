@@ -717,6 +717,7 @@ class WSNotebookEnvironment(AbstractLocalEnvironment):
         super(WSNotebookEnvironment, self).__init__()
         self._start_time = None
         self.solve_id = str(uuid.uuid4())  # generate random uuid for each session
+        self.model_type = None # set in start solve
         self.tracker = tracker if tracker else Tracker()
 
     def notify_start_solve(self, solve_details):
@@ -737,6 +738,7 @@ class WSNotebookEnvironment(AbstractLocalEnvironment):
                    'modelSize': model_statistics,
                    'solveId': self.solve_id,
                    'edition': cplex_edition}
+        self.model_type = model_type
         self.tracker.notify_ws(START_SOLVE_EVENT, details)
         self._start_time = time.time()
         
@@ -746,6 +748,7 @@ class WSNotebookEnvironment(AbstractLocalEnvironment):
         if (self._start_time and solve_time == None):
             solve_time = (time.time() - self._start_time)
         details = {'solveTime': solve_time,
+                   'modelType': self.model_type,
                    'solveId': self.solve_id}
         self.tracker.notify_ws(END_SOLVE_EVENT, details)
         self._start_time = None

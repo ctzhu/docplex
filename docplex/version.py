@@ -8,6 +8,6 @@
 # This file is generated !
 # See script tools/gen_version.py
 docplex_version_major = 2
-docplex_version_minor = 13
-docplex_version_micro = 184
-docplex_version_string = '2.13.184'
+docplex_version_minor = 14
+docplex_version_micro = 186
+docplex_version_string = '2.14.186'

@@ -107,17 +107,18 @@ class SolveSolution(object):
                              job_solve_status=None):
         # INTERNAL
         # noinspection PyArgumentEqualDefault
+        rounding = model.round_solution
         sol = SolveSolution(model,
                             var_value_map=None,
                             obj=obj,
                             blended_obj_by_priority=blended_obj_by_priority,
                             solved_by=solved_by,
-                            rounding=True,
+                            rounding=rounding,
                             keep_zeros=False)
         if solve_details is not None:
             sol._solve_details = copy.copy(solve_details)
         # trust engines
-        roundfn = sol._roundfn
+        roundfn = sol._roundfn if rounding else lambda x_: x_
         for dvar, value in iteritems(var_value_map):
             if value:
                 if dvar.is_discrete() and value != int(value):
@@ -661,7 +662,7 @@ class SolveSolution(object):
             m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
             for u, uct in enumerate(unsat_cts, start=1):
                 m.warning("{0} - unsatisified constraint: {1!s}".format(u, uct))
-        return not(invalid_domain_vars) and not(unsat_cts)
+        return not (invalid_domain_vars or unsat_cts)
 
     is_feasible_solution = is_valid_solution
 
@@ -692,8 +693,8 @@ class SolveSolution(object):
         for this_triple, other_triple in izip(this_triplets, other_triplets):
             this_index, this_name, this_val = this_triple
             other_index, other_name, other_val = other_triple
-            if other_index != this_index or this_name != other_name or\
-                abs(this_val - other_val) >= var_precision:
+            if other_index != this_index or this_name != other_name or \
+                    abs(this_val - other_val) >= var_precision:
                 return False
         else:
             return True
@@ -1008,7 +1009,7 @@ class SolveSolution(object):
                               dv, dvv, dv.vartype.short_name)
         if count_values == 0:
             docplex_fatal("MIP start contains no discrete variable")  # pragma: no cover
-        return not(count_errors) if strong_check else True
+        return not count_errors if strong_check else True
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}

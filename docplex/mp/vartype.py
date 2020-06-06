@@ -4,8 +4,6 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from docplex.mp.utils import is_int
-
 
 class VarType(object):
     """VarType()
@@ -83,7 +81,7 @@ class VarType(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         # """ Checks if the `numeric_value` is valid for the type.
         #
         # Accepted values depend on the type:
@@ -116,9 +114,14 @@ class VarType(object):
         else:
             return True
 
+    @classmethod
+    def is_int_within_tolerance(cls, candidate_value, tolerance):
+        assert tolerance >= 0
+        return abs(candidate_value - int(candidate_value)) <= tolerance
+
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return self.accept_value(candidate_value) and\
+        return self.accept_value(candidate_value, tolerance) and\
                self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def to_string(self):
@@ -178,7 +181,7 @@ class BinaryVarType(VarType):
         """
         return True
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         # """ Checks if `numeric_value` equals 0 or 1.
         #
         # Args:
@@ -219,7 +222,7 @@ class ContinuousVarType(VarType):
         """
         return False
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         # """ Checks if the value is within the minus infinity to positive infinity range.
         #
         # Args:
@@ -262,7 +265,7 @@ class IntegerVarType(VarType):
         """
         return True
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         # """ Redefines the generic `accept_value` method.
         #
         # A value is valid if is an integer and belongs to the variable's domain.
@@ -273,7 +276,7 @@ class IntegerVarType(VarType):
         # Returns:
         #     True if the value is valid for the type, else False.
         # """
-        return is_int(numeric_value) or numeric_value == int(numeric_value)
+        return self.is_int_within_tolerance(numeric_value, tolerance)
 
     def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)
@@ -307,7 +310,7 @@ class SemiContinuousVarType(VarType):
         """
         return False
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         # """ Checks if the value is within the minus infinity to positive infinity range.
         #
         # Args:
@@ -354,10 +357,10 @@ class SemiIntegerVarType(VarType):
         """
         return True
 
-    def accept_value(self, numeric_value):
+    def accept_value(self, numeric_value, tolerance=1e-6):
         if 0 == numeric_value:
             return True
-        return numeric_value >= 0 and (is_int(numeric_value) or numeric_value == int(numeric_value))
+        return numeric_value >= 0 and self.is_int_within_tolerance(numeric_value, tolerance)
 
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]

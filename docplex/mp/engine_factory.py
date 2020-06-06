@@ -99,15 +99,13 @@ class EngineFactory(object):
             default_engine_type = self._cplex_engine_type
             default_engine_name = 'cplex'
 
-        elif has_credentials(context.solver.docloud):
-            # default is docloud
-            default_engine_type = DOcloudEngine
-            default_engine_name = 'docloud'
+        # elif has_credentials(context.solver.docloud):
+        #     # default is docloud
+        #     default_engine_type = DOcloudEngine
+        #     default_engine_name = 'docloud'
 
         else:
             # no CPLEX, no credentials
-            # model.trace("CPLEX DLL not found and model has no DOcplexcloud credentials. "
-            # "Credentials are required at solve time")
             default_engine_type = NoSolveEngine
             default_engine_name = 'nosolve'
 

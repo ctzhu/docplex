@@ -80,7 +80,7 @@ class LinearOperand(Operand):
             yield v
 
     def iter_terms(self):
-        # iterates over alllinear terms, if any
+        # iterates over all linear terms, if any
         return iter_emptyset()
 
     iter_sorted_terms = iter_terms
@@ -88,6 +88,7 @@ class LinearOperand(Operand):
     def number_of_terms(self):
         return sum(1 for _ in self.iter_terms())
 
+    @property
     def size(self):
         return self.number_of_terms()
 

@@ -485,6 +485,14 @@ class ProgressDataRecorder(ProgressListener):
         """
         return iter(self._recorded)
 
+    @property
+    def recorded(self):
+        """ Returns a copy of the recorded data.
+
+        :return:
+        """
+        return self._recorded[:]
+
 
 class SolutionListener(ProgressListener):
     """ The base class for listeners that work on intermediate solutions.
@@ -568,14 +576,18 @@ class SolutionRecorder(SolutionListener):
         return sols[-1] if sols else None
 
 
-class SolutionHookListener(SolutionListener):
+class FunctionalSolutionListener(SolutionListener):
+    """ A subclass of SolutionListener, which calls a function at each intermediate solution.
 
-    def __init__(self, sol_hook_fn, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
+        No exception is caught.
+    """
+
+    def __init__(self, solution_fn, clock=ProgressClock.Gap, absdiff=None, reldiff=None):
         SolutionListener.__init__(self, clock, absdiff, reldiff)
-        self._hook_fn = sol_hook_fn
+        self._sol_fn = solution_fn
 
     def notify_solution(self, sol):
-        self._hook_fn(sol)
+        self._sol_fn(sol)
 
 
 class KpiListener(SolutionListener):

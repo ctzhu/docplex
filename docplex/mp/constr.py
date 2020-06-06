@@ -12,6 +12,37 @@ from docplex.mp.utils import DocplexLinearRelaxationError
 import warnings
 
 
+class _ExtraConstraintUsage(object):
+    # INTERNAL
+    def __init__(self, tag):
+        self.tag = tag
+
+    def __str__(self):
+        return "UsedAs<%s>" % self.tag
+
+    def notify_expr_modified(self, linct, new_expr, engine):
+        tagval = self.tag
+        engine.update_extra_constraint(linct, tagval, new_expr)
+
+
+class _ConstraintLogicalUsage(object):
+    def __init__(self, logct):
+        self._log_ct = logct
+
+    @property
+    def tag(self):
+        return "logical"
+
+    _cannot_modify_linearct_non_discrete_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified with non-discrete expr: {1}'
+
+    def notify_expr_modified(self, linct, new_expr, engine):
+        log_ct = self._log_ct
+        if log_ct.is_equivalence() and not new_expr.is_discrete():
+            linct.fatal(self._cannot_modify_linearct_non_discrete_msg, linct, new_expr)
+        else:
+            engine.update_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
+
+
 class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     __slots__ = ()
 
@@ -78,8 +109,9 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def get_var_coef(self, dvar):  # pragma: no cover
         raise NotImplementedError
 
+    @property
     def size(self):
-        return sum(x.size() for x in self.iter_exprs())
+        return sum(x.size for x in self.iter_exprs())
 
     def copy(self, target_model, var_map):
         raise NotImplementedError  # pragma: no cover
@@ -174,9 +206,8 @@ class BinaryConstraint(AbstractConstraint):
         self._left_expr = left_expr
         self._right_expr = right_expr
 
-    def get_super_logical_ct(self):
-        # INTERNAL
-        return None
+    def _iter_usages(self):
+        return iter([])
 
     @property
     def type(self):
@@ -377,7 +408,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     """ The class that models all constraints of the form `<expr1> <OP> <expr2>`,
             where <expr1> and <expr2> are linear expressions.
     """
-    __slots__ = ('_super_ct', '_status_var')  # for enclosing indicator if any
+    __slots__ = ('_status_var', '_usages')
 
     def __init__(self, model, left_expr, ctsense, right_expr, name=None):
         BinaryConstraint.__init__(self, model, left_expr, ctsense, right_expr, name)
@@ -399,11 +430,20 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     name = property(ModelingObjectBase.get_name, set_name)
 
     def notify_used_in_logical_ct(self, lct):
-        self._super_ct = lct
+        self._add_usage(_ConstraintLogicalUsage(lct))
 
-    def get_super_logical_ct(self):
+    def _add_usage(self, usage):
+        if hasattr(self, '_usages'):
+            self._usages.append(usage)
+        else:
+            self._usages = [usage]
+
+    def _get_usages(self):
+        return getattr(self, '_usages', [])
+
+    def _iter_usages(self):
         # INTERNAL
-        return getattr(self, '_super_ct', None)
+        return iter(self._get_usages())
 
     def is_linear(self):
         return True
@@ -514,6 +554,10 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
             self.fatal('{0}: {1}', msg, old_expr)
         else:
             self.fatal('{0}: was: {1!s}, new: {2!s}', msg, old_expr, new_expr)
+
+    def _check_editable(self, new_expr, engine):
+        for usage in self._iter_usages():
+            usage.notify_expr_modified(self, new_expr, engine)
 
     def notify_expr_modified(self, expr, expr_event):
         # INTERNAL
@@ -709,8 +753,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     def _check_is_discrete(self, ct, msg=None):
         err_msg = msg or "Conversion from constraint to expression is available only for discrete constraints"
-        StaticTypeChecker.typecheck_discrete_constraint\
-            (self, ct, msg=err_msg)
+        StaticTypeChecker.typecheck_discrete_constraint(self, ct, msg=err_msg)
 
     def get_resolved_status_var(self, caller_msg=None):
         status_var = self._get_status_var()  # always use the getter!
@@ -838,6 +881,40 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
             """
         return self._model.if_then(if_ct=self, then_ct=other)
+
+    def _tag_as_extra_ct(self, qualifier):
+        # INTERNAL
+        self._add_usage(_ExtraConstraintUsage(qualifier))
+
+    def _untag_as_extra_ct(self, qualifier):
+        usages = self._get_usages()
+        upos = -1
+        for u, used in enumerate(usages):
+            if used.tag == qualifier:
+                upos = u
+                break
+        if upos >= 0:
+            del usages[upos]
+
+    _user_cut_tag = "user-cut constraint"
+    _lazy_constraint_tag = "lazy constraint"
+
+    def notify_used_as_user_cut(self):
+        # INTERNAL
+        self._tag_as_extra_ct(self._user_cut_tag)
+
+    def notify_used_as_lazy_constraint(self):
+        # INTERNAL
+        self._tag_as_extra_ct(self._lazy_constraint_tag)
+
+    def notify_unused_as_user_cut(self):
+        # INTERNAL
+        self._untag_as_extra_ct(self._user_cut_tag)
+
+    def notify_unused_as_lazy_constraint(self):
+        # INTERNAL
+        self._untag_as_extra_ct(self._lazy_constraint_tag)
+
 
 
 class RangeConstraint(AbstractConstraint):
@@ -1025,6 +1102,7 @@ class RangeConstraint(AbstractConstraint):
     def get_left_expr(self):
         return self._expr
 
+    # noinspection PyMethodMayBeStatic
     def get_right_expr(self):
         return None
 
@@ -1035,7 +1113,8 @@ class RangeConstraint(AbstractConstraint):
         return copied_range
 
     def to_string(self):
-        return "{0} <= {1!s} <= {2}".format(self._lb, self._expr, self._ub)
+        np = self.model._num_printer
+        return "{0} <= {1!s} <= {2}".format(np.to_string(self._lb), self._expr, np.to_string(self._ub))
 
     def __str__(self):
         """ Returns a string representation of the range constraint.
@@ -1188,7 +1267,6 @@ class LogicalConstraint(AbstractConstraint):
                                       self._active_value,
                                       copy_name)
         return copied_equiv
-
 
     def relaxed_copy(self, relaxed_model, var_map):
         raise DocplexLinearRelaxationError(self, cause='logical')

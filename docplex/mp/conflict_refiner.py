@@ -10,7 +10,7 @@ from docplex.mp.constants import ComparisonType, VarBoundType
 from docplex.mp.context import check_credentials
 from docplex.mp.cloudutils import context_must_use_docloud
 
-from docplex.mp.utils import str_holo
+from docplex.mp.utils import str_maxed
 from docplex.mp.publish import PublishResultAsDf
 
 import warnings
@@ -19,7 +19,7 @@ TConflictConstraint = namedtuple("_TConflictConstraint", ["name", "element", "st
 
 
 def trim_field(element):
-    return str_holo(element, maxlen=50)
+    return str_maxed(element, maxlen=50)
 
 
 def to_output_table(conflicts, use_df=True):
@@ -132,7 +132,7 @@ class ConflictRefinerResult(object):
             else:
                 ct = elt
                 label = ct.__class__.__name__
-            print("  - status: {1}, {0}: {2!s}".format(label, st.name, str_holo(ct, maxlen=40)))
+            print("  - status: {1}, {0}: {2!s}".format(label, st.name, str_maxed(ct, maxlen=40)))
 
     def display_stats(self):
         """ Displays statistics on conflicts.

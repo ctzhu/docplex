@@ -22,6 +22,7 @@ class CpoType(object):
                  'is_constant_atom',   # Indicates that type denotes an atomic constant
                  'is_array',           # Indicates that type describes an array
                  'is_array_of_expr',   # Indicates that type describes an array of expressions (not constants)
+                 'is_toplevel',        # Indicates that type describes an expression that can be used as top level expression
                  'higher_types',       # List of higher types in the hierarchy
                  'element_type',       # Type of array element (for arrays)
                  'parent_array_type',  # Type corresponding to an array of this type
@@ -32,7 +33,7 @@ class CpoType(object):
                                        # Key is type name, value is common type with this one.
                 )
 
-    def __init__(self, name, isvar=False, iscst=False, isatm=False, htyps=(), eltyp=None, bastyp=None):
+    def __init__(self, name, isvar=False, iscst=False, istop=False, isatm=False, htyps=(), eltyp=None, bastyp=None):
         """ Create a new type definition
 
         Args:
@@ -48,6 +49,7 @@ class CpoType(object):
         self.is_variable       = isvar
         self.is_constant       = iscst
         self.is_constant_atom  = isatm
+        self.is_toplevel       = istop
         self.higher_types = (self,) + htyps
         self.element_type = eltyp
         if bastyp is None:

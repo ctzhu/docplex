@@ -81,6 +81,7 @@ Following functions allow to construct general purpose expressions and constrain
  * :meth:`count_different`: Counts the number of different values in an array of integer expressions.
  * :meth:`scal_prod`: Scalar product of two vectors.
  * :meth:`pack`: Maintains the load on a set of containers given objects sizes and assignments.
+ * :meth:`distribute`: Calculates and/or constrains the distribution of values taken by an array of integer expressions.
  * :meth:`sequence`:  Constrains the number of occurrences of the values taken by the different subsets of consecutive *k* variables.
  * :meth:`constant`: Creates an expression from a numeric constant.
  * :meth:`element`: Access to an element of an array using an integer expression.
@@ -3446,7 +3447,7 @@ def select_smallest(evaluator, minNumber=None, tolerance=None):
     elif evaluator.is_kind_of(Type_IntVarEval):
         rtype = Type_IntVarSelector
     else:
-        assert false, "Argument 'evaluator' should be an evaluator of integer variable or an evaluator of integer value"
+        assert False, "Argument 'evaluator' should be an evaluator of integer variable or an evaluator of integer value"
 
     if minNumber is None:
         if tolerance is None:
@@ -3462,7 +3463,6 @@ def select_smallest(evaluator, minNumber=None, tolerance=None):
 
 def select_largest(evaluator, minNumber=None, tolerance=None):
     """ Selector of integer variables or value having the largest evaluation according to a given evaluator.
-
 
     This function returns a selector of value assignments to a variable that selects all values having the
     largest evaluation according to the evaluator e.
@@ -3501,7 +3501,7 @@ def select_largest(evaluator, minNumber=None, tolerance=None):
     elif evaluator.is_kind_of(Type_IntVarEval):
         rtype = Type_IntVarSelector
     else:
-        assert false, "Argument 'evaluator' should be an evaluator of integer variable or an evaluator of integer value"
+        assert False, "Argument 'evaluator' should be an evaluator of integer variable or an evaluator of integer value"
 
     if minNumber is None:
         if tolerance is None:

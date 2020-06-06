@@ -229,16 +229,29 @@ from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
 import sys, socket, os, traceback
 
+# Check if running in a worker environment
 try:
     import docplex.util.environment as runenv
     IS_IN_WORKER = isinstance(runenv.get_environment(), runenv.WorkerEnvironment)
 except:
     IS_IN_WORKER = False
 
-EXE_EXTENSION = ".exe" if IS_WINDOWS else ""
+# CP Optimizer Interactive executable name
+CPO_EXEC_INTERACTIVE = "cpoptimizer" + (".exe" if IS_WINDOWS else "")
 
 # CP Optimizer Interactive executable name
-CPO_EXEC_INTERACTIVE = "cpoptimizer" + EXE_EXTENSION
+CPO_LIBRARY = "lib_cpo_solver_12100" + (".dll" if IS_WINDOWS else ".so")
+
+# Determine path extension to search executables
+python_home = os.path.dirname(os.path.abspath(sys.executable))
+if IS_WINDOWS:
+    PATH_EXTENSION = [os.path.join(python_home, "Scripts")]
+    appdata = os.environ.get('APPDATA')
+    if appdata is not None:
+        PATH_EXTENSION.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
+else:
+    PATH_EXTENSION = ["~/.local/bin", os.path.join(python_home, "bin")]
+
 
 
 ##############################################################################
@@ -356,6 +369,12 @@ context.solver.auto_publish.result_output = "solution.json"
 # Indicate to auto-publish kpis in environment
 context.solver.auto_publish.kpis_output = "kpis.csv"
 
+# For KPIs output, name of the kpi name column
+context.solver.auto_publish.kpis_output_field_name = "Name"
+
+# For KPIs output, name of the kpi value column
+context.solver.auto_publish.kpis_output_field_value = "Value"
+
 # Indicate to auto-publish conflicts in environment
 context.solver.auto_publish.conflicts_output = "conflicts.csv"
 
@@ -367,7 +386,7 @@ context.solver.listeners = ["docplex.cp.solver.environment_client.EnvSolverListe
 
 
 #-----------------------------------------------------------------------------
-# Local solving agent context
+# Local solving using CP Interactive executable
 
 context.solver.local = Context()
 
@@ -383,19 +402,42 @@ context.solver.local.parameters = ['-angel']
 # Agent log prefix
 context.solver.local.log_prefix = "[Local] "
 
-# Search exec file in the path
-python_home = os.path.dirname(os.path.abspath(sys.executable))
-if IS_WINDOWS:
-    pext = [os.path.join(python_home, "Scripts")]
-    appdata = os.environ.get('APPDATA')
-    if appdata is not None:
-        pext.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
-else:
-    pext = ["~/.local/bin", os.path.join(python_home, "bin")]
 # Set exec file with full path if found in the path
-cpfile = search_file_in_path(context.solver.local.execfile, pext)
-if cpfile:
-    context.solver.local.execfile = cpfile
+cpxfile = search_file_in_path(context.solver.local.execfile, PATH_EXTENSION)
+if cpxfile:
+    context.solver.local.execfile = cpxfile
+
+
+#-----------------------------------------------------------------------------
+# Local solving with CPO library (internal)
+
+context.solver.lib = Context()
+
+# Python class implementing the agent
+context.solver.lib.class_name = "docplex.cp.solver.solver_lib.CpoSolverLib"
+
+# Name or path of the CPO library
+context.solver.lib.libfile = CPO_LIBRARY
+
+# Agent log prefix
+context.solver.lib.log_prefix = "[PyLib] "
+
+# Check if library has been installed with specific package
+try:
+    from docplex_cpo_solver import get_library_path
+    libfile = get_library_path()
+    # Force solver to use lib by default
+    context.solver.agent = 'lib'
+except:
+    libfile = None
+
+# If no special lib is given, search it in the path
+if libfile is None:
+    libfile = search_file_in_path(context.solver.lib.libfile, PATH_EXTENSION)
+
+# Set library file with full path if it has been found
+if libfile:
+        context.solver.lib.libfile = libfile
 
 
 #-----------------------------------------------------------------------------
@@ -448,12 +490,11 @@ LOCAL_CONTEXT = context
 DOCLOUD_CONTEXT = context.clone()
 
 # Set local context specific attributes
-LOCAL_CONTEXT.solver.agent = 'local'
 LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
 LOCAL_CONTEXT.model.length_for_alias = None
 
 # Set DOcloud context specific attributes
-DOCLOUD_CONTEXT.solver.agent = 'local'
+DOCLOUD_CONTEXT.solver.agent = 'docloud'
 DOCLOUD_CONTEXT.solver.trace_log = False
 DOCLOUD_CONTEXT.model.length_for_alias = 15
 

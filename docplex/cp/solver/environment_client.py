@@ -196,8 +196,10 @@ class EnvSolverListener(CpoSolverListener):
             kpis = msol.get_kpis()
             if kpis:
                 self.publish_context.log(2, "Publish KPIs result output in '", kpiout, "'")
+                fname  = self.publish_context.get_attribute('kpis_output_field_name',  'Name')
+                fvalue = self.publish_context.get_attribute('kpis_output_field_value', 'Value')
                 with self.env.get_output_stream(kpiout) as fp:
-                    fp.write('"NAME","VALUE"\n'.encode('utf-8'))
+                    fp.write('"{}","{}"\n'.format(fname, fvalue).encode('utf-8'))
                     for k, v in kpis.items():
                         fp.write('{},{}\n'.format(encode_csv_string(k), v).encode('utf-8'))
 

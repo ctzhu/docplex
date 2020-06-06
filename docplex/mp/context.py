@@ -330,6 +330,10 @@ class Context(BaseContext):
             are saved as a table with KPI name and values. Currently only
             csv files are supported. This can be a list of filenames if
             multiple KPIs files are to be published.
+        context.solver.auto_publish.kpis_output_field_name: Name of field for KPI names in KPI output
+            table. Defaults to 'Name'
+        context.solver.auto_publish.kpis_output_field_value: Name of field for KPI values for KPI output
+            table. Defaults to 'Value'
         solver.log_output: This attribute can have the following values:
 
             * True: When True, logs are printed to sys.out.
@@ -377,6 +381,8 @@ class Context(BaseContext):
         # update will also ensure compatibility with older kwargs like
         # 'url' and 'api_key'
         self.update(kwargs, create_missing_nodes=True)
+
+        self.model_build_hook = None
 
     def init_cplex_parameters(self):
         local_env = self.get('_env_at_init') or Environment.get_default_env()
@@ -652,12 +658,16 @@ def create_default_auto_publish_context(defaults=True):
         auto_publish.solve_details = True
         auto_publish.result_output = 'solution.json'
         auto_publish.kpis_output = 'kpis.csv'
+        auto_publish.kpis_output_field_name = 'Name'
+        auto_publish.kpis_output_field_value = 'Value'
         auto_publish.relaxations_output = 'relaxations.csv'
         auto_publish.conflicts_output = 'conflicts.csv'
     else:
         auto_publish.solve_details = False
         auto_publish.result_output = None
         auto_publish.kpis_output = None
+        auto_publish.kpis_output_field_name = None
+        auto_publish.kpis_output_field_value = None
         auto_publish.relaxations_output = None
         auto_publish.conflicts_output = None
     return auto_publish
@@ -727,6 +737,19 @@ class ContextOverride(Context):
                 self.cplex_parameters = value
             else:
                 self.update_cplex_parameters(value)
+        elif k == 'time_limit':
+            time_limit_failed = True
+            try:
+                time_limit = int(value)
+                if time_limit >= 0:
+                    # this method makes a local copy for the duration of solve()
+                    self.update_cplex_parameters({"timelimit": time_limit})
+                    time_limit_failed = False
+
+            except ValueError:
+                pass
+            if time_limit_failed:
+                print("Invalid time limit: {0!r} - ignored".format(value))
 
         elif k is 'url':
             self.solver.docloud.url = value

@@ -30,6 +30,7 @@ _ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
                 Type_IntExprArray: 'intExprArray', Type_FloatExprArray: 'floatExprArray',
                 Type_CumulExprArray: 'cumulExprArray',
                 Type_IntervalVarArray: 'intervalVarArray', Type_SequenceVarArray: 'sequenceVarArray',
+                Type_IntValueSelectorArray: 'intValueSelectorArray' , Type_IntVarSelectorArray: 'intVarSelectorArray',
                 Type_CumulAtomArray: '_cumulAtomArray'}
 
 
@@ -273,9 +274,31 @@ class CpoCompiler(object):
                     out.write(u"\n//--- KPIs ---\n")
                 out.write(u"KPIs {\n")
                 for k, (x, l) in kpis.items():
-                    # Check CpoExpr to skip lambda expressions
-                    if isinstance(x, CpoExpr):
-                        self._write_expression(out, (x, l, 1, self._get_id_string(k), True, True))
+                    # Skip lambda expressions
+                    if not isinstance(x, CpoExpr):
+                        continue
+                    # Write KPI name
+                    out.write(self._get_id_string(k));
+                    # Retrieve expression infos
+                    # if x.name != k:
+                    #     out.write(u" = " + self._compile_expression(x, False))
+                    # xinfo = self.expr_infos.get(id(x))
+                    # if xinfo:
+                    #     xn = xinfo[0].name
+                    #     if ()
+                    #     # Check if expression is already compiled
+                    #     if xinfo[5] and xn != k:
+                    #         self._write_expression(out, [CpoAlias(x, k), l, 1, self._get_id_string(k), False, False])
+                    #     else:
+                    #         if xn is not None:
+                    #             if xinfo[3] is None:
+                    #                xinfo[3] = self._get_id_string(k)
+                    #             self._write_expression(out, xinfo)
+                    #         else:
+                    #             self._write_expression(out, [x, l, 1, self._get_id_string(k), True, False])
+                    # else:
+                    #     self._write_expression(out, [x, l, 1, self._get_id_string(k), True, False])
+                    out.write(u";\n")
                 out.write(u"}\n")
             else:
                 # Check that all KPI model expressions are integer variables
@@ -339,19 +362,11 @@ class CpoCompiler(object):
         #print("Write expr: {}, refcnt: {}, name: {}, root: {}, iscpld: {}".format(expr, rcnt, name, isroot, iscpld))
 
         # Trace location if required
-        lloc = self.last_location
-        if self.add_source_location and (loc is not None) and (loc != lloc):
-            (file, line) = loc
-            lline = u"#line " + str(line)
-            if (lloc is None) or (file != lloc[0]):
-                lline += u' "' + file + '"'
-            out.write(lline + u"\n")
-            self.last_location = loc
+        self._write_source_location(out, loc)
 
         # Write expression
-        if iscpld:
-            if name:
-                out.write(name + u";\n")
+        if iscpld and name:
+            out.write(name + u";\n")
         else:
             if name:
                 if isinstance(expr, CpoAlias):
@@ -367,6 +382,8 @@ class CpoCompiler(object):
                     out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n")
             else:
                 out.write(self._compile_expression(expr, True) + u";\n")
+            # Mark as compiled
+            xinfo[5] = True
 
 
     def _write_starting_point(self, out, var):
@@ -389,6 +406,27 @@ class CpoCompiler(object):
         # Write variable starting point
         if cout:
             out.write(self._get_expr_id(var.expr) + u" = " + u''.join(cout) + u";\n")
+
+
+    def _write_source_location(self, out, loc):
+        """ Write a source location
+
+        Args:
+            out:  Target output
+            loc:  Source location
+        """
+        if self.add_source_location:
+            lloc = self.last_location
+            if loc != lloc:
+                if loc is None:
+                    out.write( u"#line off\n")
+                else:
+                    (file, line) = loc
+                    lline = u"#line " + str(line)
+                    if (lloc is None) or (file != lloc[0]):
+                        lline += u' "' + file.replace('\\', '/') + '"'
+                    out.write(lline + u"\n")
+                self.last_location = loc
 
 
     def _get_id_string(self, id):
@@ -628,23 +666,6 @@ class CpoCompiler(object):
         cout.append(")")
 
 
-    def _compile_integer_var_starting_point(self, v, cout):
-        """ Compile a integer variable starting point in a string in CPO format
-        Args:
-            v:    Variable
-            cout: Output string list
-        """
-        cout.append("(")
-        dom = v.value
-        dmin = _domain_min(dom)
-        dmax = _domain_max(dom)
-        cout.append(_int_var_value_string(dmin))
-        if dmin != dmax:
-            cout.append('..')
-            cout.append(_int_var_value_string(dmax))
-        cout.append(")")
-
-
     def _compile_interval_var(self, v, cout):
         """ Compile a IntervalVar in a string in CPO format
         Args:
@@ -672,10 +693,27 @@ class CpoCompiler(object):
         cout.append(", ".join(args) + ")")
 
 
+    def _compile_integer_var_starting_point(self, v, cout):
+        """ Compile a integer variable starting point in a string in CPO format
+        Args:
+            v:    Variable solution (CpoIntVarSolution)
+            cout: Output string list
+        """
+        cout.append("(")
+        dom = v.value
+        dmin = _domain_min(dom)
+        dmax = _domain_max(dom)
+        cout.append(_int_var_value_string(dmin))
+        if dmin != dmax:
+            cout.append('..')
+            cout.append(_int_var_value_string(dmax))
+        cout.append(")")
+
+
     def _compile_interval_var_starting_point(self, v, cout):
         """ Compile a starting IntervalVar in a string in CPO format
         Args:
-            v:    Variable
+            v:    Variable solution (CpoIntervalVarSolution)
             cout: Output string list
         """
         if v.is_absent():
@@ -848,60 +886,37 @@ class CpoCompiler(object):
         if model is None:
             return
 
+        # Scan all expressions
+        self.expr_infos = expr_infos = {}
+        all_exprs = []
+        self._scan_expressions(model.get_all_expressions(), expr_infos, all_exprs)
+
         # Create an alias list for KPIs
         kpiexprs = []
         kpis = model.get_kpis()
         if kpis:
             for k, (x, l) in kpis.items():
-                if isinstance(x, CpoExpr):
+                if isinstance(x, CpoExpr) and not isinstance(x, CpoAlias):
                     if x.get_name() != k:
                         kpiexprs.append((CpoAlias(x, k), l))
                     elif not isinstance(x, CpoVariable):
-                        kpiexprs.append((x, l))
+                        xnfo = expr_infos.get(id(x))
+                        if (xnfo is None) or (xnfo[2] == 0):
+                            kpiexprs.append((x, l))
 
-        # Scan all expressions
-        self.expr_infos = expr_infos = {}
-        all_exprs = []
-        for expr, loc in itertools.chain(model.get_all_expressions(), kpiexprs, model.get_search_phases()):
-            eid = id(expr)
-            if eid in expr_infos:
-                # Expression already compiled, add it again
-                all_exprs.append([expr, loc, 1, None, True, True])
-            else:
-                expr_infos[eid] = xinfo = [expr, loc, 1, None, True, False]
-                if expr.children:
-                    # Initialize expression stack with [expression, child index]
-                    stack = [[x, 0] for x in expr.children]
-                    while stack:
-                        xdscr = stack[-1]
-                        e, cx = xdscr
-                        # Skip constants
-                        if e.type.is_constant_atom and not e.name:
-                            stack.pop()
-                            continue
-                        # Check if expression already processed
-                        xid = id(e)
-                        xnfo = expr_infos.get(xid)
-                        if xnfo:
-                            xnfo[2] += 1
-                            stack.pop()
-                            continue
-                        # Check if all children processed
-                        if cx >= len(e.children):
-                            # Add current children node and remove it from stack
-                            xnfo = [e, loc, 1, None, False, False]
-                            expr_infos[xid] = xnfo
-                            all_exprs.append(xnfo)
-                            stack.pop()
-                        else:
-                            # Push current child on the stack
-                            stack.append([e.children[cx], 0])
-                            xdscr[1] += 1
-                all_exprs.append(xinfo)
+        # Add KPIs expressions
+        self._scan_expressions(kpiexprs, expr_infos, all_exprs)
+        # kpexprs = []
+        # self._scan_expressions([(x, l) for (x, l) in kpis.values() if isinstance(x, CpoExpr)], expr_infos, kpexprs)
+        # for xnfo in kpexprs:
+        #     x = xnfo[0]
+        #     if x.name and ((not id(x) in expr_infos) or (x.type.is_variable and xnfo[2] == 1)):
+        #         all_exprs.append(xnfo)
 
         # Initialize lists of expressions
         list_consts = []
         list_vars = []
+        vars_set = set()
         list_exprs = []
         list_phases = []
         alias_name_map = {}       # List of variable with a name but renamed shortly
@@ -923,6 +938,10 @@ class CpoCompiler(object):
         for x, l in kpiexprs:
             expr_by_names[x.get_name()] = x
 
+        # print ("All expressions infos to process:")
+        # for xinfo in all_exprs:
+        #     print("   {}".format(xinfo))
+        #
         # Allocate names and split variables and constants
         for xinfo in all_exprs:
             expr = xinfo[0]
@@ -954,7 +973,7 @@ class CpoCompiler(object):
                             xname = nname
                         xinfo[3] = to_printable_string(xname)
                     expr_by_names[xname] = expr
-            elif (xinfo[2] > 1) or typ.is_variable:
+            elif (xinfo[3] is None) and ((xinfo[2] > 1) or typ.is_variable):
                 # Allocate name
                 xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                 expr_by_names[xname] = expr
@@ -968,7 +987,9 @@ class CpoCompiler(object):
             if typ.is_constant and xname:
                 list_consts.append(xinfo)
             elif typ.is_variable and not isinstance(expr, CpoAlias):
-                list_vars.append(xinfo)
+                if expr not in vars_set:
+                    vars_set.add(expr)
+                    list_vars.append(xinfo)
             elif typ == Type_SearchPhase:
                 list_phases.append(xinfo)
             elif xname or xinfo[4] or xinfo[2] > 1:
@@ -983,6 +1004,57 @@ class CpoCompiler(object):
         self.list_exprs = list_exprs
         self.list_phases = list_phases
         self.alias_name_map = alias_name_map
+
+
+    def _scan_expressions(self, lexpr, expr_infos, all_exprs):
+        """ Scan a list of expressions
+        Args:
+            lexpr:       List of expression to scan (list of tuples (expression, location))
+            expr_infos:  Map if expression infos to update
+            all_exprs:   List of all root expressions to update
+        """
+        # Scan all expressions
+        for expr, loc in lexpr:
+            eid = id(expr)
+            xinfo = expr_infos.get(eid)
+            if xinfo is not None:
+                # Expression already compiled, add it again
+                xinfo[2] += 1  # Increment reference count
+            else:
+                # Create new expression info
+                xinfo = [expr, loc, 1, None, True, False]
+                expr_infos[eid] = xinfo
+                # Process children
+                if expr.children:
+                    # Initialize expression stack with [expression, child index]
+                    stack = [[x, 0] for x in expr.children]
+                    while stack:
+                        xdscr = stack[-1]
+                        e, cx = xdscr
+                        # Skip constants
+                        if e.type.is_constant_atom and not e.name:
+                            stack.pop()
+                            continue
+                        # Check if expression already processed
+                        xid = id(e)
+                        xnfo = expr_infos.get(xid)
+                        if xnfo:
+                            xnfo[2] += 1
+                            stack.pop()
+                            continue
+                        # Check if all children processed
+                        if cx >= len(e.children):
+                            # Add current children node and remove it from stack
+                            xnfo = [e, loc, 1, None, False, False]
+                            expr_infos[xid] = xnfo
+                            all_exprs.append(xnfo)
+                            stack.pop()
+                        else:
+                            # Push current child on the stack
+                            stack.append([e.children[cx], 0])
+                            xdscr[1] += 1
+            # Append to the list of expressions
+            all_exprs.append(xinfo)
 
 
 ###############################################################################

@@ -18,13 +18,16 @@ from docplex.mp.constants import CplexScope
 
 class IEngine(object):
 
+    def only_cplex(self, mname):
+        raise TypeError("{0} requires CPLEX - not available.".format(mname))  # pragma: no cover
+
     def register_callback(self, cb):
         raise NotImplementedError  # pragma: no cover
 
     def connect_progress_listeners(self, listeners, model):
         raise NotImplementedError  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+    def solve(self, mdl, parameters, **kwargs):
         ''' Redefine this method for the real solve.
             Returns a solution object or None.
         '''
@@ -184,7 +187,7 @@ class IEngine(object):
     def check_var_indices(self, dvars):
         raise NotImplementedError  # pragma: no cover
 
-    def check_constraint_indices(self, cts):
+    def check_constraint_indices(self, cts, ctscope):
         raise NotImplementedError  # pragma: no cover
 
     def create_sos(self, sos):
@@ -196,7 +199,10 @@ class IEngine(object):
     def get_basis(self, mdl):
         raise NotImplementedError  # pragma: no cover
 
-    def set_lp_start(self, var_stats, ct_stats):
+    def set_lp_start(self, var_stats, ct_stats):  # pragma: no cover
+        raise NotImplementedError
+
+    def export(self, out, fmt):  # pragma: no cover
         raise NotImplementedError
 
 
@@ -204,8 +210,8 @@ class IEngine(object):
 class MinimalEngine(IEngine):
     # define as most methods as possible with reasonable defaults.
 
-    def only_cplex(self, mname):
-        raise TypeError("{0} requires CPLEX - not available.")  # pragma: no cover
+    def export(self, out, fmt):
+        self.only_cplex("export to %s" % fmt.name)
 
     def end(self):
         pass  # pragma: no cover
@@ -255,7 +261,7 @@ class MinimalEngine(IEngine):
     def check_var_indices(self, dvars):
         pass  # pragma: no cover
 
-    def check_constraint_indices(self, cts):
+    def check_constraint_indices(self, cts, ctscope):
         pass  # pragma: no cover
 
     def remove_constraints(self, cts):
@@ -263,6 +269,9 @@ class MinimalEngine(IEngine):
 
     def update_constraint(self, ct, event, *args):
         self.only_cplex(mname="update_constraint")
+
+    def update_extra_constraint(self, lct, qualifier, *args):
+        self.only_cplex(mname="update_extra_constraint")
 
     def remove_constraint(self, ct):
         pass   # pragma: no cover
@@ -318,8 +327,12 @@ class MinimalEngine(IEngine):
         self.only_cplex(mname="set_multi_objective_exprs")  # pragma: no cover
 
 
+
 # noinspection PyAbstractClass,PyMethodMayBeStatic
 class DummyEngine(IEngine):
+    def export(self, out, fmt):
+        self.only_cplex("export to %s" % fmt.name)
+
     def create_range_constraint(self, rangect):
         return -1  # pragma: no cover
 
@@ -403,7 +416,7 @@ class DummyEngine(IEngine):
     def disconnect_progress_listeners(self, listeners):
         pass  # pragma: no cover
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+    def solve(self, mdl, parameters, **kwargs):
         return None  # pragma: no cover
 
     def get_solve_status(self):
@@ -437,7 +450,7 @@ class DummyEngine(IEngine):
     def check_var_indices(self, dvars):
         pass  # pragma: no cover
 
-    def check_constraint_indices(self, cts):
+    def check_constraint_indices(self, cts, ctscope):
         pass  # pragma: no cover
 
     def create_sos(self, sos):
@@ -451,6 +464,21 @@ class DummyEngine(IEngine):
 
     def set_lp_start(self, var_stats, ct_stats):  # pragma: no cover
         raise DOcplexException('set_lp_start() requires CPLEX, not available for {0}'.format(self.name))
+
+    def add_lazy_constraints(self, lazies):
+        pass
+
+    def clear_lazy_constraints(self):
+        pass
+
+    def add_user_cuts(self, lazies):
+        pass
+
+    def clear_user_cuts(self):
+        pass
+
+    def update_extra_constraint(self, lct, qualifier, *args):
+        pass
 
 
 # noinspection PyAbstractClass,PyUnusedLocal,PyMethodMayBeStatic
@@ -577,7 +605,7 @@ class NoSolveEngine(IndexerEngine):
     def _no_cplex_error(mdl, method_name):  # pragma: no cover
         mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: {0} is not available".format(method_name))
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):  # pragma: no cover
+    def solve(self, mdl, parameters, **kwargs):  # pragma: no cover
         """
         This solver cannot solve. never ever.
         """
@@ -631,7 +659,7 @@ class ZeroSolveEngine(IndexerEngine):
     def get_var_zero_solution(dvar):
         return max(0, dvar.lb)
 
-    def solve(self, mdl, parameters, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+    def solve(self, mdl, parameters, **kwargs):
         # remember last solved params
         self._last_solved_parameters = parameters.clone() if parameters is not None else None
         self.show_parameters(parameters)

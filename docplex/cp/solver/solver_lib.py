@@ -30,16 +30,36 @@ import os
 ###############################################################################
 
 # Events received from library
-_EVENT_SOLVER_INFO   = 1  # Information on solver as JSON document
-_EVENT_JSON_RESULT   = 2  # Solve result expressed as a JSON string
-_EVENT_LOG_OUTPUT    = 3  # Log data on output stream
-_EVENT_LOG_WARNING   = 4  # Log data on warning stream
-_EVENT_LOG_ERROR     = 5  # Log data on error stream
-_EVENT_SOLVER_ERROR  = 6  # Solver error. Details are in event associated string.
+_EVENT_SOLVER_INFO     = 1  # Information on solver as JSON document
+_EVENT_JSON_RESULT     = 2  # Solve result expressed as a JSON string
+_EVENT_LOG_OUTPUT      = 3  # Log data on output stream
+_EVENT_LOG_WARNING     = 4  # Log data on warning stream
+_EVENT_LOG_ERROR       = 5  # Log data on error stream
+_EVENT_SOLVER_ERROR    = 6  # Solver error. Details are in event associated string.
 
 
 # Event notifier callback prototype
 _EVENT_NOTIF_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)
+
+# CPO callback prototype (event name, json data)
+_CPE_CALLBACK_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_char_p)
+
+# Function prototypes
+_LIB_FUNCTION_PROTYTYPES = \
+{
+    'createSession' : (ctypes.c_void_p, (ctypes.c_void_p,)),
+    'deleteSession' : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'setCpoModel'   : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p)),
+    'solve'         : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'startSearch'   : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'searchNext'    : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'endSearch'     : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'abortSearch'   : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'propagate'     : (ctypes.c_int,    (ctypes.c_void_p,)),
+    'refineConflict': (ctypes.c_int,    (ctypes.c_void_p,)),
+    'runSeeds'      : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int,)),
+    'setCpoCallback': (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_void_p,)),
+}
 
 
 ###############################################################################
@@ -65,8 +85,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
     """ Interface to a local solver through a shared library """
     __slots__ = ('libhdl',            # Lib handler
                  'session',           # Solve session in the library
-                 'cbackproto',        # Prototype of the event callback
+                 'notifproto',        # Prototype of the event callback
                  'first_error_line',  # First line of error
+                 'callbackproto',     # Prototype of the CPO callback function
                  )
 
     def __init__(self, solver, params, context):
@@ -92,8 +113,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
 
         # Create session
         # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
-        self.cbackproto = _EVENT_NOTIF_PROTOTYPE(self._notify_event)
-        self.session = self.libhdl.createSession(self.cbackproto)
+        self.notifproto = _EVENT_NOTIF_PROTOTYPE(self._notify_event)
+        self.session = self.libhdl.createSession(self.notifproto)
         self.context.log(5, "Solve session: {}".format(self.session))
 
         # Check solver version if any
@@ -106,6 +127,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
         cpostr = self._get_cpo_model_string()
         self._set_cpo_model(cpostr)
         self.context.log(3, "Model set into solver.")
+
+        # Initialize CPO callback setting
+        self.callbackproto = None
 
 
     def __del__(self):
@@ -128,6 +152,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
         Raises:
             CpoException if error occurs
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Solve the model
         self._call_lib_function('solve', True)
 
@@ -138,6 +165,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
     def start_search(self):
         """ Start a new search. Solutions are retrieved using method search_next().
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         self._call_lib_function('startSearch', False)
 
 
@@ -189,6 +219,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
             cpostr = self._get_cpo_model_string()
             self._set_cpo_model(cpostr)
 
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Call library function
         self._call_lib_function('refineConflict', True)
 
@@ -205,6 +238,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
             Propagation result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Call library function
         self._call_lib_function('propagate', True)
 
@@ -227,6 +263,9 @@ class CpoSolverLib(solver.CpoSolverAgent):
         Returns:
             Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
         """
+        # Add callback if needed
+        self._add_callback_if_needed()
+
         # Call library function
         self._call_lib_function('runSeeds', False, nbrun)
 
@@ -274,7 +313,7 @@ class CpoSolverLib(solver.CpoSolverAgent):
     def _notify_event(self, event, data):
         """ Callback called by the library to notify Python of an event (log, error, etc)
         Args:
-            event:  Event id
+            event:  Event id (integer)
             data:   Event data string
         """
         # Process event
@@ -307,6 +346,26 @@ class CpoSolverLib(solver.CpoSolverAgent):
             errmsg = data.decode('utf-8')
             if self.first_error_line is not None:
                 errmsg += " (" + self.first_error_line + ")"
+            out = self.log_output if self.log_output is not None else sys.stdout
+            out.write("SOLVER ERROR: {}\n".format(errmsg))
+            out.flush()
+
+
+    def _cpo_callback(self, event, data):
+        """ Callback called by the library to notify Python of an event (log, error, etc)
+        Args:
+            event:  Event name (string)
+            data:   JSON data (string)
+        """
+        # Decode all data
+        stime = time.time()
+        event = event.decode('utf-8')
+        data = data.decode('utf-8')
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_DECODE_TIME, time.time() - stime)
+
+        # Build result data and notify solver
+        res = self._create_result_object(CpoSolveResult, data)
+        self.solver._notify_callback_event(event, res)
 
 
     def _set_cpo_model(self, cpostr):
@@ -317,12 +376,12 @@ class CpoSolverLib(solver.CpoSolverAgent):
         # Encode model
         stime = time.time()
         cpostr = cpostr.encode('utf-8')
-        self.process_infos.incr(CpoProcessInfos.MODEL_ENCODE_TIME, time.time() - stime)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_ENCODE_TIME, time.time() - stime)
 
         # Send CPO model to process
         stime = time.time()
         self._call_lib_function('setCpoModel', False, cpostr)
-        self.process_infos.incr(CpoProcessInfos.MODEL_SEND_TIME, time.time() - stime)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - stime)
 
 
     def _get_lib_handler(self):
@@ -380,26 +439,19 @@ class CpoSolverLib(solver.CpoSolverAgent):
         return ctypes.CDLL(libf)
 
 
-
-###############################################################################
-##  Private functions
-###############################################################################
-
-# Function prototypes
-_LIB_FUNCTION_PROTYTYPES = \
-{
-    'createSession' : (ctypes.c_void_p, (ctypes.c_void_p,)),
-    'deleteSession' : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'setCpoModel'   : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p)),
-    'solve'         : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'startSearch'   : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'searchNext'    : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'endSearch'     : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'abortSearch'   : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'propagate'     : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'refineConflict': (ctypes.c_int,    (ctypes.c_void_p,)),
-    'runSeeds'      : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int,)),
-}
-
+    def _add_callback_if_needed(self):
+        """ Ask solver to add callback if needed. """
+        if not self.callbackproto and self.solver.callbacks:
+            # Check solver version
+            lver = self.version_info.get('LibVersion', 0)
+            sver = self.version_info.get('SolverVersion', "1")
+            if (compare_natural(sver, "12.10") >= 0) and (lver >= 2):
+                # Create session
+                # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
+                self.callbackproto = _CPE_CALLBACK_PROTOTYPE(self._cpo_callback)
+                self._call_lib_function('setCpoCallback', False, self.callbackproto)
+                self.context.log(3, "CPO callback created.")
+            else:
+                raise CpoLibException("This version of the CPO solver does not support solver callbacks. Solver: {}, lib: {}".format(sver, lver))
 
 

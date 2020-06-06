@@ -525,6 +525,7 @@ class Parameter(object):
         # INTERNAL
         return False  # pragma: no cover
 
+    @property
     def type_name(self):
         # INTERNAL
         raise NotImplementedError  # pragma: no cover
@@ -563,6 +564,7 @@ class BoolParameter(Parameter):
     def accept_value(self, value):
         return value in {0, 1} or str(value).lower() in _BOOLEAN_STATES or value in {True, False}
 
+    @property
     def type_name(self):
         return "bool"
 
@@ -577,6 +579,7 @@ class StrParameter(Parameter):
     def accept_value(self, new_value):
         return isinstance(new_value, str)
 
+    @property
     def type_name(self):
         return "string"
 
@@ -604,6 +607,7 @@ class IntParameter(Parameter):
         self._max_value = max_value
         self._synchronous = sync
 
+    @property
     def type_name(self):
         return "int"
 
@@ -621,8 +625,9 @@ class PositiveIntParameter(IntParameter):
         IntParameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=0,
                               max_value=max_value)
 
+    @property
     def type_name(self):
-        return "count"
+        return "positive int"
 
 
 class NumParameter(Parameter):
@@ -652,8 +657,9 @@ class NumParameter(Parameter):
     def transform_value(self, new_value):
         return float(new_value)
 
+    @property
     def type_name(self):
-        return "num"
+        return "number"
 
 
 # a dictionary of formats for each type.

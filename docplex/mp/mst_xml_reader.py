@@ -58,7 +58,7 @@ class MSTReader(object):
                 if effort_s is not None:
                     # expect an integer attribute, then convert it to EffortLevel
                     # default is Auto
-                    effort_level = EffortLevel.parse(cls.to_int(effort_s, fallback=0), fallback=EffortLevel.Auto)
+                    effort_level = EffortLevel.parse(cls.to_int(effort_s))
 
             elif child.tag == "variables":
                 for v, var_elt in enumerate(child, start=1):

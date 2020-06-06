@@ -20,6 +20,7 @@ try:
     from cplex._internal._subinterfaces import ObjSense
     from cplex._internal._procedural import getrows, getnumrows
     from cplex.exceptions import CplexError, CplexSolverError
+    # noinspection PyUnresolvedReferences
     from docplex.mp.cplex_engine import _safe_cplex
 
 except ImportError:  # pragma: no cover
@@ -72,18 +73,18 @@ def fast_get_rows(cpx):
     cpxenv = cpx._env._e
     cpxlp = cpx._lp
     num_rows = getnumrows(cpxenv, cpxlp)
-    matbeg, matind, matval = getrows(cpxenv, cpxlp, 0, num_rows-1)
+    matbeg, matind, matval = getrows(cpxenv, cpxlp, 0, num_rows - 1)
     size = len(matbeg)
-    all_rows = []
+
     def make_tuple(k):
         begin = matbeg[k]
         if k == size - 1:
             end = len(matind)
         else:
-            end = matbeg[k+ 1]
-        return (matind[begin:end], matval[begin:end])
-    return [make_tuple(i) for i in range(size)]
+            end = matbeg[k + 1]
+        return matind[begin:end], matval[begin:end]
 
+    return [make_tuple(i) for i in range(size)]
 
 
 # noinspection PyArgumentList
@@ -114,13 +115,13 @@ class ModelReader(object):
 
     """
 
-    class _RangeData(object):
-        # INTERNAL
-        def __init__(self, var_index, var_name, lb=0, ub=1e+75):
-            self.var_index = var_index
-            self.var_name = var_name
-            self.lb = lb
-            self.ub = ub
+    # class _RangeData(object):
+    #     # INTERNAL
+    #     def __init__(self, var_index, var_name, lb=0, ub=1e+75):
+    #         self.var_index = var_index
+    #         self.var_name = var_name
+    #         self.lb = lb
+    #         self.ub = ub
 
     @staticmethod
     def _build_linear_expr_from_sparse_pair(lfactory, var_map, cpx_sparsepair):
@@ -135,6 +136,7 @@ class ModelReader(object):
 
     _sense2comp_dict = {'L': ComparisonType.LE, 'E': ComparisonType.EQ, 'G': ComparisonType.GE}
 
+    # noinspection PyDefaultArgument
     @classmethod
     def parse_sense(cls, cpx_sense, sense_dict=_sense2comp_dict):
         return sense_dict.get(cpx_sense)
@@ -234,15 +236,15 @@ class ModelReader(object):
             raise ModelReaderError("*CPLEX error {0!s} reading file {1} - exiting".format(cpx_e, filename))
 
     @classmethod
-    def _make_expr_from_coef_vector(cls, mdl, var_index_map, coeffs, offset):
+    def _make_expr_from_coef_vector(cls, mdl, index_2var_map, coeffs, offset):
         all_obj_vars = []
         all_obj_coefs = []
         for v in range(mdl.number_of_variables):
-            if v in var_index_map:
+            if v in index_2var_map:
                 obj_coeff = coeffs[v]
                 if obj_coeff:
                     all_obj_coefs.append(obj_coeff)
-                    all_obj_vars.append(var_index_map[v])
+                    all_obj_vars.append(index_2var_map[v])
 
         expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
         if offset:
@@ -259,14 +261,14 @@ class ModelReader(object):
         return mdl._lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
 
     @classmethod
-    def _make_expr_from_varmap_coefs(cls, mdl, varmap, dvarxs, coefs, offset=0):
-        terms_dict = mdl._lfactory._new_term_dict()
+    def _make_expr_from_varmap_coefs(cls, lfactory, varmap, dvarxs, coefs, offset=0):
+        terms_dict = lfactory._new_term_dict()
 
         for dvx, k in izip(dvarxs, coefs):
-            dv = varmap[dvx]
+            dv = varmap.get(dvx)
             if dv is not None and k:
                 terms_dict[dv] = k
-        return mdl._lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
+        return lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
 
     def read_model(self, filename, model_name=None, verbose=False, model_class=None, **kwargs):
         """ Reads a model from a CPLEX export file.
@@ -331,7 +333,6 @@ class ModelReader(object):
         if not cpx:  # pragma: no cover
             return None
 
-        range_map = {}
         final_output_level = kwargs.get("output_level", "info")
         debug_read = kwargs.get("debug", False)
 
@@ -372,7 +373,6 @@ class ModelReader(object):
             # map from cplex variable indices to docplex's
             # use to skip range vars
             # cplex : [x, Rg1, y] -> {0:0, 2: 1}
-            var_index_map = {}
 
             d = 0
             model_varnames = []
@@ -382,16 +382,16 @@ class ModelReader(object):
             for v in range(cpx_nb_vars):
                 varname = cpx_var_names[v] if cpx_var_names else None
 
-                if varname and varname.startswith("Rg"):
-                    # generated var for ranges
-                    range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=cpx_var_ubs[v])
-                else:
-                    var_index_map[v] = d
-                    model_varnames.append(varname)
-                    model_types.append(cpx_vartypes[v])
-                    model_lbs.append(cpx_var_lbs[v])
-                    model_ubs.append(cpx_var_ubs[v])
-                    d += 1
+                # if varname and varname.startswith("Rg"):
+                #     # generated var for ranges
+                #     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=cpx_var_ubs[v])
+                # else:
+
+                model_varnames.append(varname)
+                model_types.append(cpx_vartypes[v])
+                model_lbs.append(cpx_var_lbs[v])
+                model_ubs.append(cpx_var_ubs[v])
+                d += 1
 
             # vars
             model_vars = lfactory.new_multitype_var_list(d,
@@ -400,19 +400,19 @@ class ModelReader(object):
                                                          model_ubs,
                                                          model_varnames)
 
-            cpx_var_index_to_docplex = {v: model_vars[var_index_map[v]] for v in var_index_map.keys()}
+            # inverse map from indices to docplex vars
+            cpx_var_index_to_docplex = {v: model_vars[v] for v in range(cpx_nb_vars)}
 
             # 2. upload linear constraints and ranges (mixed in cplex)
             cpx_linearcts = cpx.linear_constraints
             nb_linear_cts = cpx_linearcts.get_num()
-            #all_rows1 = cpx_linearcts.get_rows()
+            # all_rows1 = cpx_linearcts.get_rows()
             all_rows = fast_get_rows(cpx)
             all_rhs = cpx_linearcts.get_rhs()
             all_senses = cpx_linearcts.get_senses()
             all_range_values = cpx_linearcts.get_range_values()
             cpx_ctnames = [] if ignore_names else self._safe_call_get_names(cpx_linearcts.get_names)
 
-            has_range = range_map or any(s == "R" for s in all_senses)
             deferred_cts = []
 
             if verbose:
@@ -425,61 +425,24 @@ class ModelReader(object):
                 range_val = all_range_values[c]
 
                 indices, coefs = row
+                expr = self._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
 
-                range_data = None
-
-                if not has_range:
-                    #expr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
-                    expr = self._make_expr_from_varmap_coefs(mdl, cpx_var_index_to_docplex, indices, coefs)
-                    rhs_expr = lfactory.constant_expr(cst=rhs, safe_number=True)
-                    op = self.parse_sense(sense)
-                    ct = LinearConstraint(mdl, expr, op, rhs_expr, ctname)
-                    #ct = lfactory._new_binary_constraint(lhs=expr, rhs=rhs_expr, sense=op, name=ctname)
-                    deferred_cts.append(ct)
-
-                else:
-                    expr = lfactory.linear_expr()
-                    rcoef = 1
-                    for idx, koef in izip(indices, coefs):
-                        var = cpx_var_index_to_docplex.get(idx, None)
-                        if var:
-                            expr._add_term(var, koef)
-                        elif idx in range_map:
-                            # this is a range: coeff must be 1 or -1
-                            abscoef = koef if koef >= 0 else -koef
-                            rcoef = koef
-                            assert abscoef == 1, "range var has coef different from 1: {}".format(koef)
-                            assert range_data is None, "range_data is not None: {0!s}".format(
-                                range_data)  # cannot use two range vars
-                            range_data = range_map[idx]
-                        else:  # pragma: no cover
-                            # this is an internal error.
-                            raise ModelReaderError("ERROR: index not in var map or range map: {0}".format(idx))
-
-                    if range_data:
-                        label = ctname or 'c#%d' % (c + 1)
-                        if sense not in "EL":  # pragma: no cover
-                            raise ModelReaderError("{0} range sense is not E: {1!s}".format(label, sense))
-                        if rcoef < 0:  # -1 actually
-                            rng_lb = rhs
-                            rng_ub = rhs + range_data.ub
-                        elif rcoef > 0:  # koef is 1 here
-                            rng_lb = rhs - range_data.ub
-                            rng_ub = rhs
-                        else:  # pragma: no cover
-                            raise ModelReaderError("unexpected range coef: {}".format(rcoef))
-
-                        mdl.add_range(lb=rng_lb, expr=expr, ub=rng_ub, rng_name=ctname)
+                if sense == 'R':
+                    # rangeval can be negative !!! issue 52
+                    if range_val >= 0:
+                        range_lb = rhs
+                        range_ub = rhs + range_val
                     else:
-                        if sense == 'R':
-                            # range min is rangeval
-                            range_lb = rhs
-                            range_ub = rhs + range_val
-                            mdl.add_range(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
-                        else:
-                            op = ComparisonType.cplex_ctsense_to_python_op(sense)
-                            ct = op(expr, rhs)
-                            mdl.add_constraint(ct, ctname)
+                        range_ub = rhs
+                        range_lb = rhs + range_val
+
+                    rgct = mdl.range_constraint(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
+                    deferred_cts.append(rgct)
+                else:
+                    op = self.parse_sense(sense)
+                    rhs_expr = lfactory.constant_expr(cst=rhs, safe_number=True)
+                    ct = LinearConstraint(mdl, expr, op, rhs_expr, ctname)
+                    deferred_cts.append(ct)
             if deferred_cts:
                 # add constraint as a block
                 lfactory._post_constraint_block(posted_cts=deferred_cts)
@@ -507,8 +470,8 @@ class ModelReader(object):
 
                     if linear_nb_non_zeros > 0:
                         indices, coefs = linear_component.unpack()
-                        #linexpr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
-                        linexpr = self._make_expr_from_varmap_coefs(mdl, cpx_var_index_to_docplex, indices, coefs)
+                        # linexpr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
+                        linexpr = self._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
                     else:
                         linexpr = None
 
@@ -553,7 +516,8 @@ class ModelReader(object):
                     # 1 . check the bvar is ok
                     ind_bvar = cpx_var_index_to_docplex[ind_bvar]
                     # each var appears once
-                    ind_linexpr = self._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex, ind_linear)
+                    ind_linexpr = self._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex,
+                                                                           ind_linear)
                     op = ComparisonType.cplex_ctsense_to_python_op(ind_sense)
                     ind_lct = op(ind_linexpr, ind_rhs)
                     if ind_type == ind_equiv_type:
@@ -569,7 +533,8 @@ class ModelReader(object):
                 cpx_pwl = cpx.pwl_constraints
                 cpx_pwl_defs = cpx_pwl.get_definitions()
                 pwl_fallback_names = [""] * cpx_pwl.get_num()
-                cpx_pwl_names = pwl_fallback_names if ignore_names else self._safe_call_get_names(cpx_pwl.get_names, pwl_fallback_names)
+                cpx_pwl_names = pwl_fallback_names if ignore_names else self._safe_call_get_names(cpx_pwl.get_names,
+                                                                                                  pwl_fallback_names)
                 for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in izip(cpx_pwl_defs,
                                                                                                 cpx_pwl_names):
                     varx = cpx_var_index_to_docplex.get(varx_idx, None)
@@ -588,7 +553,7 @@ class ModelReader(object):
             # noinspection PyPep8
             try:
                 cpx_multiobj = cpx.multiobj
-            except AttributeError:   # pragma: no cover
+            except AttributeError:  # pragma: no cover
                 # pre-12.9 version
                 cpx_multiobj = None
 
@@ -606,7 +571,7 @@ class ModelReader(object):
                         all_obj_coefs.append(obj_coeff)
                         all_obj_vars.append(cpx_var_index_to_docplex[v])
 
-                #obj_expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
+                # obj_expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
                 obj_expr = self._make_expr_from_vars_coefs(mdl, all_obj_vars, all_obj_coefs)
 
                 if cpx_obj.get_num_quadratic_variables() > 0:

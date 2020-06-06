@@ -13,7 +13,8 @@ from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
     IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint, NotEqualConstraint, QuadraticConstraint
-from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr, LogicalNotExpr
+from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr, \
+    LogicalNotExpr
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range, izip_longest
 from docplex.mp.environment import Environment
@@ -24,6 +25,29 @@ from docplex.mp.sttck import StaticTypeChecker
 
 from itertools import product, islice
 
+
+class ModificationBlocker(object):
+    fmt = "Cplex cannot modify {0} in-place"
+
+    all_blockers = {}
+
+    def __init__(self, cause):
+        self._msg = self.fmt.format(cause)
+
+    def cannot_modify(self, expr):
+        raise DOcplexException("{0}: {1}".format(self._msg, expr))
+
+    def notify_expr_modified(self, expr, event):  # event is ignored
+        self.cannot_modify(expr)
+
+    @classmethod
+    def get_blocker(cls, name):
+        cached_blocker = cls.all_blockers.get(name)
+        if cached_blocker is None:
+            blocker = ModificationBlocker(name)
+            cls.all_blockers[name] = blocker
+            cached_blocker = blocker
+        return cached_blocker
 
 
 def fix_format_string(fmt, dimen=1, key_format='_%s'):
@@ -125,7 +149,6 @@ class _AbstractModelFactory(object):
     def var_dict_type(self, ordered):
         return self._var_dict_type if ordered else dict
 
-
     @classmethod
     def _term_dict_type_from_ordering(cls, ordered):
         if not ordered or Environment.env_is_python36:
@@ -143,9 +166,7 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(_AbstractModelFactory):
-
     status_var_fmt = '_{{{0:s}}}'
-
 
     @staticmethod
     def float_or_default(bound, default_bound):
@@ -213,7 +234,7 @@ class ModelFactory(_AbstractModelFactory):
             varname = None
         else:
             # use name if any else use truncated ct string representation
-            base_varname = self.status_var_fmt.format(ct.name or str_holo(ct, maxlen=20))
+            base_varname = self.status_var_fmt.format(ct.name or str_maxed(ct, maxlen=20))
             # if name is already taken, use unique index at end to disambiguate
             varname = model._get_non_ambiguous_varname(base_varname)
 
@@ -229,6 +250,7 @@ class ModelFactory(_AbstractModelFactory):
         # INTERNAL Takes as input a candidate keys input and returns a valid key sequence
         used_name = name
         check_keys = True
+        used_keys = []
         if is_iterable(keys):
             if is_pandas_dataframe(keys):
                 used_keys = keys.index.values
@@ -249,7 +271,7 @@ class ModelFactory(_AbstractModelFactory):
         else:
             self.fatal("Unexpected var keys: {0!s}, expecting iterable or integer", keys)  # pragma: no cover
 
-        if check_keys and len(used_keys) > 0:
+        if check_keys and len(used_keys):  # do not check truth value of used_keys: can be a Series!
             self._checker.typecheck_key_seq(used_keys)
         return used_name, used_keys
 
@@ -319,22 +341,13 @@ class ModelFactory(_AbstractModelFactory):
             return list(var_bound)
 
         elif isinstance(var_bound, dict):
-            dict_bounds =  [var_bound.get(k, default_bound) for k in keys]
+            dict_bounds = [var_bound.get(k, default_bound) for k in keys]
             return self._check_bounds(size, dict_bounds, default_bound, true_if_lb)
         else:
             # try a function?
             try:
                 fn_bounds = [var_bound(k) for k in keys]
                 return self._check_bounds(size, fn_bounds, default_bound, true_if_lb)
-                # for b, bnd in enumerate(_fn_bounds):
-                #     if bnd is None:
-                #         _fn_bounds[b] = default_bound
-                #     elif not is_number(bnd):
-                #         self.fatal("computed bound expects a number, got: {0!s}", bnd)
-                #     else:
-                #         # conversion to float()
-                #         _fn_bounds[b] = float(bnd)
-                return fn_bounds
 
             except TypeError:
                 self._bad_bounds_fatal(var_bound)
@@ -345,7 +358,7 @@ class ModelFactory(_AbstractModelFactory):
     def _bad_bounds_fatal(self, bad_bound):
         self.fatal("unexpected variable bound: {0!s}, expecting: None|number|function|iterable", bad_bound)
 
-    def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None, key_format=None):
+    def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None):
         if not size:
             return []
         mdl = self._model
@@ -409,12 +422,14 @@ class ModelFactory(_AbstractModelFactory):
         return allvars
 
     def _make_var_dict(self, keys, var_list, ordered):
+        self._checker.check_for_duplicate_keys(keys)
         _dict_type = self.var_dict_type(ordered)
-        vdict =  _dict_type(izip(keys, var_list))
+        vdict = _dict_type(izip(keys, var_list))
         return vdict
 
     def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
         actual_name, key_seq = self.make_key_seq(keys, name)
+
         ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
         var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
         return self._make_var_dict(key_seq, var_list, ordered)
@@ -469,18 +484,19 @@ class ModelFactory(_AbstractModelFactory):
         return ConstantExpr(self._model, k)
 
     use_constant_expr = True
+
     def constant_expr(self, cst, safe_number=False):
         if not cst:
             return self.new_zero_expr()
-        elif self.use_constant_expr:
+        else:
             return self._new_constant_expr(cst, safe_number=safe_number)
-        else:  # pragma: no cover
-            if safe_number:
-                k = cst
-            else:
-                self_number_validation_fn = self.number_validation_fn
-                k = self_number_validation_fn(cst) if self_number_validation_fn else cst
-            return LinearExpr(self._model, e=None, constant=k, safe=True)
+        # else:  # pragma: no cover
+        #     if safe_number:
+        #         k = cst
+        #     else:
+        #         self_number_validation_fn = self.number_validation_fn
+        #         k = self_number_validation_fn(cst) if self_number_validation_fn else cst
+        #     return LinearExpr(self._model, e=None, constant=k, safe=True)
 
     def linear_expr(self, arg=None, constant=0, name=None, safe=False):
         return LinearExpr(self._model, arg, constant, name, safe=safe)
@@ -511,7 +527,6 @@ class ModelFactory(_AbstractModelFactory):
             except DocplexQuadToLinearException as qe:
                 used_msg = msg.format(e) if msg else qe.message
                 raise DOcplexException(used_msg)
-
 
     def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False):
         # TODO: replace by to_linear_operand
@@ -566,8 +581,10 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_neq_constraint(self, lhs, rhs, ctname=None):
         m = self._model
-        left_expr  = self._to_linear_operand (lhs, msg="The `!=` operator requires two linear expressions, {0} was passed (left)")
-        right_expr = self._to_linear_operand(rhs, msg="The `!=` operator requires two linear expressions, {0} was passed (right)")
+        left_expr = self._to_linear_operand(lhs,
+                                            msg="The `!=` operator requires two linear expressions, {0} was passed (left)")
+        right_expr = self._to_linear_operand(rhs,
+                                             msg="The `!=` operator requires two linear expressions, {0} was passed (right)")
         StaticTypeChecker.typecheck_discrete_expression(m, msg="NotEqualConstraint", expr=left_expr)
         StaticTypeChecker.typecheck_discrete_expression(m, msg="NotEqualConstraint", expr=right_expr)
         self._checker.typecheck_two_in_model(m, left_expr, right_expr, "new_binary_constraint")
@@ -618,50 +635,26 @@ class ModelFactory(_AbstractModelFactory):
         and_expr = self.new_logical_and_expr([ct, other])
         return and_expr
 
-
-
     # updates
 
     def update_linear_constraint_exprs(self, ct, expr_event):
-        ct_event = UpdateEvent.LinearConstraintRhs if expr_event is UpdateEvent.ExprConstant\
-            else  UpdateEvent.LinearConstraintGlobal
+        ct_event = UpdateEvent.LinearConstraintRhs if expr_event is UpdateEvent.ExprConstant \
+            else UpdateEvent.LinearConstraintGlobal
         self._engine.update_constraint(ct, ct_event)
 
     def update_indicator_constraint_expr(self, ind, expr, event):
         self._engine.update_constraint(ind, UpdateEvent.IndicatorLinearConstraint, expr)
-
-    # @classmethod
-    # def check_is_discrete(cls, arg):
-    #     try:
-    #         # try an operand
-    #         return arg.is_discrete()
-    #     except AttributeError:
-    #         # should be a number ??
-    #         return is_int(arg)
 
     def check_expr_discrete_lock(self, expr, arg):
         # INTERNAL
         if expr.is_discrete_locked():
             self.fatal('Expression: {0} is used in equivalence, cannot be modified', expr)
 
-    _cannot_modify_linearct_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified.'
-
-    _cannot_modify_linearct_non_discrete_msg = 'Linear constraint: {0} is used in equivalence, cannot be modified with non-discrete expr: {1}'
-    _cannot_modify_expr_non_discrete_msg = 'Expression: {0} is used in equivalence, cannot be modified with non-discrete item: {1}'
-
-    def _check_editable(self, linct, new_expr):
-        log_ct = linct.get_super_logical_ct()
-        if log_ct is not None:
-            # check that expression is discrete
-            if log_ct.is_equivalence() and not new_expr.is_discrete():
-                self.fatal(self._cannot_modify_linearct_non_discrete_msg, linct, new_expr)
-            self._engine.update_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
-
     def set_linear_constraint_expr_from_pos(self, lct, pos, new_expr, update_subscribers=True):
         # INTERNAL
         # pos is 0 for left, 1 for right
         new_operand = self._to_linear_operand(e=new_expr, force_clone=False)
-        self._check_editable(lct, new_operand)
+        lct._check_editable(new_operand, self._engine)
 
         old_expr = lct.get_expr_from_pos(pos)
         exprs = [lct._left_expr, lct._right_expr]
@@ -744,7 +737,7 @@ class ModelFactory(_AbstractModelFactory):
             return args[0]
         elif all(is_number(a) for a in args):
             # if all args are numbers, simply compute a number
-            return builtin_fn(args) # a number
+            return builtin_fn(args)  # a number
         else:
             return expr_class(self._model, [self._to_linear_operand(a) for a in args])
 
@@ -807,7 +800,8 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_sos(self, dvars, sos_type, weights, name):
         # INTERNAL
-        new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, weights=weights, name=name)
+        new_sos = SOSVariableSet(model=self._model, variable_sequence=dvars, sos_type=sos_type, weights=weights,
+                                 name=name)
         return new_sos
 
     def new_piecewise(self, pwl_def, name):
@@ -838,10 +832,9 @@ class ModelFactory(_AbstractModelFactory):
         elif hasattr(kpi_arg, 'name') and kpi_arg.name:
             publish_name = kpi_arg.name
         else:
-            publish_name = str_holo(kpi_arg, maxlen=32)
+            publish_name = str_maxed(kpi_arg, maxlen=32)
         new_kpi = KPI.new_kpi(self._model, kpi_arg, publish_name)
         return new_kpi
-
 
     def _new_constraint_block2(self, cts, ctnames):
         posted_cts = []
@@ -876,6 +869,7 @@ class ModelFactory(_AbstractModelFactory):
             return []
 
         try:
+            # noinspection PyUnusedLocal
             ct, ctname = ctseq[0]
             tuple_mode = True
         except (TypeError, ValueError):
@@ -912,14 +906,16 @@ class ModelFactory(_AbstractModelFactory):
         except TypeError:
             pass  # no len available.
         if names:
-            ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in izip(lbs, exprs, ubs, names)]
+            ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in
+                      izip(lbs, exprs, ubs, names)]
         else:
             ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
         self._post_constraint_block(ranges)
         return ranges
 
-    def new_solution(self, var_value_dict=None, name=None, objective_value=None, keep_zeros=True, **kwargs):
+    def new_solution(self, var_value_dict=None, name=None, objective_value=None, **kwargs):
         rounding = kwargs.get('rounding', False)
+        keep_zeros = kwargs.get('keep_zeros', True)
 
         return SolveSolution(model=self._model, obj=objective_value,
                              var_value_map=var_value_dict, name=name,

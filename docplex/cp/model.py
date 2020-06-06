@@ -122,7 +122,7 @@ class CpoModelStatistics(object):
             if model is None:
                 self.nb_root_exprs = 0
             else:
-                self.nb_root_exprs = len(model.expr_list) + len(model.search_phases) + (0 if model.objective is None else 1)
+                self.nb_root_exprs = len(model.expr_list) + (0 if model.objective is None else 1)
             self.nb_integer_var   = 0     # Number of integer variables
             self.nb_interval_var  = 0     # Number of interval variables
             self.nb_expr_nodes    = 0     # Number of expression nodes
@@ -244,7 +244,6 @@ class CpoModel(object):
         super(CpoModel, self).__init__()
         self.expr_list        = []            # List of model root expressions as tuples (expression, location)
         self.parameters       = None          # Solving parameters
-        self.search_phases    = []            # List of search phases
         self.starting_point   = None          # Starting point
         self.objective        = None          # Objective function
         self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name.
@@ -266,7 +265,7 @@ class CpoModel(object):
             loc = self._get_calling_location()
             if loc is not None:
                 sfile = loc[0]
-        self.source_file = sfile
+        self.source_file = sfile.replace('\\', '/')
 
         # Store model name
         self.name = name
@@ -337,27 +336,42 @@ class CpoModel(object):
         Raises:
             CpoException in case of error.
         """
-        # Check simple boolean expressions
-        if is_bool(expr):
-            # assert expr, "Try to add an expression which is already false"
-            # return
-            expr = build_cpo_expr(expr)
+        # Determine calling location
+        loc = self._get_calling_location() if self.source_loc else None
 
-        # Check expression type
-        if not isinstance(expr, CpoExpr):
-            # Check string
+        # Check simple expression
+        if isinstance(expr, CpoExpr) or is_bool(expr):
+            self._add_with_loc(expr, loc)
+        else:
+            # Argument may be an iterable of expressions
             if is_string(expr):
                 raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
             # Try as iterable
             try:
                 for x in expr:
-                    self.add(x)
+                    self._add_with_loc(x, loc)
             except:
                 raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
-            return
 
-        # Determine calling location
-        loc = self._get_calling_location() if self.source_loc else None
+
+    def _add_with_loc(self, expr, loc):
+        """ Adds an expression with its location to the model.
+
+        Args:
+            expr: CPO expression (constraint, boolean, objective, etc) to add to the model
+            loc:  Expression location
+        Raises:
+            CpoException in case of error.
+        """
+        #print("Add expression {} at loc {}".format(expr, loc))
+        # Update last add time
+        self.last_add_time = time.time()
+
+        # Check simple boolean expressions for case where expression built a constant
+        if is_bool(expr):
+            # Add expression even if false
+            self.expr_list.append((CpoValue(expr, Type_Bool), loc))
+            return
 
         # Check type of expression
         etyp = expr.type
@@ -372,15 +386,12 @@ class CpoModel(object):
                 self.objective = expr
                 self.expr_list.append((expr, loc))
         elif etyp is Type_SearchPhase:
-            self.search_phases.append((expr, loc))
+            self.expr_list.append((expr, loc))
         elif isinstance(expr, CpoVariable):
             # Not really useful, just to force variable to be in the model
             self.expr_list.append((expr, loc))
         else:
             raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase, not an object of type {}.".format(type(expr)))
-
-        # Update last add time
-        self.last_add_time = time.time()
 
 
     def remove(self, expr):
@@ -395,10 +406,6 @@ class CpoModel(object):
             True if expression has been removed, False if not found
         """
         etyp = expr.type
-
-        # Process case of search phase
-        if etyp is Type_SearchPhase:
-            return self._remove_from_expr_list(expr, self.search_phases)
 
         # Check if it is current objective expression
         if expr is self.objective:
@@ -544,15 +551,6 @@ class CpoModel(object):
 
         # Add to model
         self.add(phase)
-
-
-    def get_search_phases(self):
-        """ Get the list of search phases.
-
-        Returns:
-            List of search phases (pairs (expression, location)), [] if none.
-        """
-        return self.search_phases
 
 
     def set_starting_point(self, stpoint):
@@ -738,7 +736,6 @@ class CpoModel(object):
         """
         # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
-        estack.extend([x for x, l in self.search_phases])
         if self.objective is not None:
             estack.append(self.objective)
 
@@ -769,7 +766,6 @@ class CpoModel(object):
         """
         # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
-        estack.extend([x for x, l in self.search_phases])
         if self.objective is not None:
             estack.append(self.objective)
         # Loop while expression stack is not empty
@@ -941,7 +937,6 @@ class CpoModel(object):
         """
         # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
-        estack.extend([x for x, l in self.search_phases])
         result = CpoModelStatistics(self)
         doneset = set()  # Set of ids of expressions already processed
 
@@ -998,6 +993,40 @@ class CpoModel(object):
         stats.write(out, " - ")
 
 
+    def create_solver(self, **kwargs):
+        """ Create a new solver instance attached to this model
+
+        All necessary solving parameters are taken from the solving context that is constructed from the following list
+        of sources, each one overwriting the previous:
+
+           - the parameters that are set in the model itself,
+           - the default solving context that is defined in the module :mod:`~docplex.cp.config`
+           - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the optional arguments of this method.
+
+        Args:
+            context (Optional): Complete solving context.
+                                If not given, solving context is the default one that is defined in the module
+                                :mod:`~docplex.cp.config`.
+            params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
+                                that overwrite those in the solving context.
+            (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
+                               (for example *TimeLimit*, *Workers*, *SearchType*, etc).
+            (others) (Optional): Any leaf attribute with the same name in the solving context
+                                (for example *agent*, *trace_log*, *trace_cpo*, etc).
+        Returns:
+            New solver properly initialized.
+        """
+        slvr = CpoSolver(self, **kwargs)
+        # Add solvers listeners
+        for l in self.listeners:
+            slvr.add_listener(l)
+        # Add solvers callbacks
+        for l in self.callbacks:
+            slvr.add_callback(l)
+        return slvr
+
+
     def solve(self, **kwargs):
         """ Solves the model.
 
@@ -1023,9 +1052,6 @@ class CpoModel(object):
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context
@@ -1035,7 +1061,7 @@ class CpoModel(object):
         Raises:
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = self._create_solver(**kwargs)
+        solver = self.create_solver(**kwargs)
         msol = solver.solve()
         solver.end()
         return msol
@@ -1077,7 +1103,7 @@ class CpoModel(object):
         Raises:
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = self._create_solver(**kwargs)
+        solver = self.create_solver(**kwargs)
         return solver
 
 
@@ -1134,7 +1160,7 @@ class CpoModel(object):
             :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = self._create_solver(**kwargs)
+        solver = self.create_solver(**kwargs)
         rsol = solver.refine_conflict()
         solver.end()
         return rsol
@@ -1193,7 +1219,7 @@ class CpoModel(object):
             mdl = self.clone()
             mdl.add(cnstr)
         # Call propagation
-        solver = mdl._create_solver(**kwargs)
+        solver = mdl.create_solver(**kwargs)
         psol = solver.propagate()
         solver.end()
         return psol
@@ -1233,7 +1259,7 @@ class CpoModel(object):
             :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
             :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
         """
-        solver = self._create_solver(**kwargs)
+        solver = self.create_solver(**kwargs)
         rsol = solver.run_seeds(nbrun)
         solver.end()
         return rsol
@@ -1418,15 +1444,6 @@ class CpoModel(object):
                 print("X2 = {}".format(x2))
                 raise CpoException("The expression {} differs: {} vs {}".format(i, x1, x2))
 
-        # Compare search phases
-        lx1 = self.search_phases
-        lx2 = other.search_phases
-        if len(lx1) != len(lx2):
-            raise CpoException("Different number of search phases, {} vs {}.".format(len(lx1), len(lx2)))
-        for i, (x1, x2) in enumerate(zip(lx1, lx2)):
-            if not x1[0].equals(x2[0]):
-                raise CpoException("The search phase {} differs: {} vs {}".format(i, x1[0], x2[0]))
-
 
     def equals(self, other):
         """ Checks if this model is equal to another.
@@ -1456,7 +1473,6 @@ class CpoModel(object):
         res.expr_list = list(self.expr_list)
         if self.parameters is not None:
             res.parameters = self.parameters.copy()
-        res.search_phases = list(self.search_phases)
         return res
 
 
@@ -1479,24 +1495,6 @@ class CpoModel(object):
     def __str__(self):
         """ Convert the model into string (returns model name) """
         return self.get_name()
-
-
-    def _create_solver(self, **kwargs):
-        """ Create a new solver instance attached to this model
-
-        Args:
-            kwargs: Parameters to pass to solver creation
-        Returns:
-            New solver properly initialized.
-        """
-        slvr = CpoSolver(self, **kwargs)
-        # Add solvers listeners
-        for l in self.listeners:
-            slvr.add_listener(l)
-        # Add solvers callbacks
-        for l in self.callbacks:
-            slvr.add_callback(l)
-        return slvr
 
 
     @staticmethod
@@ -1528,7 +1526,6 @@ class CpoModel(object):
         """
         # Initialize stack of expressions to parse
         estack = [x for x, l in self.expr_list]
-        estack.extend([x for x, l in self.search_phases])
         if self.objective is not None:
             estack.append(self.objective)
         # Loop while expression stack is not empty

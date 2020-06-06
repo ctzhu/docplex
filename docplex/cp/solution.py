@@ -505,7 +505,7 @@ class CpoSequenceVarSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoSequenceVar`.
-            lvars: List of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
+            lvars: Ordered list of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
                    or list of interval variables (object of class CpoIntervalVar)
         """
         assert isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
@@ -956,6 +956,7 @@ class CpoModelSolution(object):
             var = _get_expr_from_map(expr_map, vname)
             vnlist = [v for v in vars[vname]]
             ivres = [self.get_var_solution(vn) for vn in vnlist]
+            #ivres = [_get_expr_from_map(expr_map, vn) for vn in vnlist]  Should have been this instead of previous line
             self.add_var_solution(CpoSequenceVarSolution(var, ivres))
 
         # Add state functions
@@ -1117,7 +1118,6 @@ class CpoRunResult(object):
             log (str): Log of the solver
         """
         self.solver_log = log
-        self.process_infos[CpoProcessInfos.LOG_DATA_SIZE] = len(log)
 
 
     def get_solver_log(self):
@@ -1494,7 +1494,7 @@ class CpoSolveResult(CpoRunResult):
 
 
     def _add_json_solution(self, jsol, expr_map):
-        """ Add a json solution to this solution descriptor
+        """ Add a json solution to this result descriptor
 
         Args:
             jsol:     JSON document representing solution.
@@ -1511,9 +1511,8 @@ class CpoSolveResult(CpoRunResult):
             self.search_status = status.get('SearchStatus')
             self.stop_cause    = status.get('SearchStopCause')
             nsts = status.get('nextStatus')
-            if nsts is not None:
-                if nsts != 'NextTrue':
-                    self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
+            if nsts and (nsts != 'NextTrue'):
+                self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
 
         # Add parameters
         prms = jsol.get('parameters', None)
@@ -1582,16 +1581,17 @@ class CpoSolveResult(CpoRunResult):
         out.write(u'\n')
 
         # Print search/solve status
-        out.write(u"Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
-        #out.write(u"Solve status: " + str(self.get_solve_status()) + "\n")
         s = self.get_search_status()
         if s:
+            out.write(u"Solve status: " + str(self.get_solve_status()) + "\n")
             out.write(u"Search status: " + str(s))
             s = self.get_stop_cause()
             if s:
                 out.write(u", stop cause: " + str(s))
             out.write(u"\n")
-
+        else:
+            # Old fashion
+            out.write(u"Solve status: " + str(self.get_solve_status()) + ", Fail status: " + str(self.get_fail_status()) + "\n")
         # Print solve time
         out.write(u"Solve time: " + str(round(self.get_solve_time(), 2)) + " sec\n")
         out.write(u"-------------------------------------------------------------------------------\n")
@@ -1926,7 +1926,13 @@ class CpoProcessInfos(InfoDict):
     It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
     the methods such as :meth:`~docplex.cp.utils.InfoDict.write` that allows to easily print
     the full content of the information structure.
+
+    Note that the content is purely informative. Information names and values depends on the implementation
+    of the solver agent that has been used to solve the model.
     """
+
+    # Name of the agent used to solve the model
+    SOLVER_AGENT = "SolverAgent"
 
     # Model build time (time between model creation and last addition of an expression)
     MODEL_BUILD_TIME = "ModelBuildTime"
@@ -1934,20 +1940,11 @@ class CpoProcessInfos(InfoDict):
     # Attribute name for time needed to transform model into CPO format
     MODEL_COMPILE_TIME = "ModelCompileTime"
 
-    # Attribute name for time needed to encode model string in UTF8
-    MODEL_ENCODE_TIME = "ModelEncodeTime"
-
     # Attribute name for time needed to dump model in file and/or on log
     MODEL_DUMP_TIME = "ModelDumpTime"
 
     # Attribute name for the size of the generated CPO model
     MODEL_DATA_SIZE = "ModelDataSize"
-
-    # Time needed to send model to the solver
-    MODEL_SEND_TIME = "ModelSendTime"
-
-    # Name of the agent used to solve the model
-    SOLVER_AGENT = "SolverAgent"
 
     # Attribute name for total solve time (including model send and response receive)
     SOLVE_TOTAL_TIME = "TotalSolveTime"
@@ -1958,20 +1955,26 @@ class CpoProcessInfos(InfoDict):
     # Attribute name for size of the result string
     RESULT_DATA_SIZE = "ResultDataSize"
 
-    # Attribute name for time needed to decode result string from UTF-8
-    RESULT_DECODE_TIME = "ResultDecodeTime"
-
-    # Attribute name for time needed to parse JSON result
-    RESULT_PARSE_TIME = "ResultParseTime"
+    # Attribute name for total time needed to parse JSON result
+    TOTAL_JSON_PARSE_TIME = "TotalJsonParseTime"
 
     # Attribute name for size of the log data
-    LOG_DATA_SIZE = "LogDataSize"
+    TOTAL_LOG_DATA_SIZE = "TotalLogDataSize"
+
+    # Attribute name for total time needed to encode strings in UTF8
+    TOTAL_UTF8_ENCODE_TIME = "TotalUtf8EncodeTime"
+
+    # Attribute name for total time needed to decode strings from UTF-8
+    TOTAL_UTF8_DECODE_TIME = "TotalUtf8DecodeTime"
+
+    # Time needed to send model to the solver
+    TOTAL_DATA_SEND_TIME = "TotalDataSendTime"
 
     # Total size of data sent to solver
-    TOTAL_SENT_DATA_SIZE = "TotalSentDataSize"
+    TOTAL_DATA_SEND_SIZE = "TotalDataSendSize"
 
     # Total size of data received from solver
-    TOTAL_RECEIVED_DATA_SIZE = "TotalReceivedDataSize"
+    TOTAL_DATA_RECEIVE_SIZE = "TotalDataReceiveSize"
 
 
     def __init__(self):

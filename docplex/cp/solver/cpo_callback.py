@@ -6,7 +6,8 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module defines the class :class:`CpoCallback` that allows to retrieve events sent by Cpo solver when running.
+This module defines the class :class:`CpoCallback` that allows to retrieve events
+that are sent by the CP Optimizer solver engine when running.
 
 Any number of callbacks can be added to a solver using the method :meth:`docplex.cp.solver.solver.CpoSolver.add_callback`.
 Callbacks can also be added on the model object using :meth:`docplex.cp.model.CpoModel.add_callback`
@@ -59,8 +60,8 @@ class CpoCallback(object):
         """ Notify the callback about a solver event.
 
         This method is called every time an event is notified by the CPO solver.
-        Associated to the event, the solver status is represented by an object of class :class:`~docplex.cp.solution.CpoSolveResult`
-        that is partially instanciated with nformation available at this step.
+        Associated to the event, the solver information is provided as a an object of class
+        class:`~docplex.cp.solution.CpoSolveResult` that is instantiated with information available at this step.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)

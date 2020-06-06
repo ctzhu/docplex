@@ -7,7 +7,7 @@
 from docplex.mp.operand import Operand
 from docplex.mp.error_handler import docplex_fatal, DOcplexException
 
-from docplex.mp.utils import is_number, is_string, is_function, str_holo
+from docplex.mp.utils import is_number, is_string, is_function, str_maxed
 
 
 class KPI(object):
@@ -186,7 +186,7 @@ class DecisionKPI(KPI):
         return DecisionKPI(self._expr, self._name)
 
     def __repr__(self):
-        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_holo(self._expr, maxlen=64))
+        return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_maxed(self._expr, maxlen=64))
 
 
 class FunctionalKPI(KPI):

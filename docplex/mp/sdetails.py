@@ -107,7 +107,8 @@ class SolveDetails(object):
                     ("_miprelgap", "cplex.miprelgap", float, _NO_GAP),
                     ('_best_bound', 'PROGRESS_BEST_OBJECTIVE', float, _NO_BEST_BOUND),
                     ("_md5", "cplex.model.md5", str, ""),
-                    ('_n_iterations', 'cplex.itcount', int, 0)
+                    ('_n_iterations', 'cplex.itcount', int, 0),
+                    ('_n_nodes_processed', 'cplex.nodes.processed', int, 0)
                     )
 
     @staticmethod
@@ -323,6 +324,10 @@ class SolveDetails(object):
 
         """
         return self._solve_status_code in self._limit_statuses
+
+    def notify_hit_limit(self, logger):
+        if self.has_hit_limit():
+            logger.info("solve: {0}".format(self.status))
 
     @property
     def quality_metrics(self):

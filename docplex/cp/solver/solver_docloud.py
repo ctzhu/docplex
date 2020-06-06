@@ -126,7 +126,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
         # Encode model
         stime = time.time()
         cpostr = cpostr.encode('utf-8')
-        self.process_infos[CpoProcessInfos.MODEL_ENCODE_TIME] = time.time() - stime
+        self.process_infos[CpoProcessInfos.TOTAL_UTF8_ENCODE_TIME] = time.time() - stime
 
         # Solve model and retrieve solution
         name = self.model.get_name()
@@ -138,7 +138,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
             # Create job and start execution
             stime = time.time()
             client.create_cpo_job(name, cpostr, cmd)
-            self.process_infos[CpoProcessInfos.MODEL_SEND_TIME] = time.time() - stime
+            self.process_infos[CpoProcessInfos.TOTAL_DATA_SEND_TIME] = time.time() - stime
 
             # Start execution
             client.execute_job()
@@ -174,7 +174,7 @@ class CpoSolverDocloud(solver.CpoSolverAgent):
                     self.process_infos[CpoProcessInfos.RESULT_DATA_SIZE] = len(jsol)
                     stime = time.time()
                     jsol = jsol.decode('utf-8')
-                    self.process_infos[CpoProcessInfos.RESULT_DECODE_TIME] = time.time() - stime
+                    self.process_infos[CpoProcessInfos.TOTAL_UTF8_DECODE_TIME] = time.time() - stime
                 except Exception as e:
                     raise CpoException("Model solution access error: " + str(e))
 

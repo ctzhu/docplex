@@ -9,7 +9,7 @@ import sys
 from collections import defaultdict
 
 from docplex.mp.engine import IEngine
-from docplex.mp.utils import DOcplexException, str_holo
+from docplex.mp.utils import DOcplexException, str_maxed, is_string
 from docplex.mp.compat23 import izip
 
 from docplex.mp.constants import ConflictStatus
@@ -213,6 +213,7 @@ def fast_add_linear1290(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
     # noinspection PyArgumentList
     with chbmatrix(lin_expr, cpx._env_lp_ptr, 0,
                    cpxenv._apienc) as (rmat, nnz):
+        # noinspection PyArgumentList
         addrows(cpxenv._e, cpx._lp, 0,
                 len(rhs), nnz, rhs, cpx_senses,
                 rmat, [], names, cpxenv._apienc)
@@ -243,7 +244,7 @@ def fast_add_linear_1210(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
             list(range(num_old_rows, num_old_rows + num_new_rows)),
             ranges)
 
-    return six.moves.range(num_old_rows, cpx_linearcts.get_num())
+    return fast_range(num_old_rows, cpx_linearcts.get_num())
 
 
 def static_fast_set_linear_obj(cpx, indices, obj_coefs):
@@ -406,7 +407,7 @@ class IndexScope(object):  # pragma: no cover
         self._index -= len(deleted_indices)
 
     def __str__(self):  # pragma: no cover
-        return 'IndexScope({0}}[{1}]'.format(self._name, self._index)
+        return 'IndexScope({0})[{1}]'.format(self._name, self._index)
 
 
 class _SafeCplexWrapper(cplex.Cplex):  # pragma: no cover
@@ -644,7 +645,7 @@ class CplexEngine(IEngine):
             self.error_handler.fatal("unrecognized constraint to query index: {0!s}", ct)
 
     @classmethod
-    def sync_data_differ_stop_here(clscls, cpx_data, mdl_data):
+    def sync_data_differ_stop_here(cls, cpx_data, mdl_data):
         # put breakpoint here
         pass
 
@@ -878,7 +879,7 @@ class CplexEngine(IEngine):
             nb_terms = left_expr.number_of_terms()
             if nb_terms:
                 indices = [-1] * nb_terms
-                coefs = [0] * nb_terms
+                coefs = [0.0] * nb_terms
                 for i, (dv, k) in enumerate(left_expr.iter_terms()):
                     indices[i] = dv._index
                     coefs[i] = float(k)
@@ -1293,7 +1294,7 @@ class CplexEngine(IEngine):
         nterms = linexpr.number_of_terms()
         if nterms:
             indices = [-1] * nterms
-            koefs = [0] * nterms
+            koefs = [0.0] * nterms
             i = 0
             for dv, k in linexpr.iter_terms():
                 indices[i] = dv._index
@@ -1450,6 +1451,9 @@ class CplexEngine(IEngine):
 
     def update_quadratic_constraint(self, qct, event, *args):
         self._model.fatal('CPLEX cannot modify quadratic constraint: {0!s}', qct)
+
+    def update_extra_constraint(self, lct, qualifier, *args):
+        self._model.fatal('CPLEX cannot modify {1}: {0!s}', lct, qualifier)
 
     def update_logical_constraint(self, lgct, event, *args):
         if isinstance(lgct, IndicatorConstraint):
@@ -1673,23 +1677,29 @@ class CplexEngine(IEngine):
         ''' Converts a CPLEX integer status value to a string'''
         return _subinterfaces.SolutionInterface.status.__getitem__(cpx_status)
 
-    _CPLEX_SOLVE_OK_STATUSES = frozenset({1,  # CPX_STAT_OPTIMAL
-                                          6,  # CPX_STAT_NUM_BEST: solution exists but numerical issues
-                                          24,  # CPX_STAT_FIRSTORDER: stting optimlaitytarget to 2
-                                          101,  # CPXMIP_OPTIMAL
-                                          102,  # CPXMIP_OPTIMAL_TOL
-                                          104,  # CPXMIP_SOL_LIM
-                                          105,  # CPXMPI_NODE_LIM_FEAS
-                                          107,  # CPXMIP_TIME_LIM_FEAS
-                                          109,  # CPXMIP_FAIL_FEAS : what is this ??
-                                          111,  # CPXMIP_MEM_LIM_FEAS
-                                          113,  # CPXMIP_ABORT_FEAS
-                                          116,  # CPXMIP_FAIL_FEAS_NO_TREE : integer sol exists (????)
-                                          129,  # CPXMIP_OPTIMAL_POPULATED
-                                          130,  # CPXMIP_OPTIMAL_POPULATED_TOL
-                                          301,  # CPX_STAT_MULTIOBJ_OPTIMAL
-                                          305  # CPX_STAT_MULTIOBJ_NON_OPTIMAL
-                                          })
+    _CPLEX_SOLVE_OK_STATUSES = {cpx_cst.CPX_STAT_OPTIMAL,
+                                cpx_cst.CPX_STAT_NUM_BEST,  # solution exists but numerical issues
+                                cpx_cst.CPX_STAT_FIRSTORDER,  # stting optimlaitytarget to 2
+                                cpx_cst.CPXMIP_OPTIMAL,
+                                cpx_cst.CPXMIP_OPTIMAL_TOL,
+                                cpx_cst.CPXMIP_SOL_LIM,
+                                cpx_cst.CPXMIP_NODE_LIM_FEAS,
+                                cpx_cst.CPXMIP_TIME_LIM_FEAS,
+                                cpx_cst.CPXMIP_DETTIME_LIM_FEAS,  # cf issue #61
+                                cpx_cst.CPXMIP_MEM_LIM_FEAS,
+                                cpx_cst.CPXMIP_FAIL_FEAS,
+                                cpx_cst.CPXMIP_ABORT_FEAS,
+                                cpx_cst.CPXMIP_FAIL_FEAS_NO_TREE,  # integer sol exists (????)
+                                cpx_cst.CPXMIP_OPTIMAL_POPULATED,
+                                cpx_cst.CPXMIP_OPTIMAL_POPULATED_TOL,
+                                301,  # cpx_cst.CPX_STAT_MULTIOBJ_OPTIMAL,
+                                305  # cpx_cst.CPX_STAT_MULTIOBJ_NON_OPTIMAL
+                                }
+
+    @classmethod
+    def add_ok_status(cls, ok_status):
+        # INTERNAL
+        cls._CPLEX_SOLVE_OK_STATUSES.add(ok_status)
 
     @classmethod
     def _is_solve_status_ok(cls, status):
@@ -1837,11 +1847,17 @@ class CplexEngine(IEngine):
         self._cplex.linear_constraints.advanced.free_user_cuts()
 
     def sync_extra_cts(self, mdl):
+        # calling the free_xxx methods mandate c plex to start from the beginning of the search.
+        # so we should not call them unless some cuts/lazy are present!
         adv = self._cplex.linear_constraints.advanced
-        adv.free_user_cuts()
-        self.add_user_cuts(mdl._user_cuts)
-        adv.free_lazy_constraints()
-        self.add_lazy_constraints(mdl._lazy_constraints)
+        # mdl_user_cuts = mdl._user_cuts
+        # if mdl_user_cuts:
+        #     adv.free_user_cuts()
+        #     self.add_user_cuts(mdl._user_cuts)
+        # mdl_lazy_cts = mdl._lazy_constraints
+        # if mdl_lazy_cts:
+        #     adv.free_lazy_constraints()
+        #     self.add_lazy_constraints(mdl._lazy_constraints)
 
     def _sync_equivalence_cts(self, mdl):
         # INTERNAL
@@ -1917,8 +1933,41 @@ class CplexEngine(IEngine):
         lct_int_stats = [stat.value for stat in lct_stats]
         cpx.start.set_start(dvar_int_stats, lct_int_stats, col_primal=[], col_dual=[], row_primal=[], row_dual=[])
 
-    def solve(self, mdl, parameters=None, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+
+    def build_multiobj_paramsets(self, mdl, lex_timelimits, lex_mipgaps):
+        cpx = self._cplex
+        paramsets = None
+        if lex_timelimits is not None or lex_mipgaps is not None:
+            self._check_multi_objective_support()
+
+            # Get list of priorities in decreasing order
+            decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
+
+            if lex_timelimits is not None and len(lex_timelimits) != len(decreasing_ordered_prio):
+                mdl.fatal("lex_timelimits list length does not match number of priorities for multiobjective solve")
+            if lex_mipgaps is not None and len(lex_mipgaps) != len(decreasing_ordered_prio):
+                mdl.fatal("lex_mipgaps list length does not match number of priorities for multiobjective solve")
+            paramsets = []
+            for _ in decreasing_ordered_prio:
+                paramset = cpx.create_parameter_set()
+                paramsets.append(paramset)
+            if lex_timelimits is not None:
+                for paramIdx, timelimit in enumerate(lex_timelimits):
+                    paramsets[paramIdx].add(cpx_cst.CPX_PARAM_TILIM, timelimit)
+            if lex_mipgaps is not None:
+                for paramIdx, mipgap in enumerate(lex_mipgaps):
+                    paramsets[paramIdx].add(cpx_cst.CPX_PARAM_EPGAP, mipgap)
+            # If there is a single priority level, timelimit and mipgaps are handled at the cplex_parameters level
+            paramsets = paramsets if len(paramsets) > 1 else None
+        return paramsets
+
+
+    def solve(self, mdl, parameters=None, **kwargs):
         self._resync_if_needed()
+
+        lex_mipstart = kwargs.pop('_lex_mipstart', None)
+        lex_mipgaps = kwargs.pop('lex_mipgaps', None)
+        lex_timelimits = kwargs.pop('lex_timelimits', None)
 
         cpx = self._cplex
         # keep this line until RTC28217 is solved and closed !!! ----------------
@@ -1944,15 +1993,17 @@ class CplexEngine(IEngine):
             self._sync_var_bounds()
             self._sync_annotations(mdl)
             self._sync_equivalence_cts(mdl)
-            self.sync_extra_cts(mdl)
 
             if mdl.clean_before_solve:
                 self.clean_before_solve()
 
             # --- mipstart block ---
             cpx_mip_starts = cpx.MIP_starts
-            if not lex_mipstart:
-                # ignore mip starts if within lexicographic
+            if not lex_mipstart: # ignore mip starts if within lexicographic
+                # do -not- delete mip starts here,
+                # as each solve creates one.
+                # set clean_before_solve=True to enforce clean start
+                # TODO: avoid adding model mip starts twice.
                 for (mps, effort_level) in mdl.iter_mip_starts():
                     if not mps.number_of_var_values:
                         self._model.warning("Empty MIP start solution ignored")
@@ -1967,36 +2018,15 @@ class CplexEngine(IEngine):
             linear_nonzeros = cpx.linear_constraints.get_num_nonzeros()
             nb_columns = cpx.variables.get_num()
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
+            nb_iterations, nb_nodes_processed = 0, 0
 
             # # FOR TEST PURPOSE ---- TEMPORARY **************************************************************************
             # cpx.write("/temp/cplex_model.lp", filetype="lp")
 
             #Handle lex_timelimits list
-            if lex_timelimits is not None or lex_mipgaps is not None:
-                self._check_multi_objective_support()
-
-                # Get list of priorities in decreasing order
-                decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
-
-                if lex_timelimits is not None and len(lex_timelimits) != len(decreasing_ordered_prio):
-                    mdl.fatal("lex_timelimits list length does not match number of priorities for multiobjective solve")
-                if lex_mipgaps is not None and len(lex_mipgaps) != len(decreasing_ordered_prio):
-                    mdl.fatal("lex_mipgaps list length does not match number of priorities for multiobjective solve")
-                paramsets = []
-                for _ in decreasing_ordered_prio:
-                    paramset = cpx.create_parameter_set()
-                    paramsets.append(paramset)
-                if lex_timelimits is not None:
-                    for paramIdx, timelimit in enumerate(lex_timelimits):
-                        paramsets[paramIdx].add(cpx_cst.CPX_PARAM_TILIM, timelimit)
-                if lex_mipgaps is not None:
-                    for paramIdx, mipgap in enumerate(lex_mipgaps):
-                        paramsets[paramIdx].add(cpx_cst.CPX_PARAM_EPGAP, mipgap)
-                # If there is a single priority level, timelimit and mipgaps are handled at the cplex_parameters level
-                paramsets = paramsets if len(paramsets) > 1 else None
-
+            paramsets = self.build_multiobj_paramsets(mdl, lex_timelimits, lex_mipgaps)
+            if paramsets:
                 cpx.solve(paramsets=paramsets)
-
             else:
                 cpx.solve()
 
@@ -2024,7 +2054,7 @@ class CplexEngine(IEngine):
                     self._model.error('Model is non-convex')
                 else:
                     cpx_status_string = "QP with non-convex objective"
-                    self._model.error('Model has non-convex objective: {0!s}', str_holo(self._model.objective_expr, 60))
+                    self._model.error('Model has non-convex objective: {0!s}', str_maxed(self._model.objective_expr, 60))
             elif 1016 == cpx_code:
                 # this is the: CPXERR_RESTRICTED_VERSION - " Promotional version. Problem size limits exceeded." case
                 cpx_status = 1016
@@ -2041,7 +2071,7 @@ class CplexEngine(IEngine):
 
         except Exception as pe:  # pragma: no cover
             solve_ok = False
-            self.error_handler.error('Internal error in CPLEX solve: {0!s}'.format(pe))
+            self.error_handler.error('Internal error in CPLEX solve: {0}: {1!s}'.format(type(pe).__name__, pe))
             cpx_status_string = 'Internal error: {0!s}'.format(pe)
             cpx_status = -2
 
@@ -2158,7 +2188,7 @@ class CplexEngine(IEngine):
                     self._model.error('Model is non-convex')
                 else:
                     cpx_status_string = "QP with non-convex objective"
-                    self._model.error('Model has non-convex objective: {0!s}', str_holo(self._model.objective_expr, 60))
+                    self._model.error('Model has non-convex objective: {0!s}', str_maxed(self._model.objective_expr, 60))
             elif 1016 == cpx_code:
                 # this is the: CPXERR_RESTRICTED_VERSION - " Promotional version. Problem size limits exceeded." case
                 cpx_status = 1016
@@ -2311,7 +2341,7 @@ class CplexEngine(IEngine):
 
     def _make_cplex_default_groups(self, mdl):
         def make_atom_group(pref, obj, con):
-            return (pref, ((con, obj.index), ))
+            return pref, ((con, obj.index),)
 
         grs = []
         # add all linear constraints with pref=2.0
@@ -2475,19 +2505,25 @@ class CplexEngine(IEngine):
 
         return ConflictRefinerResult(conflicts, refined_by=self.name)
 
-    def dump(self, path):
-        self._resync_if_needed()
-        try:
-            if '.' in path:
-                self._cplex.write(path)
-            else:
-                self._cplex.write(path, filetype="lp")
+    def export(self, out, exchange_format):
+        if is_string(out):
+            path = out
+            self._resync_if_needed()
+            try:
+                if '.' in path:
+                    self._cplex.write(path)
+                else:
+                    self._cplex.write(path, filetype="lp")
 
-        except CplexSolverError as cpx_se:  # pragma: no cover
-            if cpx_se.args[2] == 1422:
-                raise IOError("SAV export cannot open file: {}".format(path))
-            else:
-                raise DOcplexException("CPLEX error in SAV export: {0!s}", cpx_se)
+            except CplexSolverError as cpx_se:  # pragma: no cover
+                if cpx_se.args[2] == 1422:
+                    raise IOError("SAV export cannot open file: {}".format(path))
+                else:
+                    raise DOcplexException("CPLEX error in SAV export: {0!s}", cpx_se)
+        else:
+            # assume a file-like object
+            filetype = exchange_format.filetype
+            return self._cplex.write_to_stream(out, filetype)
 
     def end(self):
         """ terminate the engine, cannot find this in the doc.
@@ -2550,20 +2586,33 @@ class CplexEngine(IEngine):
             self._model.error('Model has not been solved: no quality metrics available.')
         return qm_dict
 
-    def set_parameter(self, parameter, value):
-        # value check is up to the caller.
-        # parameter is a DOcplex parameter object
+    def get_parameter_from_id(self, param_id):
         try:
-            self._cplex._env.parameters._set(parameter.cpx_id, value)
+            return self._cplex._env.parameters._get(param_id)
+        except CplexError as cpx_e:
+            self.error_handler.warning("Error getting value for parameter from  id \"{0}\": {1!s}", (param_id, cpx_e))
+            return None
+
+    def set_parameter_from_id(self, param_id, value, param_short_name=''):
+        # sets a parameter from its internal ID
+        # BEWARE: no value check is performed.
+        try:
+            self._cplex._env.parameters._set(param_id, value)
         except CplexError as cpx_e:
             cpx_msg = str(cpx_e)
             if cpx_msg.startswith("Bad parameter identifier"):
-                self.error_handler.warning("Parameter \"{0}\" is not recognized", (parameter.qualified_name,))
+                self.error_handler.warning("Parameter id \"{0}\" is not recognized", (param_id,))
             else:  # pragma: no cover
                 self.error_handler.error("Error setting parameter {0} (id: {1}) to value {2} - ignored"
-                                         .format(parameter.short_name,
-                                                 parameter.cpx_id,
+                                         .format(param_short_name,
+                                                 param_id,
                                                  value))
+
+    def set_parameter(self, parameter, value):
+        # no value check is up to the caller.
+        # parameter is a DOcplex parameter object
+        self.set_parameter_from_id(parameter.cpx_id, value, param_short_name=parameter.short_name)
+
 
     def get_parameter(self, parameter):
         try:

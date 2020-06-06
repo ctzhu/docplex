@@ -106,9 +106,20 @@ class VarType(object):
         # """
         raise NotImplementedError  # pragma: no cover
 
-    def accept_domain_value(self, candidate_value, lb, ub):
+    @classmethod
+    def is_within_bounds_and_tolerance(cls, candidate_value, lb, ub, tolerance):
+        assert tolerance >= 0
+        if candidate_value <= lb - tolerance:
+            return False
+        elif candidate_value >= ub + tolerance:
+            return False
+        else:
+            return True
+
+    def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return self.accept_value(candidate_value) and (lb <= candidate_value <= ub)
+        return self.accept_value(candidate_value) and\
+               self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def to_string(self):
         """
@@ -308,9 +319,9 @@ class SemiContinuousVarType(VarType):
         # """
         return 0 <= numeric_value <= self._plus_infinity
 
-    def accept_domain_value(self, candidate_value, lb, ub):
+    def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return 0 == candidate_value or (lb <= candidate_value <= ub)
+        return 0 == candidate_value or self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)
@@ -348,9 +359,9 @@ class SemiIntegerVarType(VarType):
             return True
         return numeric_value >= 0 and (is_int(numeric_value) or numeric_value == int(numeric_value))
 
-    def accept_domain_value(self, candidate_value, lb, ub):
+    def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return 0 == candidate_value or (lb <= candidate_value <= ub)
+        return 0 == candidate_value or self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)

@@ -31,10 +31,10 @@ Type_IntExprArray          = CpoType("IntExprArray", htyps=(Type_FloatExprArray,
 Type_IntArray              = CpoType("IntArray", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
 Type_IntVarArray           = CpoType("IntVarArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_IntVar)
 
-Type_Constraint            = CpoType("Constraint")
+Type_Constraint            = CpoType("Constraint", istop=True)
 
-Type_BoolExpr              = CpoType("BoolExpr", htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_Bool                  = CpoType("Bool", iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_BoolExpr              = CpoType("BoolExpr", istop=True, htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_Bool                  = CpoType("Bool", istop=True, iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
 Type_BoolVar               = CpoType("BoolVar", isvar=True, htyps=(Type_IntVar, Type_Bool, Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
 Type_BoolInt               = CpoType("BoolInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
 Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
@@ -58,7 +58,7 @@ Type_SegmentedFunction     = CpoType("SegmentedFunction", iscst=True)
 Type_StepFunction          = CpoType("StepFunction", iscst=True)
 Type_TransitionMatrix      = CpoType("TransitionMatrix", iscst=True)
 Type_IntervalArray         = CpoType("IntervalArray")
-Type_Objective             = CpoType("Objective")
+Type_Objective             = CpoType("Objective", istop=True)
 Type_TupleSet              = CpoType("TupleSet", iscst=True)
 
 Type_IntValueEval          = CpoType("IntValueEval")

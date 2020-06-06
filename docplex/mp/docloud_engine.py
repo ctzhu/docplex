@@ -258,7 +258,7 @@ class DOcloudEngine(IndexerEngine):
             self._model.warning("Progress listeners are not supported on DOcplexcloud.")
 
     def register_callback(self, cb):
-        self._model.error('Callbacks are not available on DOcplexcloud')
+        self._model.fatal('Callbacks are not available on DOcplexcloud')
 
     @staticmethod
     def _docloud_cplex_version():
@@ -566,9 +566,10 @@ class DOcloudEngine(IndexerEngine):
         attachments.append({'name': warmstart_name, 'data': warmstart_data})
 
     # noinspection PyProtectedMember
-    def solve(self, mdl, parameters=None, lex_mipstart=None, lex_timelimits=None, lex_mipgaps=None):
+    def solve(self, mdl, parameters=None, **kwargs):
         # Before submitting the job, we will build the list of attachments
         # parameters are CPLEX parameters
+        lex_mipstart = kwargs.pop('_lex_mipstart', None)
         attachments = []
 
         # make sure model is the first attachment: that will be the name of the job on the console

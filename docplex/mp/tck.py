@@ -10,7 +10,8 @@
 import math
 
 from docplex.mp.compat23 import izip
-from docplex.mp.constr import AbstractConstraint, LinearConstraint
+from docplex.mp.constr import AbstractConstraint, LinearConstraint,\
+    LogicalConstraint, EquivalenceConstraint, IndicatorConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.linear import Var, Expr
 from docplex.mp.pwl import PwlFunction
@@ -173,6 +174,11 @@ class DocplexTypeCheckerI(object):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
+    def typecheck_logical_constraint_seq(self, cts, true_if_equivalence):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
+
+
     def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
         # must return sequence unchanged
         return ct_ctname_seq  # pragma: no cover
@@ -227,6 +233,10 @@ class DocplexTypeCheckerI(object):
 
     def check_duplicate_name(self, name, name_table, qualifier):
         raise NotImplementedError
+
+    def check_for_duplicate_keys(self, keys, caller=None):
+        # default is no-op
+        pass
 
 
 # noinspection PyAbstractClass
@@ -318,11 +328,11 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         # check for all differemt and output a justifier variable apperaing twice.
         inc_set = set([])
         for v in seq_as_list:
-            if v in inc_set:
+            if v.index in inc_set:
                 self.fatal('Variable: {0} appears twice in sequence', v)
 
             else:
-                inc_set.add(v)
+                inc_set.add(v.index)
         return seq_as_list
 
     def typecheck_constraint(self, obj):
@@ -386,6 +396,23 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 elif not accept_range and not isinstance(ct, LinearConstraint):
                     self.fatal("Expecting sequence of linear constraints (not ranges), got: {0!r} at position {1}", ct,
                                i)
+        return checked_cts_list
+
+    def typecheck_logical_constraint_seq(self, cts, true_if_equivalence):
+        checked_cts_list = list(cts)  # listify to avoid consuming iterators....
+        if true_if_equivalence:
+            checked_type = EquivalenceConstraint
+            typename = "equivalence"
+        elif true_if_equivalence is False:
+            checked_type = IndicatorConstraint
+            typename = "indicator"
+        else:
+            checked_type = LogicalConstraint
+            typename = "equivalence or indicator"
+        for i, ct in enumerate(checked_cts_list):
+            if not isinstance(ct, checked_type):
+                self.fatal("Expecting sequence of {0} constraints, got: {1!r} at position {2}", typename, ct, i)
+
         return checked_cts_list
 
     def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
@@ -579,6 +606,10 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
         # must return sequence unchanged
         return cts  # pragma: no cover
 
+    def typecheck_logical_constraint_seq(self, cts, true_if_equivalence):
+        # must return sequence unchanged
+        return cts  # pragma: no cover
+
     def typecheck_linear_constraint_name_tuple_seq(self, ct_ctname_seq, accept_range=True):
         # must return sequence unchanged
         return ct_ctname_seq  # pragma: no cover
@@ -683,6 +714,18 @@ class FullTypeChecker(StandardTypeChecker):
 
     def typecheck_num_seq(self, seq, caller=None):
         return DocplexNumericCheckerMixin.typecheck_num_seq(self._logger, seq, check_math=True, caller=caller)
+
+    def check_for_duplicate_keys(self, keys, caller=None):
+        key_set = set(keys)
+        if len(key_set) < len(keys):
+            # some key is duplicated:
+            inc_set = set()
+            for k in keys:
+                if k in inc_set:
+                    s_caller = resolve_caller_as_string(caller, sep=' ')
+                    self.fatal("{0}Duplicated key: {1!s}".format(s_caller, k))
+                else:
+                    inc_set.add(k)
 
 
 #  ------------------------------

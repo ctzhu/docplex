@@ -86,11 +86,11 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     def contains_var(self, dvar):
         return self is dvar
 
-    def accept_initial_value(self, candidate_value):
-        return self.vartype.accept_domain_value(candidate_value, lb=self._lb, ub=self._ub)
+    def accepts_value(self, candidate_value, tolerance=1e-6):
+        # INTERNAL
+        return self.vartype.accept_domain_value(candidate_value, lb=self._lb, ub=self._ub, tolerance=tolerance)
 
     def check_name(self, new_name):
-        #ModelingObject.check_name(self, new_name)
         if not is_string(new_name) or not new_name:
             self.fatal("Variable name accepts only non-empty strings, {0!r} was passed", new_name)
         elif new_name.find(' ') >= 0:
@@ -306,7 +306,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     @staticmethod
     def _extract_calling_ct_xhs():
-        _searched_patterns = [("lhs", 0),  ("left_expr", 0), ("rhs", 1), ("right_expr", 1) ]
+        _searched_patterns = [("lhs", 0),  ("left_expr", 0), ("rhs", 1), ("right_expr", 1)]
         import inspect
         # need to get 2 steps higher to find caller to add/sub
         frame = inspect.stack()[2]
@@ -684,7 +684,6 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
     # no unary not in magic methods...
 
 
-
 # noinspection PyAbstractClass
 class AbstractLinearExpr(Expr, LinearOperand):
     __slots__ = ('_discrete_locked',)
@@ -1007,7 +1006,9 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
 
-
+# from private.debug_deco import count_instances
+#
+# @count_instances
 class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     """LinearExpr()
 
@@ -1132,12 +1133,13 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     name = property(_get_name, set_name)
 
+    # from private.debug_deco import count_calls
+    # @count_calls
     def clone(self):
         """
         Returns:
             A copy of the expression on the same model.
         """
-        self._model._linexpr_clone_counter += 1
         cloned_terms = self._new_terms_dict(self._model, self.__terms)  # faster than copy() on OrderedDict()
         cloned = LinearExpr(model=self._model, e=cloned_terms, constant=self._constant, safe=True)
         return cloned
@@ -1428,9 +1430,11 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                 k = -k
             else:
                 sign = u'+'
-            if use_space: oss.write(SP)
+            if use_space:
+                oss.write(SP)
             oss.write(sign)
-            if use_space: oss.write(SP)
+            if use_space:
+                oss.write(SP)
             self._num_to_stringio(oss, k, nb_digits)
 
     def _add_expr(self, other_expr):
@@ -1476,7 +1480,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             event = None
         elif is_number(e):
             validfn = self._model._checker.get_number_validation_fn()
-            valid_e= validfn(e) if validfn else e
+            valid_e = validfn(e) if validfn else e
             self._constant += valid_e
             event = UpdateEvent.ExprConstant
         elif isinstance(e, Expr) and e.is_quad_expr():
@@ -1501,6 +1505,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def number_of_terms(self):
         return len(self.__terms)
 
+    @property
     def size(self):
         return len(self.__terms) + bool(self._constant)
 
@@ -1937,8 +1942,9 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
     multiply = times
 
     def __iadd__(self, other):
-        self.notify_replaced(other)
-        return other
+        linear_other = self.get_linear_factory()._to_linear_operand(other, force_clone=False)
+        self.notify_replaced(linear_other)
+        return linear_other
 
     def __isub__(self, other):
         linear_other = self.get_linear_factory()._to_linear_operand(other, force_clone=True)
@@ -1954,8 +1960,9 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
         ModelingObjectBase.__init__(self, model=model, name=None)
         # assume constant is a number (to be checked upfront)
         self._constant = cst
-        self._subscribers= []
+        self._subscribers = []
 
+    @property
     def size(self):
         return 1 if self._constant else 0
 
@@ -2096,8 +2103,8 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
         if is_number(other):
             return self._constant == other
         else:
-            return isinstance(other, LinearOperand)\
-                    and other.is_constant() and \
+            return isinstance(other, LinearOperand) \
+                   and other.is_constant() and \
                    self._constant == other.get_constant()
 
     # arithmetic to self

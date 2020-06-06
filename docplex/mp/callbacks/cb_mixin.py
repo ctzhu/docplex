@@ -25,8 +25,8 @@ class ModelCallbackMixin(object):
         - the constructor of the custom callback class must take an `env` parameter to comply
             with the CPLEX API
         - the constructor of the custom callback must call two __init__() methods:
-            - one for the cplex callback class, taking the `env` parameter
-            - one for the mixin class
+            - one for the cplex callback class, taking an `env` parameter
+            - one for the mixin class.
 
     Example:
 
@@ -42,16 +42,13 @@ class ModelCallbackMixin(object):
 
         See Also:
             :func:`docplex.mp.model.Model.register_callback`
-
-
     """
-
     def __init__(self):
         self._model = None
 
     @property
     def model(self):
-        """ This property is used to get or set the model associated with the mixin.
+        """ This property is used to get the model associated with the mixin.
 
         An exception is raised if no model has been associated with the mixin.
 
@@ -60,10 +57,6 @@ class ModelCallbackMixin(object):
         if not self._model:
             raise ValueError('No model has been attached to the callback.')  # pragma: no cover
         return self._model
-
-    @model.setter
-    def model(self, mdl):
-        self._model = mdl
 
     def index_to_var(self, var_index):
         """ This method converts a variable index to a Var object.
@@ -86,33 +79,64 @@ class ModelCallbackMixin(object):
         return cpx_lhs, cpx_sense, cpx_rhs
 
     def make_solution_from_vars(self, dvars):
-        # build a solution object from array of solution values
-        # noinspection PyUnresolvedReferences
-        m = self.model
+        """ Creates an intermediate solution from a list of variables.
+
+        :param dvars: a list of DOcplex variables.
+        :return: a :class:`docplex.mp.solution.SolveSolution` object.
+        """
         if dvars:
             indices = [v._index for v in dvars]
             # this calls the Cplex callback method get_values, which crashes if called with empty list
+            # noinspection PyUnresolvedReferences
             var_values = super(ModelCallbackMixin, self).get_values(indices)
+            # noinspection PyArgumentList
             var_value_dict = {v: val for v, val in izip(dvars, var_values)}
-        else:
+        else:  # pragma: no cover
+            # shouldnot happen: a MIP has at least one variable...
             var_value_dict = {}
-        return m.new_solution(var_value_dict)
+        return self.model.new_solution(var_value_dict)
+
+    def make_complete_solution(self):
+        """ Creates and returns an intermediate solution with all variables.
+
+        Values are taken from the `get_values()` method of the callback
+
+        :return: a :class:`docplex.mp.solution.SolveSolution` object.
+        """
+        all_vars = list(self.model.iter_variables())
+        return self.make_solution_from_vars(all_vars)
 
 
 class ConstraintCallbackMixin(ModelCallbackMixin):
 
     def __init__(self):
         ModelCallbackMixin.__init__(self)
-        self.vars = None
+        self._ct_vars = None
         self.cts = []
+        self._vars = []
 
     def register_constraints(self, cts):
         self.cts.extend(cts)
-        self.vars = None
+        self._ct_vars = None
 
     def register_constraint(self, ct):
-        self.cts.append(ct)
-        self.vars = None
+        self.register_constraints([ct])
+
+    def register_watched_var(self, dvar):
+        """ Register one variable.
+
+        Registered variables will be part of the intermediate solutions.
+
+        """
+        self._vars.append(dvar)
+
+    def register_watched_vars(self, dvars):
+        """ Register an iterable of  variables.
+
+        Registered variables will be part of the intermediate solutions.
+
+        """
+        self._vars.extend(dvars)
 
     @staticmethod
     def _collect_constraint_variables(cts):
@@ -124,20 +148,28 @@ class ConstraintCallbackMixin(ModelCallbackMixin):
         return var_list
 
     def _get_or_collect_vars(self):
-        if self.vars is None:
-            self.vars = self._collect_constraint_variables(self.cts)
-        return self.vars
+        # INTERNAL
+        if self._ct_vars is None:
+            self._ct_vars = self._collect_constraint_variables(self.cts)
+        return self._ct_vars
 
-    def make_solution(self):
-        """ Creates and returns a DOcplex solution instance.
+    @property
+    def watched_vars(self):
+        return self._get_or_collect_vars() + self._vars
+
+    def make_solution_from_watched(self):
+        """ Creates and returns a DOcplex solution instance from watched items.
 
         This method should be called when CPLEX has a new incumbent solution.
-        It stores variable values from the variables mentioned in the constraints.
+        It builds an intermediate solution from the watched variables and
+        variables mentioned in the registered constraints..
+
+        To build a soluton from all variables, use `make_complete_solution()`
 
         :return:
             An instance of SolveSolution.
         """
-        return self.make_solution_from_vars(self._get_or_collect_vars())
+        return self.make_solution_from_vars(self.watched_vars)
 
     def get_cpx_unsatisfied_cts(self, cts, sol, tolerance=1e-6):
         """ returns the subset of unsatisfied constraints in a given solution.
@@ -148,15 +180,19 @@ class ConstraintCallbackMixin(ModelCallbackMixin):
         :param tolerance: amn optional numerical value used to determine
             whether a constraint is satisfied or not. Defaut is 1e-6.
 
-        :return: a list of constraints from `cts`.
+        :return: a list of tuples (ct, lhs, sense, lhs) where:
+            ct is an unsatisfied constraint
+            lhs is the left-hand size, as expected by the cplex callback
+            sense is the constraint sense, as expected by the cplex callback
+            rhs is the rith-and side (a number), as expected by the cplex callback
+
         """
         unsatisfied = []
         for ct in cts:
             if not ct.is_satisfied(sol, tolerance):
                 # use mixin API to convert to cplex lingo
                 cpx_lhs, cpx_sense, cpx_rhs = self.linear_ct_to_cplex(ct)
-                # this add() method is specific to the type of CPLEX callback
-                unsatisfied.append((ct, cpx_lhs, cpx_sense, cpx_rhs))
+                unsatisfied.append( (ct, cpx_lhs, cpx_sense, cpx_rhs) )
         return unsatisfied
 
 

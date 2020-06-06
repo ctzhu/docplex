@@ -4,8 +4,7 @@ from distutils.core import setup
 import sys
 
 required = ['requests',
-            'six',
-            'docloud>=1.0.375']
+            'six']
 if ((sys.version_info[0]) < 3) or \
    ((sys.version_info[0] == 3) and (sys.version_info[1] < 2)):
     required.append('futures')
@@ -22,7 +21,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.12'
+    readme = 'DOcplex 2.13'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -48,7 +47,7 @@ setup(
                'docplex.util',
                'docplex.util.dods',
                'docplex.util.ws'],
-    version = '2.12.182',  # replaced at build time
+    version = '2.13.184',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

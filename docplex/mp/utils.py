@@ -462,8 +462,8 @@ def resolve_pattern(pattern, args):
         return pattern
 
 
-def str_holo(arg, maxlen):
-    """ Returns a truncated string representation of arg
+def str_maxed(arg, maxlen):
+    """ Returns a (possibly) truncated string representation of arg
 
     If maxlen is positive (or null), returns str(arg) up to maxlen chars.
 
@@ -472,10 +472,10 @@ def str_holo(arg, maxlen):
     :return:
     """
     s = str(arg)
-    if maxlen < 0 or len(s) <= maxlen:
+    if maxlen <= 0 or len(s) <= maxlen:
         return s
     else:
-        return "{}..".format(s[:maxlen])
+        return "%s.." % s[:maxlen]
 
 
 try:
@@ -527,29 +527,13 @@ def open_universal_newline(filename, mode):
         # try the python 3 syntax
         return open(filename, mode=mode, newline=None)
     except TypeError as te:
-        if "'newline'" in te.message:
+        if "'newline'" in str(te):
             # so open does not have a newline parameter -> python 2, use "U"
             # mode
             return open(filename, mode=mode + "U")
         else:
             # for other errors, just raise them
             raise
-
-
-
-def write_solution(env, solution, name):
-    with env.get_output_stream(name) as output:
-        output.write(solution.export_as_json_string().encode('utf-8'))
-
-
-def write_result_output(env, context, model, solution):
-    # import from context here otherwise we have cyclic inclusions between
-    # context and utils
-    from docplex.mp.publish import auto_publishing_result_output_names
-
-    names = auto_publishing_result_output_names(context)
-    for name in names:
-        write_solution(env, solution, name)
 
 
 class CyclicLoop(object):
@@ -887,6 +871,7 @@ def apply_thread_limitations(context, solver_context):
         # we don't want to duplicate parameters unnecessary
         if max_threads != parameters.threads.get():
             new_parameters = parameters.copy()
+            # change actual #threads
             new_parameters.threads = max_threads
             out_stream = solver_context.log_output_as_stream
             if out_stream:
@@ -896,6 +881,23 @@ def apply_thread_limitations(context, solver_context):
             return new_parameters
 
     return parameters
+
+
+def compute_overwrite_nb_threads(parameters, solver_context):
+    # returns a corrected value for threads, if necessary, else None
+    if getattr(solver_context, 'max_threads', None) is not None:
+        solve_threads = solver_context.max_threads
+        param_threads = parameters.threads.get()
+        if 0 == param_threads:
+            # 0 for cplex meeans any number
+            max_threads = solve_threads
+        else:
+            max_threads = min(solve_threads, param_threads)
+        if max_threads != param_threads:
+            return max_threads
+    # None means no overwrite
+    return None
+
 
 def is_almost_equal(x1, x2, reltol, abstol=0):
     # returns true if x2 equals x1 w.r.t a miax of an absolute tolerance and a relative tolerance

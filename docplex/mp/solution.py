@@ -21,7 +21,7 @@ from six import iteritems, iterkeys
 
 from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import CplexScope, BasisStatus, WriteLevel
-from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_holo, normalize_basename
+from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_maxed, normalize_basename
 from docplex.mp.utils import make_output_path2
 from docplex.mp.linear import Var
 from docplex.mp.error_handler import docplex_fatal
@@ -106,6 +106,7 @@ class SolveSolution(object):
     def make_engine_solution(model, var_value_map, obj, blended_obj_by_priority, solved_by, solve_details,
                              job_solve_status=None):
         # INTERNAL
+        # noinspection PyArgumentEqualDefault
         sol = SolveSolution(model,
                             var_value_map=None,
                             obj=obj,
@@ -444,6 +445,8 @@ class SolveSolution(object):
         """
         return iteritems(self._var_value_map)
 
+    iteritems = iter_var_values
+
     def iter_variables(self):
         """Iterates over all variables mentioned in the solution.
 
@@ -621,8 +624,46 @@ class SolveSolution(object):
         mdl.info("restored {0} variable values using range constraints".format(len(restore_ranges)))
         return mdl.add(restore_ranges)
 
-    def check(self, tolerance=1e-6):
-        return not (self.find_unsatisfied_constraints(tolerance))
+    def find_invalid_domain_variables(self, tolerance=1e-6):
+        m = self.model
+        invalid_domain_vars = []
+        for dv in m.iter_variables():
+            dvv = self.get_var_value(dv)
+            if not dv.accepts_value(dvv, tolerance=tolerance):
+                invalid_domain_vars.append(dv)
+        return invalid_domain_vars
+
+    def is_valid_solution(self, tolerance=1e-6, silent=True):
+        """ Returns True if the solution is valid.
+
+        This method checks that solution values for variables are acceptable for their types
+        and bounds. It also checks that all constraints are satisfied with these values.
+
+        :param tolerance: a float number used to check constraint satisfaction. default is 1e-6.
+        :param silent: optional flag. If False, prints which avriable or constraint causes the solution to be invalid.
+            default is True (nothing is printed)
+
+        :return: True if the solution is valid, within the tolerance value.
+
+        *New in version 2.13*
+        """
+        m = self.model
+        invalid_domain_vars = self.find_invalid_domain_variables(tolerance)
+        if not silent and invalid_domain_vars:
+            m.warning("invalid domain vars: {0}".format(len(invalid_domain_vars)))
+            for v, ivd in enumerate(invalid_domain_vars, start=1):
+                dvv = self.get_var_value(ivd)
+                m.warning("{0} - invalid value {1} for variable {2!s}".format(v, dvv, ivd))
+        m = self.model
+
+        unsat_cts = self.find_unsatisfied_constraints(tolerance)
+        if not silent and unsat_cts:
+            m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
+            for u, uct in enumerate(unsat_cts, start=1):
+                m.warning("{0} - unsatisified constraint: {1!s}".format(u, uct))
+        return not(invalid_domain_vars) and not(unsat_cts)
+
+    is_feasible_solution = is_valid_solution
 
     def equals_solution(self, other, check_models=False, obj_precision=1e-3, var_precision=1e-6):
         from itertools import dropwhile
@@ -806,23 +847,25 @@ class SolveSolution(object):
             s_obj = "obj=N/A"
         s_values = ",".join(["{0!s}:{1:g}".format(var, val) for var, val in iteritems(self._var_value_map)])
         r = "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
-        return str_holo(r, maxlen=72)
+        return str_maxed(r, maxlen=72)
 
     def __iter__(self):
         # INTERNAL: this is necessary to prevent solution from being an iterable.
         # as it follows getitem protocol, it can mistakenly be interpreted as an iterable
         raise TypeError
 
-    def __as_df__(self):
+    def __as_df__(self, name_key='name', value_key='value'):
+        assert name_key
+        assert value_key
         try:
             import pandas
         except ImportError:
             raise NotImplementedError('Cannot convert solution to pandas.DataFrame if pandas is not available')
-        solution_df = pandas.DataFrame(columns=['name', 'value'])
+        solution_df = pandas.DataFrame(columns=[name_key, value_key])
 
         for index, dvar in enumerate(self.iter_variables()):
-            solution_df.loc[index, 'name'] = dvar.to_string()
-            solution_df.loc[index, 'value'] = dvar.solution_value
+            solution_df.loc[index, name_key] = dvar.to_string()
+            solution_df.loc[index, value_key] = self._get_var_value(dvar)
 
         return solution_df
 
@@ -942,7 +985,7 @@ class SolveSolution(object):
         """
         return self._export_as_string(fmt='json', **kwargs)
 
-    def check_as_mip_start(self):
+    def check_as_mip_start(self, strong_check=False):
         """Checks that this solution is a valid MIP start.
 
         To be valid, it must have:
@@ -959,13 +1002,13 @@ class SolveSolution(object):
         for dv, dvv in self.iter_var_values():
             if dv.is_discrete() and not dv.is_generated():
                 count_values += 1
-                if not dv.accept_initial_value(dvv):  # pragma: no cover
+                if not dv.accepts_value(dvv):  # pragma: no cover
                     count_errors += 1
                     m.warning("Solution value {1} is outside the domain of variable {0!r}: {1}, type: {2!s}",
                               dv, dvv, dv.vartype.short_name)
         if count_values == 0:
             docplex_fatal("MIP start contains no discrete variable")  # pragma: no cover
-        return True
+        return not(count_errors) if strong_check else True
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}
@@ -996,159 +1039,3 @@ class SolveSolution(object):
         '''
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
         return kpi._get_solution_value(self)
-
-
-# from json import JSONEncoder
-#
-#
-# class SolutionJSONEncoder(JSONEncoder):
-#     def __init__(self, **kwargs):
-#         # extract kwargs I know
-#         self.keep_zeros = None
-#         if "keep_zeros" in kwargs:
-#             self.keep_zeros = kwargs["keep_zeros"]
-#             del kwargs["keep_zeros"]
-#         super(SolutionJSONEncoder, self).__init__(**kwargs)
-#
-#     def default(self, solution):
-#         n = {'CPLEXSolution': self.encode_solution(solution)}
-#         return n
-#
-#     def encode_solution(self, solution):
-#         n = {}
-#         n["version"] = "1.0"
-#         n["header"] = self.encode_header(solution)
-#         n["variables"] = self.encode_variables(solution)
-#         lc = self.encode_linear_constraints(solution)
-#         if len(lc) > 0:
-#             n["linearConstraints"] = lc
-#         qc = self.encode_quadratic_constraints(solution)
-#         if len(qc) > 0:
-#             n["quadraticConstraints"] = qc
-#         return n
-#
-#     def encode_header(self, solution):
-#         n = {}
-#         n["problemName"] = solution.problem_name
-#         if solution.has_objective():
-#             n["objectiveValue"] = "{}".format(solution.objective_value)
-#         n["solved_by"] = solution.solved_by
-#         return n
-#
-#     def encode_linear_constraints(self, solution):
-#         n = []
-#         model = solution.model
-#         was_solved = True
-#         try:
-#             model.check_has_solution()
-#         except DOcplexException:
-#             was_solved = False
-#         duals = []
-#         if not model._solves_as_mip():
-#             duals = model.dual_values(model.iter_linear_constraints())
-#         slacks = []
-#         if was_solved:
-#             slacks = model.slack_values(model.iter_linear_constraints())
-#         for (ct, d, s) in izip_longest(model.iter_linear_constraints(),
-#                                        duals, slacks,
-#                                        fillvalue=None):
-#             # basis status is not yet supported
-#             c = {"name": ct.name,
-#                  "index": ct.index}
-#             if s:
-#                 c["slack"] = s
-#             if d:
-#                 c["dual"] = d
-#             n.append(c)
-#         return n
-#
-#     def encode_quadratic_constraints(self, solution):
-#         n = []
-#         model = solution.model
-#         duals = []
-#         # RTC#37375
-#         # if not model._solves_as_mip():
-#         #     duals = model.dual_values(model.iter_quadratic_constraints())
-#         slacks = []
-#         was_solved = True
-#         try:
-#             model.check_has_solution()
-#         except DOcplexException:
-#             was_solved = False
-#         if was_solved:
-#             slacks = model.slack_values(model.iter_quadratic_constraints())
-#         for (ct, d, s) in izip_longest(model.iter_quadratic_constraints(),
-#                                        duals, slacks,
-#                                        fillvalue=None):
-#             # basis status is not yet supported
-#             c = {"name": ct.name,
-#                  "index": ct.index}
-#             if s:
-#                 c["slack"] = s
-#             if d:
-#                 c["dual"] = d
-#             n.append(c)
-#         return n
-#
-#     def encode_variables(self, sol):
-#         model = sol.model
-#         n = []
-#         if not model._solves_as_mip():
-#             reduced_costs = model.reduced_costs(model.iter_variables())
-#         else:
-#             reduced_costs = []
-#
-#         keep_zeros = sol._keep_zeros
-#         if self.keep_zeros is not None:
-#             keep_zeros = keep_zeros or self.keep_zeros
-#
-#         for (dvar, rc) in izip_longest(model.iter_variables(), reduced_costs,
-#                                        fillvalue=None):
-#             value = sol[dvar]
-#             if not keep_zeros and not value:
-#                 continue
-#             v = {"index": "{}".format(dvar.index),
-#                  "name": dvar.lp_name,
-#                  "value": "{}".format(value)}
-#             if rc is not None:
-#                 v["reducedCost"] = rc
-#             n.append(v)
-#         return n
-#
-#
-# class SolutionJSONPrinter(object):
-#     json_extension = ".json"
-#
-#     @classmethod
-#     def print(cls, out, solutions, indent=None, **kwargs):
-#         # solutions can be either a plain solution or a sequence or an iterator
-#         sol_to_print = list(solutions) if is_iterable(solutions) else [solutions]
-#         # encode all solutions in dict ready for json output
-#         encoder = SolutionJSONEncoder(**kwargs)
-#         solutions_as_dict = [encoder.default(sol) for sol in sol_to_print]
-#         # use an output stream adapter for py2/py3 and str/unicode compatibility
-#         osa = OutputStreamAdapter(out)
-#         if len(sol_to_print) == 1:  # if only one solution, use at root node
-#             osa.write(json.dumps(solutions_as_dict[0], indent=indent))
-#         else:  # for multiple solutions, we want a "CPLEXSolutions" root
-#             osa.write(json.dumps({"CPLEXSolutions": solutions_as_dict}, indent=indent))
-#
-#     @classmethod
-#     def print_to_stream(cls, solutions, out, extension=json_extension, indent=None, **kwargs):
-#         if out is None:
-#             # prints on standard output
-#             cls.print(sys.stdout, solutions, indent=indent, **kwargs)
-#         elif isinstance(out, str):
-#             # a string is interpreted as a path name
-#             path = out if out.endswith(extension) else out + extension
-#             with open(path, "w") as of:
-#                 cls.print_to_stream(solutions, of, indent=indent, **kwargs)
-#                 # print("* file: %s overwritten" % path)
-#         else:
-#             cls.print(out, solutions, indent=indent, **kwargs)
-#
-#     @classmethod
-#     def print_to_string(cls, solutions, indent=None):
-#         oss = StringIO()
-#         cls.print_to_stream(solutions, out=oss, indent=indent)
-#         return oss.getvalue()

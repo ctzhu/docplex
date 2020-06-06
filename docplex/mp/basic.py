@@ -10,7 +10,7 @@ from io import StringIO
 from enum import Enum
 
 from docplex.mp.operand import Operand
-from docplex.mp.utils import is_number, is_string, str_holo
+from docplex.mp.utils import is_number, is_string, str_maxed
 from docplex.mp.format import LP_format
 
 
@@ -107,9 +107,6 @@ class ModelingObjectBase(object):
     def is_in_model(self, model):
         return model and self._model is model
 
-    def is_model_ordered(self):
-        return self._model._keep_ordering
-
     def _check_model_has_solution(self):
         self.model.check_has_solution()
 
@@ -130,7 +127,7 @@ class ModelingObjectBase(object):
         return self._model.error_handler
 
     def truncated_str(self):
-        return str_holo(self, maxlen=self._model._max_repr_len)
+        return str_maxed(self, maxlen=self._model._max_repr_len)
 
     def zero_expr(self):
         # INTERNAL
@@ -266,6 +263,10 @@ class Expr(ModelingObjectBase, Operand):
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.name):
         raise NotImplementedError  # pragma: no cover
 
+    def is_model_ordered(self):
+        return self._model._keep_ordering
+
+
     def _num_to_stringio(self, oss, num, ndigits=None, print_sign=False, force_plus=False, use_space=False):
         k = num
         if print_sign:
@@ -321,9 +322,6 @@ class Expr(ModelingObjectBase, Operand):
     def solution_value(self):
         self._check_model_has_solution()
         return self._get_solution_value()
-
-    # def __ne__(self, other):
-    #     self.model.unsupported_neq_error(self, other)
 
     def __pow__(self, power):
         # INTERNAL
@@ -500,6 +498,8 @@ class _SubscriptionMixin(object):
         # INTERNAL
         self._subscribers.append(user)
 
+    notify_subscribed = notify_used
+
     def notify_unsubscribed(self, subscriber):
         # 1 find index
         for s, sc in enumerate(self._subscribers):
@@ -513,20 +513,16 @@ class _SubscriptionMixin(object):
     def is_in_use(self):
         return bool(self._subscribers)
 
+    @property
+    def nb_subscribers(self):
+        return len(self._subscribers)
+
     def is_shared(self):
-        nb_subscribers = len(self._subscribers)
-        if nb_subscribers >= 2:
-            return True
-        else:
-            return False
+        return self.nb_subscribers >= 2
 
     def is_used_by(self, obj):
         # lists are not optimal here, but we favor insertion: append is faster than set.add
-        for sc in self._subscribers:
-            if obj is sc:
-                return True
-        else:
-            return False
+        return any(obj is sc for sc in self.iter_subscribers())
 
     def notify_modified(self, event):
         for s in self._subscribers:

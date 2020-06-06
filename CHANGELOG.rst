@@ -1,15 +1,33 @@
 Changelog
 ---------
 
-Changed in 2.12.182:
+Changed in 2.13.184:
 ````````````````````
+* Removed dependency to the `docloud` package. Now you need to explicitely install the package using `pip install docloud` to use DOcplexcloud.
+* In ``docplex.mp``:
+    * registering callbacks on cloud now raises an exception.
+    * added  export_as_mps_string, export_as_sav_string.
+    * fixed a bug with dettime_limit: soling with a deterministic time limit always returned None.
+    * fixed bug on cplexcloud solve: number of nodes processed was always zero.
+    * repeated solves incorrectly restarted from start of search, now start from where the last solve stopped.
+    * added keyword argument 'time_limit' to Model.solve() to set a temporray time limit.
+    * added new method SolveSolution.is_valid_solution()
+    * fixed a bug in ModelReader: ranged constraints bounds were inverted when reading from SAV or MPS.
+    * fixed a bug in Model.set_lex_multiobj() : arguments abstols, reltols were ignored.
+    * added proper type-checking for Model.add_inicator_constraints()
+    * added docplex.mp.check_list/py to check local installation.
+
+
+Changed in 2.12.182 (2019.12):
+``````````````````````````````
+
 * In ``docplex.mp``:
     * Added a LinearRelaxer class to make a linearized copy of a MIP model (if possible).
       see class `docplex.mp.relax_linear.LinearRelaxer`
     * Conflict refiner default behavior is now identical to CPLEX interactive
       (the new behavior is much faster).
-    * Bug fixed: expressions of the form a*x did not notify constraints when modified.
-    * Fixed: message "ignored keyword argument was incorrectly printed when setting
+    * Bug fixed: expressions of the form k*x did not notify constraints when modified.
+    * Fixed: message "ignored keyword argument" was incorrectly printed when setting
       `cts_by_name=True` in model constructor.
 
 

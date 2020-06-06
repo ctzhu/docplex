@@ -16,12 +16,18 @@ class ExchangeFormat(object):
         This class is not meant to be instantiated by users.
     """
 
-    def __init__(self, name, extension, is_binary=False):
+    def __init__(self, name, extension, requires_cplex, is_binary=False):
         assert isinstance(name, str)
         assert isinstance(extension, str)
         self._name = name
         self._extension = extension if extension.startswith(".") else ".%s" % extension
+        self._requires_cplex = bool(requires_cplex)
         self._is_binary = is_binary
+
+    @property
+    def filetype(self):
+        # remove starting '.' from extension
+        return self._extension[1:]
 
     @property
     def name(self):
@@ -100,16 +106,17 @@ class LPFormat(ExchangeFormat):
         _translate_chars = _translate_chars_py3
 
     def __init__(self):
-        ExchangeFormat.__init__(self, "LP", "lp")
+        ExchangeFormat.__init__(self, "LP", "lp", requires_cplex=False)
 
     lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
 
     @classmethod
     def is_lp_compliant(cls, name, lp_re=lp_re):
-        if name is None:
-            return True
-        lp_match = lp_re.match(name)
-        return lp_match and lp_match.start() == 0 and lp_match.end() == len(name)
+        if name:
+            lp_match = lp_re.match(name)
+            return lp_match and lp_match.start() == 0 and lp_match.end() == len(name)
+        else:
+            return False
 
     @classmethod
     def make_prefix_name(cls, prefix, local_index, offset=1):
@@ -120,9 +127,9 @@ class LPFormat(ExchangeFormat):
     def lp_var_name(cls, dvar):
         return cls.lp_name(dvar.get_name(), "x", dvar.get_index())
 
-    @classmethod
-    def lp_ct_name(cls, linct):
-        return cls.lp_name(linct.get_name(), "c", linct.get_index())
+    # @classmethod
+    # def lp_ct_name(cls, linct):
+    #     return cls.lp_name(linct.get_name(), "c", linct.get_index())
 
     @classmethod
     def lp_name(cls, raw_name, prefix, local_index, hide_names=False,
@@ -153,9 +160,9 @@ class LPFormat(ExchangeFormat):
 """ The global LP format object."""
 # noinspection PyPep8
 LP_format  = LPFormat()
-SAV_format = ExchangeFormat("SAV", "sav", is_binary=True)
-OPL_format = ExchangeFormat("OPL", ".mod")
-MPS_format = ExchangeFormat("MPS", ".mps")
+SAV_format = ExchangeFormat("SAV", "sav", requires_cplex=True, is_binary=True)
+OPL_format = ExchangeFormat("OPL", ".mod", requires_cplex=False)
+MPS_format = ExchangeFormat("MPS", ".mps", requires_cplex=True)
 
 _FORMAT_MAPPER = {"lp": LP_format,
                   "opl": OPL_format

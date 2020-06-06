@@ -324,6 +324,9 @@ class CpoSolverAgent(object):
                 self.log_output.flush()
             if self.log_data is not None:
                 self.log_data.append(data)
+        # Update statistics
+        self.process_infos.incr(CpoProcessInfos.TOTAL_LOG_DATA_SIZE, len(data))
+
 
 
     def _set_last_json_result_string(self, json):
@@ -364,9 +367,9 @@ class CpoSolverAgent(object):
             # Parse JSON
             stime = time.time()
             jsol = parse_json_string(jsol)
+            res.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
             # Build result structure
             res._add_json_solution(jsol, self.expr_map)
-            res.process_infos[CpoProcessInfos.RESULT_PARSE_TIME] = time.time() - stime
 
         # Process Log
         if self.log_data is not None:
@@ -534,16 +537,12 @@ class CpoSolver(object):
         try:
             msol = self.agent.solve()
         except Exception as e:
-            if self.status == STATUS_ABORTED:
-                # Search has been aborted externally
-                for lstnr in self.listeners:
-                    lstnr.end_solve(self)
-                self._set_status(STATUS_RELEASED)
-                return self._create_solution_aborted()
-            else:
-                if self.context.log_exceptions:
-                    traceback.print_exc()
-                raise e
+            # Check if aborted in the mean time
+            if self._check_status_aborted():
+                return self.last_result
+            if self.context.log_exceptions:
+                traceback.print_exc()
+            raise e
         self._set_status(STATUS_IDLE)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
@@ -559,6 +558,7 @@ class CpoSolver(object):
         # Notify listeners
         for lstnr in self.listeners:
             lstnr.result_found(self, msol)
+        for lstnr in self.listeners:
             lstnr.end_solve(self)
 
         # Return solution
@@ -582,34 +582,26 @@ class CpoSolver(object):
             self._set_status(STATUS_SEARCH_WAITING)
             for lstnr in self.listeners:
                 lstnr.start_solve(self)
-        # Check if status is aborted (may be caused by listener)
-        if self.status == STATUS_ABORTED:
-            for lstnr in self.listeners:
-                lstnr.end_solve(self)
-            self._set_status(STATUS_RELEASED)
-            self.last_result = self._create_solution_aborted()
-            return self.last_result
-        else:
-            self._check_status(STATUS_SEARCH_WAITING)
 
-        # Solve model
+        # Check if status is aborted in the mean time (may be caused by listener)
+        if self._check_status_aborted():
+            return self.last_result
+
+        self._check_status(STATUS_SEARCH_WAITING)
+
+        # Search next
         stime = time.time()
         self._set_status(STATUS_SEARCH_RUNNING)
         try:
             msol = self.agent.search_next()
         except BaseException as e:
             sys.stdout.flush()
-            if self.status == STATUS_ABORTED:
-                # Search has been aborted externally
-                for lstnr in self.listeners:
-                    lstnr.end_solve(self)
-                self._set_status(STATUS_RELEASED)
-                self.last_result = self._create_solution_aborted()
+            # Check if aborted in the mean time
+            if self._check_status_aborted():
                 return self.last_result
-            else:
-                if self.context.log_exceptions:
-                    traceback.print_exc()
-                raise e
+            if self.context.log_exceptions:
+                traceback.print_exc()
+            raise e
         self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")
@@ -936,7 +928,7 @@ class CpoSolver(object):
         """ Solve the model using a start/next loop instead of standard solve.
 
         Return:
-            Last model solution
+            Last solve result
         """
         # Loop on all solutions
         last_sol = None
@@ -970,6 +962,24 @@ class CpoSolver(object):
         """
         if self.status != ests:
            raise CpoException("Unexpected solver status. Should be '{}' instead of '{}'".format(ests, self.status))
+
+
+    def _check_status_aborted(self):
+        """ Check if the solve status has been changed to aborted by another thread or a listener.
+        If so, an Aborted solve result is stored in last_result.
+
+        Returns: true if status was aborted, false otherwise.
+        """
+        if self.status != STATUS_ABORTED:
+            return False
+
+        self._set_status(STATUS_RELEASED)
+        self.last_result = self._create_solution_aborted()
+        for lstnr in self.listeners:
+            lstnr.result_found(self, self.last_result)
+        for lstnr in self.listeners:
+            lstnr.end_solve(self)
+        return True
 
 
     def _create_solution_aborted(self):

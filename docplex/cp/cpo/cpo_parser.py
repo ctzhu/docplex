@@ -55,6 +55,7 @@ _KNOWN_IDENTIFIERS = {"intmax": INT_MAX, "intmin": INT_MIN,
 _ARRAY_TYPES = {'intArray': Type_IntArray, 'floatArray': Type_FloatArray,
                 'boolExprArray' : Type_BoolExprArray, 'intExprArray': Type_IntExprArray, 'floatExprArray': Type_FloatExprArray,
                 'intervalVarArray': Type_IntervalVarArray, 'sequenceVarArray': Type_SequenceVarArray,
+                'intValueSelectorArray': Type_IntValueSelectorArray, 'intVarSelectorArray': Type_IntVarSelectorArray,
                 'tupleSet' : Type_TupleSet,
                 '_cumulAtomArray' : Type_CumulAtomArray}
 
@@ -99,6 +100,7 @@ class CpoParser(object):
                  'token',          # Last read token
                  'pushtoken',      # Pushed token
                  'fun_handlers',   # Special function handlers
+                 'current_loc',    # Current source location
                  )
     
     def __init__(self, mdl=None):
@@ -114,6 +116,7 @@ class CpoParser(object):
         self.tokenizer = None
         self.token = None
         self.pushtoken = None
+        self.current_loc = None
 
         # Do not store location information (would store parser instead of real lines)
         self.model.source_loc = False
@@ -224,24 +227,24 @@ class CpoParser(object):
             tok2 = self._next_token()
 
         if tok1 is TOKEN_HASH:
-            self._read_directive(tok2.value)
+            self._read_directive()
 
         elif tok2 is TOKEN_ASSIGN:
             expr = self._read_assignment(tok1.get_string())
             # Add expression to the model if it is a variable
             if expr.is_variable():
-                self.model.add(expr)
+                self.model._add_with_loc(expr, self.current_loc)
 
         elif tok2 is TOKEN_SEMICOLON:
             # Get existing expression and re-add it to the model
             expr = self.expr_dict.get(tok1.get_string())
             if expr is None:
                 self._raise_exception("Expression '{}' not found in the model".format(tok1.get_string()))
-            self.model.add(expr)
+            self.model._add_with_loc(expr, self.current_loc)
 
         elif tok2 is TOKEN_COLON:
             expr = self._read_assignment(tok1.get_string())
-            self.model.add(expr)
+            self.model._add_with_loc(expr, self.current_loc)
 
         elif tok2 is TOKEN_BRACE_OPEN:
             self._read_section(tok1.value)
@@ -251,36 +254,66 @@ class CpoParser(object):
             self._push_token(tok1)
             expr = self._read_expression()
             #print("Expression read in statement: Type: " + str(expr.type) + ", val=" + str(expr))
-            self.model.add(expr)
+            self.model._add_with_loc(expr, self.current_loc)
             self._check_token(self.token, TOKEN_SEMICOLON)
 
         return True
 
 
-    def _read_directive(self, name):
+    def _read_directive(self):
         """ Read a directive
-
-        Args:
-            name:  Directive name
         """
+        name = self.token.value
         if name == "line":
-            # Skip line
-            self.tokenizer._skip_to_end_of_line()
+            self._read_directive_line()
 
         elif name == "include":
-            # Get file name
-            fname = self._check_token_string(self._next_token())
-            if (os.path.dirname(fname) == "") and (self.source_file is not None):
-                fname = os.path.dirname(self.source_file) + "/" + fname
-            # Push current context
-            old_ctx = (self.source_file, self.tokenizer, self.token)
-            # Parse file
-            self.parse(fname)
-            # Restore context
-            self.source_file, self.tokenizer, self.token = old_ctx
+            self._read_directive_include()
 
         else:
             self._raise_exception("Unknown directive '" + name + "'")
+
+
+    def _read_directive_line(self):
+        """ Read a line directive
+        """
+        # # Skip line
+        # self.tokenizer._skip_to_end_of_line()
+        tok = self._next_token()
+        # Check line off
+        if (tok.type == TOKEN_TYPE_SYMBOL) and tok.value == "off":
+            self.current_loc = None
+            return
+        # Get line number
+        if tok.type != TOKEN_TYPE_INTEGER:
+            self._raise_exception("Line number should be an integer")
+        lnum = int(tok.value)
+        # Get optional source file name, string on the same line
+        cline = self.tokenizer.line_number
+        tok = self._next_token()
+        if cline != self.tokenizer.line_number:
+            self._push_token(tok)
+            fname = None if self.current_loc is None else self.current_loc[0]
+        else:
+            if tok.type != TOKEN_TYPE_STRING:
+               self._raise_exception("File name should be a string")
+            fname = tok.get_string()
+        self.current_loc = (fname, lnum)
+
+
+    def _read_directive_include(self):
+        """ Read a include directive
+        """
+        # Get file name
+        fname = self._check_token_string(self._next_token())
+        if (os.path.dirname(fname) == "") and (self.source_file is not None):
+            fname = os.path.dirname(self.source_file) + "/" + fname
+        # Push current context
+        old_ctx = (self.source_file, self.tokenizer, self.token)
+        # Parse file
+        self.parse(fname)
+        # Restore context
+        self.source_file, self.tokenizer, self.token = old_ctx
 
 
     def _read_assignment(self, name):
@@ -427,10 +460,6 @@ class CpoParser(object):
         # Check symbol
         if toktyp is TOKEN_TYPE_SYMBOL:
             tokval = tok.value
-            # Check known identifier
-            if tokval in _KNOWN_IDENTIFIERS:
-                return _KNOWN_IDENTIFIERS[tok.value]
-
             if ntok is TOKEN_PARENT_OPEN:
                 self._next_token()
                 # Check special function calls
@@ -461,6 +490,10 @@ class CpoParser(object):
                 if not res.type.is_kind_of(typ):
                     res.type = typ
                 return res
+
+            # Check known identifier
+            if tokval in _KNOWN_IDENTIFIERS:
+                return _KNOWN_IDENTIFIERS[tok.value]
 
             # Token is an expression id
             return self._get_identifier_value(tok.get_string())
@@ -700,7 +733,7 @@ class CpoParser(object):
         """
         params = CpoParameters()
         tok = self._next_token()
-        while not tok.value == '}':
+        while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
             vname = self._check_token_string(tok)
             self._check_token(self._next_token(), TOKEN_ASSIGN)
             value = self._next_token()
@@ -716,7 +749,7 @@ class CpoParser(object):
         """
         # Skip all until section end
         tok = self._next_token()
-        while (tok is not TOKEN_EOF) and (tok.value != '}'):
+        while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
             if self.token.value == "version":
                 self._check_token(self._next_token(), TOKEN_PARENT_OPEN)
                 vtok = self._next_token()
@@ -738,7 +771,7 @@ class CpoParser(object):
         """
         # Skip all until section end
         tok = self._next_token()
-        while (tok is not TOKEN_EOF) and (tok.value != '}'):
+        while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
             tok = self._next_token()
 
 
@@ -762,7 +795,8 @@ class CpoParser(object):
         while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
             # Check directive (#line)
             if tok is TOKEN_HASH:
-                self._read_directive(self._next_token().value)
+                self._next_token()
+                self._read_directive()
                 tok = self._next_token()
                 continue
 
@@ -805,7 +839,7 @@ class CpoParser(object):
             elif var.type is Type_IntervalVar:
                 if tok.value == "absent":
                     vsol = CpoIntervalVarSolution(var, presence=False)
-                    self._check_token(self._next_token(), TOKEN_SEMICOLON)
+                    self._next_token()
                 else:
                     if tok.value == "intervalVar":
                         tok = self._next_token()
@@ -816,8 +850,8 @@ class CpoParser(object):
                         self._next_token()
                     else:
                         ivar = self._read_interval_var()
-                    ivar.set_name(vname)
-                    vsol = CpoIntervalVarSolution(ivar,
+                    #ivar.set_name(vname)
+                    vsol = CpoIntervalVarSolution(var,
                                                   presence=True if ivar.is_present() else False if ivar.is_absent() else None,
                                                   start=ivar.get_start() if ivar.get_start() != DEFAULT_INTERVAL else None,
                                                   end=ivar.get_end() if ivar.get_end() != DEFAULT_INTERVAL else None,
@@ -834,12 +868,12 @@ class CpoParser(object):
             # Process state function
             elif var.type is Type_StateFunction:
                 # Read state function value and ignore
-                expr = self._read_expression()
+                self._read_expression()
 
             # Process pulse function
             elif var.type is Type_CumulAtom:
                 # Read pulse expression and ignore
-                expr = self._read_expression()
+                self._read_expression()
 
             else:
                 self._raise_exception("The section 'startingPoint' should contain only integer and interval variables.")
@@ -965,7 +999,7 @@ class CpoParser(object):
         # Check interval operator
         if op is _OPER_INTERVAL:
             return tuple(args)
-        # Check unary minus on constant value
+        # Check unary operations on constant value
         if (op is Oper_minus) and (len(args) == 1) and is_number(args[0]):
             return -args[0]
         if (op is Oper_plus) and (len(args) == 1) and is_number(args[0]):

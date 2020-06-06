@@ -259,6 +259,22 @@ class CpoParameters(Context):
         self.clear()
 
 
+    def add(self, ctx):
+        """ Add another parameters to this one.
+
+        All attributes of given parameters are set in this one, except if there value is None.
+        If one value is another context, it is cloned before being set.
+
+        Args:
+            ctx:  Other context to add to this one.
+        """
+        for k, v in ctx.items():
+            if v is not None:
+                if isinstance(v, Context):
+                    v = v.clone()
+                self.set_attribute(k, v)
+
+
     def get_AllDiffInferenceLevel(self):
         """
         This parameter specifies the inference level for every constraint AllDiff extracted to the invoking
@@ -665,6 +681,22 @@ class CpoParameters(Context):
     IntervalSequenceInferenceLevel = property(get_IntervalSequenceInferenceLevel, set_IntervalSequenceInferenceLevel)
 
 
+    def get_KPIDisplay(self):
+        """
+        This parameter determines how KPIs are displayed in the log during the search.
+
+        The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.
+
+        *New in version 2.8, for CPO solver version 12.9.0 and higher.*
+        """
+        return self.get_attribute('KPIDisplay')
+
+    def set_KPIDisplay(self, val):
+        self._set_value_enum('KPIDisplay', val, _KPI_DISPLAY)
+
+    KPIDisplay = property(get_KPIDisplay, set_KPIDisplay)
+
+
     def get_LogPeriod(self):
         """
         The CP Optimizer search log includes information that is displayed periodically. This parameter
@@ -681,40 +713,24 @@ class CpoParameters(Context):
     LogPeriod = property(get_LogPeriod, set_LogPeriod)
 
 
-    def get_LogSearchTags(self):
-        """
-        This parameter controls the log activation. When set to On, the engine will display failure tags
-        (indices) in the engine log when solving the model. To specify the failures to explain, the member
-        functions explainFailure(Int failureTag) or explainFailure(IntArray tagArray) needs to be called
-        with the failure tags as the parameter. Several failures tags can be added. The member function
-        clearExplanations() is used to clear the set of failure tags to be explained. To be able to see
-        failure tags and explanations, the parameter SearchType must be set to DepthFirst and the parameter
-        Workers to 1.
-
-        The value is a symbol in ['On', 'Off']. Default value is 'Off'.
-        """
-        return self.get_attribute('LogSearchTags')
-
-    def set_LogSearchTags(self, val):
-        self._set_value_enum('LogSearchTags', val, _ON_OFF)
-
-    LogSearchTags = property(get_LogSearchTags, set_LogSearchTags)
-
-
-    def get_KPIDisplay(self):
-        """
-        This parameter determines how KPIs are displayed in the log during the search.
-
-        The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.
-
-        *New in version 2.8, for CPO solver version 12.9.0 and higher.*
-        """
-        return self.get_attribute('KPIDisplay')
-
-    def set_KPIDisplay(self, val):
-        self._set_value_enum('KPIDisplay', val, _KPI_DISPLAY)
-
-    KPIDisplay = property(get_KPIDisplay, set_KPIDisplay)
+    # def get_LogSearchTags(self):
+    #     """
+    #     This parameter controls the log activation. When set to On, the engine will display failure tags
+    #     (indices) in the engine log when solving the model. To specify the failures to explain, the member
+    #     functions explainFailure(Int failureTag) or explainFailure(IntArray tagArray) needs to be called
+    #     with the failure tags as the parameter. Several failures tags can be added. The member function
+    #     clearExplanations() is used to clear the set of failure tags to be explained. To be able to see
+    #     failure tags and explanations, the parameter SearchType must be set to DepthFirst and the parameter
+    #     Workers to 1.
+    #
+    #     The value is a symbol in ['On', 'Off']. Default value is 'Off'.
+    #     """
+    #     return self.get_attribute('LogSearchTags')
+    #
+    # def set_LogSearchTags(self, val):
+    #     self._set_value_enum('LogSearchTags', val, _ON_OFF)
+    #
+    # LogSearchTags = property(get_LogSearchTags, set_LogSearchTags)
 
 
     def get_LogVerbosity(self):
@@ -739,7 +755,7 @@ class CpoParameters(Context):
 
     def get_ModelAnonymizer(self):
         """
-        This parameter controls anonymization of a model dumped via dumpModel. The legal values of this
+        This parameter controls anonymization of a model dumped in CPO file format. The legal values of this
         parameter are Off and On. The default is Off. When the anonymizer is off, then names of variables
         and constraints in the model may be found in the output file. When the anonymizer is on, names given
         to variables or constraints in the model will not be reflected in the output file and standard
@@ -795,7 +811,7 @@ class CpoParameters(Context):
         """
         This parameter sets an absolute tolerance on the objective value for optimization models. This means
         that when CP Optimizer reports an optimal solution found, then there is no solution which improves
-        the objective by more than the value of this parameter. The default value of this parameter is 0.
+        the objective by more than the value of this parameter.
         This parameter is used in conjunction with RelativeOptimalityTolerance. The optimality of a solution
         is proven if either of the two parameters' criteria is fulfilled.
 

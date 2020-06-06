@@ -1773,7 +1773,7 @@ def search_file_in_path(f, pext=None):
 
     Args:
         f:  File name
-        pext (Optional): Extension to the path, expressed as a list of folders.
+        pext (Optional): Extension to the path, expressed as a list of folders, and scanned prior to system path.
     Returns:
         First file found with full path, None if not found
     """
@@ -1785,7 +1785,7 @@ def search_file_in_path(f, pext=None):
     path = os.getenv('PATH')
     path = path.split(os.pathsep) if path else []
     if pext is not None:
-        path.extend(pext)
+        path = pext + path
     for d in path:
         nf = os.path.join(d, f)
         if is_exe_file(nf):

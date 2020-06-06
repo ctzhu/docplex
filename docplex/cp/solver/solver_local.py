@@ -124,7 +124,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         timer.cancel()
         if evt != EVT_VERSION_INFO:
             raise LocalSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
-        self.version_info = verinf = json.loads(data.decode('utf-8'))
+        self.version_info = verinf = json.loads(data)
         self.available_command = self.version_info['AvailableCommands']
         # Normalize information
         verinf['AgentModule'] = __name__
@@ -142,7 +142,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Send CPO model to process
         cpostr = self._get_cpo_model_string()
-        self._send_cpo_model(cpostr)
+        self._write_message(CMD_SET_CPO_MODEL, cpostr)
+        self._wait_json_result(EVT_SUCCESS)  # JSON stored
         context.log(3, "Model sent.")
 
         # Initialize CPO callback setting
@@ -214,7 +215,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         """ End current search.
 
         Returns:
-            Last (fail) model solution with last solve information (type CpoSolveResult)
+            Last (fail) solve result with last solve information (type CpoSolveResult)
         """
 
         # Request end search
@@ -247,15 +248,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         if not self.context.model.name_all_constraints:
             self.context.model.name_all_constraints = True
             cpostr = self._get_cpo_model_string()
-            # Encode model
-            stime = time.time()
-            cpostr = cpostr.encode('utf-8')
-            self.process_infos.incr(CpoProcessInfos.MODEL_ENCODE_TIME, time.time() - stime)
+            self.context.model.name_all_constraints = False
             # Send CPO model to process
-            stime = time.time()
             self._write_message(CMD_SET_CPO_MODEL, cpostr)
-            self.process_infos.incr(CpoProcessInfos.MODEL_SEND_TIME, time.time() - stime)
-
             self._wait_event(EVT_SUCCESS)
 
         # Add callback if needed
@@ -362,23 +357,6 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             super(CpoSolverLocal, self).end()
 
 
-    def _send_cpo_model(self, cpostr):
-        """ Set the cpo model in the solver
-        Args:
-            cpostr:  CPO model as a string
-        """
-        # Encode model
-        stime = time.time()
-        cpostr = cpostr.encode('utf-8')
-        self.process_infos.incr(CpoProcessInfos.MODEL_ENCODE_TIME, time.time() - stime)
-
-        # Send CPO model to process
-        stime = time.time()
-        self._write_message(CMD_SET_CPO_MODEL, cpostr)
-        self._wait_json_result(EVT_SUCCESS)  # JSON stored
-        self.process_infos.incr(CpoProcessInfos.MODEL_SEND_TIME, time.time() - stime)
-
-
     def _wait_event(self, xevt):
         """ Wait for a particular event while forwarding logs if any.
         Args:
@@ -401,38 +379,34 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
                 if data:
-                    # Warn parent solver
                     # Store log if required
                     if self.log_enabled:
-                        self._add_log_data(data.decode('utf-8'))
+                        self._add_log_data(data)
 
             elif evt == EVT_SOLVER_ERR_STREAM:
                 if data:
-                    ldata = data.decode('utf-8')
                     if firsterror is None:
-                        firsterror = ldata.replace('\n', '')
+                        firsterror = data.replace('\n', '')
                     out = self.log_output if self.log_output is not None else sys.stdout
-                    out.write("ERROR: {}\n".format(ldata))
+                    out.write("ERROR: {}\n".format(data))
                     out.flush()
 
             elif evt == EVT_TRACE:
-                self.context.log(4, "ANGEL: " + data.decode('utf-8'))
+                self.context.log(4, "ANGEL: " + data)
 
             elif evt == EVT_ERROR:
-                errmsg = data.decode('utf-8')
                 if firsterror is not None:
-                    errmsg += " (" + firsterror + ")"
+                    data += " (" + firsterror + ")"
                 self.end()
-                raise LocalSolverException("Solver error: " + errmsg)
+                raise LocalSolverException("Solver error: " + data)
 
             elif evt == EVT_CALLBACK_EVENT:
-                event = data.decode('utf-8')
+                event = data
                 # Read data
                 evt, data = self._read_message()
                 assert evt == EVT_CALLBACK_DATA
-                jsol = data.decode('utf-8')
-                jsol = self._create_result_object(CpoSolveResult, jsol)
-                self.solver._notify_callback_event(event, jsol)
+                res = self._create_result_object(CpoSolveResult, data)
+                self.solver._notify_callback_event(event, res)
 
             else:
                 self.end()
@@ -449,14 +423,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Wait JSON result
         data = self._wait_event(evt)
-        self.process_infos[CpoProcessInfos.RESULT_DATA_SIZE] = len(data)
 
-        # Decode json result
-        stime = time.time()
-        jsol = data.decode('utf-8')
-        self.process_infos[CpoProcessInfos.RESULT_DECODE_TIME] = time.time() - stime
-        self._set_last_json_result_string(jsol)
-        self.context.log(3, "JSON result:\n", jsol)
+        # Store last json result
+        self._set_last_json_result_string(data)
+        self.context.log(3, "JSON result:\n", data)
 
         return self.last_json_result
 
@@ -467,8 +437,15 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             cid:   Command name
             data:  Data to write, already encoded in UTF8 if required
         """
-        # Build header
+        # Encode elements
+        stime = time.time()
         cid = cid.encode('utf-8')
+        if is_string(data):
+            data = data.encode('utf-8')
+        nstime = time.time()
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_ENCODE_TIME, nstime - stime)
+
+        # Build header
         tlen = len(cid)
         if data is not None:
             tlen += len(data) + 1
@@ -494,7 +471,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         self.pout.flush()
 
         # Update statistics
-        self.process_infos.incr(CpoProcessInfos.TOTAL_SENT_DATA_SIZE, len(frame))
+        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - nstime)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_SIZE, len(frame))
 
 
     def _read_message(self):
@@ -514,10 +492,13 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         tsize = (frame[2] << 24) | (frame[3] << 16) | (frame[4] << 8) | frame[5]
         data = self._read_frame(tsize)
 
-        # Split name from data
+        # Split name and data
         ename = 0
         while (ename < tsize) and (data[ename] != 0):
             ename += 1
+
+        # Decode name and data
+        stime = time.time()
         if ename == tsize:
             # Command only, no data
             evt = data.decode('utf-8')
@@ -525,11 +506,14 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         else:
             # Split command and data
             evt = data[0:ename].decode('utf-8')
-            data = data[ename+1:]
-        self.context.log(5, "Read message: ", evt, ", data: '", data, "'")
+            data = data[ename+1:].decode('utf-8')
 
         # Update statistics
-        self.process_infos.incr(CpoProcessInfos.TOTAL_RECEIVED_DATA_SIZE, tsize + 6)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_DECODE_TIME, time.time() - stime)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_RECEIVE_SIZE, tsize + 6)
+
+        # Log received message
+        self.context.log(5, "Read message: ", evt, ", data: '", data, "'")
 
         return evt, data
 
@@ -546,7 +530,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         if len(data) != nbb:
             if len(data) == 0:
                 # Check if first read of data
-                if self.process_infos.get(CpoProcessInfos.TOTAL_RECEIVED_DATA_SIZE, 0) == 0:
+                if self.process_infos.get(CpoProcessInfos.TOTAL_DATA_RECEIVE_SIZE, 0) == 0:
                     if IS_WINDOWS:
                         raise LocalSolverException("Nothing to read from local solver process. Possibly not started because cplex dll is not accessible.")
                     else:

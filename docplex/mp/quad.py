@@ -129,7 +129,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def __init__(self, model, quads=None, linexpr=None, name=None, safe=False):
         Expr.__init__(self, model, name)
-        model._quadexpr_instance_counter += 1
         self._transient = False
         self._subscribers = []  # used by subscription mixin
         if quads is None:
@@ -190,7 +189,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
         Returns:
             A quadratic expression.
         """
-        self._model._quadexpr_clone_counter += 1
         cloned_linear = self._linexpr.clone()
         self_name = self.name
         cloned_name = self_name if self_name is None else self_name[:]
@@ -264,8 +262,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
         """
         return len(self._quadterms)
 
+    @property
     def size(self):
-        return self.number_of_quadratic_terms + self._linexpr.size()
+        return self.number_of_quadratic_terms + self._linexpr.size
 
     def is_separable(self):
         """ Checks if all quadratic terms are separable.

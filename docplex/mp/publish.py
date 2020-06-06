@@ -117,6 +117,7 @@ def write_csv(env, table, fields, name):
         for line in table:
             write_csv_line(ostr, line, encoding)
 
+
 def get_auto_publish_names(context, prop_name, default_name):
     # comparing auto_publish to boolean values because it can be a non-boolean
     autopubs = context.solver.auto_publish
@@ -155,6 +156,27 @@ def auto_publising_kpis_table_names(context):
     # Return the list of kpi table names for saving
     return get_auto_publish_names(context, 'kpis_output', 'kpis.csv')
 
+def get_kpis_name_field(context):
+    autopubs = context.solver.auto_publish
+    field = None
+    if autopubs is True:
+        field = 'Name'
+    elif autopubs is False:
+        field = None
+    else:
+        field = context.solver.auto_publish.kpis_output_field_name
+    return field
+
+def get_kpis_value_field(context):
+    autopubs = context.solver.auto_publish
+    field = None
+    if autopubs is True:
+        field = 'Value'
+    elif autopubs is False:
+        field = None
+    else:
+        field = context.solver.auto_publish.kpis_output_field_value
+    return field
 
 class PublishResultAsDf(object):
     '''Mixin for classes publishing a result as data frame
@@ -234,7 +256,7 @@ class PublishResultAsDf(object):
         return names
 
 
-def write_kpis(env, kpis_table, name):
+def write_kpis(env, kpis_table, name, field_names):
     '''Writes a kpis dataframe as file which name is specified.
     The data type depends of extension of name.
 
@@ -245,7 +267,7 @@ def write_kpis(env, kpis_table, name):
     if ext == '.csv':
         encoding = 'utf-8'
         with env.get_output_stream(name) as ostr:
-            write_csv_line(ostr, ['NAME', 'VALUE'], encoding)
+            write_csv_line(ostr, field_names, encoding)
             for line in kpis_table:
                 write_csv_line(ostr, line, encoding)
     else:
@@ -260,5 +282,18 @@ def write_kpis_table(env, context, model, solution):
         kpis_table.append([k.name, k.compute(solution)])
     if kpis_table:
         # do not create the kpi tables if there are no kpis to be written
+        field_names = [get_kpis_name_field(context),
+                       get_kpis_value_field(context)]
         for name in names:
-            write_kpis(env, kpis_table, name)
+            write_kpis(env, kpis_table, name, field_names)
+
+
+def write_solution(env, solution, name):
+    with env.get_output_stream(name) as output:
+        output.write(solution.export_as_json_string().encode('utf-8'))
+
+
+def write_result_output(env, context, model, solution):
+    names = auto_publishing_result_output_names(context)
+    for name in names:
+        write_solution(env, solution, name)

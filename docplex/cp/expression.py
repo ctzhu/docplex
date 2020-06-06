@@ -92,7 +92,7 @@ class CpoExpr(object):
         """ Constructor:
 
         Args:
-            type:   Expression type.
+            type:   Expression type, object of class CpoType.
             name:   Expression name.
         """
         super(CpoExpr, self).__init__()
@@ -127,13 +127,18 @@ class CpoExpr(object):
     def set_name(self, name):
         """ Set the name of the expression.
 
+        This method returns this expression. It enables fluent calls such as: mdl.add((a + b == 1).set_name("myname"))
+
         Args:
             name: Expression name, possibly None.
+        Returns:
+            This expression
         """
         assert (name is None) or is_string(name), "Argument 'name' should be a string or None, not '{}' of type {}".format(name, type(name))
         if name is not None:
             name = make_unicode(name)
         self.name = name
+        return self
 
 
     def get_name(self):
@@ -1162,6 +1167,7 @@ class CpoIntervalVar(CpoVariable):
                self.size == other.size and \
                self.granularity == other.granularity and \
                self.presence == other.presence
+
 
 class CpoSequenceVar(CpoVariable):
     """ This class represents an *sequence variable* that can be used in a CPO model.

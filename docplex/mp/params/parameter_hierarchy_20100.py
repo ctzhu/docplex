@@ -12,7 +12,7 @@ from docplex.mp.params.parameters import *
 # generating code for group: Barrier_Limits
 def _group_barrier_limits_params(pgroup):
     return dict(corrections=IntParameter(pgroup, "corrections", "CPX_PARAM_BARMAXCOR", 3013, "maximum correction limit", default_value=-1, min_value=-1.0, max_value=9223372036800000000),
-                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1e+12, min_value=1.0, max_value=1e+75),
+                growth=NumParameter(pgroup, "growth", "CPX_PARAM_BARGROWTH", 3003, "factor used to determine unbounded optimal face", default_value=1000000000000.0, min_value=1.0, max_value=1e+75),
                 iteration=IntParameter(pgroup, "iteration", "CPX_PARAM_BARITLIM", 3012, "barrier iteration limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
                 objrange=NumParameter(pgroup, "objrange", "CPX_PARAM_BAROBJRNG", 3004, "barrier objective range (above and below zero)", default_value=1e+20, min_value=0.0, max_value=1e+75)
                 )
@@ -27,7 +27,7 @@ def _group_barrier_params(pgroup):
     return dict(algorithm=IntParameter(pgroup, "algorithm", "CPX_PARAM_BARALG", 3007, "barrier algorithm choice", default_value=0, min_value=0.0, max_value=3.0),
                 colnonzeros=IntParameter(pgroup, "colnonzeros", "CPX_PARAM_BARCOLNZ", 3009, "minimum number of entries to consider a column dense", default_value=0, min_value=0.0, max_value=2100000000),
                 convergetol=NumParameter(pgroup, "convergetol", "CPX_PARAM_BAREPCOMP", 3002, "tolerance on complementarity for convergence", default_value=1e-08, min_value=1e-12, max_value=1e+75),
-                crossover=IntParameter(pgroup, "crossover", "CPX_PARAM_BARCROSSALG", 3018, "barrier crossover choice", default_value=0, min_value=-1.0, max_value=2.0),
+                crossover=IntParameter(pgroup, "crossover", "CPX_PARAM_BARCROSSALG", 3018, "barrier crossover choice", default_value=0, min_value=0.0, max_value=2.0),
                 display=IntParameter(pgroup, "display", "CPX_PARAM_BARDISPLAY", 3010, "barrier display level", default_value=1, min_value=0.0, max_value=2.0),
                 ordering=IntParameter(pgroup, "ordering", "CPX_PARAM_BARORDER", 3014, "barrier ordering algorithm", default_value=0, min_value=0.0, max_value=3.0),
                 qcpconvergetol=NumParameter(pgroup, "qcpconvergetol", "CPX_PARAM_BARQCPEPCOMP", 3020, "tolerance on complementarity for QCP convergence", default_value=1e-07, min_value=1e-12, max_value=1e+75),
@@ -155,14 +155,13 @@ def _group_mip_cuts_make(pgroup):
 # generating code for group: MIP_Limits
 def _group_mip_limits_params(pgroup):
     return dict(aggforcut=IntParameter(pgroup, "aggforcut", "CPX_PARAM_AGGCUTLIM", 2054, "constraint aggregation limit for cut generation", default_value=3, min_value=0.0, max_value=2100000000),
-                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1.0, max_value=8),
+                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1.0, max_value=12),
                 cutpasses=IntParameter(pgroup, "cutpasses", "CPX_PARAM_CUTPASS", 2056, "number of cutting plane passes", default_value=0, min_value=-1.0, max_value=9223372036800000000),
                 cutsfactor=NumParameter(pgroup, "cutsfactor", "CPX_PARAM_CUTSFACTOR", 2033, "rows multiplier factor to limit cuts", default_value=-1.0, min_value=-1.0, max_value=1e+75),
                 eachcutlimit=IntParameter(pgroup, "eachcutlimit", "CPX_PARAM_EACHCUTLIM", 2102, "limit on number of cuts for each type per pass", default_value=2100000000, min_value=0.0, max_value=2100000000),
                 gomorycand=IntParameter(pgroup, "gomorycand", "CPX_PARAM_FRACCAND", 2048, "candidate limit for generating Gomory fractional cuts", default_value=200, min_value=1.0, max_value=2100000000),
                 gomorypass=IntParameter(pgroup, "gomorypass", "CPX_PARAM_FRACPASS", 2050, "pass limit for generating Gomory fractional cuts", default_value=0, min_value=0.0, max_value=9223372036800000000),
                 nodes=IntParameter(pgroup, "nodes", "CPX_PARAM_NODELIM", 2017, "branch and cut node limit", default_value=9223372036800000000, min_value=0.0, max_value=9223372036800000000),
-                polishtime=NumParameter(pgroup, "polishtime", "CPX_PARAM_POLISHTIME", 2066, "time limit for polishing best solution", default_value=0.0, min_value=0.0, max_value=1e+75),
                 populate=IntParameter(pgroup, "populate", "CPX_PARAM_POPULATELIM", 2108, "solutions limit for each populate call", default_value=20, min_value=1.0, max_value=2100000000),
                 probedettime=NumParameter(pgroup, "probedettime", "CPX_PARAM_PROBEDETTIME", 2150, "deterministic time limit for probing", default_value=1e+75, min_value=0.0, max_value=1e+75),
                 probetime=NumParameter(pgroup, "probetime", "CPX_PARAM_PROBETIME", 2065, "time limit for probing", default_value=1e+75, min_value=0.0, max_value=1e+75),
@@ -213,8 +212,9 @@ def _group_mip_strategy_params(pgroup):
                 bbinterval=IntParameter(pgroup, "bbinterval", "CPX_PARAM_BBINTERVAL", 2039, "interval to select best bound node", default_value=7, min_value=0.0, max_value=9223372036800000000),
                 branch=IntParameter(pgroup, "branch", "CPX_PARAM_BRDIR", 2001, "direction of first branch", default_value=0, min_value=-1.0, max_value=1.0),
                 dive=IntParameter(pgroup, "dive", "CPX_PARAM_DIVETYPE", 2060, "dive strategy", default_value=0, min_value=0.0, max_value=3.0),
-                file=IntParameter(pgroup, "file", "CPX_PARAM_NODEFILEIND", 2016, "file for node storage when tree memory limit is reached", default_value=1, min_value=0.0, max_value=4),
+                file=IntParameter(pgroup, "file", "CPX_PARAM_NODEFILEIND", 2016, "file for node storage when tree memory limit is reached", default_value=1, min_value=0.0, max_value=3.0),
                 fpheur=IntParameter(pgroup, "fpheur", "CPX_PARAM_FPHEUR", 2098, "feasibility pump heuristic", default_value=0, min_value=-1.0, max_value=2.0),
+                heuristiceffort=NumParameter(pgroup, "heuristiceffort", "CPX_PARAM_HEUREFFORT", 2120, "effort level of heuristics", default_value=1.0, min_value=0.0, max_value=1e+75),
                 heuristicfreq=IntParameter(pgroup, "heuristicfreq", "CPX_PARAM_HEURFREQ", 2031, "frequency to apply periodic heuristic algorithm", default_value=0, min_value=-1.0, max_value=9223372036800000000),
                 kappastats=IntParameter(pgroup, "kappastats", "CPX_PARAM_MIPKAPPASTATS", 2137, "strategy to gather statistics on the kappa of subproblems", default_value=0, min_value=-1.0, max_value=2.0),
                 lbheur=BoolParameter(pgroup, "lbheur", "CPX_PARAM_LBHEUR", 2063, "indicator for local branching heuristic", default_value=0),
@@ -251,6 +251,7 @@ def _group_mip_submip_make(pgroup):
 # generating code for group: MIP_Tolerances
 def _group_mip_tolerances_params(pgroup):
     return dict(absmipgap=NumParameter(pgroup, "absmipgap", "CPX_PARAM_EPAGAP", 2008, "absolute mixed integer optimality gap tolerance", default_value=1e-06, min_value=0.0),
+                linearization=NumParameter(pgroup, "linearization", "CPX_PARAM_EPLIN", 2068, "epsilon value used in linearization", default_value=0.001, min_value=0.0, max_value=1e+75),
                 integrality=NumParameter(pgroup, "integrality", "CPX_PARAM_EPINT", 2010, "integrality tolerance", default_value=1e-05, min_value=0.0, max_value=0.5),
                 lowercutoff=NumParameter(pgroup, "lowercutoff", "CPX_PARAM_CUTLO", 2006, "lower objective cutoff", default_value=-1e+75),
                 mipgap=NumParameter(pgroup, "mipgap", "CPX_PARAM_EPGAP", 2009, "mixed integer optimality gap tolerance", default_value=0.0001, min_value=0.0, max_value=1.0),
@@ -345,13 +346,13 @@ def _group_preprocessing_params(pgroup):
                 dual=IntParameter(pgroup, "dual", "CPX_PARAM_PREDUAL", 1044, "take dual in preprocessing", default_value=0, min_value=-1.0, max_value=1.0),
                 fill=PositiveIntParameter(pgroup, "fill", "CPX_PARAM_AGGFILL", 1002, "limit on fill in aggregation", default_value=10, max_value=2100000000),
                 folding=IntParameter(pgroup, "folding", "CPX_PARAM_FOLDING", 1164, "indicator for folding of LPs", default_value=-1, min_value=-1.0, max_value=5.0),
-                linear=IntParameter(pgroup, "linear", "CPX_PARAM_PRELINEAR", 1058, "indicator for linear reductions", default_value=1, min_value=0.0, max_value=1.0),
                 numpass=IntParameter(pgroup, "numpass", "CPX_PARAM_PREPASS", 1052, "limit on applications of presolve", default_value=-1, min_value=-1.0, max_value=2100000000),
                 presolve=BoolParameter(pgroup, "presolve", "CPX_PARAM_PREIND", 1030, "presolve indicator", default_value=1),
                 qcpduals=IntParameter(pgroup, "qcpduals", "CPX_PARAM_CALCQCPDUALS", 4003, "dual calculation for QCPs", default_value=1, min_value=0.0, max_value=2.0),
                 qpmakepsd=BoolParameter(pgroup, "qpmakepsd", "CPX_PARAM_QPMAKEPSDIND", 4010, "indicator to make a binary qp psd or tighter", default_value=1),
                 qtolin=IntParameter(pgroup, "qtolin", "CPX_PARAM_QTOLININD", 4012, "indicator to linearize products in the objective involving binary variables (for convex MIQP), or all products of bounded variables (for global QP)", default_value=-1, min_value=-1.0, max_value=1.0),
                 reduce=IntParameter(pgroup, "reduce", "CPX_PARAM_REDUCE", 1057, "type of primal and dual reductions", default_value=3, min_value=0.0, max_value=3.0),
+                reformulations=IntParameter(pgroup, "reformulations", "CPX_PARAM_PREREFORM", 1167, "reformulations in presolve", default_value=3, min_value=0.0, max_value=3.0),
                 relax=IntParameter(pgroup, "relax", "CPX_PARAM_RELAXPREIND", 2034, "indicator for additional presolve of lp relaxation of mip", default_value=-1, min_value=-1.0, max_value=1.0),
                 repeatpresolve=IntParameter(pgroup, "repeatpresolve", "CPX_PARAM_REPEATPRESOLVE", 2064, "repeat mip presolve", default_value=-1, min_value=-1.0, max_value=3.0),
                 symmetry=IntParameter(pgroup, "symmetry", "CPX_PARAM_SYMMETRY", 2059, "indicator for symmetric reductions", default_value=-1, min_value=-1.0, max_value=5.0)
@@ -364,13 +365,9 @@ def _group_preprocessing_make(pgroup):
 
 # generating code for group: Read
 def _group_read_params(pgroup):
-    return dict(constraints=IntParameter(pgroup, "constraints", "CPX_PARAM_ROWREADLIM", 1021, "constraint read size", default_value=30000, min_value=0.0, max_value=2100000000),
-                datacheck=IntParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1, min_value=0.0, max_value=2.0),
+    return dict(datacheck=IntParameter(pgroup, "datacheck", "CPX_PARAM_DATACHECK", 1056, "indicator to check data consistency", default_value=1, min_value=0.0, max_value=2.0),
                 fileencoding=StrParameter(pgroup, "fileencoding", "CPX_PARAM_FILEENCODING", 1129, "code page for file reading and writing", default_value="ISO-8859-1"),
-                nonzeros=PositiveIntParameter(pgroup, "nonzeros", "CPX_PARAM_NZREADLIM", 1024, "constraint nonzero read size", default_value=250000, max_value=9223372036800000000),
-                qpnonzeros=PositiveIntParameter(pgroup, "qpnonzeros", "CPX_PARAM_QPNZREADLIM", 4001, "quadratic nonzero read size", default_value=5000, max_value=9223372036800000000),
                 scale=IntParameter(pgroup, "scale", "CPX_PARAM_SCAIND", 1034, "type of scaling used", default_value=0, min_value=-1.0, max_value=1.0),
-                variables=IntParameter(pgroup, "variables", "CPX_PARAM_COLREADLIM", 1023, "variable read size", default_value=60000, min_value=0.0, max_value=2100000000),
                 warninglimit=IntParameter(pgroup, "warninglimit", "CPX_PARAM_WARNLIM", 1157, "max number of warnings to display", default_value=10, min_value=0.0, max_value=9223372036800000000)
                 )
 
@@ -435,7 +432,7 @@ def _group_simplex_params(pgroup):
                 dgradient=IntParameter(pgroup, "dgradient", "CPX_PARAM_DPRIIND", 1009, "type of dual gradient used in pricing", default_value=0, min_value=0.0, max_value=5),
                 display=IntParameter(pgroup, "display", "CPX_PARAM_SIMDISPLAY", 1019, "level of the iteration display", default_value=1, min_value=0.0, max_value=2),
                 dynamicrows=IntParameter(pgroup, "dynamicrows", "CPX_PARAM_DYNAMICROWS", 1161, "indicator for dynamic management of rows", default_value=-1, min_value=-1.0, max_value=1.0),
-                pgradient=IntParameter(pgroup, "pgradient", "CPX_PARAM_PPRIIND", 1029, "type of primal gradient used in pricing", default_value=0, min_value=-1.0, max_value=4),
+                pgradient=IntParameter(pgroup, "pgradient", "CPX_PARAM_PPRIIND", 1029, "type of primal gradient used in pricing", default_value=0, min_value=-1.0, max_value=4.0),
                 pricing=IntParameter(pgroup, "pricing", "CPX_PARAM_PRICELIM", 1010, "size of the pricing candidate list", default_value=0, min_value=0.0, max_value=2100000000),
                 refactor=IntParameter(pgroup, "refactor", "CPX_PARAM_REINV", 1031, "refactorization interval", default_value=0, min_value=0.0, max_value=10000.0)
                 )
@@ -475,7 +472,7 @@ def _group_cpxparam_params(pgroup):
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 paramdisplay=BoolParameter(pgroup, "paramdisplay", "CPX_PARAM_PARAMDISPLAY", 1163, "whether to display changed parameters before optimization", default_value=1),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201808295, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=202001241, min_value=0.0, max_value=2100000000),
                 record=BoolParameter(pgroup, "record", "CPX_PARAM_RECORD", 1162, "record calls to C API", default_value=0),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
@@ -503,8 +500,8 @@ def _group_cpxparam_subgroups():
                 tune=_group_tune_make)
 
 
-def make_root_params_12900():
-    proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.9.0.0")
+def make_root_params_20100():
+    proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "20.1.0.0")
     # -- set synchronous params
     proot.read.datacheck._synchronous = True
     proot.mip.pool.absgap._synchronous = True

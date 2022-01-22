@@ -22,7 +22,7 @@ from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstra
 from docplex.mp.context import Context, \
     is_auto_publishing_solve_details, has_credentials
 from docplex.mp.cloudutils import is_url_valid, make_new_kpis_dict
-from docplex.mp.publish import auto_publishing_result_output_names, auto_publising_kpis_table_names
+from docplex.mp.publish import auto_publishing_result_output_names, auto_publishing_kpis_table_names
 
 # from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.engine_factory import EngineFactory
@@ -32,7 +32,7 @@ from docplex.mp.error_handler import DefaultErrorHandler, \
 from docplex.mp.format import LP_format, SAV_format, MPS_format
 from docplex.mp.mfactory import ModelFactory
 from docplex.mp.model_stats import ModelStatistics
-from docplex.mp.numutils import round_nearest_towards_infinity, _NumPrinter
+from docplex.mp.numutils import round_nearest_towards_infinity1, _NumPrinter
 from docplex.mp.printer_factory import ModelPrinterFactory
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.tck import get_typechecker
@@ -50,7 +50,6 @@ from docplex.util.environment import get_environment
 from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials,\
     is_in_docplex_worker
 
-from docplex.mp.progress import FunctionalSolutionListener
 from docplex.mp.publish import _KpiRecorder, write_kpis_table, write_result_output
 
 try:
@@ -302,10 +301,6 @@ class Model(object):
     def cannot_be_used_as_denominator_error(self, denominator, numerator):
         StaticTypeChecker.cannot_be_used_as_denominator_error(self, denominator, numerator)
 
-    def round_nearest(self, x):
-        # INTERNAL
-        return round_nearest_towards_infinity(x, self.infinity)
-
     def _parse_kwargs(self, kwargs):
         # parse some arguments from kwargs
         for arg_name, arg_val in six.iteritems(kwargs):
@@ -417,7 +412,6 @@ class Model(object):
 
         self._progress_listeners = []
         self._solve_hooks = []  # debugSolveHook()
-        self._solution_hook = None
         self._mipstarts = []
 
         # by default, ignore_names is off
@@ -475,6 +469,7 @@ class Model(object):
 
         # rond solution or not
         self._round_solution = True
+        self._round_function = round_nearest_towards_infinity1
 
         # update from kwargs, before the actual inits.
         # pop cts_by name before parse kwargs
@@ -493,7 +488,7 @@ class Model(object):
                                       cplex_scope=CplexScope.VAR_SCOPE, offset=name_offset)
         self._linct_scope = _IndexScope(self.iter_linear_constraints, "linear constraint",
                                         cplex_scope=CplexScope.LINEAR_CT_SCOPE, offset=name_offset)
-        self._logical_scope = _IndexScope(lambda: self.iter_logical_constraints(include_implicits=True),
+        self._logical_scope = _IndexScope(self._iter_all_logical_constraints,
                                           "logical constraint",
                                           cplex_scope=CplexScope.IND_CT_SCOPE, offset=name_offset)
         self._quadct_scope = _IndexScope(self.iter_quadratic_constraints, "quadratic constraint",
@@ -598,6 +593,18 @@ class Model(object):
             self.fatal(raise_msg)
         else:
             return None
+
+    @property
+    def cplex(self):
+        """ Returns the instance of Cplex used by the model, if any.
+
+        In case no local installation of CPLEX can be found, this method raises an exception.,
+
+        :return: a Cplex instance.
+
+        *New in version 2.15*
+        """
+        return self.get_cplex(do_raise=True)
 
     def has_cplex(self):
         return self.get_cplex(do_raise=False) is not None
@@ -740,7 +747,6 @@ class Model(object):
          The default is not to store quality metrics.
 
          *New in version 2.10*
-
         """
         return self._quality_metrics
 
@@ -758,11 +764,24 @@ class Model(object):
 
     @property
     def round_solution(self):
+        """ This flag controls whether integer and discrete variable values are rounded in solutions, or not.
+            If not rounded, it may happen that solution value for a binary variable returns 0.99999.
+         The default is to round discrete values.
+
+         *New in version 2.15*
+        """
         return self._round_solution
 
     @round_solution.setter
     def round_solution(self, do_round):
         self._round_solution = bool(do_round)
+
+    def _round_element_value_if_necessary(self, elt, elt_value):
+        # INTERNAL
+        if self.round_solution and elt_value and elt.is_discrete() and elt_value != int(elt_value):
+            return self._round_function(elt_value)
+        else:
+            return elt_value
 
     def has_cts_by_name_dict(self):
         return self._cts_by_name is not None
@@ -776,7 +795,7 @@ class Model(object):
 
     @property
     def time_limit(self):
-        """ This property is sued to get/set the time limit for this model.
+        """ This property is used to get/set the time limit for this model.
         """
         return self.time_limit_parameter.get()
 
@@ -867,35 +886,9 @@ class Model(object):
                 self.fatal("Model.restore_solution(): Expecting solution attached to model {0}, but attached to {1}"
                            .format(self.name, sol.model.name))
             # check solution is linked to this model
-            sol.restore(restore_all=restore_all)
+            sol.restore(self, restore_all=restore_all)
         except AttributeError:
             self.fatal("Model.restore_solution(): Expecting solution, {0!r} was passed", sol)
-
-    @property
-    def solution_hook(self):
-        """
-        This property is used to get or set a solution hook.
-
-        A solution hook is a function that takes a solution argument.
-        This is now deprecated, use a prrogress listsner.
-
-        See Also:
-            :class:`docplex.mp.progress.SolutionListener`
-
-        """
-        return self._solution_hook
-
-    @solution_hook.setter
-    def solution_hook(self, sol_hook):
-        warnings.warn("solution_hook is deprecated, use progress listeners instead", DeprecationWarning)
-        self._checker.check_solution_hook(self, sol_hook)
-        if not self.has_cplex():
-            self.warning('Solution hook requires a local CPLEX, is ignored on cloud.')
-        self._solution_hook = sol_hook
-
-    def _solution_hook_warn_no_cplex(self):
-        # INTERNAL
-        self.warning('Solution hook requires a local CPLEX, is ignored on cloud.')
 
     def fatal(self, msg, *args):
         self._error_handler.fatal(msg, args)
@@ -1286,13 +1279,9 @@ class Model(object):
     def number_of_user_variables(self):
         return sum(1 for _ in self.generate_user_variables())
 
-    def _has_discrete_var(self):
-        # INTERNAL
-        for v in self.iter_variables():
-            if v.is_discrete():
-                return True
-        else:
-            return False
+    # def _has_discrete_var(self):
+    #     # INTERNAL
+    #     return any(v.is_discrete for v in self.iter_variables())
 
     def _contains_discrete_artefacts(self):
         if hasattr(self._lfactory, "_cached_justifier_discrete_var"):
@@ -1571,7 +1560,6 @@ class Model(object):
         if new_ub != old_ub:
             self._set_var_ub(dvar, new_ub)
 
-
     def get_constraint_by_name(self, name):
         """ Searches for a constraint from a name.
 
@@ -1601,13 +1589,24 @@ class Model(object):
         return self._ensure_cts_name_dir().get(name)
 
     def get_constraint_by_index(self, idx):
-        # INTERNAL
+        """ Searches for a linear constraint from an index.
+
+        Returns the linear constraint with `idx` as index, or None.
+        This function will not raise an exception if no constraint with this index is found.
+
+        Note: remember that linear constraints, logical constraints, and quadratic constraints
+        each have separate index spaces.
+
+        :param idx: a valid index (greater than 0).
+
+        :return: A linear constraint, or None.
+        """
         return self._linct_scope.get_object_by_index(idx, self._checker)
 
     def get_logical_constraint_by_index(self, idx):
         return self._logical_scope.get_object_by_index(idx, self._checker)
 
-    def get_quadratic_by_index(self, idx):
+    def get_quadratic_constraint_by_index(self, idx):
         # INTERNAL
         return self._quadct_scope.get_object_by_index(idx, self._checker)
 
@@ -1689,6 +1688,11 @@ class Model(object):
             if c.is_linear():
                 yield c
 
+
+    @property
+    def number_of_nonzeros(self):
+        return sum(lct.size for lct in self.iter_linear_constraints())
+
     def iter_indicator_constraints(self):
         """ Returns an iterator on indicator constraints in the model.
 
@@ -1750,6 +1754,9 @@ class Model(object):
             for imp_eqct in self.iter_implicit_equivalence_cts():
                 yield imp_eqct
 
+    def _iter_all_logical_constraints(self):
+        # INTERNAL
+        return self.iter_logical_constraints(include_implicits=True)
 
     def var(self, vartype, lb=None, ub=None, name=None):
         """ Creates a decision variable and stores it in the model.
@@ -2989,6 +2996,9 @@ class Model(object):
 
     def _add_constraint_internal(self, ct, ctname=None):
         used_ct_name = None if self._ignore_names else ctname
+        if not isinstance(ct, AbstractConstraint) and hasattr(ct, 'as_logical_operand'):
+            ct1 = self._lfactory.logical_expr_to_constraint(ct, ctname)
+            return self._post_constraint(ct1)
 
         check_trivial = self._checker.check_trivial_constraints()
         if self._prepare_constraint(ct, used_ct_name, check_for_trivial_ct=check_trivial):
@@ -3604,16 +3614,6 @@ class Model(object):
     # objective
     # ----------------------------------------------------
 
-    def round_objective_if_discrete(self, raw_obj):
-        # INTERNAL
-        if is_iterable(raw_obj):
-            return [self.round_objective_if_discrete(raw_obj_item) for raw_obj_item in raw_obj]
-        else:
-            if self._objective_expr.is_discrete():
-                return self.round_nearest(raw_obj)
-            else:
-                return raw_obj
-
     def minimize(self, expr):
         """ Sets an expression as the expression to be minimized.
 
@@ -3912,13 +3912,13 @@ class Model(object):
             if self.has_objective() and clear_objective:
                 self._clear_objective_expr()
 
-            def refine_caller(caller, qualifier):
-                if not caller:
-                    return caller
-                elif caller[-1] == ')':
-                    return '%s.%s' % (caller[:-2], qualifier)
+            def refine_caller(caller_, qualifier):
+                if not caller_:
+                    return caller_
+                elif caller_[-1] == ')':
+                    return '%s.%s' % (caller_[:-2], qualifier)
                 else:
-                    return '%s.%s' % (caller, qualifier)
+                    return '%s.%s' % (caller_, qualifier)
 
             abstols_ = self._typecheck_optional_num_seq(abstols, accept_none=True, caller=refine_caller(caller, 'abstols'))
             reltols_ = self._typecheck_optional_num_seq(reltols, accept_none=True, caller=refine_caller(caller, 'reltols'))
@@ -4101,7 +4101,7 @@ class Model(object):
 
 
     def _make_end_infodict(self):  # pragma: no cover
-        return self.solution.as_dict(keep_zeros=False) if self.solution is not None else dict()
+        return self.solution.as_name_dict() if self.solution is not None else dict()
 
     def prepare_actual_context(self, **kwargs):
         # prepares the actual context that will be used for a solve
@@ -4273,7 +4273,7 @@ class Model(object):
 
         auto_publish_details = is_auto_publishing_solve_details(context)
         auto_publish_solution = (auto_publishing_result_output_names(context) is not None)
-        auto_publish_kpis_table = (auto_publising_kpis_table_names(context) is not None)
+        auto_publish_kpis_table = (auto_publishing_kpis_table_names(context) is not None)
         
         the_env = get_environment()
 
@@ -4285,12 +4285,6 @@ class Model(object):
                                             publish_hook=env_kpi_hook)
             self.add_progress_listener(self.kpi_recorder)
 
-        sol_hook = self.solution_hook
-        if sol_hook is not None and self._contains_discrete_artefacts():
-            automatic_solution_listener = FunctionalSolutionListener(sol_hook)
-            self.add_progress_listener(automatic_solution_listener)
-        else:
-            automatic_solution_listener = None
 
         # connect progress listeners (if any) if problem is mip
         self._connect_progress_listeners()
@@ -4305,11 +4299,18 @@ class Model(object):
         # then we update solve details only if they need to be published
         # [[[
         self_stats = self.get_statistics()
-        kpis = make_new_kpis_dict(self._allkpis,
-                                  self_stats.number_of_integer_variables,
-                                  self_stats.number_of_continuous_variables,
-                                  self_stats.number_of_linear_constraints,
-                                  self_stats.number_of_binary_variables)
+        kpis = make_new_kpis_dict(allkpis=self._allkpis,
+                                  int_vars=self_stats.number_of_integer_variables,
+                                  continuous_vars=self_stats.number_of_continuous_variables,
+                                  linear_constraints=self_stats.number_of_linear_constraints,
+                                  bin_vars=self_stats.number_of_binary_variables,
+                                  quadratic_constraints=self_stats.number_of_quadratic_constraints,
+                                  total_constraints=self_stats.number_of_constraints,
+                                  total_variables=self_stats.number_of_variables)
+        # implementation for https://github.ibm.com/IBMDecisionOptimization/dd-planning/issues/2491
+        problem_type = self._get_cplex_problem_type()
+        kpis['STAT.cplex.modelType'] = problem_type
+        kpis['MODEL_DETAIL_OBJECTIVE_SENSE'] = self._objective_sense.verb
         # self_solve_hooks if for backward compatibility only. Should
         # really use env instead
         for h in self_solve_hooks:
@@ -4348,8 +4349,6 @@ class Model(object):
             # store solve status as returned by the engine.
             engine_status = self_engine.get_solve_status()
             self._last_solve_status = engine_status
-            if sol_hook:
-                sol_hook(new_solution)
 
         except DOcplexException as docpx_e:  # pragma: no cover
             self._set_solution(None)
@@ -4366,8 +4365,6 @@ class Model(object):
             self._solve_details = solve_details
             self._fire_end_solve_listeners(has_solution, reported_obj)
             self._disconnect_progress_listeners()
-            if automatic_solution_listener:
-                self.remove_progress_listener(automatic_solution_listener)
 
             # call hooks
             get_environment().notify_end_solve(engine_status)
@@ -5365,6 +5362,16 @@ class Model(object):
         return sol.get_reduced_costs(dvars)
 
     def quadratic_dual_slacks(self, *args):
+        """ Returns quadratic dual slacks as a dict of dicts.
+
+        :param args: accepts either no arguments, in which case returns quadratic dual slacks
+           for all quadratic constraints in the model, or a list of quadratic constraints.
+
+        :return: a Python dictionary, whose keys are quadratic constraints, and
+            values are dictionaries from variables to quadratic dual slacks.
+
+        *New in version 2.15*
+        """
         nb_args = len(args)
         if 0 == nb_args:
             qcts = self.iter_quadratic_constraints()
@@ -5583,9 +5590,15 @@ class Model(object):
         Only valid after a successful solve, otherwise states that the model is not solved.
         """
         if self._has_solution():
-            used_prec = 0 if self.objective_expr.is_discrete() else self._float_precision
-            print("* model {0} solved with objective = {1:.{prec}f}".format(self.name,
-                                                                            self._objective_value(), prec=used_prec))
+            if self.has_multi_objective():
+                mobj_values = self._multi_objective_values()
+                prec = self._float_precision
+                s_mobjs = ", ".join("{0:.{prec}f}".format(mo, prec=prec) for mo in mobj_values)
+                print("* model {0} solved with objectives = [{1}]".format(self.name, s_mobjs))
+            else:
+                used_prec = self._float_precision
+                print("* model {0} solved with objective = {1:.{prec}f}".format(self.name,
+                                                                                self._objective_value(), prec=used_prec))
             self.report_kpis()
         else:
             self.info("Model {0} has not been solved successfully, no reporting done.".format(self.name))

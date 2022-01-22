@@ -334,6 +334,7 @@ class CpoParser(object):
             # Create an alias if needed
             if name != expr.name:
                 expr = CpoAlias(expr, name)
+                self.model.add(expr)
         else:
             expr.set_name(name)
 
@@ -901,6 +902,13 @@ class CpoParser(object):
         # Read statements up to end of section
         tok = self._next_token()
         while (tok is not TOKEN_EOF) and (tok is not TOKEN_BRACE_CLOSE):
+            # Check directive (line)
+            if tok is TOKEN_HASH:
+                self._next_token()
+                self._read_directive()
+                tok = self._next_token()
+                continue
+
             # Get KPI name
             kname = self._check_token_string(tok)
             if self._next_token() is TOKEN_SEMICOLON:

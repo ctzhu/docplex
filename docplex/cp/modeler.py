@@ -2037,7 +2037,7 @@ def end_at_end(a, b, delay=None):
 def end_before_start(a, b, delay=None):
     """ Constrains minimum delay between the end of one interval variable and start of another one.
 
-    the function *end_before_start* constrains interval variables *a* and *b* in the following way.
+    The function *end_before_start* constrains interval variables *a* and *b* in the following way.
     If both interval variables *a* and *b* are present, then *b* cannot start before *end_of(a) + delay*.
     If *a* or *b* is absent then the constraint is automatically satisfied.
 

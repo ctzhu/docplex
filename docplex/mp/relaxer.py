@@ -267,8 +267,8 @@ class Relaxer(PublishResultAsDf, object):
     _default_mode = RelaxationMode.OptSum
 
     def __init__(self, prioritizer='all', verbose=False, precision=default_precision,
-                 override=False, output_processing=None):
-        self.output_table_customizer = output_processing
+                 override=False, **kwargs):
+        self.output_table_customizer = kwargs.get('output_processing') # wml tables, internal
         self.output_table_property_name = 'relaxations_output'
         self.default_output_table_name = 'relaxations.csv'
         self.output_table_using_df = True  # if pandas is available of course
@@ -283,7 +283,7 @@ class Relaxer(PublishResultAsDf, object):
             self._prioritizer = MappingPrioritizer(priority_mapping=prioritizer, override=override)
         elif prioritizer == 'named':
             self._prioritizer = NamedPrioritizer()
-        elif prioritizer is None or prioritizer is 'all':
+        elif prioritizer is None or prioritizer == 'all':
             self._prioritizer = UniformPrioritizer(override=override)
         elif is_function(prioritizer):
             self._prioritizer = FunctionalPrioritizer(prioritizer, override=override)

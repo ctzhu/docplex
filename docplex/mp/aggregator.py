@@ -15,6 +15,7 @@ from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_seri
     is_numpy_ndarray, is_pandas_dataframe, is_numpy_matrix, is_ordered_sequence
 from docplex.mp.linear import Var, MonomialExpr, AbstractLinearExpr, LinearExpr, ZeroExpr
 from docplex.mp.functional import _FunctionalExpr
+from docplex.mp.operand import LinearOperand
 from docplex.mp.quad import QuadExpr, VarPair
 
 
@@ -196,18 +197,12 @@ class ModelAggregator(object):
         qcc = None
         number_validation_fn = checker.get_number_validation_fn()
         for item in args:
-            if isinstance(item, Var):
-                update_dict_from_item_value(lcc, item, 1)
-            elif isinstance(item, MonomialExpr):
-                update_dict_from_item_value(lcc, item._dvar, item._coef)
-            elif isinstance(item, LinearExpr):
+            if isinstance(item, LinearOperand):
                 for lv, lk in item.iter_terms():
                     update_dict_from_item_value(lcc, lv, lk)
-                sum_of_nums += item.get_constant()
-            elif isinstance(item, _FunctionalExpr):
-                update_dict_from_item_value(lcc, item.functional_var, 1)
-            elif isinstance(item, ZeroExpr):
-                pass
+                itc = item.get_constant()
+                if itc:
+                    sum_of_nums += itc
             elif is_number(item):
                 sum_of_nums += number_validation_fn(item) if number_validation_fn else item
             elif isinstance(item, QuadExpr):
@@ -266,8 +261,6 @@ class ModelAggregator(object):
             varsum_terms = linear_term_dict_type()
             linear_terms_setitem = linear_term_dict_type.__setitem__
             for v in var_list:
-                # if not isinstance(v, Var):
-                #     print('bingo')
                 linear_terms_setitem(varsum_terms, v, 1)
         else:
             # there might be repeated variables.

@@ -92,7 +92,6 @@ class ModelCallbackMixin(object):
             # noinspection PyArgumentList
             var_value_dict = {v: val for v, val in izip(dvars, var_values)}
         else:  # pragma: no cover
-            # shouldnot happen: a MIP has at least one variable...
             var_value_dict = {}
         return self.model.new_solution(var_value_dict)
 

@@ -114,6 +114,7 @@ except ImportError:
 from six import iteritems
 
 from docplex.util.logging_utils import LoggerToFile, LoggerToDocloud
+from docplex.util.csv_utils import write_table_as_csv
 
 in_ws_nb = None
 
@@ -272,7 +273,9 @@ class Environment(object):
     def get_record_history_fields(self):
         if self._record_history_fields is None:
             if self.is_dods():
-                self._record_history_fields = ['PROGRESS_CURRENT_OBJECTIVE']
+                self._record_history_fields = ['PROGRESS_BEST_OBJECTIVE',
+                                               'PROGRESS_CURRENT_OBJECTIVE',
+                                               'PROGRESS_GAP']
             else:
                 # the default out of dods is to not record any history
                 self._record_history_fields = []
@@ -827,6 +830,21 @@ class WorkerEnvironment(Environment):
     def publish_solve_details(self, details):
         super(WorkerEnvironment, self).publish_solve_details(details)
         self.solve_hook.update_solve_details(details)
+        # if on dods, we want to publish stats.csv if any
+        if self.is_dods():
+            self._publish_stats_csv(details)
+
+    def _publish_stats_csv(self, stats):
+        # generate the stats.csv file with the specified stats
+        names = ['stats.csv']
+        stats_table = []
+        for k in stats:
+            if k.startswith("STAT."):
+                stats_table.append([k, stats[k]])
+        if stats_table:
+            field_names = ['Name', 'Value']
+            for name in names:
+                write_table_as_csv(self, stats_table, name, field_names)
 
     def notify_start_solve(self, solve_details):
         super(WorkerEnvironment, self).notify_start_solve(solve_details)

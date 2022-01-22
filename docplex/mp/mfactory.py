@@ -166,7 +166,7 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(_AbstractModelFactory):
-    status_var_fmt = '_{{{0:s}}}'
+    status_var_fmt = '_bool{{{0:s}}}'
 
     @staticmethod
     def float_or_default(bound, default_bound):
@@ -729,6 +729,11 @@ class ModelFactory(_AbstractModelFactory):
     def new_logical_not_expr(self, arg):
         return LogicalNotExpr(self._model, arg)
 
+    def logical_expr_to_constraint(self, logical_expr, name=None):
+        # generate a constraint expr == 1
+        ct1 = self._new_binary_constraint(lhs=logical_expr, rhs=1.0, sense=ComparisonType.EQ, name=name)
+        return ct1
+
     def _new_min_max_expr(self, expr_class, builtin_fn, empty_value, *args):
         nb_args = len(args)
         if 0 == nb_args:
@@ -903,23 +908,25 @@ class ModelFactory(_AbstractModelFactory):
             n_exprs = len(exprs)
             if n_exprs != len(lbs):  # pragma: no cover
                 self.fatal('incorrect number of expressions: expecting {0}, got: {1}'.format(len(lbs), n_exprs))
+
         except TypeError:
             pass  # no len available.
-        if names:
-            ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in
+        if not names:
+            names = generate_constant(None, None)
+
+        ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in
                       izip(lbs, exprs, ubs, names)]
-        else:
-            ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
+        # else:
+        #     ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
         self._post_constraint_block(ranges)
         return ranges
 
     def new_solution(self, var_value_dict=None, name=None, objective_value=None, **kwargs):
-        rounding = kwargs.get('rounding', False)
         keep_zeros = kwargs.get('keep_zeros', True)
 
         return SolveSolution(model=self._model, obj=objective_value,
                              var_value_map=var_value_dict, name=name,
-                             keep_zeros=keep_zeros, rounding=rounding)
+                             keep_zeros=keep_zeros)
 
     def _new_var_container(self, vartype, key_list, lb, ub, name):
         # INTERNAL

@@ -376,17 +376,17 @@ class BinaryConstraint(AbstractConstraint):
         return iter([self._left_expr, self._right_expr])
 
     def get_expr_from_pos(self, pos):
-        if pos is 0:
+        if 0 == pos:
             return self._left_expr
-        elif pos is 1:
+        elif 1 == pos:
             return self._right_expr
         else:  # pragma: no cover
             self.fatal('Unexpected expression position: {0!r}, expecting 0 or 1', pos)
 
     def set_expr_from_pos(self, pos, new_expr):
-        if pos is 0:
+        if 0 == pos:
             self._left_expr = new_expr
-        elif pos is 1:
+        elif 1 == pos:
             self._right_expr = new_expr
         else:  # pragma: no cover
             self.fatal('Unexpected expression position: {0!r}, expecting 0 or 1', pos)

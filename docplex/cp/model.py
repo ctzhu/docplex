@@ -246,7 +246,7 @@ class CpoModel(object):
         self.parameters       = None          # Solving parameters
         self.starting_point   = None          # Starting point
         self.objective        = None          # Objective function
-        self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name.
+        self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name, value is (expr, loc)
         self.listeners        = []            # Solver listeners
         self.callbacks        = []            # Solver callbacks
 
@@ -284,6 +284,7 @@ class CpoModel(object):
         self.transition_matrix = expression.transition_matrix
         self.tuple_set         = expression.tuple_set
         self.state_function    = expression.state_function
+        self.float_var         = expression.float_var
 
         # Copy all modeler public functions in the model object
         for f in list_module_public_functions(modeler, ('maximize', 'minimize')):
@@ -354,6 +355,20 @@ class CpoModel(object):
                 raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
 
 
+    def add_constraint(self, expr):
+        """ Adds a constraint to the model.
+
+        This method has been added for compatibility with docplex.mp.
+        It is equivalent to method :meth:`~CpoModel.add`
+
+        Args:
+            expr: Constraint expression to add to the model,
+        Raises:
+            CpoException in case of error.
+        """
+        self.add(expr)
+
+
     def _add_with_loc(self, expr, loc):
         """ Adds an expression with its location to the model.
 
@@ -387,7 +402,7 @@ class CpoModel(object):
                 self.expr_list.append((expr, loc))
         elif etyp is Type_SearchPhase:
             self.expr_list.append((expr, loc))
-        elif isinstance(expr, CpoVariable):
+        elif isinstance(expr, (CpoVariable, CpoAlias)):
             # Not really useful, just to force variable to be in the model
             self.expr_list.append((expr, loc))
         else:

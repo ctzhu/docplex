@@ -159,6 +159,12 @@ class ConflictRefinerResult(object):
         return to_output_table(self, use_df)
 
 
+    def print_information(self):
+        """ Similar as `display_stats`
+        """
+        self.display_stats()
+
+
 class VarBoundWrapper(object):
     # INTERNAL
 

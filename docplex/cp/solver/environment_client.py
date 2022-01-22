@@ -142,31 +142,62 @@ class EnvSolverListener(CpoSolverListener):
         if self.publish_context.get_attribute('solve_details', True):
             self.publish_context.log(2, "Publish solve details")
 
-            # Build solve details from infos
+            # Get solver infos
             infos = msol.get_infos()
+            nb_int_vars      = infos.get("NumberOfIntegerVariables")
+            nb_interval_vars = infos.get("NumberOfIntervalVariables")
+            nb_sequence_vars = infos.get("NumberOfSequenceVariables")
+            nb_constraints   = infos.get("NumberOfConstraints")
+            nb_variables     = infos.get("NumberOfVariables")
+            memory_usage     = infos.get("MemoryUsage")
+            nb_of_branches   = infos.get("NumberOfBranches")
+            solve_time       = infos.get("SolveTime")
+
+            # Build solve details
             sdetails = {}
-            nbintvars = infos.get("NumberOfIntegerVariables")
-            if nbintvars is not None:
-                sdetails["MODEL_DETAIL_INTEGER_VARS"] = nbintvars
-            nbintervars = infos.get("NumberOfIntervalVariables")
-            if nbintervars is not None:
-                sdetails["MODEL_DETAIL_INTERVAL_VARS"] = nbintervars
-            nbseqvars = infos.get("NumberOfSequenceVariables")
-            if nbseqvars is not None:
-                sdetails["MODEL_DETAIL_SEQUENCE_VARS"] = nbseqvars
-            nbconstr = infos.get("NumberOfConstraints")
-            if nbconstr is not None:
-                sdetails["MODEL_DETAIL_CONSTRAINTS"] = nbconstr
-            # Set detail type
-            if (nbintervars in (0, None)) and (nbseqvars in (0, None)):
-                sdetails["MODEL_DETAIL_TYPE"] = "CPO CP"
-            else:
-                sdetails["MODEL_DETAIL_TYPE"] = "CPO Scheduling"
+            if nb_int_vars is not None:
+                sdetails["MODEL_DETAIL_INTEGER_VARS"]      = nb_int_vars
+                sdetails["STAT.cpo.size.integerVariables"] = nb_int_vars
+            if nb_interval_vars is not None:
+                sdetails["MODEL_DETAIL_INTERVAL_VARS"]      = nb_interval_vars
+                sdetails["STAT.cpo.size.intervalVariables"] = nb_interval_vars
+            if nb_sequence_vars is not None:
+                sdetails["MODEL_DETAIL_SEQUENCE_VARS"]      = nb_sequence_vars
+                sdetails["STAT.cpo.size.sequenceVariables"] = nb_sequence_vars
+            if nb_constraints is not None:
+                sdetails["MODEL_DETAIL_CONSTRAINTS"]  = nb_constraints
+                sdetails["STAT.cpo.size.constraints"] = nb_constraints
+
+            # Add other STAT values
+            sdetails["STAT.cpo.modelType"] = "CPO"
+            if nb_variables is not None:
+                sdetails["STAT.cpo.size.variables"] = nb_variables
+            if memory_usage is not None:
+                sdetails["STAT.cpo.solve.memoryUsage"] = memory_usage
+            if nb_of_branches is not None:
+                sdetails["STAT.cpo.solve.numberOfBranches"] = nb_of_branches
+            if solve_time is not None:
+                sdetails["STAT.cpo.solve.time"] = solve_time
+
+            # Set problem type
+            sdetails["MODEL_DETAIL_TYPE"] = "CPO CP" if nb_interval_vars in (0, "0", None) else "CPO Scheduling"
+
+            # Set objective sens
+            mdl = msol.get_model()
+            if mdl and not mdl.is_satisfaction():
+                sdetails["MODEL_DETAIL_OBJECTIVE_SENSE"] = "maximize" if mdl.is_maximization() else "minimize"
 
             # Set objective if any
             objctv = msol.get_objective_values()
             if objctv is not None:
-                sdetails["PROGRESS_CURRENT_OBJECTIVE"] = ';'.join([str(x) for x in objctv])
+                sobj = ';'.join([str(x) for x in objctv])
+                sdetails["PROGRESS_CURRENT_OBJECTIVE"] = sobj
+                sdetails["PROGRESS_BEST_OBJECTIVE"] = sobj
+
+            # Set gap if any
+            objgaps = msol.get_objective_gaps()
+            if objgaps is not None:
+                sdetails["PROGRESS_GAP"] = ';'.join([str(x) for x in objgaps])
 
             # Set KPIs if any
             kpis = msol.get_kpis()
@@ -256,7 +287,6 @@ class EnvSolverListener(CpoSolverListener):
         return True
 
 
-
     def _build_conflict_csv_constraint_line(self, cstr, csts):
         """ Build the string representing a constraint in conflicts csv
         Args:
@@ -289,5 +319,4 @@ class EnvSolverListener(CpoSolverListener):
                                      encode_csv_string(str(name)) if name is not None else '""',
                                      encode_csv_string(var))
         return res
-
 

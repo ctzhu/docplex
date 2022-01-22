@@ -80,6 +80,8 @@ def round_nearest_towards_infinity(x, infinity=1e+20):
         raw_nearest = math.floor(x + 0.5)
         return int(raw_nearest)
 
+def round_nearest_towards_infinity1(x):
+    return round_nearest_towards_infinity(x)
 
 class _NumPrinter(object):
     """

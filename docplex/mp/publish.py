@@ -16,6 +16,7 @@ try:
 except ImportError:
     pd = None
 
+from docplex.util.csv_utils import write_csv, write_table_as_csv
 
 class _KpiRecorder(SolutionListener):
     # '''A specialized subclass of :class:`~SolutionListener` that stores the KPI values
@@ -49,26 +50,39 @@ class _KpiRecorder(SolutionListener):
         return len(self._kpi_dicts)
 
     def notify_solution(self, sol):
+        env = get_environment()
         pdata = self.current_progress_data
+        context = self._context
 
-        publish_name_fn = self.publish_name_fn
-        # 1. build a dict from formatted names to kpi values.
-        name_values = {publish_name_fn(kp.name): kp.compute(sol) for kp in self.model.iter_kpis()}
+        # 1. Start with empty table
+        name_values = {}
         # 2. add predefined keys for obj, time.
         name_values['PROGRESS_CURRENT_OBJECTIVE'] = sol.objective_value
-        name_values[publish_name_fn('_time')] = pdata.time
 
         # 3. store it (why???)
         self._kpi_dicts.append(name_values)
+
+        # new stats for https://github.ibm.com/IBMDecisionOptimization/dd-planning/issues/2491
+        if env.is_dods():
+            name_values['PROGRESS_GAP'] = pdata.mip_gap
+            name_values['PROGRESS_BEST_OBJECTIVE'] = pdata.best_bound
+            name_values['STAT.cplex.solve.explored'] = pdata.current_nb_nodes
+            name_values['STAT.cplex.solve.opened'] = pdata.remaining_nb_nodes
+            name_values['STAT.cplex.solve.iterationCount'] = pdata.current_nb_iterations
+            name_values['STAT.cplex.solve.elapsedTime'] = pdata.time
+
+        # add KPIs
+        publish_name_fn = self.publish_name_fn
+        name_values.update({publish_name_fn(kp.name): kp.compute(sol) for kp in self.model.iter_kpis()})
+        name_values[publish_name_fn('_time')] = pdata.time
 
         # usually publish kpis in environment...
         if self.publish_hook is not None:
             self.publish_hook(name_values)
 
         # save kpis.csv table
-        context = self._context
-        if auto_publising_kpis_table_names(context) is not None:
-            write_kpis_table(env=get_environment(),
+        if auto_publishing_kpis_table_names(context) is not None:
+            write_kpis_table(env=env,
                              context=context,
                              model=self.model,
                              solution=sol)
@@ -84,38 +98,6 @@ class _KpiRecorder(SolutionListener):
 
         df = DataFrame(self._kpi_dicts, **kwargs)
         return df
-
-
-def encode_csv_string(text):
-    """ Encode a string to be used in CSV file
-
-    Args:
-        text:  String to encode
-    Returns:
-        Encoded string, including starting and ending double quote
-    """
-    res = ['"']
-    for c in text:
-        res.append(c)
-        if c == '"':
-            res.append('"')
-    res.append('"')
-    return ''.join(res)
-
-
-def write_csv_line(output, line, encoding):
-    line = ','.join([encode_csv_string('%s' % c) for c in line])
-    output.write(line.encode(encoding))
-    output.write('\n'.encode(encoding))
-
-
-def write_csv(env, table, fields, name):
-    # table must be a named tuple
-    encoding = 'utf-8'
-    with env.get_output_stream(name) as ostr:
-        write_csv_line(ostr, fields, encoding)
-        for line in table:
-            write_csv_line(ostr, line, encoding)
 
 
 def get_auto_publish_names(context, prop_name, default_name):
@@ -152,9 +134,10 @@ def auto_publishing_result_output_names(context):
     return get_auto_publish_names(context, 'result_output', 'solution.json')
 
 
-def auto_publising_kpis_table_names(context):
+def auto_publishing_kpis_table_names(context):
     # Return the list of kpi table names for saving
     return get_auto_publish_names(context, 'kpis_output', 'kpis.csv')
+
 
 def get_kpis_name_field(context):
     autopubs = context.solver.auto_publish
@@ -167,6 +150,7 @@ def get_kpis_name_field(context):
         field = context.solver.auto_publish.kpis_output_field_name
     return field
 
+
 def get_kpis_value_field(context):
     autopubs = context.solver.auto_publish
     field = None
@@ -177,6 +161,7 @@ def get_kpis_value_field(context):
     else:
         field = context.solver.auto_publish.kpis_output_field_value
     return field
+
 
 class PublishResultAsDf(object):
     '''Mixin for classes publishing a result as data frame
@@ -256,27 +241,8 @@ class PublishResultAsDf(object):
         return names
 
 
-def write_kpis(env, kpis_table, name, field_names):
-    '''Writes a kpis dataframe as file which name is specified.
-    The data type depends of extension of name.
-
-    This uses the specfied env to write data as attachments
-    '''
-    _, ext = os.path.splitext(name)
-    ext = ext.lower()
-    if ext == '.csv':
-        encoding = 'utf-8'
-        with env.get_output_stream(name) as ostr:
-            write_csv_line(ostr, field_names, encoding)
-            for line in kpis_table:
-                write_csv_line(ostr, line, encoding)
-    else:
-        # right now, only csv is supported
-        raise ValueError('file format not supported for KPIs file: %s' % ext)
-
-
 def write_kpis_table(env, context, model, solution):
-    names = auto_publising_kpis_table_names(context)
+    names = auto_publishing_kpis_table_names(context)
     kpis_table = []
     for k in model.iter_kpis():
         kpis_table.append([k.name, k.compute(solution)])
@@ -285,7 +251,7 @@ def write_kpis_table(env, context, model, solution):
         field_names = [get_kpis_name_field(context),
                        get_kpis_value_field(context)]
         for name in names:
-            write_kpis(env, kpis_table, name, field_names)
+            write_table_as_csv(env, kpis_table, name, field_names)
 
 
 def write_solution(env, solution, name):

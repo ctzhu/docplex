@@ -309,10 +309,7 @@ class Expr(ModelingObjectBase, Operand):
         return 0 if self.is_discrete() else self.model.float_precision
 
     def _round_if_discrete(self, raw_value):
-        if self.is_discrete():
-            return self.model.round_nearest(raw_value)
-        else:
-            return raw_value
+        return self.model._round_element_value_if_necessary(self, raw_value)
 
     def _get_solution_value(self, s=None):
         # INTERNAL: compute solution value.

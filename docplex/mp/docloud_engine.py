@@ -243,9 +243,11 @@ class DOcloudEngine(IndexerEngine):
         # <-> is supposed to be supported in LP?
         return True, None
 
+    docloud_solver_name = 'cplex_cloud'
+
     @property
     def name(self):
-        return 'cplex_cloud'
+        return self.docloud_solver_name
 
     def can_solve(self):
         """
@@ -650,27 +652,28 @@ class DOcloudEngine(IndexerEngine):
                 os.remove(model_file)
 
     def _var_by_cloud_index(self, cloud_index, cloud_index_name_map):
-        # 1 go to cloud name first
+        # index -> cloud_name (lp_name) -> var object
         cloud_name = cloud_index_name_map.get(cloud_index)
         return self._lpname_to_var_map.get(cloud_name) if cloud_name else None
 
     def _make_solution(self, mdl, solution_handler):
+        solver_name = self.docloud_solver_name
         # Store the results of solve in a solution object.
-        raw_docloud_obj = solution_handler.get_objective()
-        docloud_obj = mdl.round_objective_if_discrete(raw_docloud_obj)
+        docloud_obj = solution_handler.get_objective()
         docloud_values_by_idx, docloud_var_rcs = solution_handler.variable_results()
         # CPLEX index to name map
         # for those variables returned by CPLEX.
         # all other are assumed to be zero
         cloud_index_name_map = solution_handler.cplex_index_name_map()
+        var_mapper = lambda idx: self._var_by_cloud_index(idx, cloud_index_name_map)
         # send an objective, a var-value dict and a string identifying the engine which solved.
         docloud_values_by_vars = {}
         keep_zeros = False
         count_nonmatching_cloud_vars = 0
         for cpx_idx, val in iteritems(docloud_values_by_idx):
-            if val != 0 or keep_zeros:
+            if keep_zeros or val:
                 # first get the name from the cloud idx
-                dvar = self._var_by_cloud_index(cloud_index=cpx_idx, cloud_index_name_map=cloud_index_name_map)
+                dvar = var_mapper(cpx_idx)
                 if dvar:
                     docloud_values_by_vars[dvar] = val
                 else:
@@ -690,13 +693,13 @@ class DOcloudEngine(IndexerEngine):
                                                  obj=docloud_obj,
                                                  blended_obj_by_priority=[docloud_obj],
                                                  var_value_map=docloud_values_by_vars,
-                                                 solved_by=self.name,
+                                                 solved_by=solver_name,
                                                  solve_details=self._solve_details,
                                                  job_solve_status=self.get_solve_status())
 
         # attributes
         docloud_ct_duals, docloud_ct_slacks = solution_handler.constraint_results()
-        var_mapper = lambda idx: self._var_by_cloud_index(idx, cloud_index_name_map)
+
         ct_mapper = lambda idx: mdl.get_constraint_by_index(idx)
         sol.store_reduced_costs(docloud_var_rcs, mapper=var_mapper)
         sol.store_dual_values(docloud_ct_duals, mapper=ct_mapper)

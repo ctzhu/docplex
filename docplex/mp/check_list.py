@@ -37,8 +37,8 @@ def check_platform():
 
 def run_docplex_check_list():
     check_platform()
-    from docplex.version import docplex_version_major, docplex_version_minor
-    cplex_latest_version_as_tuple = (docplex_version_major, docplex_version_minor)
+    from docplex.version import latest_cplex_major, latest_cplex_minor
+    cplex_latest_version_as_tuple = (latest_cplex_major, latest_cplex_minor)
 
     diagnostics = []
 
@@ -66,10 +66,12 @@ def run_docplex_check_list():
 
         cpx = Cplex()
         cpxv = cpx.get_version()
-        cpxvt = tuple(float(x) for x in cpx.get_version().split("."))
+        cpxvt = tuple(float(x) for x in cpx.get_version().split("."))[:2]
+        lcpxv = ".".join(str(z for z in cplex_latest_version_as_tuple))
         if cpxvt < cplex_latest_version_as_tuple:
-            lcpxv = ".".join(str(z for z in cplex_latest_version_as_tuple))
             print("* Your cplex version {0} is not the latest, {1} is available".format(cpxv, lcpxv))
+        elif cpxvt > cplex_latest_version_as_tuple:
+            print("* Your cplex version {0} is ahead of the latest DOcplex-compatible version {1}, thismight not be compatible.".format(cpxv, lcpxv))
         else:
             print("* you have the latest cplex version")
         cpx.end()

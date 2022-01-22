@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from docplex.mp.engine import IEngine
 from docplex.mp.utils import DOcplexException, str_maxed, is_string
-from docplex.mp.compat23 import izip
+from docplex.mp.compat23 import izip, fast_range
 
 from docplex.mp.constants import ConflictStatus
 from docplex.mp.constr import IndicatorConstraint, RangeConstraint, BinaryConstraint, \
@@ -158,7 +158,7 @@ def get_progress_details(cpx):
 # gendoc: ignore
 
 def add_linear(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
-    if not static_is_1210 and chbmatrix:
+    if not static_is_post1210 and chbmatrix:
         # BEWARE: expects a string for senses, not a list
         cpx_linearcts = cpx.linear_constraints
         num_old_rows = cpx_linearcts.get_num()
@@ -177,7 +177,7 @@ def add_linear(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
                 list(range(num_old_rows, num_old_rows + num_new_rows)),
                 ranges)
 
-        return six.moves.range(num_old_rows, cpx_linearcts.get_num())
+        return fast_range(num_old_rows, cpx_linearcts.get_num())
     else:  # pragma: no cover
         return cpx.linear_constraints.add(lin_expr=lin_expr, senses=cpx_senses, rhs=rhs, names=names,
                                           range_values=ranges)
@@ -195,7 +195,7 @@ def _fast_get_var_names12100(cpx):
     return getcolname(cpxenv._e, cpx._lp, 0, nb_vars-1)
 
 def fast_get_var_names(cpx):
-    if static_is_1210:
+    if static_is_post1210:
         return _fast_get_var_names12100(cpx)
     else:
         return _fast_get_var_names1290(cpx)
@@ -223,7 +223,7 @@ def fast_add_linear1290(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
             list(range(num_old_rows, num_old_rows + num_new_rows)),
             ranges)
 
-    return six.moves.range(num_old_rows, cpx_linearcts.get_num())
+    return fast_range(num_old_rows, cpx_linearcts.get_num())
 
 
 def fast_add_linear_1210(cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
@@ -265,12 +265,11 @@ class ConnectListenersCallback(MIPInfoCallback):
         assert mdl is not None
 
         sol = SolveSolution(mdl, obj=obj, solved_by='cplex')
-        for v in mdl.iter_variables():
+        for dv in mdl.iter_variables():
             # incumbent values are provided as a list with indices as positions.
-            incumbent_value = incumbents[v._index]
-            if incumbent_value:
-                # silently round discrete values, just as with engine solutions.
-                sol._set_var_value_internal(v, incumbent_value, rounding=True)
+            incumbent_value = incumbents[dv._index]
+            dvv = mdl._round_element_value_if_necessary(dv, incumbent_value)
+            sol._set_var_value_internal(dv, dvv)
         return sol
 
     # noinspection PyAttributeOutsideInit
@@ -427,13 +426,16 @@ class _SafeCplexWrapper(cplex.Cplex):  # pragma: no cover
 
 try:
     cpxv = cplex.__version__
-    static_is_1210 = cpxv.startswith("12.10.")
+    cpxv_as_tuples =cpxv.split('.')
+    cpxvt = tuple(int(x) for x in cpxv_as_tuples)
+    static_is_post1210 = cpxvt >= (12, 10)
+
 
 except AttributeError:  # pragma: no cover
-    static_is_1210 = False
+    static_is_post1210 = False
 
 
-fast_add_linear = fast_add_linear_1210 if static_is_1210 else  fast_add_linear1290
+fast_add_linear = fast_add_linear_1210 if static_is_post1210 else  fast_add_linear1290
 
 
 
@@ -462,7 +464,7 @@ class CplexEngine(IEngine):
     """
     CPX_RANGE_SYMBOL = 'R'
 
-    procedural = True # not static_is_1210
+    procedural = True # not static_is_post1210
 
     cplex_error_re = re.compile(r'CPLEX Error\s+(\d+)')
 
@@ -561,8 +563,8 @@ class CplexEngine(IEngine):
 
         self._cplex = cpx
 
-        self._solve_count = 0
-        self._last_solve_status = False
+        #self._solve_count = 0
+        self._last_solve_status = None
         self._last_solve_details = None
 
         # for unpickling, remember to resync with model
@@ -1070,7 +1072,7 @@ class CplexEngine(IEngine):
                          linmat, cpx_indtypes,
                          cpx_names, nnz,
                          cpxenv._apienc)
-        return six.moves.range(old_nb_indicators, cpx.indicator_constraints.get_num())
+        return fast_range(old_nb_indicators, cpx.indicator_constraints.get_num())
 
     def fast_add_logicals12100(self, logcts, is_equivalence):
         cpx = self._cplex
@@ -1104,9 +1106,9 @@ class CplexEngine(IEngine):
                          cpx_complemented,  cpx_rhss, ''.join(cpx_senses),
                          linmat, cpx_indtypes,
                          cpx_names, nnz)
-        return six.moves.range(old_nb_indicators, cpx.indicator_constraints.get_num())
+        return fast_range(old_nb_indicators, cpx.indicator_constraints.get_num())
 
-    fast_add_logicals = fast_add_logicals12100 if static_is_1210 else fast_add_logicals1290
+    fast_add_logicals = fast_add_logicals12100 if static_is_post1210 else fast_add_logicals1290
 
     def _create_typed_indicator_internal(self, cpx_ind, indvar, linct,
                                          equivalence,
@@ -1261,7 +1263,7 @@ class CplexEngine(IEngine):
         old = cpx.variables.get_num()
         size = max(len(cpx_vartype), len(lbs), len(ubs), len(names))
         newcols(cpx_e, cpx_lp, obj=[], lb=lbs, ub=ubs, xctype=cpx_vartype, colname=names)
-        return six.moves.range(old, old + size)
+        return fast_range(old, old + size)
 
     def _fast_set_longanno(self, anno_idx, anno_objtype, indices, groups):
         if setlonganno:
@@ -1363,7 +1365,7 @@ class CplexEngine(IEngine):
         pw_index = getnumpwl(cpx_env._e, cpx._lp) - 1
         return pw_index
 
-    _fast_add_piecewise_constraint = _fast_add_piecewise_constraint12100 if static_is_1210 else _fast_add_piecewise_constraint1290
+    _fast_add_piecewise_constraint = _fast_add_piecewise_constraint12100 if static_is_post1210 else _fast_add_piecewise_constraint1290
 
     # ---
 
@@ -1977,7 +1979,7 @@ class CplexEngine(IEngine):
         # ------ !!! see RTC34123 ---
         setintparam(cpx._env._e, 1047, -1)
         # ---------------------------
-        self._solve_count += 1
+        #self._solve_count += 1
         solve_time_start = cpx.get_time()
         cpx_status = -1
         cpx_miprelgap = None
@@ -2111,7 +2113,6 @@ class CplexEngine(IEngine):
         full_obj = cpx.solution.get_objective_value()
         if self._has_multi_objective(cpx):
             full_obj = [cpx.solution.multiobj.get_objective_value(objidx) for objidx in range(cpx.multiobj.get_num())]
-        rounded_obj = mdl.round_objective_if_discrete(full_obj)
 
         # Build list of objectives value by priority level (ie: each priority level corresponds to blended objectives
         # with same priority)
@@ -2119,7 +2120,6 @@ class CplexEngine(IEngine):
         if self._has_multi_objective(cpx):
             decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
             full_obj_by_prio = [cpx.solution.multiobj.get_objval_by_priority(prio) for prio in decreasing_ordered_prio]
-        rounded_obj_by_prio = mdl.round_objective_if_discrete(full_obj_by_prio)
 
         nb_vars = mdl.number_of_variables
         if nb_vars > 0:
@@ -2144,8 +2144,8 @@ class CplexEngine(IEngine):
         assert solve_details is not None
         solution = SolveSolution.make_engine_solution(model=mdl,
                                                       var_value_map=var_value_map,
-                                                      obj=rounded_obj,
-                                                      blended_obj_by_priority=rounded_obj_by_prio,
+                                                      obj=full_obj,
+                                                      blended_obj_by_priority=full_obj_by_prio,
                                                       solved_by=self.name,
                                                       solve_details=solve_details,
                                                       job_solve_status=job_solve_status)
@@ -2212,11 +2212,11 @@ class CplexEngine(IEngine):
                                cpx_bestbound)
         return details
 
-    def _check_is_solved_ok(self):
-        if 0 == self._solve_count:
-            self._model.fatal("Model {0} is not solved yet", self._model.name)
-        if not self._last_solve_status:
-            self._model.fatal("Last solve failed")
+    # def _check_is_solved_ok(self):
+    #     if 0 == self._solve_count:
+    #         self._model.fatal("Model {0} is not solved yet", self._model.name)
+    #     if not self._last_solve_status:
+    #         self._model.fatal("Last solve failed")
 
     def get_solve_details(self):
         # must be solved but not necessarily ok
@@ -2479,7 +2479,7 @@ class CplexEngine(IEngine):
                     conflicts.append(TConflictConstraint(ct.name, ct, c_status))
 
                 if _type == cpx_cst.CPX_CON_QUADRATIC:
-                    ct = mdl.get_quadratic_by_index(_id)
+                    ct = mdl.get_quadratic_constraint_by_index(_id)
                     conflicts.append(TConflictConstraint(ct.name, ct, c_status))
 
                 if _type == cpx_cst.CPX_CON_SOS:
@@ -2552,27 +2552,27 @@ class CplexEngine(IEngine):
     def _compute_quality_metrics(self):
         qm_dict = {}
 
-        if self._solve_count:
-            with SilencedCplexContext(self._saved_log_output, self._cplex, self.error_handler, ) as silent_cplex:
-                cpxs = silent_cplex.solution
-                for qm in QualityMetric:
-                    qmcode = qm.code
-                    try:
-                        qmf = cpxs.get_float_quality(qmcode)
-                        qm_dict[qm.key] = qmf
+#       if self._last_solve_status is not None:
+        with SilencedCplexContext(self._saved_log_output, self._cplex, self.error_handler, ) as silent_cplex:
+            cpxs = silent_cplex.solution
+            for qm in QualityMetric:
+                qmcode = qm.code
+                try:
+                    qmf = cpxs.get_float_quality(qmcode)
+                    qm_dict[qm.key] = qmf
 
+                except (CplexError, CplexSolverError):
+                    pass
+                if qm.has_int:
+                    try:
+                        qmi = cpxs.get_integer_quality(qmcode)
+                        if qmi >= 0:
+                            # do something with int parameter?
+                            qm_dict[qm.int_key] = qmi
                     except (CplexError, CplexSolverError):
                         pass
-                    if qm.has_int:
-                        try:
-                            qmi = cpxs.get_integer_quality(qmcode)
-                            if qmi >= 0:
-                                # do something with int parameter?
-                                qm_dict[qm.int_key] = qmi
-                        except (CplexError, CplexSolverError):
-                            pass
-        else:
-            self._model.error('Model has not been solved: no quality metrics available.')
+        # else:
+        #     self._model.error('Model has not been solved: no quality metrics available.')
         return qm_dict
 
     def get_parameter_from_id(self, param_id):
@@ -2805,6 +2805,8 @@ class CplexEngine(IEngine):
             return JobSolveStatus.UNKNOWN
         else:
             return JobSolveStatus.UNBOUNDED_SOLUTION
+
+
 
     def _resync_if_needed(self):
         if self._resync is _CplexSyncMode.OutOfSync:

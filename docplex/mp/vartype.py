@@ -117,7 +117,7 @@ class VarType(object):
     @classmethod
     def is_int_within_tolerance(cls, candidate_value, tolerance):
         assert tolerance >= 0
-        return abs(candidate_value - int(candidate_value)) <= tolerance
+        return abs(candidate_value - round(candidate_value)) <= tolerance
 
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
         # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
@@ -190,7 +190,8 @@ class BinaryVarType(VarType):
         # Returns:
         #     Boolean: True if `numeric_value` equals 0 or 1.
         # """
-        return 0 == numeric_value or 1 == numeric_value
+        return -tolerance <= numeric_value <= tolerance or\
+               (1-tolerance <= numeric_value <= 1 + tolerance)
 
     def __hash__(self):  # pragma: no cover
         return VarType.hash_vartype(self)

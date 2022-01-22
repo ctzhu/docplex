@@ -1215,6 +1215,9 @@ class CpoSolveResult(CpoRunResult):
     def get_fail_status(self):
         """ Gets the solving fail status.
 
+        This method is deprecated since release 12.8.
+        Use :meth:`~CpoSolveResult.get_search_status` and :meth:`~CpoSolveResult.get_stop_cause` instead.
+
         Returns:
             Fail status, element of the global list :const:`ALL_FAIL_STATUSES`.
         """
@@ -1657,6 +1660,7 @@ class CpoRefineConflictResult(CpoRunResult):
         self.member_variables = []           # List of member variables
         self.possible_variables = []         # List of possible member variables
         self.solver_infos = CpoSolverInfos() # Solving information
+        self.cpo_conflict = None             # Conflict in CPO format
 
 
     def get_all_member_constraints(self):
@@ -1693,6 +1697,15 @@ class CpoRefineConflictResult(CpoRunResult):
             List of model variables (class CpoIntVar or CpoIntervalVar) possibly member of the conflict.
         """
         return self.possible_variables
+
+
+    def get_cpo(self):
+        """ Returns the conflict represented in CPO format.
+
+        Returns:
+            String containing the conflict in CPO format, None if not given.
+        """
+        return self.cpo_conflict
 
 
     def is_conflict(self):
@@ -1797,6 +1810,7 @@ class CpoRefineConflictResult(CpoRunResult):
         if not self.is_conflict():
             out.write(u"   No conflict\n")
             return
+
         # Print constraints in the conflict
         lc = self.get_all_member_constraints()
         if lc:
@@ -1808,6 +1822,7 @@ class CpoRefineConflictResult(CpoRunResult):
             out.write(u"Possible member constraints:\n")
             for c in lc:
                 out.write(u"   {}\n".format(_build_conflict_constraint_string(c)))
+
         # Print variables in the conflict
         lc = self.get_all_member_variables()
         if lc:
@@ -1819,6 +1834,14 @@ class CpoRefineConflictResult(CpoRunResult):
             out.write(u"Possible member variables:\n")
             for c in lc:
                 out.write(u"   {}\n".format(c))
+
+        # Print cpo format if any
+        cpo = self.get_cpo()
+        if cpo:
+            out.write(u"Conflict in CPO format:\n")
+            for line in cpo.splitlines():
+                out.write(u"   " + line + "\n")
+
 
 
     def __str__(self):

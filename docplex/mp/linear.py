@@ -886,6 +886,8 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         checker.typecheck_num(coef, 'Expr.set_coefficient()')
         return self._set_coefficient(dvar, coef)
 
+    set_coef = set_coefficient
+
     def _set_coefficient(self, dvar, coef):
         self.check_discrete_lock_frozen(item=coef)
         if dvar is self._dvar:

@@ -4,6 +4,8 @@
 # (c) Copyright IBM Corp. 2019-2020
 # --------------------------------------------------------------------------
 
+# gendoc: ignore
+
 import json
 import uuid
 try:

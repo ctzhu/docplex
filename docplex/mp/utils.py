@@ -245,9 +245,9 @@ def is_iterator(e):
     except TypeError:
         return False
 
-import platform
 
 def is_function(e):
+    import platform
     if platform.python_version() >= '3.7':
         from collections.abc import Callable
     else:

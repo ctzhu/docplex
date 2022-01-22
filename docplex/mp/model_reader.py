@@ -89,39 +89,21 @@ def fast_get_rows(cpx):
 
 # noinspection PyArgumentList
 class ModelReader(object):
-    """ This class is used to read models from CPLEX files.
-
-    All keyword arguments understood by the `Model` class can be passed to the `ModelReader` constructor
-    in which case, these arguments will be used to create the initial empty model.
-
-    Args:
-        model_class: A subclass of `Model` (the default). This class type
-            is used to build the empty model and fill it with the contents of the file.
-            For example, to build an instance of `AdvModel`, pass `model_class=AdvModel`
-            to the constructor of `ModelReader`.
-
-    Returns:
-        An instance of :class:`doc.mp.model.Model` if the file was successfully read, or None.
+    """ This class is used to read models from CPLEX files (e.g.  SAV, LP, MPS)
 
     Note:
         This class requires CPLEX to be installed and present in ``PYTHONPATH``. The following file formats are
         accepted: LP, SAV, MPS.
 
     Example:
-        Reads the contents of file ``mymodel.sav`` into an `AdvModel` instance, built with the context `my_ctx`::
+        Use the class method ``read`` to read a model file.
 
-            mr = ModelReader(model_class=AdvModel)
-            mr.read_model('mymodel.sav', context=my_ctx)
+        Reads the contents of file ``mymodel.sav`` into an `AdvModel` instance, built with the context `my_ctx`,
+        with the parameter ``ignore_names`` set to True::
+
+            m = ModelReader.read(path='mymodel.lp', model_class=AdvModel, context=my_ctx, ignore_names=True)
 
     """
-
-    # class _RangeData(object):
-    #     # INTERNAL
-    #     def __init__(self, var_index, var_name, lb=0, ub=1e+75):
-    #         self.var_index = var_index
-    #         self.var_name = var_name
-    #         self.lb = lb
-    #         self.ub = ub
 
     @staticmethod
     def _build_linear_expr_from_sparse_pair(lfactory, var_map, cpx_sparsepair):
@@ -131,40 +113,12 @@ class ModelReader(object):
             expr._add_term(dv, k)
         return expr
 
-    def __init__(self, **kwargs):
-        pass
-
     _sense2comp_dict = {'L': ComparisonType.LE, 'E': ComparisonType.EQ, 'G': ComparisonType.GE}
 
     # noinspection PyDefaultArgument
     @classmethod
     def parse_sense(cls, cpx_sense, sense_dict=_sense2comp_dict):
         return sense_dict.get(cpx_sense)
-
-    @classmethod
-    def read(cls, pathname, model_name=None, verbose=False, model_class=None, **kwargs):
-        """
-        A class method to read a model from a file.
-
-        :param pathname: a path to the file to read
-        :param model_name: An optional string to use as name for the returned model.
-            If None, the basename of the path is used.
-        :param verbose: An optional flag to print informative messages, default is False.
-        :param model_class: An optional class type; must be a subclass of Model.
-            The returned model is built using this model_class and the keyword arguments kwargs, if any.
-            By default, the model is class is `Model`.
-
-        kwargs: A dict of keyword-based arguments that are used when creating the model
-            instance.
-
-        :return: a model instance, or None, if an error occurred.
-
-        Note:
-            This class method calls `ModelReader.read_model()`, without requesting to create an explicit instance
-            of `ModelReader`.
-        """
-        mri = ModelReader()
-        return mri.read_model(pathname, model_name, verbose, model_class, **kwargs)
 
     @classmethod
     def read_prm(cls, filename):
@@ -219,8 +173,8 @@ class ModelReader(object):
                 # this is something else
                 raise
 
-    @staticmethod
-    def _cplex_read(filename, verbose=False):
+    @classmethod
+    def _cplex_read(cls, filename, verbose=False):
         # print("-> start reading file: {0}".format(filename))
         cpx = _safe_cplex()
         # no warnings
@@ -270,7 +224,8 @@ class ModelReader(object):
                 terms_dict[dv] = k
         return lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
 
-    def read_model(self, filename, model_name=None, verbose=False, model_class=None, **kwargs):
+    @classmethod
+    def read(cls, filename, model_name=None, verbose=False, model_class=None, **kwargs):
         """ Reads a model from a CPLEX export file.
 
         Accepts all formats exported by CPLEX: LP, SAV, MPS.
@@ -326,7 +281,7 @@ class ModelReader(object):
 
         if verbose:
             print("-> CPLEX starts reading file: {0}".format(filename))
-        cpx = self._cplex_read(filename, verbose=verbose)
+        cpx = cls._cplex_read(filename, verbose=verbose)
         if verbose:
             print("<- CPLEX finished reading file: {0}".format(filename))
 
@@ -362,7 +317,7 @@ class ModelReader(object):
 
             if verbose:
                 print("-- uploading {0} variables...".format(cpx_nb_vars))
-            cpx_var_names = [] if ignore_names else self._safe_call_get_names(cpx.variables.get_names)
+            cpx_var_names = [] if ignore_names else cls._safe_call_get_names(cpx.variables.get_names)
 
             if cpx._is_MIP():
                 cpx_vartypes = [vartype_map.get(cpxt, vartype_cont) for cpxt in cpx.variables.get_types()]
@@ -381,12 +336,6 @@ class ModelReader(object):
             model_types = []
             for v in range(cpx_nb_vars):
                 varname = cpx_var_names[v] if cpx_var_names else None
-
-                # if varname and varname.startswith("Rg"):
-                #     # generated var for ranges
-                #     range_map[v] = self._RangeData(var_index=v, var_name=varname, ub=cpx_var_ubs[v])
-                # else:
-
                 model_varnames.append(varname)
                 model_types.append(cpx_vartypes[v])
                 model_lbs.append(cpx_var_lbs[v])
@@ -411,7 +360,7 @@ class ModelReader(object):
             all_rhs = cpx_linearcts.get_rhs()
             all_senses = cpx_linearcts.get_senses()
             all_range_values = cpx_linearcts.get_range_values()
-            cpx_ctnames = [] if ignore_names else self._safe_call_get_names(cpx_linearcts.get_names)
+            cpx_ctnames = [] if ignore_names else cls._safe_call_get_names(cpx_linearcts.get_names)
 
             deferred_cts = []
 
@@ -425,7 +374,7 @@ class ModelReader(object):
                 range_val = all_range_values[c]
 
                 indices, coefs = row
-                expr = self._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
+                expr = cls._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
 
                 if sense == 'R':
                     # rangeval can be negative !!! issue 52
@@ -439,7 +388,7 @@ class ModelReader(object):
                     rgct = mdl.range_constraint(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
                     deferred_cts.append(rgct)
                 else:
-                    op = self.parse_sense(sense)
+                    op = cls.parse_sense(sense)
                     rhs_expr = lfactory.constant_expr(cst=rhs, safe_number=True)
                     ct = LinearConstraint(mdl, expr, op, rhs_expr, ctname)
                     deferred_cts.append(ct)
@@ -457,7 +406,7 @@ class ModelReader(object):
                 all_quadratic_nb_non_zeros = cpx_quadraticcts.get_quad_num_nonzeros()
                 all_quadratic_components = cpx_quadraticcts.get_quadratic_components()
                 all_senses = cpx_quadraticcts.get_senses()
-                cpx_ctnames = [] if ignore_names else self._safe_call_get_names(cpx_quadraticcts.get_names)
+                cpx_ctnames = [] if ignore_names else cls._safe_call_get_names(cpx_quadraticcts.get_names)
 
                 for c in range(nb_quadratic_cts):
                     rhs = all_rhs[c]
@@ -471,7 +420,7 @@ class ModelReader(object):
                     if linear_nb_non_zeros > 0:
                         indices, coefs = linear_component.unpack()
                         # linexpr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
-                        linexpr = self._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
+                        linexpr = cls._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
                     else:
                         linexpr = None
 
@@ -495,7 +444,7 @@ class ModelReader(object):
             cpx_indicators = cpx.indicator_constraints
             nb_indicators = cpx_indicators.get_num()
             if nb_indicators:
-                all_ind_names = [] if ignore_names else self._safe_call_get_names(cpx_indicators.get_names)
+                all_ind_names = [] if ignore_names else cls._safe_call_get_names(cpx_indicators.get_names)
 
                 all_ind_bvars = cpx_indicators.get_indicator_variables()
                 all_ind_rhs = cpx_indicators.get_rhs()
@@ -516,7 +465,7 @@ class ModelReader(object):
                     # 1 . check the bvar is ok
                     ind_bvar = cpx_var_index_to_docplex[ind_bvar]
                     # each var appears once
-                    ind_linexpr = self._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex,
+                    ind_linexpr = cls._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex,
                                                                            ind_linear)
                     op = ComparisonType.cplex_ctsense_to_python_op(ind_sense)
                     ind_lct = op(ind_linexpr, ind_rhs)
@@ -533,7 +482,7 @@ class ModelReader(object):
                 cpx_pwl = cpx.pwl_constraints
                 cpx_pwl_defs = cpx_pwl.get_definitions()
                 pwl_fallback_names = [""] * cpx_pwl.get_num()
-                cpx_pwl_names = pwl_fallback_names if ignore_names else self._safe_call_get_names(cpx_pwl.get_names,
+                cpx_pwl_names = pwl_fallback_names if ignore_names else cls._safe_call_get_names(cpx_pwl.get_names,
                                                                                                   pwl_fallback_names)
                 for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in izip(cpx_pwl_defs,
                                                                                                 cpx_pwl_names):
@@ -572,7 +521,7 @@ class ModelReader(object):
                         all_obj_vars.append(cpx_var_index_to_docplex[v])
 
                 # obj_expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
-                obj_expr = self._make_expr_from_vars_coefs(mdl, all_obj_vars, all_obj_coefs)
+                obj_expr = cls._make_expr_from_vars_coefs(mdl, all_obj_vars, all_obj_coefs)
 
                 if cpx_obj.get_num_quadratic_variables() > 0:
                     cpx_all_quad_cols_coeffs = cpx_obj.get_quadratic()
@@ -605,7 +554,7 @@ class ModelReader(object):
 
                 for m in range(nb_multiobjs):
                     (obj_coeffs, obj_offset, weight, prio, abstol, reltol) = cpx_multiobj.get_definition(m)
-                    obj_expr = self._make_expr_from_coef_vector(mdl, cpx_var_index_to_docplex, obj_coeffs, obj_offset)
+                    obj_expr = cls._make_expr_from_coef_vector(mdl, cpx_var_index_to_docplex, obj_coeffs, obj_offset)
                     exprs[m] = obj_expr
                     priorities[m] = prio
                     weights[m] = weight
@@ -670,3 +619,12 @@ class ModelReader(object):
             cpx.end()
 
         return mdl
+
+    @classmethod
+    def read_model(cls, filename, model_name=None, verbose=False, model_class=None, **kwargs):
+        """ This method is a synonym of `read` for compatibility.
+
+        """
+        import warnings
+        warnings.warn("ModelReader.read_model is deprecated, use class method ModelReader.read()", DeprecationWarning)
+        return cls.read(filename, model_name, verbose, model_class, **kwargs)

@@ -544,29 +544,29 @@ class Context(BaseContext):
                 docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(arg_params))
 
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
-        if k is 'docloud_context':
+        if k == 'docloud_context':
             warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
             self.solver.docloud = value
-        elif k is 'cplex_parameters':
+        elif k == 'cplex_parameters':
             if isinstance(value, RootParameterGroup):
                 self.cplex_parameters = value
             else:
                 self.update_cplex_parameters(value)
 
-        elif k is 'url':
+        elif k == 'url':
             self.solver.docloud.url = value
-        elif k is 'api_key' or k is 'key':
+        elif k == 'api_key' or k == 'key':
             self.solver.docloud.key = value
-        elif k is 'log_output':
+        elif k == 'log_output':
             self.solver.log_output = value
-        elif k is 'override':
+        elif k  == 'override':
             self.update_from_list(iteritems(value))
-        elif k is 'proxies':
+        elif k == 'proxies':
             self.solver.docloud.proxies = value
-        elif k is '_env':
+        elif k ==  '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
-        elif k is 'agent':
+        elif k ==  'agent':
             self.solver.agent = value
         else:
             if create_missing_nodes:
@@ -729,10 +729,10 @@ class ContextOverride(Context):
     #     return self._solver
 
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
-        if k is 'docloud_context':
+        if k == 'docloud_context':
             warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
             self.solver.docloud = value
-        elif k is 'cplex_parameters':
+        elif k == 'cplex_parameters':
             if isinstance(value, RootParameterGroup):
                 self.cplex_parameters = value
             else:
@@ -751,20 +751,20 @@ class ContextOverride(Context):
             if time_limit_failed:
                 print("Invalid time limit: {0!r} - ignored".format(value))
 
-        elif k is 'url':
+        elif k == 'url':
             self.solver.docloud.url = value
-        elif k is 'api_key' or k is 'key':
+        elif k == 'api_key' or k == 'key':
             self.solver.docloud.key = value
-        elif k is 'log_output':
+        elif k == 'log_output':
             self.solver.log_output = value
-        elif k is 'override':
+        elif k == 'override':
             self.update_from_list(iteritems(value))
-        elif k is 'proxies':
+        elif k == 'proxies':
             self.solver.docloud.proxies = value
-        elif k is '_env':
+        elif k == '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
-        elif k is 'agent':
+        elif k == 'agent':
             self.solver.agent = value
         else:
             if create_missing_nodes:

@@ -1,14 +1,27 @@
 Changelog
 ---------
 
-Changed in 2.14.186:
+Changed in 2.15.194:
 ````````````````````
+* In ``docplex.mp``:
+    * add Model.quadratic_dual_slacks()
+    * Fixed a bug in multi-objectives: objectives were incorrectly rounded
+    * Fixed a bug in Model.report(): multiple objective values were not displayed()
+* In ``docplex.cp``:
+    * Add conflict in CPO format in refine conflict result
+    * Fix problem when parsing KPIs section of a CPO model
+    * Add method add_constraint() to model for compatibility with docplex.mp
+    * Comment method get_fail_status() of SolveResult as deprecated.
+
+
+Changed in 2.14.186 (2020.05):
+``````````````````````````````
 
 * Updated tracking events in Watson studio notebooks.
 * In ``docplex.mp``:
     * Model.solve() will not use solve on cloud unless `agent` is specifically set to 'docloud`.
 
-
+    
 Changed in 2.13.184 (2020.03):
 ``````````````````````````````
 

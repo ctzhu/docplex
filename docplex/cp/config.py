@@ -133,6 +133,11 @@ Configuration of the model solving
     This parameter indicates to add the solver log content to the solution object.
     By default, this parameter is True but it can be set to False if the log is very big or of no interest.
 
+*context.solver.add_conflict_as_cpo = True*
+
+    This parameter indicates to include the conflict in CPO format in the conflict refiner result
+    By default, this parameter is True.
+
 *context.solver.agent = 'local'*
 
     This parameter specifies the name of the solver agent that is used to solve the model.
@@ -347,6 +352,9 @@ context.solver.max_threads = None
 
 # Indicate to add solver log to the solution
 context.solver.add_log_to_solution = True
+
+# Indicate to add the conflict in CPO format to conflict refiner result
+context.solver.add_conflict_as_cpo = True
 
 # Indicate to replace simple solve by a start/next loop
 context.solver.solve_with_start_next = False

@@ -8,15 +8,9 @@
 
 import sys
 
-from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import DOcplexException
 from docplex.mp.utils import is_iterable, OutputStreamAdapter
-
-try:  # pragma: no cover
-    from itertools import zip_longest as izip_longest
-except ImportError:  # pragma: no cover
-    # noinspection PyUnresolvedReferences
-    from itertools import izip_longest
+from docplex.mp.compat23 import izip_longest
 
 import json
 
@@ -58,7 +52,8 @@ class SolutionJSONEncoder(json.JSONEncoder):
         n["solved_by"] = solution.solved_by
         return n
 
-    def encode_linear_constraints(self, solution, was_solved):
+    @classmethod
+    def encode_linear_constraints(cls, solution, was_solved):
         n = []
         model = solution.model
         if was_solved:
@@ -89,7 +84,8 @@ class SolutionJSONEncoder(json.JSONEncoder):
             n.append(c)
         return n
 
-    def encode_quadratic_constraints(self, solution):
+    @classmethod
+    def encode_quadratic_constraints(cls, solution):
         n = []
         model = solution.model
         duals = []
@@ -118,7 +114,7 @@ class SolutionJSONEncoder(json.JSONEncoder):
         n = []
         if was_solved:
             try:
-                reduced_costs = [] if model._solved_as_mip() else  model.reduced_costs(model.iter_variables())
+                reduced_costs = [] if model._solved_as_mip() else model.reduced_costs(model.iter_variables())
             except DOcplexException as dex:
                 if "not available for integer" in str(dex):
                     reduced_costs = []
@@ -135,7 +131,7 @@ class SolutionJSONEncoder(json.JSONEncoder):
         for (dvar, rc) in izip_longest(model.iter_variables(),
                                        reduced_costs,
                                        fillvalue=None):
-            if not dvar.is_generated(): # 38934
+            if not dvar.is_generated():  # 38934
                 value = sol._get_var_value(dvar)
                 if keep_zeros or value:
                     v = {"index": "{}".format(dvar.index),

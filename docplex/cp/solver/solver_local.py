@@ -39,19 +39,20 @@ CMD_RUN_SEEDS       = "RunSeeds"       # Run with multiple seeds.
 CMD_ADD_CALLBACK    = "AddCallback"    # Add callback proxy to the solver
 
 # List of events received from solver
-EVT_VERSION_INFO       = "VersionInfo"     # Local solver version info (String in JSON format)
-EVT_SUCCESS            = "Success"         # Success in last command execution
-EVT_ERROR              = "Error"           # Error (data is error string)
-EVT_TRACE              = "DebugTrace"      # Debugging trace
-EVT_SOLVER_OUT_STREAM  = "OutStream"       # Solver output stream
-EVT_SOLVER_WARN_STREAM = "WarningStream"   # Solver warning stream
-EVT_SOLVER_ERR_STREAM  = "ErrorStream"     # Solver error stream
-EVT_SOLVE_RESULT       = "SolveResult"     # Solver result in JSON format
-EVT_CONFLICT_RESULT    = "ConflictResult"  # Conflict refiner result in JSON format
-EVT_PROPAGATE_RESULT   = "PropagateResult" # Propagate result in JSON format
-EVT_RUN_SEEDS_RESULT   = "RunSeedsResult"  # Run seeds result (no data, all is in log)
-EVT_CALLBACK_EVENT     = "CallbackEvent"   # Callback event. Data is event name.
-EVT_CALLBACK_DATA      = "CallbackData"    # Callback data, following event. Data is JSON document.
+EVT_VERSION_INFO        = "VersionInfo"        # Local solver version info (String in JSON format)
+EVT_SUCCESS             = "Success"            # Success in last command execution
+EVT_ERROR               = "Error"              # Error (data is error string)
+EVT_TRACE               = "DebugTrace"         # Debugging trace
+EVT_SOLVER_OUT_STREAM   = "OutStream"          # Solver output stream
+EVT_SOLVER_WARN_STREAM  = "WarningStream"      # Solver warning stream
+EVT_SOLVER_ERR_STREAM   = "ErrorStream"        # Solver error stream
+EVT_SOLVE_RESULT        = "SolveResult"        # Solver result in JSON format
+EVT_CONFLICT_RESULT     = "ConflictResult"     # Conflict refiner result in JSON format
+EVT_CONFLICT_RESULT_CPO = "ConflictResultCpo"  # Conflict refiner result in CPO format
+EVT_PROPAGATE_RESULT    = "PropagateResult"    # Propagate result in JSON format
+EVT_RUN_SEEDS_RESULT    = "RunSeedsResult"     # Run seeds result (no data, all is in log)
+EVT_CALLBACK_EVENT      = "CallbackEvent"      # Callback event. Data is event name.
+EVT_CALLBACK_DATA       = "CallbackData"       # Callback data, following event. Data is JSON document.
 
 # Max possible received data size in one message
 _MAX_RECEIVED_DATA_SIZE = 1000000
@@ -128,9 +129,6 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         self.available_command = self.version_info['AvailableCommands']
         # Normalize information
         verinf['AgentModule'] = __name__
-        iver = verinf.get('AngelVersion')
-        if iver:
-            verinf['InterfaceVersion'] = iver
 
         context.log(3, "Local solver info: '", verinf, "'")
 
@@ -255,15 +253,28 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Add callback if needed
         self._add_callback_if_needed()
-
-        # Request refine conflict
-        self._write_message(CMD_REFINE_CONFLICT)
-
-        # Wait JSON result
-        jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
+        
+        # Check if cpo format required
+        pver = self.version_info.get('ProxyVersion')
+        if self.context.add_conflict_as_cpo and pver and (int(pver) >= 9):
+            # Request refine conflict with CPO format
+            self._write_message(CMD_REFINE_CONFLICT, bytearray([1]))
+            # Wait JSON result
+            jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
+            # Wait for CPO conflict
+            cposol = self._wait_event(EVT_CONFLICT_RESULT_CPO)
+        else:
+            # Request refine conflict
+            self._write_message(CMD_REFINE_CONFLICT)
+            # Wait JSON result
+            jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
+            # No CPO conflict
+            cposol = None
 
         # Build result object
-        return self._create_result_object(CpoRefineConflictResult, jsol)
+        result = self._create_result_object(CpoRefineConflictResult, jsol)
+        result.cpo_conflict = cposol
+        return result
 
 
     def propagate(self):

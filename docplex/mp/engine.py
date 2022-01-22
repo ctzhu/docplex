@@ -62,6 +62,9 @@ class IEngine(object):
         """
         raise NotImplementedError  # pragma: no cover
 
+    def populate(self):
+        raise NotImplementedError  # pragma: no cover
+
     def get_solve_status(self):
         """  Return a DOcplexcloud-style solve status.
 
@@ -315,6 +318,9 @@ class MinimalEngine(IEngine):
 
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         self.only_cplex(mname="solve_relaxed")  # pragma: no cover
+
+    def populate(self):
+        self.only_cplex(mname="populate")  # pragma: no cover
 
     def create_pwl_constraint(self, pwl_ct):
         self.only_cplex(mname="create_quadratic_constraint")  # pragma: no cover

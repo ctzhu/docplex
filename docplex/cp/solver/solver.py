@@ -1083,7 +1083,7 @@ def get_version_info():
     It returns a dictionary with various information, as in the following example:
     ::
     {
-       "AngelVersion" : 5,  # Or 'DllVersion' for Dll
+       "ProxyVersion" : 5,
        "SourceDate" : "Sep 12 2017",
        "SolverVersion" : "12.8.0.0",
        "IntMin" : -9007199254740991,

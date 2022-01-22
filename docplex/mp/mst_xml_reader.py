@@ -36,8 +36,7 @@ class MSTReader(object):
 
     @classmethod
     def new_empty_mipstart(cls, mdl, mipstart_name=None):
-        # keep all values, never perform rounding.
-        return mdl.new_solution(rounding=False, name=mipstart_name)
+        return mdl.new_solution(name=mipstart_name)
 
     @classmethod
     def read_one_solution(cls, xml_solution, mdl, mst_path):

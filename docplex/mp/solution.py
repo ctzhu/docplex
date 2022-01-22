@@ -46,7 +46,7 @@ class SolveSolution(object):
         return v == int(v)
 
     def __init__(self, model, var_value_map=None, obj=None, blended_obj_by_priority=None, name=None, solved_by=None,
-                 keep_zeros=True, rounding=False):
+                 keep_zeros=True):
         """ SolveSolution(model, var_value_map, obj, name)
 
         Creates a new solution object, associated to a a model.
@@ -88,15 +88,12 @@ class SolveSolution(object):
         self._infeasibilities = {}
         self._basis_statuses = None
 
-        self._round_discrete = rounding
         self._solve_status = None
         self._keep_zeros = keep_zeros
         self._solve_details = None
-        # the round function
-        self._roundfn = self._model.round_nearest
 
         if var_value_map is not None:
-            self._store_var_value_map(var_value_map, keep_zeros=keep_zeros, rounding=rounding)
+            self._store_var_value_map(var_value_map, keep_zeros=keep_zeros)
 
     @property
     def _checker(self):
@@ -107,21 +104,20 @@ class SolveSolution(object):
                              job_solve_status=None):
         # INTERNAL
         # noinspection PyArgumentEqualDefault
-        rounding = model.round_solution
         sol = SolveSolution(model,
                             var_value_map=None,
                             obj=obj,
                             blended_obj_by_priority=blended_obj_by_priority,
                             solved_by=solved_by,
-                            rounding=rounding,
                             keep_zeros=False)
         if solve_details is not None:
             sol._solve_details = copy.copy(solve_details)
-        # trust engines
-        roundfn = sol._roundfn if rounding else lambda x_: x_
-        for dvar, value in iteritems(var_value_map):
-            if value:
-                if dvar.is_discrete() and value != int(value):
+
+        if model.round_solution:
+            # only for models which specify round_solution
+            roundfn = sol._model._round_function
+            for dvar, value in iteritems(var_value_map):
+                if value and dvar.is_discrete() and value != int(value):
                     var_value_map[dvar] = roundfn(value)
         # do trust engines...
         sol._var_value_map = var_value_map
@@ -139,15 +135,14 @@ class SolveSolution(object):
                                  var_value_map=None,
                                  obj=self.objective_value,
                                  solved_by=self.solved_by,
-                                 keep_zeros=self._keep_zeros,
-                                 rounding=self._round_discrete)
+                                 keep_zeros=self._keep_zeros)
         # copy value dict
         mipstart._var_value_map = self._var_value_map.copy()
         if self.solved_by and not self._keep_zeros:
             # completion: add all discrete, non-generated:
             for dvi in self.model.generate_user_variables():
                 if dvi.is_discrete() and dvi not in self._var_value_map:
-                    mipstart._set_var_value_internal(dvi, 0, rounding=False)
+                    mipstart._set_var_value_internal(dvi, 0)
         return mipstart
 
     def clear(self):
@@ -247,40 +242,34 @@ class SolveSolution(object):
             value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False)
+        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros)
 
     def __setitem__(self, var_key, value):
         # always keep zero, no warnings, no checks
-        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros, rounding=False)
+        self._set_var_key_value(var_key, value, keep_zero=self._keep_zeros)
 
-    def set_var_key_value(self, var_key, value, keep_zero, rounding):
+    def set_var_key_value(self, var_key, value, keep_zero):
         # INTERNAL
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
-        self._set_var_key_value(var_key, value, keep_zero, rounding)
+        self._set_var_key_value(var_key, value, keep_zero)
 
-    def _set_var_key_value(self, var_key, value, keep_zero, rounding):
+    def _set_var_key_value(self, var_key, value, keep_zero):
         # INTERNAL: no checks done.
         dvar = self._resolve_var(var_key, do_raise=False)
         if dvar is not None:
             if value or keep_zero:
                 # either value is nonzero or we keep all, store.
-                self._set_var_value_internal(dvar, value, rounding)
+                self._set_var_value_internal(dvar, value)
             elif self.contains(dvar):
                 # value is 0 and we dont keep zeros: zap the variable, if
                 del self._var_value_map[dvar]
 
-    def _set_var_value_internal(self, var, value, rounding):
-        # INTERNAL, no check is done on var
-        if rounding and var.is_discrete() and not self._is_discrete_value(value):
-            stored_value = self._roundfn(value)
-        else:
-            stored_value = value
-
-        self._var_value_map[var] = stored_value
+    def _set_var_value_internal(self, var, value):
+        self._var_value_map[var] = value
 
     def _set_var_value(self, var, value):
         # INTERNAL
-        self._set_var_value_internal(var, value, self._round_discrete)
+        self._set_var_value_internal(var, value)
 
     def update(self, var_values_iterable):
         """
@@ -294,7 +283,7 @@ class SolveSolution(object):
         """
         keep_zeros = self._keep_zeros
         for k, v in iteritems(var_values_iterable):
-            self._set_var_key_value(k, v, keep_zeros, rounding=False)
+            self._set_var_key_value(k, v, keep_zeros)
 
     @property
     def model(self):
@@ -381,9 +370,10 @@ class SolveSolution(object):
         To check whether the objective has been set, use :func:`has_objective`.
 
         """
-        if is_indexable(self._objective):
+        try:
             return self._objective[0]
-        return self._objective
+        except TypeError:
+            return self._objective
 
     @objective_value.setter
     def objective_value(self, new_objvalue):
@@ -398,9 +388,8 @@ class SolveSolution(object):
         To check whether the objective has been set, use :func:`has_objective`.
 
         """
-        if is_indexable(self._objective):
-            return self._objective
-        return [self._objective]
+        self_obj = self._objective
+        return self_obj if is_indexable(self_obj) else [self_obj]
 
     @property
     def solve_status(self):
@@ -410,11 +399,11 @@ class SolveSolution(object):
         # INTERNAL
         self._solve_status = new_status
 
-    def _store_var_value_map(self, key_value_map, keep_zeros=False, rounding=False):
+    def _store_var_value_map(self, key_value_map, keep_zeros=False):
         # INTERNAL
         for e, val in iteritems(key_value_map):
             # need to check var_keys and values
-            self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros, rounding=rounding)
+            self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros)
 
     def store_infeasibilities(self, infeasibilities):
         assert isinstance(infeasibilities, dict)
@@ -512,7 +501,7 @@ class SolveSolution(object):
         # INTERNAL
         return self._var_value_map.get(dvar, 0)
 
-    def get_values(self, dvars):
+    def get_value_list(self, dvars):
         """
         Gets the value of a sequence of variables in a solution.
         If a variable is not mentioned in the solution,
@@ -531,6 +520,11 @@ class SolveSolution(object):
         dvar_seq = checker.typecheck_var_seq(dvars)
         return self._get_values(dvar_seq)
 
+    def get_values(self, var_seq):
+        """ Same as get_value_list
+        """
+        return self.get_value_list(var_seq)
+
     def _get_values(self, dvars):
         # internal: no checks are done.
         self_value_map = self._var_value_map
@@ -542,7 +536,7 @@ class SolveSolution(object):
         m = self._model
         return [self_value_map.get(dv, 0) for dv in m.iter_variables()]
 
-    def get_value_dict(self, var_dict, keep_zeros=True, precision=1e-6):
+    def get_value_dict(self, var_dict, keep_zeros=True, precision=0):
         """ Converts a dictionary of variables to a dictionary of solutions
 
         Assuming `var_dict` is a dictionary of variables
@@ -564,9 +558,44 @@ class SolveSolution(object):
             value_dict = {}
             for key, dvar in iteritems(var_dict):
                 dvar_value = self._get_var_value(dvar)
-                if abs(dvar_value) >= precision:
+                if (precision and abs(dvar_value) >= precision) or dvar_value:
                     value_dict[key] = dvar_value
             return value_dict
+
+    def get_value_df(self, var_dict, value_column_name=None, key_column_names=None):
+        """ Returns values of a dicitonary of variables, as a pandas dataframe.
+
+        If pandas is not present, returns a dicitonary of columns.
+
+        :param var_dict: the dicitonary of variables, as created by Model.xx_var_dict
+        :param value_column_name: an optional string to name the value column. Default is 'value'
+        :param key_column_names: an optional list of strings to name th ekeys of the dicitonary.
+            If not present, keys are named 'k1', 'k2', ...
+
+        :return: a pandas DataFrame, if pandas is present.
+        """
+        keys = list(six.iterkeys(var_dict))
+        values = self.get_values(six.itervalues(var_dict))
+        if isinstance(keys[0], tuple):
+            keys = list(zip(*keys))
+            knames = None
+            if key_column_names:
+                if len(key_column_names) == len(keys):
+                    knames = key_column_names
+            if not knames:
+                knames = ['key_%d' % k for k in range(1, len(keys)+1)]
+            kd = {kn: ks for kn, ks in zip(knames, keys)}
+        else:
+            kn = key_column_names or 'key'
+            kd = {kn: keys}
+        value_col_name = value_column_name or 'value'
+        kd[value_col_name] = values
+        try:
+            import pandas as pd
+            return pd.DataFrame(kd)
+        except ImportError:
+            self.model.warning("pandas module not found, returning a dict instead of DataFrame")
+            return kd
 
     # def __len__(self):
     #     return len(self.__var_value_map)
@@ -604,17 +633,15 @@ class SolveSolution(object):
         else:
             return 1 if ct.is_satisfied(self) else 0
 
-    def find_unsatisfied_constraints(self, tolerance=1e-6):
+    def find_unsatisfied_constraints(self, m, tolerance=1e-6):
         unsats = []
-        m = self.model
         for ct in m.iter_constraints():
             if not ct.is_satisfied(self, tolerance):
                 unsats.append(ct)
         return unsats
 
-    def restore(self, tolerance=1e-6, restore_all=False):
+    def restore(self, mdl, tolerance=1e-6, restore_all=False):
         # restores the solution in its model, adding ranges.
-        mdl = self.model
         lfactory = mdl._lfactory
         restore_ranges = []
         for dvar, val in self.iter_var_values():
@@ -625,8 +652,7 @@ class SolveSolution(object):
         mdl.info("restored {0} variable values using range constraints".format(len(restore_ranges)))
         return mdl.add(restore_ranges)
 
-    def find_invalid_domain_variables(self, tolerance=1e-6):
-        m = self.model
+    def find_invalid_domain_variables(self, m, tolerance=1e-6):
         invalid_domain_vars = []
         for dv in m.iter_variables():
             dvv = self.get_var_value(dv)
@@ -649,15 +675,14 @@ class SolveSolution(object):
         *New in version 2.13*
         """
         m = self.model
-        invalid_domain_vars = self.find_invalid_domain_variables(tolerance)
+        invalid_domain_vars = self.find_invalid_domain_variables(m, tolerance)
         if not silent and invalid_domain_vars:
             m.warning("invalid domain vars: {0}".format(len(invalid_domain_vars)))
             for v, ivd in enumerate(invalid_domain_vars, start=1):
                 dvv = self.get_var_value(ivd)
                 m.warning("{0} - invalid value {1} for variable {2!s}".format(v, dvv, ivd))
-        m = self.model
 
-        unsat_cts = self.find_unsatisfied_constraints(tolerance)
+        unsat_cts = self.find_unsatisfied_constraints(m, tolerance)
         if not silent and unsat_cts:
             m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
             for u, uct in enumerate(unsat_cts, start=1):
@@ -856,23 +881,36 @@ class SolveSolution(object):
         raise TypeError
 
     def __as_df__(self, name_key='name', value_key='value'):
+        return self.as_df(name_key, value_key)
+
+    def as_df(self, name_key='name', value_key='value'):
+        """ Converts the solution to a pandas dataframe with two columns: variable name and values
+
+        :param name_key: column name for variable names. Default is 'name'
+        :param value_key: cilumn name for values., Default is 'value'.
+
+        :return: a pandas dataframe, if pandas is present.
+
+        *New in version 2.15*
+        """
         assert name_key
         assert value_key
+        assert name_key != value_key
         try:
-            import pandas
+            import pandas as pd
         except ImportError:
-            raise NotImplementedError('Cannot convert solution to pandas.DataFrame if pandas is not available')
-        solution_df = pandas.DataFrame(columns=[name_key, value_key])
+            raise ImportError('Cannot convert solution to pandas.DataFrame if pandas is not available')
 
-        for index, dvar in enumerate(self.iter_variables()):
-            solution_df.loc[index, name_key] = dvar.to_string()
-            solution_df.loc[index, value_key] = self._get_var_value(dvar)
-
-        return solution_df
+        names = []
+        values = []
+        for dv, dvv in self.iter_var_values():
+            names.append(dv.to_string())
+            values.append(dvv)
+        name_value_dict = {name_key: names, value_key: values}
+        return pd.DataFrame(name_value_dict)
 
     def print_mst(self, out=sys.stdout, **kwargs):
-        """
-        Writes the solution in in an output stream (default is sys.out)
+        """ Writes the solution in MST format in an output stream (default is sys.out)
         """
         self.export(out, format='mst', **kwargs)
 
@@ -1013,7 +1051,15 @@ class SolveSolution(object):
 
     def as_dict(self, keep_zeros=False):
         var_value_dict = {}
+        # INTERNAL: return a dictionary of variable: variable_value
+        for dvar, dval in self.iter_var_values():
+            if keep_zeros or dval:
+                var_value_dict[dvar] = dval
+        return var_value_dict
+
+    def as_name_dict(self, keep_zeros=False):
         # INTERNAL: return a dictionary of variable_name: variable_value
+        var_value_dict = {}
         for dvar, dval in self.iter_var_values():
             dvar_name = dvar.get_name()
             if dvar_name and (keep_zeros or dval):

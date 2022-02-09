@@ -49,13 +49,13 @@ class Operand(object):
         return self
 
     def __le__(self, rhs):
-        return self._model._qfactory.new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.LE)
+        return self._model._new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.LE)
 
     def __eq__(self, rhs):
-        return self._model._qfactory.new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.EQ)
+        return self._model._new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.EQ)
 
     def __ge__(self, rhs):
-        return self._model._qfactory.new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.GE)
+        return self._model._new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.GE)
 
 
     le = __le__
@@ -99,6 +99,9 @@ class LinearOperand(Operand):
     def is_constant(self):
         # redefine this for subclasses.
         return False  # pragma: no cover
+
+    def is_quad_expr(self):
+        return False
 
     def as_variable(self):
         # return a variable if the expression is actually one variable, else None

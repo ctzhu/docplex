@@ -49,9 +49,9 @@ import threading
 import warnings
 
 
-###############################################################################
-## Constants
-###############################################################################
+#==============================================================================
+# Constants
+#==============================================================================
 
 INT_MAX = (2**53 - 1)  # (2^53 - 1) for 64 bits, (2^31 - 1) for 32 bits
 """ Maximum integer value. """
@@ -69,9 +69,37 @@ BINARY_DOMAIN = ((0, 1),)
 _FLOATING_POINT_PRECISION = 1e-9
 
 
-###############################################################################
-## Public expression classes
-###############################################################################
+#==============================================================================
+# Utility classes
+#==============================================================================
+
+class IntegerDomain(tuple):
+    """ Class representing the domain of an integer variable.
+    """
+
+    # Do not implement constructor, not supported in Python 3 (not investigated)
+
+    def __str__(self):
+        """ Build a string representing this domain, using mathematical convention """
+        # Check fixed domain
+        if (len(self) == 1) and not isinstance(self[0], (tuple, list)):
+            return str(self[0])
+        cout = ["{"]
+        for i, d in enumerate(self):
+            if i > 0:
+                cout.append(", ")
+            if isinstance(d, (list, tuple)):
+                cout.append(str(d[0]) + ".." + str(d[1]))
+            else:
+                cout.append(str(d))
+        cout.append("}")
+        return u''.join(cout)
+
+
+#==============================================================================
+# Public expression classes
+#==============================================================================
+
 
 class CpoExpr(object):
     """ This class is an abstract class that represents any CPO expression node.
@@ -383,25 +411,32 @@ class CpoExpr(object):
 
     def __add__(self, other):
         """ Plus """
-        if other is 0:  # Do not use == because it is overloaded
-            return self
         other = build_cpo_expr(other)
+        # Check integer expression
         if self.is_kind_of(Type_IntExpr):
             if other.is_kind_of(Type_IntExpr):
                 return CpoFunctionCall(Oper_plus, Type_IntExpr, (self, other))
-            assert other.is_kind_of(Type_FloatExpr), "Operands of + should be integer, float or cumul"
-            return CpoFunctionCall(Oper_plus, Type_FloatExpr, (self, other))
+            if other.is_kind_of(Type_FloatExpr):
+                return CpoFunctionCall(Oper_plus, Type_FloatExpr, (self, other))
+            # Check special case for CumulExpr
+            if other.is_kind_of(Type_CumulExpr):
+                if (type(self) is CpoValue) and (self.value == 0):
+                    return other
+        # Check float expression
         elif self.is_kind_of(Type_FloatExpr):
-            assert other.is_kind_of(Type_FloatExpr), "Operands of + should be integer, float or cumul"
-            return CpoFunctionCall(Oper_plus, Type_FloatExpr, (self, other))
-        # Sum of cumul expressions
-        assert self.is_kind_of(Type_CumulExpr) and other.is_kind_of(Type_CumulExpr), "Operands of + should be integer, float or cumul expressions"
-        return CpoFunctionCall(Oper_plus, Type_CumulExpr, (self, other))
+            if other.is_kind_of(Type_FloatExpr):
+                return CpoFunctionCall(Oper_plus, Type_FloatExpr, (self, other))
+        # Check cumul expressions
+        elif self.is_kind_of(Type_CumulExpr):
+            if other.is_kind_of(Type_CumulExpr):
+                return CpoFunctionCall(Oper_plus, Type_CumulExpr, (self, other))
+            # Check special value zero
+            if (type(other) is CpoValue) and (other.value == 0):
+                return self
+        raise AssertionError("Operands of + should be integer, float or cumul expressions")
 
     def __radd__(self, other):
         """ Plus (right) """
-        if other is 0:  # Do not use == because it is overloaded
-            return self
         return build_cpo_expr(other).__add__(self)
 
     def __pos__(self):
@@ -438,8 +473,6 @@ class CpoExpr(object):
 
     def __mul__(self, other):
         """ Multiply """
-        # if other is 1: # Do not use == because it is overloaded
-        #     return self
         other = build_cpo_expr(other)
         if self.is_kind_of(Type_IntExpr):
             if other.is_kind_of(Type_IntExpr):
@@ -1612,6 +1645,9 @@ def interval_var(start=None, end=None, length=None, size=None,
     The length of the interval will be at least long enough to cover the work requirements
     given by the interval size, taking into account the intensity function.
 
+    More information is available
+    `here <https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/refcppcplex/html/interval_variables.html>`__.
+
     Args:
         start (optional):       Allowed range for the start of the interval (single integer or interval expressed as a tuple of 2 integers).
                                 Default value is [0..INTERVAL_MAX].
@@ -2360,6 +2396,10 @@ def _create_cpo_array_expr(val):
     if typ.is_array_of_expr:
         return CpoValue(tuple(build_cpo_expr(v) for v in val), typ)
 
+    # If int array, assure all elements are ints
+    if typ is Type_IntArray:
+        val = [x.value if type(x) is CpoValue else x for x in val]
+
     # Default
     return CpoValue(val, typ)
 
@@ -2624,9 +2664,9 @@ def _build_int_var_domain(min, max, domain):
     assert (min is None) and (max is None), "If domain is given extensively in 'domain', 'min' and/or 'max' should not be given"
     if is_int(domain):
         return domain
-    domain = tuple(domain)
+    domain = tuple(domain)  #In case domain is a generator
     assert all(_is_cpo_int(v) or _is_cpo_int_interval(v) for v in domain), "Argument 'domain' should be a list of integers and/or intervals (tuples of 2 integers)"
-    return domain
+    return IntegerDomain(domain)
 
 
 def _check_arg_step_function(arg, name):

@@ -212,30 +212,6 @@ class LPModelPrinter(TextModelPrinter):
         return LP_format.lp_name(mobj.name, prefix, local_index, hide_names,
                                  noncompliant_hook=self._notify_new_non_compliant_name)
 
-    # def fix_name(self, mobj, prefix, local_index, hide_names):
-    #     raw_name = mobj.get_name()
-    #
-    #     # anonymous constraints must be named in a LP (we follow CPLEX here)
-    #     if hide_names or not raw_name: # or mobj.is_generated():
-    #         return self._make_prefix_name(mobj, prefix, local_index, offset=1)
-    #
-    #     # # swap blanks with underscores
-    #     ws_name = self._translate_chars(raw_name)
-    #     if not self.is_lp_compliant(ws_name, fix_whitespace=False):
-    #         if raw_name[0] in 'eE':
-    #             # fixing eE non-LP names
-    #             fixed_name = '_' + raw_name
-    #             if self.is_lp_compliant(fixed_name, fix_whitespace=False):
-    #                 return fixed_name
-    #         # -- stats
-    #         self._notify_new_non_compliant_name(raw_name)
-    #         # --
-    #         return self._make_prefix_name(mobj, prefix, local_index, offset=1)
-    #     else:
-    #
-    #         # truncate if necessary, again this does nothing if name is too short
-    #         return ws_name[:self.TRUNCATE]
-
     def _print_model_name(self, out, model):
         model_name = None
         if model.name:
@@ -441,10 +417,10 @@ class LPModelPrinter(TextModelPrinter):
 
         for ct in model.iter_constraints():
             self._print_constraint(wrapper, self_num_printer, var_name_map, ct)
-        for lct in model.iter_implicit_equivalence_cts():
-            wrapper.begin_line(True)
-            self._print_logical_ct(wrapper, self_num_printer, var_name_map, lct, '<->')
-            wrapper.flush(restart_from_empty_line=True)
+        # for lct in model._iter_implicit_equivalence_cts():
+        #     wrapper.begin_line(True)
+        #     self._print_logical_ct(wrapper, self_num_printer, var_name_map, lct, '<->')
+        #     wrapper.flush(restart_from_empty_line=True)
 
         # lazy constraints
         self.print_linear_constraint_section(out, wrapper, model.iter_lazy_constraints(),
@@ -460,8 +436,8 @@ class LPModelPrinter(TextModelPrinter):
         var_print_name_fn = self._var_print_name
         for dvar in model.iter_variables():
             lp_varname = var_print_name_fn(dvar)
-            var_lb = dvar._get_lb()
-            var_ub = dvar._get_ub()
+            var_lb = dvar.lb
+            var_ub = dvar.ub
             if dvar.is_binary():
                 print_var_bounds_fn(out, self_num_printer, lp_varname, var_lb, var_ub)
             else:

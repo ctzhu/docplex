@@ -5,10 +5,6 @@
 # --------------------------------------------------------------------------
 
 from docplex.mp.compat23 import StringIO
-from docplex.mp.constants import ComparisonType
-from collections import Counter
-
-from docplex.mp.vartype import *
 
 
 class ModelStatistics(object):
@@ -23,19 +19,23 @@ class ModelStatistics(object):
 
     """
 
-    def __init__(self):
-        self._number_of_binary_variables = 0
-        self._number_of_integer_variables = 0
-        self._number_of_continuous_variables = 0
-        self._number_of_semicontinuous_variables = 0
-        self._number_of_semiinteger_variables = 0
-        self._number_of_le_constraints = 0
-        self._number_of_ge_constraints = 0
-        self._number_of_eq_constraints = 0
-        self._number_of_range_constraints = 0
-        self._number_of_indicator_constraints = 0
-        self._number_of_equivalence_constraints = 0
-        self._number_of_quadratic_constraints = 0
+    def __init__(self, nb_bvs, nb_ivs, nb_cvs,
+                 nb_scvs, nb_sivs,
+                 nb_le_cts, nb_ge_cts, nb_eq_cts,
+                 nb_rng_cts,
+                 nb_ind_cts, nb_equiv_cts, nb_quad_cts):
+        self._number_of_binary_variables = nb_bvs
+        self._number_of_integer_variables = nb_ivs
+        self._number_of_continuous_variables = nb_cvs
+        self._number_of_semicontinuous_variables = nb_scvs
+        self._number_of_semiinteger_variables = nb_sivs
+        self._number_of_le_constraints = nb_le_cts
+        self._number_of_ge_constraints = nb_ge_cts
+        self._number_of_eq_constraints = nb_eq_cts
+        self._number_of_range_constraints = nb_rng_cts
+        self._number_of_indicator_constraints = nb_ind_cts
+        self._number_of_equivalence_constraints = nb_equiv_cts
+        self._number_of_quadratic_constraints = nb_quad_cts
 
     def as_tuple(self):
         return (self._number_of_binary_variables,
@@ -56,35 +56,6 @@ class ModelStatistics(object):
 
     def __eq__(self, other):
         return self.equal_stats(other)
-
-    def __sub__(self, other):
-        if not isinstance(other, ModelStatistics):
-            raise TypeError
-        diffstats = ModelStatistics()
-        for attr in ["_number_of_le_constraints", "_number_of_ge_constraints", "_number_of_eq_constraints"]:
-            setattr(diffstats, attr, getattr(self, attr) - getattr(other, attr))
-        return diffstats
-
-    @staticmethod
-    def _make_new_stats(mdl):
-        # INTERNAL
-        stats = ModelStatistics()
-        vartype_count = Counter(type(dv.vartype) for dv in mdl.iter_variables())
-        stats._number_of_binary_variables = vartype_count[BinaryVarType]
-        stats._number_of_integer_variables = vartype_count[IntegerVarType]
-        stats._number_of_continuous_variables = vartype_count[ContinuousVarType]
-        stats._number_of_semicontinuous_variables = vartype_count[SemiContinuousVarType]
-        stats._number_of_semiinteger_variables = vartype_count[SemiIntegerVarType]
-
-        linct_count = Counter(ct.sense for ct in mdl.iter_binary_constraints())
-        stats._number_of_le_constraints = linct_count[ComparisonType.LE]
-        stats._number_of_eq_constraints = linct_count[ComparisonType.EQ]
-        stats._number_of_ge_constraints = linct_count[ComparisonType.GE]
-        stats._number_of_range_constraints = mdl.number_of_range_constraints
-        stats._number_of_indicator_constraints = mdl.number_of_indicator_constraints
-        stats._number_of_equivalence_constraints = mdl.number_of_equivalence_constraints
-        stats._number_of_quadratic_constraints = mdl.number_of_quadratic_constraints
-        return stats
 
     @property
     def number_of_variables(self):
@@ -209,9 +180,9 @@ class ModelStatistics(object):
 
     @property
     def number_of_constraints(self):
-        return self.number_of_linear_constraints +\
-               self.number_of_quadratic_constraints +\
-               self.number_of_indicator_constraints +\
+        return self.number_of_linear_constraints + \
+               self.number_of_quadratic_constraints + \
+               self.number_of_indicator_constraints + \
                self._number_of_equivalence_constraints
 
     def print_information(self):
@@ -220,7 +191,7 @@ class ModelStatistics(object):
         """
         print(' - number of variables: {0}'.format(self.number_of_variables))
         var_fmt = '   - binary={0}, integer={1}, continuous={2}'
-        if 0 != self._number_of_semicontinuous_variables:
+        if self._number_of_semicontinuous_variables:
             var_fmt += ', semi-continuous={3}'
         print(var_fmt.format(self.number_of_binary_variables,
                              self.number_of_integer_variables,
@@ -230,11 +201,11 @@ class ModelStatistics(object):
 
         print(' - number of constraints: {0}'.format(self.number_of_constraints))
         ct_fmt = '   - linear={0}'
-        if 0 != self._number_of_indicator_constraints:
+        if self._number_of_indicator_constraints:
             ct_fmt += ', indicator={1}'
-        if 0 != self._number_of_equivalence_constraints:
+        if self._number_of_equivalence_constraints:
             ct_fmt += ', equiv={2}'
-        if 0 != self._number_of_quadratic_constraints:
+        if self._number_of_quadratic_constraints:
             ct_fmt += ', quadratic={3}'
         print(ct_fmt.format(self.number_of_linear_constraints,
                             self.number_of_indicator_constraints,
@@ -245,7 +216,7 @@ class ModelStatistics(object):
         oss = StringIO()
         oss.write(" - number of variables: %d\n" % self.number_of_variables)
         var_fmt = '   - binary={0}, integer={1}, continuous={2}'
-        if 0 != self._number_of_semicontinuous_variables:
+        if self._number_of_semicontinuous_variables:
             var_fmt += ', semi-continuous={3}'
         oss.write(var_fmt.format(self.number_of_binary_variables,
                                  self.number_of_integer_variables,
@@ -257,11 +228,11 @@ class ModelStatistics(object):
         oss.write(' - number of constraints: {0}\n'.format(nb_constraints))
         if nb_constraints:
             ct_fmt = '   - linear={0}'
-            if 0 != self._number_of_indicator_constraints:
+            if self._number_of_indicator_constraints:
                 ct_fmt += ', indicator={1}'
-            if 0 != self._number_of_equivalence_constraints:
+            if self._number_of_equivalence_constraints:
                 ct_fmt += ', equiv={2}'
-            if 0 != self._number_of_quadratic_constraints:
+            if self._number_of_quadratic_constraints:
                 ct_fmt += ', quadratic={3}'
             oss.write(ct_fmt.format(self.number_of_linear_constraints,
                                     self.number_of_indicator_constraints,

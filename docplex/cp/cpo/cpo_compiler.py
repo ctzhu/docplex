@@ -67,6 +67,7 @@ class CpoCompiler(object):
                                              # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
                  'expr_by_names',            # Map of expressions by CPO name. Used to retrieve expressions from solutions.
                  'alias_name_map',           # Map of variable renamed with a shorter name. key = old name, value = new name
+                 'factorize',                # Indicate to factorize expressions used more than ones
                  )
 
     def __init__(self, model, **kwargs):
@@ -102,6 +103,7 @@ class CpoCompiler(object):
         self.id_printable_strings = {}
         self.name_all_constraints = False
         self.verbose_output = False
+        self.factorize = True
 
         # Set model parameters
         mctx = context.model
@@ -109,6 +111,7 @@ class CpoCompiler(object):
             self.min_length_for_alias = mctx.length_for_alias
             self.name_all_constraints = mctx.name_all_constraints
             self.verbose_output = not mctx.short_output
+            self.factorize = mctx.factorize_expressions
 
         # Determine CPO format version
         self.format_version = None if model is None else model.get_format_version()
@@ -509,7 +512,7 @@ class CpoCompiler(object):
                         cout.append("[]")
                     else:
                         cout.append('[')
-                        self._compile_integer_var_domain(vals, cout)
+                        _compile_integer_var_domain(vals, cout)
                         cout.append(']')
                 elif t is Type_Bool:
                     self._compile_boolean_constant(e, cout)
@@ -518,9 +521,9 @@ class CpoCompiler(object):
                 elif t is Type_TupleSet:
                     self._compile_tuple_set(e, cout)
                 elif t is Type_StepFunction:
-                    self._compile_step_function(e, cout)
+                    _compile_step_function(e, cout)
                 elif t is Type_SegmentedFunction:
-                    self._compile_segmented_function(e, cout)
+                    _compile_segmented_function(e, cout)
                 else:
                     cout.append(_number_value_string(e.value))
 
@@ -649,7 +652,7 @@ class CpoCompiler(object):
             cout: Output string list
         """
         cout.append("intVar(")
-        self._compile_integer_var_domain(v.get_domain(), cout)
+        _compile_integer_var_domain(v.get_domain(), cout)
         cout.append(")")
 
 
@@ -795,83 +798,11 @@ class CpoCompiler(object):
                 if i > 0:
                     cout.append(", ")
                 cout.append("[")
-                self._compile_integer_var_domain(tpl, cout)
+                _compile_integer_var_domain(tpl, cout)
                 cout.append("]")
             cout.append("]")
         else:
             cout.append("tupleSet[]")
-
-
-    @staticmethod
-    def _compile_integer_var_domain(dom, cout):
-        """ Compile a integer variable domain in CPO format
-
-        Args:
-            dom:   Variable domain
-            cout:  Output string list
-        """
-        if is_array(dom):
-            for i, d in enumerate(dom):
-                if i > 0:
-                    cout.append(", ")
-                if isinstance(d, (list, tuple)):
-                    cout.append(_int_var_value_string(d[0]) + ".." + _int_var_value_string(d[1]))
-                else:
-                    cout.append(_number_value_string(d))
-        else:
-            cout.append(_number_value_string(dom))
-
-
-    @staticmethod
-    def _compile_list_of_integers(lint, cout):
-        """ Compile a list of integers in CPO format
-
-        Args:
-            lint:  List of integers
-            cout:  Output string list
-        """
-        llen = len(lint)
-        i = 0
-        while i < llen:
-            if i > 0:
-                cout.append(", ")
-            j = i + 1
-            while (j < llen) and (lint[j] == lint[j - 1] + 1):
-                j += 1
-            if j > i + 1:
-                cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
-            else:
-                cout.append(str(lint[i]))
-            i = j
-
-
-    @staticmethod
-    def _compile_step_function(stfct, cout):
-        """ Compile a StepFunction in a string in CPO format
-
-        Args:
-           stfct: Step function
-           cout:  Output string list
-        """
-        cout.append("stepFunction(")
-        for i, s in enumerate(stfct.get_step_list()):
-            if i > 0:
-                cout.append(", ")
-            cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
-        cout.append(")")
-
-
-    @staticmethod
-    def _compile_segmented_function(sgfct, cout):
-        """ Compile a SegmentedFunction in a string in CPO format
-
-        Args:
-           sgfct: Segmented function
-           cout:  Output string list
-        """
-        cout.append("segmentedFunction(")
-        cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
-        cout.append(")")
 
 
     def _pre_compile_model(self):
@@ -941,8 +872,9 @@ class CpoCompiler(object):
         # print ("All expressions infos to process:")
         # for xinfo in all_exprs:
         #     print("   {}".format(xinfo))
-        #
+
         # Allocate names and split variables and constants
+        factorize = self.factorize
         for xinfo in all_exprs:
             expr = xinfo[0]
             typ = expr.type
@@ -973,7 +905,7 @@ class CpoCompiler(object):
                             xname = nname
                         xinfo[3] = to_printable_string(xname)
                     expr_by_names[xname] = expr
-            elif (xinfo[3] is None) and ((xinfo[2] > 1) or typ.is_variable):
+            elif (xinfo[3] is None) and ((factorize and (xinfo[2] > 1)) or typ.is_variable):
                 # Allocate name
                 xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                 expr_by_names[xname] = expr
@@ -992,7 +924,7 @@ class CpoCompiler(object):
                     list_vars.append(xinfo)
             elif typ == Type_SearchPhase:
                 list_phases.append(xinfo)
-            elif xname or xinfo[4] or xinfo[2] > 1:
+            elif xname or xinfo[4] or (factorize and (xinfo[2] > 1)):
                 list_exprs.append(xinfo)
 
         # Sort list of constants and variables by natural name order
@@ -1183,5 +1115,112 @@ def _interval_var_domain_string(dom):
         return _interval_var_value_string(smn) + ".." + _interval_var_value_string(smx)
     else:
         return _interval_var_value_string(dom)
+
+
+def _compile_integer_var_domain(dom, cout):
+    """ Compile a integer variable domain in CPO format
+
+    Args:
+        dom:   Variable domain
+        cout:  Output string list
+    """
+    if is_array(dom):
+        imin = imax = None
+        isfirst = True
+        for d in dom:
+            if isinstance(d, (list, tuple)):
+                if imax is None:
+                    imin, imax = d
+                else:
+                    # Check if current interval extends
+                    if d[0] == imax + 1:
+                        imax = d[1]
+                    else:
+                        _write_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin, imax = d
+            else:
+                if imax is None:
+                    imin = imax = d
+                else:
+                    # Check if current interval extends
+                    if d == imax + 1:
+                        imax = d
+                    else:
+                        _write_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin = imax = d
+        # Write last interval if any
+        if imin is not None:
+            _write_domain_interval(imin, imax, isfirst, cout)
+    else:
+        # Domain is a single value
+        cout.append(_number_value_string(dom))
+
+
+def _write_domain_interval(imin, imax, isfirst, cout):
+    """ Write a domain interval
+    Args:
+        imin:     Interval lower bound
+        imax:     Interval upper bound
+        isfirst:  First interval indicator
+        cout:     Output string list
+    """
+    if not isfirst:
+        cout.append(", ")
+    cout.append(_number_value_string(imin))
+    if imin != imax:
+        cout.append(", " if imax == imin + 1 else "..")
+        cout.append(_number_value_string(imax))
+
+
+def _compile_list_of_integers(lint, cout):
+    """ Compile a list of integers in CPO format
+
+    Args:
+        lint:  List of integers
+        cout:  Output string list
+    """
+    llen = len(lint)
+    i = 0
+    while i < llen:
+        if i > 0:
+            cout.append(", ")
+        j = i + 1
+        while (j < llen) and (lint[j] == lint[j - 1] + 1):
+            j += 1
+        if j > i + 1:
+            cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
+        else:
+            cout.append(str(lint[i]))
+        i = j
+
+
+def _compile_step_function(stfct, cout):
+    """ Compile a StepFunction in a string in CPO format
+
+    Args:
+       stfct: Step function
+       cout:  Output string list
+    """
+    cout.append("stepFunction(")
+    for i, s in enumerate(stfct.get_step_list()):
+        if i > 0:
+            cout.append(", ")
+        cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
+    cout.append(")")
+
+
+def _compile_segmented_function(sgfct, cout):
+    """ Compile a SegmentedFunction in a string in CPO format
+
+    Args:
+       sgfct: Segmented function
+       cout:  Output string list
+    """
+    cout.append("segmentedFunction(")
+    cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
+    cout.append(")")
+
 
 

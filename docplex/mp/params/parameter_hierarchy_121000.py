@@ -509,11 +509,11 @@ def make_root_params_121000():
     proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.10.0.0")
     # -- set synchronous params
     proot.read.datacheck._synchronous = True
-    proot.mip.pool.absgap._synchronous = True
-    proot.mip.pool.capacity._synchronous = True
-    proot.mip.pool.relgap._synchronous = True
-    proot.mip.pool.capacity._synchronous = True
-    proot.mip.pool.replace._synchronous = True
-    proot.mip.pool.intensity._synchronous = True
+    # proot.mip.pool.absgap._synchronous = True
+    # proot.mip.pool.capacity._synchronous = True
+    # proot.mip.pool.relgap._synchronous = True
+    # proot.mip.pool.capacity._synchronous = True
+    # proot.mip.pool.replace._synchronous = True
+    # proot.mip.pool.intensity._synchronous = True
     return proot
 #  --- end of generated code ---

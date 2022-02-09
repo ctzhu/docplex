@@ -4,8 +4,7 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2017
 # ---------------------------------------------------------------------------
-#
-# gendoc: ignore
+
 from docplex.mp.compat23 import izip
 from docplex.mp.cplex_engine import CplexEngine
 
@@ -73,6 +72,22 @@ class ModelCallbackMixin(object):
 
     @staticmethod
     def linear_ct_to_cplex(linear_ct):
+        """ Converst a DOcplex linear constraint to CPLEX Python data
+
+        :param linear_ct: a DOcplex linear constraint.
+        :return: a 3-tuple containing elements representing the constraint in CPLEX-Python
+            - a list of two lists, indices and coefficients , representing the linear part
+            - a floating point number , the "right hand side" or rhs
+            - a one-letter string (possible values are: 'L', 'E', 'G')  representing the sense of the constraint.
+
+        Example:
+            Assuming variable X has index 1, the constraint (2X <= 7) will be converted to
+
+            ct = 2 * X <= 7
+            linear_ct_cplex(ct)
+            >>> [[1], [2.0]], 7.0, 'L'
+
+        """
         cpx_lhs = CplexEngine.linear_ct_to_cplex(linear_ct=linear_ct)
         cpx_rhs = linear_ct.cplex_num_rhs()
         cpx_sense = linear_ct.sense.cplex_code

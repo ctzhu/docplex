@@ -597,7 +597,7 @@ class PwlFunction(ModelingObjectBase):
         """Internal format to represent a piecewise linear function is based on the Cplex representation"""
         self._pwl_def_as_breaks = self._PwlAsBreaks(preslope, breaksxy, postslope)
 
-    def copy(self, target_model, var_mapping):
+    def copy(self, target_model, _):
         pwl_def_copy = self.pwl_def.deepcopy()
         return target_model._piecewise(pwl_def_copy, self.get_name())
 
@@ -780,7 +780,7 @@ class PwlFunction(ModelingObjectBase):
         Returns:
             The modified `self`.
         """
-        self.model.typecheck_as_denominator(arg, numerator=self)
+        self.model._typecheck_as_denominator(arg, numerator=self)
         inverse = 1.0 / float(arg)
         return self.multiply(inverse)
 

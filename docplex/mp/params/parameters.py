@@ -10,7 +10,7 @@ from six import iteritems
 
 from docplex.mp.utils import is_int, is_string
 from docplex.mp.compat23 import StringIO
-from docplex.mp.error_handler import docplex_fatal
+from docplex.mp.error_handler import docplex_fatal, DOcplexException
 
 
 class ParameterGroup(object):
@@ -21,6 +21,7 @@ class ParameterGroup(object):
         with a full hierarchy of parameters with groups as nodes.
 
     """
+
     def __init__(self, name, parent_group=None):
         self._name = name
         self._parent = parent_group
@@ -136,6 +137,7 @@ class ParameterGroup(object):
 
         Args:
             sep (string): The separator string. Default is ".".
+            include_root (flag): True if the root name is included.
 
         Returns:
             string: A string representation of the parameter hierarchy.
@@ -198,8 +200,6 @@ class ParameterGroup(object):
             subgroup_dict = {group_name: group_fn(self)
                              for group_name, group_fn in iteritems(subgroup_fn_dict)}
             self._update_self_dict(subgroup_dict)
-
-
 
     def number_of_nondefaults(self):
         return sum(1 for _ in self.generate_nondefault_params())
@@ -435,8 +435,8 @@ class Parameter(object):
         if raw_value == self.default_value:
             return raw_value
         elif not self.accept_value(raw_value):
-            docplex_fatal("Value {0!s} of type {2} is invalid for parameter {1}",
-                          raw_value, self.qualified_name, type(raw_value))
+            docplex_fatal("Value {0!r} of type {2} is invalid for parameter '{1}'",
+                          raw_value, self.get_qualified_name(include_root=False), type(raw_value))
         else:
             return self.transform_value(raw_value)
 
@@ -467,7 +467,7 @@ class Parameter(object):
         if accepted_value is not None:
             self._current_value = accepted_value
             if self._synchronous:
-                #print(" syncing {0!s} to {1}".format(self, accepted_value))
+                #  print(" syncing {0!s} to {1}".format(self, accepted_value))
                 self.root_group().apply(self)
 
         return accepted_value
@@ -588,8 +588,7 @@ class IntParameter(Parameter):
     __slots__ = ('_min_value', '_max_value')
 
     def accept_value(self, new_value):
-        ivalue = int(new_value)
-        return is_int(ivalue) and self._is_in_range(ivalue, self._min_value, self._max_value)
+        return is_int(new_value) and self._is_in_range(new_value, self._min_value, self._max_value)
 
     def is_numeric(self):
         return True  # pragma: no cover
@@ -708,7 +707,6 @@ class RootParameterGroup(ParameterGroup):
         # apply one parameter to connected models
         for m in self._models:
             m.apply_one_parameter(param)
-
 
     @property
     def cplex_version(self):
@@ -883,10 +881,10 @@ class RootParameterGroup(ParameterGroup):
 
     def find_parameter(self, key):
         if is_int(key):
-            pred = lambda p: p.cpx_id == key
+            pred = lambda p_: p_.cpx_id == key
         elif is_string(key):
             # eliminate initial '.'
-            pred = lambda p: p.get_qualified_name(include_root=False) == key
+            pred = lambda p_: p_.get_qualified_name(include_root=False) == key
         else:
             docplex_fatal('Parameters.find() accepts either integer code or path-like name, got: {0!r}'.format(key))
         for p in self:
@@ -894,3 +892,29 @@ class RootParameterGroup(ParameterGroup):
                 return p
         else:
             return None
+
+    def set_from_qualified_name(self, qname, pvalue):
+        qname_list = qname.split('.')
+        if not qname_list:
+            # empty qname
+            return
+        groups = qname_list[:-1]
+        pname = qname_list[-1]
+        group = self
+        for g in groups:
+            group = getattr(group, g)
+            if group is None:
+                raise ValueError("Bad parameter group name: {0}".format(g))
+        res = None
+        try:
+            # extract parameter from group
+            target_param = getattr(group, pname)
+            if target_param:
+                target_param.set(pvalue)
+                res = pvalue
+        except AttributeError:
+            raise ValueError("Cannot find paramater {0} in group {1}".format(pname, group))
+        except DOcplexException as dex:
+            raise
+
+        return res

@@ -38,7 +38,6 @@ class QuadFactory(IQuadFactory):
         self._model = model
         self._engine = engine
         self._lfactory = model._lfactory
-        self._quad_count = 0
 
     def new_zero_expr(self):
         return ZeroExpr(self._model)
@@ -48,7 +47,6 @@ class QuadFactory(IQuadFactory):
         self._model.fatal("cannot multiply {0!s} by {1!s}", factor1, factor2)
 
     def new_quad(self, quads=None, linexpr=None, name=None, safe=False):
-        self._quad_count += 1
         return QuadExpr(self._model, quads=quads, linexpr=linexpr, name=name, safe=safe)
 
     def new_linear_expr(self, e=0, cst=0):
@@ -119,12 +117,6 @@ class QuadFactory(IQuadFactory):
 
         else:
             self._unexpected_product_error(linexpr, other)
-
-    def new_xconstraint(self, lhs, rhs, comparaison_type):
-        if self._quad_count and isinstance(rhs, QuadExpr):
-            return self._new_qconstraint(lhs, comparaison_type, rhs)
-        else:
-            return self._lfactory._new_binary_constraint(lhs, comparaison_type, rhs)
 
     def new_le_constraint(self, e, rhs, ctname=None):
         return self._new_qconstraint(e, ComparisonType.LE, rhs, name=ctname)

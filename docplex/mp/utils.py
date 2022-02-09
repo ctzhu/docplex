@@ -14,9 +14,10 @@ import threading
 import time
 import sys
 
-from six import PY2 as SIX_PY2
-from six import itervalues
 from itertools import chain, repeat
+from six import PY2 as SIX_PY2
+from six import itervalues, iteritems
+
 
 from docplex.mp.compat23 import Queue, izip
 
@@ -282,24 +283,24 @@ def _build_ordered_sequence_types():
 def is_ordered_sequence1(arg, type_tuple=_build_ordered_sequence_types()):
     return isinstance(arg, type_tuple)
 
-def is_ordered_sequence2(arg):
-    if isinstance(arg, (dict, str)):
-        return False
-
-    try:
-        # try it
-        l = len(arg)
-        if l:
-            arg[0]
-        return True
-    except:
-        return False
+# def is_ordered_sequence2(arg):
+#     if isinstance(arg, (dict, str)):
+#         return False
+#
+#     try:
+#         # try it
+#         l = len(arg)
+#         if l:
+#             arg[0]
+#         return True
+#     except:
+#         return False
 
 is_ordered_sequence = is_ordered_sequence1
 
 
 class DOcplexException(Exception):
-    """ Base class for modeling exceptions 
+    """ Base class for modeling exceptions
     """
     DEFAULT_MSG = 'CplexPythonModeling exception raised'
 
@@ -492,8 +493,8 @@ def compute_is_index(seq, obj):
     for i, elt in enumerate(seq):
         if elt is obj:  # use 'is' to identify obj
             return i
-    else:
-        return None
+
+    return None
 
 
 DOCPLEX_CONSOLE_HANDLER = None
@@ -590,8 +591,10 @@ class CyclicLoop(object):
                 self._queue(task)
 
     def _queue(self, task):
-        ev = self.scheduler.enter(task.interval, task.priority,
-                                  lambda a: self._process_task(a), (task.id,))
+        def process_task(task_id):
+            self._process_task(task_id)
+
+        ev = self.scheduler.enter(task.interval, task.priority, process_task, (task.id,))
         self.events_by_id[task.id] = ev
 
     def _process_task(self, task_id):
@@ -790,24 +793,49 @@ class _AutomaticSymbolGenerator(_SymbolGenerator):
 class _IndexScope(object):
     # INTERNAL: full scope of indices.
 
-    def __init__(self, obj_iter, qualifier, cplex_scope=None, offset=1):
-        self._offset = offset
-        self._obj_iter = obj_iter
-        self._index_map = None
+    def __init__(self, qualifier, cplex_scope):
+        self._index_map = {}
         self.cplex_scope = cplex_scope
         self.qualifier = qualifier
-        self._last_index = -1
 
-    def _make_index_map(self):
-        return {m.get_index(): m for m in self._obj_iter()}
+    def __repr__(self):
+        return "IndexScope<{0}>[{1}]".format(self.qualifier, self.size)
 
-    def number_of_objects(self):
-        idxmap = self._index_map
-        return 0 if idxmap is None else len(idxmap)
+    def __getitem__(self, item):
+        return self._index_map[item]
+
+    def count_filtered(self, filter):
+        return sum(1 for obj in self.iter_objects() if filter(obj))
 
     @property
-    def iter(self):
-        return self._obj_iter()
+    def last(self):
+        size = self.size
+        if not size:
+            raise ValueError("empty scope")
+        else:
+            return self._index_map[size-1]
+
+    def iter_objects(self):
+        if SIX_PY2:
+            sorted_by_index = sorted((o for o in itervalues(self._index_map)), key=lambda o: o.index)
+            return iter(sorted_by_index)
+        else:
+            return iter(self._index_map.values())
+
+    def generate_objects_filtered(self, filter):
+        for obj in self.iter_objects():
+            if filter(obj):
+                yield obj
+
+    def generate_objects_with_type(self, obj_type):
+        for obj in self.iter_objects():
+            if isinstance(obj, obj_type):
+                yield obj
+
+    @property
+    def size(self):
+        idxmap = self._index_map
+        return 0 if idxmap is None else len(idxmap)
 
     def __call__(self, idx):
         return self._object_by_index(idx)
@@ -818,8 +846,6 @@ class _IndexScope(object):
         return self._object_by_index(idx)
 
     def _object_by_index(self, idx, do_raise=False):
-        if self._index_map is None:
-            self._index_map = self._make_index_map()
         # do not raise when not found, return None.
         if do_raise:
             return self._index_map[idx]
@@ -828,28 +854,26 @@ class _IndexScope(object):
             return self._index_map.get(idx)
 
     def reset(self):
-        self._index_map = None
-        self._last_index = -1
+        self._index_map = {}
 
     def notify_obj_index(self, obj, index):
         if self._index_map is not None:
             self._index_map[index] = obj
 
     def notify_obj_indices(self, objs, indices):
-        # take the last one??
         if indices:
             idxmap = self._index_map
             if idxmap is not None:
                 for obj, idx in izip(objs, indices):
                     idxmap[idx] = obj
 
-    def update_indices(self):
-        if self._index_map is not None:
-            self._index_map = self._make_index_map()
-
-    def reindex_all(self, indexer):
-        for ix, obj in enumerate(self._obj_iter()):
-            obj.set_index(ix)
+    # def update_indices(self):
+    #     if self._index_map is not None:
+    #         self._index_map = self._make_index_map()
+    #
+    # def reindex_all(self, indexer):
+    #     for ix, obj in enumerate(self._obj_iter()):
+    #         obj.index = ix
 
     def notify_deleted(self, oldidx):
         if self._index_map:
@@ -858,8 +882,37 @@ class _IndexScope(object):
             except KeyError:
                 pass
 
+    def notify_delete_set(self, delset):
+        nb_deleted = len(delset)
+        idxmap = self._index_map
+        if nb_deleted and idxmap is not None:
+            kept = [o for o in itervalues(idxmap) if o.index not in delset]
+            new_map = {}
+            for nx, obj in enumerate(kept):
+                obj.index = nx
+                new_map[nx] = obj
+            self._index_map = new_map
 
-def apply_thread_limitations(context, solver_context):
+    def dump(self, max_lines=100):
+        if max_lines is None or max_lines < 0:
+            max_lines = 1e+20
+        print("-- scope: {0}[{1}]".format(self.qualifier, self.size))
+        for l, (k, o) in iteritems(self._index_map):
+            if l > max_lines:
+                break
+            print("  {0}> index={1}: {2:s}".format(l, k, o))
+
+    def check_indices(self):
+        # internal, checks that indices and keys are in sync
+        for k, o in iteritems(self._index_map):
+            if k != o.index:
+                raise ValueError("key-index mismatch, key: {0}, index: {1}"
+                                 .format(k, o.index))
+
+
+def apply_thread_limitations(context, solver_context=None):
+    if solver_context is None:
+        solver_context = context.solver
     # --- limit threads if needed
     parameters = context._get_raw_cplex_parameters()
     if getattr(solver_context, 'max_threads', None) is not None:
@@ -997,6 +1050,9 @@ class MultiObjective(object):
         else:
             return iter([])
 
+    def __getitem__(self, index):
+        return self.exprs[index]
+
     @staticmethod
     def as_optional_sequence(opt_seq, size):
         # converts the argument to None or a list,
@@ -1015,13 +1071,21 @@ class MultiObjective(object):
     def reltols_as_sequence(self, size):
         return self.as_optional_sequence(self.reltols, size)
 
-    def update(self, new_exprs, new_prios, new_weights, new_abstols, new_reltols, new_names):
-        self.exprs = new_exprs
-        self.priorities = new_prios
-        self.weights = new_weights
-        self.abstols = new_abstols
-        self.reltols = new_reltols
-        self.names = new_names
+    def update(self, new_exprs=None,
+               new_prios=None, new_weights=None,
+               new_abstols=None, new_reltols=None, new_names=None):
+        if new_exprs is not None:
+            self.exprs = new_exprs
+        if new_prios is not None:
+            self.priorities = new_prios
+        if new_weights is not None:
+            self.weights = new_weights
+        if new_abstols is not None:
+            self.abstols = new_abstols
+        if new_reltols is not None:
+            self.reltols = new_reltols
+        if new_names is not None:
+            self.names = new_names
 
     def itertuples(self):
         # iterates on all components
@@ -1045,10 +1109,10 @@ def resolve_caller_as_string(caller, sep=': '):
     # resolve caller as a string
     if caller is None:
         return ""
-    else:
-        try:
-            return "%s%s" % (caller(), sep)
-        except TypeError:
-            return "%s%s" % (caller, sep)
+
+    try:
+        return "%s%s" % (caller(), sep)
+    except TypeError:
+        return "%s%s" % (caller, sep)
 
     

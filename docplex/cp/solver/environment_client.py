@@ -188,16 +188,21 @@ class EnvSolverListener(CpoSolverListener):
                 sdetails["MODEL_DETAIL_OBJECTIVE_SENSE"] = "maximize" if mdl.is_maximization() else "minimize"
 
             # Set objective if any
-            objctv = msol.get_objective_values()
-            if objctv is not None:
-                sobj = ';'.join([str(x) for x in objctv])
-                sdetails["PROGRESS_CURRENT_OBJECTIVE"] = sobj
-                sdetails["PROGRESS_BEST_OBJECTIVE"] = sobj
+            objs = msol.get_objective_values()
+            if objs is not None:
+                sdetails["PROGRESS_CURRENT_OBJECTIVE"] = ';'.join([str(x) for x in objs])
+
+            # Set bound if any
+            bnds = msol.get_objective_bounds()
+            if bnds is not None:
+                sbnd = ';'.join([str(x) for x in bnds])
+                sdetails["PROGRESS_BEST_OBJECTIVE"] = sbnd  # Ugly, should have been PROGRESS_BEST_BOUND
+                sdetails["PROGRESS_BEST_BOUND"] = sbnd      # Added to prepare future use
 
             # Set gap if any
-            objgaps = msol.get_objective_gaps()
-            if objgaps is not None:
-                sdetails["PROGRESS_GAP"] = ';'.join([str(x) for x in objgaps])
+            gaps = msol.get_objective_gaps()
+            if gaps is not None:
+                sdetails["PROGRESS_GAP"] = ';'.join([str(x) for x in gaps])
 
             # Set KPIs if any
             kpis = msol.get_kpis()

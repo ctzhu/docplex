@@ -199,10 +199,7 @@ class AdvModel(Model):
 
     def _prepare_constraint(self, ct, ctname, check_for_trivial_ct, arg_checker=None):
         # INTERNAL
-        if ct is True:
-            return False
-
-        elif ct is False:
+        if ct is False:
             # happens with sum([]) and constant e.g. sum([]) == 2
             msg = "Adding a trivially infeasible constraint"
             if ctname:
@@ -210,8 +207,9 @@ class AdvModel(Model):
             # analogous to 0 == 1, model is sure to fail
             self.fatal(msg)
 
-        else:
-            pass
+        if ct is True:
+            return False
+
 
         # --- name management ---
         if ctname:
@@ -584,9 +582,7 @@ class AdvModel(Model):
             self.fatal('Incorrect size for range upper bounds, expecting: {1}, got: {0}'.format(nb_ubs, nb_rows))
         if nb_cols != nb_vars:
             self.fatal(
-                'Incorrect number of variables, expecting: {1}, got: {0},  matrix is ({0},{1})'.format(nb_vars, nb_cols,
-                                                                                                       nb_rows,
-                                                                                                       nb_cols))
+                'Incorrect number of variables, expecting: {1}, got: {0},  matrix is ({0},{1})'.format(nb_vars, nb_cols))
 
         if is_scipy_sparse(coef_mat):
             return self._aggregator._sparse_matrix_ranges(coef_mat, s_dvars, s_lbs, s_ubs)

@@ -52,6 +52,11 @@ When exists, the corresponding operator are also overloaded to make easier the w
  * :meth:`sum`: Sum of multiple expressions.
  * :meth:`min`: Minimum of multiple expressions.
  * :meth:`max`: Maximum of multiple expressions.
+ * :meth:`ceil`: Rounds a float expression upward to the nearest integer.
+ * :meth:`floor`: Rounds a float expression down to the nearest integer.
+ * :meth:`round`: Rounds a float expression to the nearest integer.
+ * :meth:`trunc`: Truncated integer parts of a float expression.
+ * :meth:`sgn`: Sign of a float expresion.
 
 **Logical expressions**
 
@@ -72,30 +77,35 @@ As for arithmetic, the corresponding operators are also overloaded.
 
 **General purpose**
 
-Following functions allow to construct general purpose expressions and constraints.
+Following functions allow to construct general purpose expressions:
 
- * :meth:`all_diff`: Constrains multiple expressions to be all different.
- * :meth:`abstraction`: Abstracts the values of one array as values in another array.
- * :meth:`bool_abstraction`: Abstracts the values of one array as boolean values in another array.
  * :meth:`count`: Counts the occurrences of an expression in an array of integer expressions.
  * :meth:`count_different`: Counts the number of different values in an array of integer expressions.
  * :meth:`scal_prod`: Scalar product of two vectors.
- * :meth:`pack`: Maintains the load on a set of containers given objects sizes and assignments.
- * :meth:`distribute`: Calculates and/or constrains the distribution of values taken by an array of integer expressions.
- * :meth:`sequence`:  Constrains the number of occurrences of the values taken by the different subsets of consecutive *k* variables.
  * :meth:`constant`: Creates an expression from a numeric constant.
  * :meth:`element`: Access to an element of an array using an integer expression.
  * :meth:`range`: Restricts the bounds of an integer or floating-point expression.
  * :meth:`all_min_distance`: Constraint on the minimum absolute distance between a pair of integer expressions in an array.
  * :meth:`if_then`: Creates and returns the new constraint e1 => e2.
- * :meth:`inverse`: Constrains elements of one array to be inverses of another.
  * :meth:`allowed_assignments`: Explicitly defines allowed assignments for one or more integer expressions.
  * :meth:`forbidden_assignments`: Explicitly defines forbidden assignments for one or more integer expressions.
- * :meth:`lexicographic`: Constraint which maintains two arrays to be lexicographically ordered.
  * :meth:`standard_deviation`: Standard deviation of the values of the variables in an array.
- * :meth:`strong`: Encourage CP Optimizer to produce stronger (higher inference) constraints.
  * :meth:`slope_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and slopes.
  * :meth:`coordinate_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and values.
+
+and constraints:
+
+ * :meth:`all_diff`: Constrains multiple expressions to be all different.
+ * :meth:`bool_abstraction`: Abstracts the values of one array as boolean values in another array.
+ * :meth:`pack`: Maintains the load on a set of containers given objects sizes and assignments.
+ * :meth:`abstraction`: Abstracts the values of one array as values in another array.
+ * :meth:`inverse`: Constrains elements of one array to be inverses of another.
+ * :meth:`distribute`: Calculates and/or constrains the distribution of values taken by an array of integer expressions.
+ * :meth:`lexicographic`: Constraint which maintains two arrays to be lexicographically ordered.
+ * :meth:`strict_lexicographic`: Constraint which maintains two arrays to be strictly lexicographically ordered.
+ * :meth:`sequence`:  Constrains the number of occurrences of the values taken by the different subsets of consecutive *k* variables.
+ * :meth:`strong`: Encourage CP Optimizer to produce stronger (higher inference) constraints.
+
 
 **Objective**
 
@@ -112,13 +122,16 @@ Scheduling functions
 
 **Interval variables**
 
-Following functions allow to construct expressions concerning interval variables.
+Following functions allow to construct expressions on interval variables:
 
  * :meth:`start_of`: Start of an interval variable.
  * :meth:`end_of`: End of an interval variable.
  * :meth:`length_of`: Length of an interval variable.
  * :meth:`size_of`: Size of an interval variable.
  * :meth:`presence_of`: Presence status of an interval variable.
+
+and constraints:
+
  * :meth:`start_at_start`: Constrains the delay between the starts of two interval variables.
  * :meth:`start_at_end`: Constrains the delay between the start of one interval variable and end of another one.
  * :meth:`start_before_start`: Constrains the minimum delay between starts of two interval variables.
@@ -142,12 +155,8 @@ Following functions allow to construct expressions concerning interval variables
 
 **Sequence variables**
 
-Following functions allow to construct expressions concerning sequence variables.
+Following functions allow to construct expressions on sequence variables:
 
- * :meth:`first`: Constrains an interval variable to be the first in a sequence.
- * :meth:`last`: Constrains an interval variable to be the last in a sequence.
- * :meth:`before`: Constrains an interval variable to be before another interval variable in a sequence.
- * :meth:`previous`: Constrains an interval variable to be previous to another interval variable in a sequence.
  * :meth:`start_of_next`: Start of the interval variable that is next in a sequence.
  * :meth:`start_of_prev`: Start of the interval variable that is previous in a sequence.
  * :meth:`end_of_next`: End of the interval variable that is next in a sequence.
@@ -158,6 +167,13 @@ Following functions allow to construct expressions concerning sequence variables
  * :meth:`size_of_prev`: Size of the interval variable that is previous in a sequence.
  * :meth:`type_of_next`: Type of the interval variable that is next in a sequence.
  * :meth:`type_of_prev`: Type of the interval variable that is previous in a sequence.
+
+and constraints:
+
+ * :meth:`first`: Constrains an interval variable to be the first in a sequence.
+ * :meth:`last`: Constrains an interval variable to be the last in a sequence.
+ * :meth:`before`: Constrains an interval variable to be before another interval variable in a sequence.
+ * :meth:`previous`: Constrains an interval variable to be previous to another interval variable in a sequence.
  * :meth:`no_overlap`: Constrains a set of interval variables not to overlap each others
  * :meth:`same_sequence`: creates a same-sequence constraint between two sequence variables.
  * :meth:`same_common_subsequence`: Creates a same-common-subsequence constraint between two sequence variables.
@@ -182,7 +198,7 @@ an interval variable (or a fixed interval) to a cumul function expression:
    These constraints allow restricting the possible values of the function over the complete horizon or over
    some fixed or variable interval:
 
-Available methods are:
+Available methods to build expressions are:
 
  * :meth:`pulse`: Elementary cumul function of constant value between the start and the end of an interval.
  * :meth:`step_at`: Elementary cumul function of constant value after a given point.
@@ -190,6 +206,9 @@ Available methods are:
  * :meth:`step_at_end`: Elementary cumul function of constant value after the end of an interval.
  * :meth:`height_at_start`: Contribution of an interval variable to a cumul function at its start point.
  * :meth:`height_at_end`: Contribution of an interval variable to a cumul function at its end point.
+
+and constraints:
+
  * :meth:`always_in`: Restrict the possible values of a cumul expression (or a state function) to a particular range
  * :meth:`cumul_range`: Limits the range of a cumul function expression.
 
@@ -370,6 +389,12 @@ def _convert_arg_bool_int(val, name):
         assert val.is_kind_of(Type_BoolInt), "Argument '{}' should be a {}".format(name, TYPE_NAMES[Type_BoolInt])
         return val
     return CpoValue(1 if val else 0, Type_BoolInt)
+
+
+def _check_same_size_arrays(x, y):
+    """ Check that two arrays have the same size """
+    if (type(x) is CpoValue) and (type(y) is CpoValue):
+         assert len(x.value) == len(y.value), "Arguments should be arrays of the same size"
 
 
 #==============================================================================
@@ -763,6 +788,76 @@ def max(arr, *args, **kwargs):
         arr.extend(args)
     arr = _expand(arr)
     return max_of(arr) if _is_cpo_array(arr) else builtin_max(arr)
+
+
+def ceil(x):
+    """ Rounds a float expression upward to the nearest integer.
+
+    Using this modeling expression implicitly constrain the float expression argument to be
+    inside the integer value bounds [INT_MIN, INT_MAX].
+
+    Args:
+        x: A float expression.
+    Returns:
+        An integer expression representing ceil(*x*)
+    """
+    return CpoFunctionCall(Oper__ceil, Type_IntExpr, (_convert_arg(x, "x", Type_FloatExpr),))
+
+
+def floor(x):
+    """ Rounds a float expression down to the nearest integer.
+
+    Using this modeling expression implicitly constrain the float expression argument to be
+    inside the integer value bounds [INT_MIN, INT_MAX].
+
+    Args:
+        x: A float expression.
+    Returns:
+        An integer expression representing floor(*x*)
+    """
+    return CpoFunctionCall(Oper__floor, Type_IntExpr, (_convert_arg(x, "x", Type_FloatExpr),))
+
+
+def round(x):
+    """ Rounds a float expression to the nearest integer.
+
+    Using this modeling expression implicitly constrain the float expression argument to be
+    inside the integer value bounds [INT_MIN, INT_MAX].
+
+    Args:
+        x: A float expression.
+    Returns:
+        An integer expression representing round(*x*)
+    """
+    return CpoFunctionCall(Oper__round, Type_IntExpr, (_convert_arg(x, "x", Type_FloatExpr),))
+
+
+def trunc(x):
+    """ Builds the truncated integer parts of a float expression.
+
+    Using this modeling expression implicitly constrain the float expression argument to be
+    inside the integer value bounds [INT_MIN, INT_MAX].
+
+    Args:
+        x: A float expression.
+    Returns:
+        An integer expression representing trunc(*x*)
+    """
+    return CpoFunctionCall(Oper__trunc, Type_IntExpr, (_convert_arg(x, "x", Type_FloatExpr),))
+
+
+def sgn(x):
+    """ Builds the sign of a float expression.
+
+    The sign of the expression is an integer whose value is -1, 0 or +1 if expression
+    *x* is respectively lower than, equal to, or greater than zero.
+
+    Args:
+        x: A float expression.
+    Returns:
+        An integer expression representing sign(*x*) (-1, 0 or +1)
+    """
+    return CpoFunctionCall(Oper__sgn, Type_IntExpr, (_convert_arg(x, "x", Type_FloatExpr),))
 
 
 #==============================================================================
@@ -1171,6 +1266,8 @@ def scal_prod(x, y):
     """
     x = build_cpo_expr(x)
     y = build_cpo_expr(y)
+    _check_same_size_arrays(x, y)
+
     if x.is_kind_of(Type_IntExprArray) and y.is_kind_of(Type_IntExprArray):
         return CpoFunctionCall(Oper_scal_prod, Type_IntExpr, (x, y))
 
@@ -1549,14 +1646,45 @@ def lexicographic(x, y):
     This means that either both arrays are equal or that there exists *i < size(x)* such that
     for all *j < i*, *x[j] = y[j]* and *x[i] < y[i]*.
 
+    Note that the size of the two arrays must be the same.
+
     Args:
         x: An array of integer expressions.
         y: An array of integer expressions.
     Returns:
         Constraint expression
     """
-    return CpoFunctionCall(Oper_lexicographic, Type_Constraint, (_convert_arg(x, "x", Type_IntExprArray),
-                                                                 _convert_arg(y, "y", Type_IntExprArray)))
+    x = _convert_arg(x, "x", Type_IntExprArray)
+    y = _convert_arg(y, "y", Type_IntExprArray)
+    _check_same_size_arrays(x, y)
+    return CpoFunctionCall(Oper_lexicographic, Type_Constraint, (x, y))
+
+
+def strict_lexicographic(x, y):
+    """ Returns a constraint which maintains two arrays to be strictly lexicographically ordered.
+
+    The *strict_lexicographic* function returns a constraint which maintains two arrays to be
+    strictly lexicographically ordered.
+
+    More specifically, *strict_lexicographic(x, y)* maintains that *x* is strictly less than *y*
+    in the lexicographical sense of the term.
+    This means that there exists *i < size(x)* such that
+    for all *j < i*, *x[j] = y[j]* and *x[i] < y[i]*.
+
+    Note that the size of the two arrays must be the same.
+
+    This function is supported only by CPO solver whose version is greater than 12.10.
+
+    Args:
+        x: An array of integer expressions.
+        y: An array of integer expressions.
+    Returns:
+        Constraint expression
+    """
+    x = _convert_arg(x, "x", Type_IntExprArray)
+    y = _convert_arg(y, "y", Type_IntExprArray)
+    _check_same_size_arrays(x, y)
+    return CpoFunctionCall(Oper_strict_lexicographic, Type_Constraint, (x, y))
 
 
 def standard_deviation(x, meanLB=NEGATIVE_INFINITY, meanUB=POSITIVE_INFINITY):
@@ -1725,10 +1853,13 @@ def maximize_static_lex(exprs):
     is proved, a search limit is exhausted, or the search is aborted.
 
     Args:
-        exprs: An array of floating-point expressions whose values are to be lexicographically maximized.
+        exprs: A non-empty array of floating-point expressions whose values are to be
+               lexicographically maximized.
     Returns:
         An expression of type objective
     """
+    # Check array is not empty
+    assert exprs, "Array of expressions should not be empty"
     return CpoFunctionCall(Oper_maximize_static_lex, Type_Objective, (_convert_arg(exprs, "exprs", Type_FloatExprArray), ))
 
 
@@ -1772,10 +1903,13 @@ def minimize_static_lex(exprs):
     is proved, a search limit is exhausted, or the search is aborted.
 
     Args:
-        exprs: An array of floating-point expressions whose values are to be lexicographically minimized.
+        exprs: A non-empty array of floating-point expressions whose values are to be
+               lexicographically minimized.
     Returns:
         An objective expression
     """
+    # Check array is not empty
+    assert exprs, "Array of expressions should not be empty"
     return CpoFunctionCall(Oper_minimize_static_lex, Type_Objective, (_convert_arg(exprs, "exprs", Type_FloatExprArray), ))
 
 

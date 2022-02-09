@@ -1,19 +1,17 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2017
+# (c) Copyright IBM Corp. 2017-2020
 # --------------------------------------------------------------------------
 # gendoc: ignore
 
-from cplex import Cplex
 
 from docplex.mp.utils import is_ordered_sequence, is_number, is_string
 from docplex.mp.compat23 import izip
 from docplex.mp.constants import ComparisonType
 from docplex.mp.aggregator import ModelAggregator
-from docplex.mp.cplex_engine import add_linear, static_fast_set_linear_obj
 from docplex.mp.sktrans.pd_utils import make_solution
-from cplex._internal._procedural import setintparam
+from docplex.mp.cplex_adapter import CplexAdapter
 
 
 class CpxModeler(object):
@@ -22,19 +20,17 @@ class CpxModeler(object):
         pass
 
     @classmethod
-    def create_cplex(cls, verbose=False):
-        cpx = Cplex()
-        # see if we want it to be verbose sometimes
+    def create_cplex_adapter(cls, verbose=False):
+        adapter = CplexAdapter()
         if not verbose:
-            cpx.set_log_stream(None)
-            cpx.set_results_stream(None)
-            cpx.set_error_stream(None)
-            cpx.set_warning_stream(None)
+            adapter.cpx.set_log_stream(None)
+            adapter.cpx.set_results_stream(None)
+            adapter.cpx.set_error_stream(None)
+            adapter.cpx.set_warning_stream(None)
 
-        # disable datacheck
         cpx_datacheck_id = 1056
-        setintparam(cpx._env._e, cpx_datacheck_id, 0)
-        return cpx
+        adapter.setintparam(adapter.cpx._env._e, cpx_datacheck_id, 0)
+        return adapter
 
     @classmethod
     def create_cpx_bound_list(cls, bounds, size):
@@ -91,7 +87,8 @@ class CpxModeler(object):
                                             cast_to_float,
                                             solution_maker=make_solution,
                                             **transform_params):
-        cpx = cls.create_cplex()
+        adapter = cls.create_cplex_adapter()
+        cpx = adapter.cpx
         if cast_to_float:
             print("-- all numbers will be cast to float")
         else:
@@ -113,11 +110,11 @@ class CpxModeler(object):
             ctsense = ComparisonType.parse(transform_params.get('sense', 'le'))
             cpx_senses = ctsense.cplex_code * nb_rows
             cpx_rhss = [float(r) for r in rhs] if cast_to_float else rhs
-            add_linear(cpx, cpx_rows, cpx_senses, cpx_rhss, names=[])
+            adapter.add_linear(cpx, cpx_rows, cpx_senses, cpx_rhss, names=[])
         if costs is not None:
             # set linear objective for all variables.
             fcosts = [float(k) for k in costs]
-            static_fast_set_linear_obj(cpx, var_indices, fcosts)
+            adapter.static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
         return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)
@@ -150,7 +147,8 @@ class CpxModeler(object):
                                             objsense, costs,
                                             solution_maker=make_solution,
                                             **transform_params):
-        cpx = cls.create_cplex()
+        adapter = cls.create_cplex_adapter()
+        cpx = adapter.cpx
         # varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
         cls.create_column_vars(cpx, nb_vars, var_lbs, var_ubs, var_types, var_names)
         var_indices = list(range(nb_vars))
@@ -173,7 +171,7 @@ class CpxModeler(object):
         if costs is not None:
             # set linear objective for all variables.
             fcosts = [float(k) for k in costs]
-            static_fast_set_linear_obj(cpx, var_indices, fcosts)
+            adapter.static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
         return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)
@@ -186,7 +184,8 @@ class CpxModeler(object):
                                            cast_to_float,
                                            solution_maker=make_solution,
                                            **transform_params):
-        cpx = cls.create_cplex()
+        adapter = cls.create_cplex_adapter()
+        cpx = adapter.cpx
         # varlist = mdl.continuous_var_list(var_count, lb=var_lbs, ub=var_ubs, name=var_names)
         cls.create_column_vars(cpx, var_count, var_lbs, var_ubs, var_types, var_names)
         var_indices = list(range(var_count))
@@ -203,11 +202,11 @@ class CpxModeler(object):
             cpx_ranges = [float(rmin - rmax) for rmin, rmax in izip(range_mins, range_maxs)]
             # rhs is UB
             cpx_rhss = [float(rmax) for rmax in range_maxs]
-            add_linear(cpx, cpx_rows, cpx_senses, rhs=cpx_rhss, names=[], ranges=cpx_ranges)
+            adapter.add_linear(cpx, cpx_rows, cpx_senses, rhs=cpx_rhss, names=[], ranges=cpx_ranges)
         if costs is not None:
             # set linear objective for all variables.
             fcosts = [float(k) for k in costs]
-            static_fast_set_linear_obj(cpx, var_indices, fcosts)
+            adapter.static_fast_set_linear_obj(cpx, var_indices, fcosts)
             cpx.objective.set_sense(objsense.cplex_coef)
         # here we go to solve...
         return cls._solve(cpx, var_names, solution_maker=solution_maker, **transform_params)

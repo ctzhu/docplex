@@ -55,15 +55,17 @@ class VarType(object):
 
     def resolve_lb(self, candidate_lb, logger):
         if candidate_lb is None:
-            return self._lb
+            resolved_lb = self._lb
         else:
-            return self.compute_lb(candidate_lb, logger)
+            resolved_lb = self.compute_lb(candidate_lb, logger)
+        return resolved_lb
 
     def resolve_ub(self, candidate_ub, logger):
         if candidate_ub is None:
-            return self._ub
+            resolved_ub = self._ub
         else:
-            return self.compute_ub(candidate_ub, logger)
+            resolved_ub = self.compute_ub(candidate_ub, logger)
+        return resolved_ub
 
     def compute_lb(self, candidate_lb, logger):  # pragma: no cover
         # INTERNAL
@@ -108,11 +110,12 @@ class VarType(object):
     def is_within_bounds_and_tolerance(cls, candidate_value, lb, ub, tolerance):
         assert tolerance >= 0
         if candidate_value <= lb - tolerance:
-            return False
+            res = False
         elif candidate_value >= ub + tolerance:
-            return False
+            res = False
         else:
-            return True
+            res = True
+        return res
 
     @classmethod
     def is_int_within_tolerance(cls, candidate_value, tolerance):
@@ -134,10 +137,6 @@ class VarType(object):
     def __str__(self):
         return self.to_string()
 
-    def one_letter_symbol(self):
-        # INTERNAL: returns B,I,C
-        return self.get_cplex_typecode()
-
     def __eq__(self, other):
         return type(other) == type(self)
 
@@ -145,7 +144,7 @@ class VarType(object):
         return type(other) != type(self)
 
     def hash_vartype(self):  # pragma: no cover
-        return hash(self.get_cplex_typecode())
+        return hash(self.cplex_typecode)
 
 
 class BinaryVarType(VarType):
@@ -287,7 +286,7 @@ class SemiContinuousVarType(VarType):
     """SemiContinuousVarType()
 
             This class models the :index:`semi-continuous` variable type and
-            is not meant to be instantiated. 
+            is not meant to be instantiated.
     """
 
     def __init__(self, plus_infinity=1e+20):

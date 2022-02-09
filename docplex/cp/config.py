@@ -100,7 +100,7 @@ General parameters
     This parameter allows to enable or disable the expression cache mechanism.
     Value os a boolean (True or False). Default value is True.
 
-*context.params.\**
+*context.params.xxx*
 
     The parameter `context.params` is an instance of the class
     :class:`~docplex.cp.parameters.CpoParameters` (in :doc:`parameters.py</docplex.cp.parameters.py>`)
@@ -232,7 +232,12 @@ Detailed description
 from docplex.cp.utils import *
 from docplex.cp.parameters import CpoParameters, ALL_PARAMETER_NAMES
 
-import sys, socket, os, traceback
+import sys
+import socket
+import os
+import traceback
+import platform
+import fnmatch
 
 # Check if running in a worker environment
 try:
@@ -245,23 +250,15 @@ except:
 CPO_EXEC_INTERACTIVE = "cpoptimizer" + (".exe" if IS_WINDOWS else "")
 
 # CP Optimizer Interactive executable name
-CPO_LIBRARY = "lib_cpo_solver_12100" + (".dll" if IS_WINDOWS else ".so")
+CPO_LIBRARY = "lib_cpo_solver_*" + (".dll" if IS_WINDOWS else ".so")
 
-# Determine path extension to search executables
-python_home = os.path.dirname(os.path.abspath(sys.executable))
-if IS_WINDOWS:
-    PATH_EXTENSION = [os.path.join(python_home, "Scripts")]
-    appdata = os.environ.get('APPDATA')
-    if appdata is not None:
-        PATH_EXTENSION.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
-else:
-    PATH_EXTENSION = ["~/.local/bin", os.path.join(python_home, "bin")]
+# Environment variable for context changes
+CONTEXT_ENVIRONMENT = "DOCPLEX_CP_CONTEXT"
 
 
-
-##############################################################################
-## Define default context for DOcloud solving
-##############################################################################
+#=============================================================================
+# Definition of the default context
+#=============================================================================
 
 #-----------------------------------------------------------------------------
 # Global context
@@ -280,6 +277,17 @@ context.visu_enabled = True
 
 # Indicator to log catched exceptions
 context.log_exceptions = False
+
+
+#-----------------------------------------------------------------------------
+# CPLEX Optimization Studio context
+
+context.cos = Context()
+
+# Location of CPLEX Optimization Studio, used to search for executables if needed.
+# Default value is None, meaning that configuration searches for the most recent
+# CPLEX_STUDIO_DIRxxx environment variable
+context.cos.location = None
 
 
 #-----------------------------------------------------------------------------
@@ -302,6 +310,9 @@ context.model.version = None
 
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
+
+# Flag to factorize expressions used more than ones
+context.model.factorize_expressions = True
 
 # Flag to generate short model output (internal)
 context.model.short_output = False
@@ -410,10 +421,8 @@ context.solver.local.parameters = ['-angel']
 # Agent log prefix
 context.solver.local.log_prefix = "[Local] "
 
-# Set exec file with full path if found in the path
-cpxfile = search_file_in_path(context.solver.local.execfile, PATH_EXTENSION)
-if cpxfile:
-    context.solver.local.execfile = cpxfile
+# Local sub-process start timeout in seconds
+context.solver.local.process_start_timeout = 5
 
 
 #-----------------------------------------------------------------------------
@@ -430,22 +439,16 @@ context.solver.lib.libfile = CPO_LIBRARY
 # Agent log prefix
 context.solver.lib.log_prefix = "[PyLib] "
 
-# Check if library has been installed with specific package
+# Check if library has been installed with workers specific package
 try:
     from docplex_cpo_solver import get_library_path
-    libfile = get_library_path()
-    # Force solver to use lib by default
-    context.solver.agent = 'lib'
+    lfile = get_library_path()
+    if lfile:
+        # Force solver to use lib by default
+        context.solver.lib.libfile = lfile
+        context.solver.agent = 'lib'
 except:
-    libfile = None
-
-# If no special lib is given, search it in the path
-if libfile is None:
-    libfile = search_file_in_path(context.solver.lib.libfile, PATH_EXTENSION)
-
-# Set library file with full path if it has been found
-if libfile:
-        context.solver.lib.libfile = libfile
+    pass
 
 
 #-----------------------------------------------------------------------------
@@ -491,7 +494,14 @@ context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
 
 
 #-----------------------------------------------------------------------------
-# Create
+# Apply special changes if running in a worker
+
+if IS_IN_WORKER:
+    context.solver.max_threads = runenv.get_environment().get_available_core_count()
+
+
+#-----------------------------------------------------------------------------
+# Create special context for docloud
 
 # Create 2 contexts for local and docloud
 LOCAL_CONTEXT = context
@@ -507,16 +517,9 @@ DOCLOUD_CONTEXT.solver.trace_log = False
 DOCLOUD_CONTEXT.model.length_for_alias = 15
 
 
-#-----------------------------------------------------------------------------
-# Apply special changes if running in a worker
-
-if IS_IN_WORKER:
-    context.solver.max_threads = runenv.get_environment().get_available_core_count()
-
-
-##############################################################################
-## Public functions
-##############################################################################
+#=============================================================================
+# Public functions
+#=============================================================================
 
 def get_default():
     """ Get the default context
@@ -527,6 +530,7 @@ def get_default():
         Current default context
     """
     return context
+
 
 def set_default(ctx):
     """ Set the default context.
@@ -543,11 +547,133 @@ def set_default(ctx):
     sys.modules[__name__].context = ctx
 
 
+#=============================================================================
+# Private functions
+#=============================================================================
+
+def _get_port_name():
+    """ Get the COS port name for the calling environment
+
+    Returns:
+        COS port name, None if not found
+    """
+    sstm = platform.system()
+    if sstm == 'Windows': return 'x64_win64'
+    if sstm == 'Darwin':  return 'x86-64osx'
+    if sstm == 'Linux':
+        machine = platform.machine()
+        if machine == 'x86_64':
+            machine = 'x86-64'
+        return machine + '_linux'
+    return None
+
+
+# List of system properties identifying candidate COS root directories
+_COS_ROOT_DIRS_ENV_VARS = ("CPLEX_STUDIO_DIR201", "CPLEX_STUDIO_DIR1210", "CPLEX_STUDIO_DIR129", "CPLEX_STUDIO_DIR128")
+
+
+def _build_search_path (ctx):
+    """ Build the path where search for executables
+
+    Args:
+        ctx:  Context to get information from
+    """
+    # Initialize with docplex install directory
+    python_home = os.path.dirname(os.path.abspath(sys.executable))
+    if IS_WINDOWS:
+        path = [os.path.join(python_home, "Scripts")]
+        appdata = os.environ.get('APPDATA')
+        if appdata is not None:
+            path.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
+    else:
+        path = ["~/.local/bin", os.path.join(python_home, "bin")]
+
+    # Add all system path
+    path.extend(get_system_path())
+
+    # Add COS location if defined
+    cdir = ctx.get_by_path('cos.location')
+    if cdir:
+        # Check existence of the directory
+        if not os.path.isdir(cdir):
+            raise Exception("COS location directory '{}' does not exists.".format(cdir))
+        # As explicitly defined, add it in front of search path
+        path = [cdir + "/bin/" + _get_port_name()] + path
+    else:
+        # Add all existing installed COS starting from the most recent
+        for cnv in _COS_ROOT_DIRS_ENV_VARS:
+            cdir = os.getenv(cnv)
+            if cdir:
+                path.append(cdir + "/cpoptimizer/bin/" + _get_port_name())
+
+    return path
+
+
+def _search_exec_file(file, ctx):
+    """ Search the first occurrence of an executable.
+
+    Args:
+        file:  Executable file name
+        ctx:   Context to get information from
+    Returns:
+        Full path of the first executable file found, None if not found
+    """
+    # Check null
+    if not file:
+       return None
+    # Check if given file is directly executable
+    if is_exe_file(file):
+        return file
+    # Check if file contains a path
+    if os.path.basename(file) == file:
+        # Build full search path
+        path = _build_search_path(ctx)
+    else:
+        # Keep file path as single path
+        path = [os.path.dirname(file)]
+        file = os.path.basename(file)
+    # Check if file contains a pattern
+    if "*" in file:
+        # Check in the path
+        for d in path:
+            if not os.path.isdir(d):
+                continue
+            lf = [os.path.join(d, f) for f in os.listdir(d) if fnmatch.fnmatch(f, file)]
+            if lf:
+                # Take most recent executable file
+                lf = [f for f in lf if is_exe_file(f)]
+                if lf:
+                    lf.sort(key=lambda x: os.path.getmtime(x))
+                    return lf[-1]
+    else:
+        # Check directly
+        for d in path:
+            if not os.path.isdir(d):
+                continue
+            nf = os.path.join(d, file)
+            if is_exe_file(nf):
+                return nf
+
+    return None
+
+
 # Attribute values denoting a default value
 DEFAULT_VALUES = ("ENTER YOUR KEY HERE", "ENTER YOUR URL HERE", "default")
 
 def _is_defined(arg, kwargs):
     return (arg in kwargs) and kwargs[arg] and (kwargs[arg] not in DEFAULT_VALUES)
+
+def _change_context_attribute(ctx, key, value):
+    rp = ctx.search_and_replace_attribute(key, value)
+    # If not found, set in solving parameters
+    if rp is None:
+        params = ctx.params
+        if not isinstance(params, CpoParameters):
+            raise CpoException("Invalid configuration attribute '{}' (no 'params' section where put it)".format(key))
+        if key in ALL_PARAMETER_NAMES or ctx.solver.enable_undocumented_params:
+            setattr(params, key, value)
+        else:
+            raise CpoException("CPO solver does not accept a parameter named '{}'".format(key))
 
 def _get_effective_context(**kwargs):
     """ Build a effective context from a variable list of arguments that may specify changes to default.
@@ -579,32 +705,30 @@ def _get_effective_context(**kwargs):
     if prms is not None:
         ctx.params.add(prms)
 
-    # Process other changes
-    rplist = []  # List of replacements to be done in solving parameters
+    # Process other changes, check first if undocumented params are enabled (or not)
+    uk = 'enable_undocumented_params'
+    if uk in kwargs:
+        _change_context_attribute(ctx, uk, kwargs[uk])
     for k, v in kwargs.items():
-        if (k != 'context') and (k != 'params') and (v not in DEFAULT_VALUES):
-            rp = ctx.search_and_replace_attribute(k, v)
-            # If not found, set in solving parameters
-            if rp is None:
-                rplist.append((k, v))
+        if (k != 'context') and (k != 'params') and (k != uk) and (v not in DEFAULT_VALUES):
+            _change_context_attribute(ctx, k, v)
 
-     # Replace or set remaining fields in parameters
-    if rplist:
-        params = ctx.params
-        chkparams = not ctx.solver.enable_undocumented_params
-        if isinstance(params, CpoParameters):
-            for k, v in rplist:
-                if chkparams and not k in ALL_PARAMETER_NAMES:
-                    raise CpoException("CPO solver does not accept a parameter named '{}'".format(k))
-                setattr(params, k, v)
+    # Get solver execfile
+    try:
+        if ctx.solver.agent == 'local':
+            ctx.solver.local.execfile = _search_exec_file(ctx.solver.local.execfile, ctx)
+        elif ctx.solver.agent == 'lib':
+            ctx.solver.lib.libfile = _search_exec_file(ctx.solver.lib.libfile, ctx)
+    except:
+        pass
 
     # Return
     return ctx
 
 
-##############################################################################
-## Overload this configuration with other customized configuration python files
-##############################################################################
+#=============================================================================
+# Overload default context with optional customizations
+#=============================================================================
 
 def _eval_file(file):
     """ If exists, evaluate the content of a python module in this module.
@@ -615,7 +739,9 @@ def _eval_file(file):
         try:
             global context
             l = {'context': context, '__file__': os.path.abspath(f) }
-            exec(open(f).read(), globals(), l)
+            with open(f) as fin:
+                fcont = fin.read()
+            exec(fcont, globals(), l)
             # Restore context in case its value has been modified.
             context = l['context']
         except Exception as e:
@@ -633,10 +759,24 @@ FILE_LIST = ("cpo_config.py",
 for f in FILE_LIST:
     _eval_file(f)
 
+# Overwrite with environment definitions if any
+envchg = os.environ.get(CONTEXT_ENVIRONMENT)
+if envchg:
+    for chg in envchg.split(';'):
+        cx = chg.find('=')
+        if cx < 0:
+            raise Exception("Invalid context change in environment variable {}: '{}'".format(CONTEXT_ENVIRONMENT, chg))
+        try:
+            context.set_by_path(chg[:cx].strip(), chg[cx+1:].strip())
+        except:
+            raise Exception("Error when applying change from environment variable {}: '{}'".format(CONTEXT_ENVIRONMENT, chg))
 
-##############################################################################
-## Print configuration when called as main
-##############################################################################
+
+#=============================================================================
+# Print configuration when called as main
+#=============================================================================
 
 if __name__ == "__main__":
-    context.write()
+    # Instanciate executable files if needed
+    ctx = _get_effective_context()
+    ctx.write()

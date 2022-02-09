@@ -85,7 +85,7 @@ class LinearRelaxer(object):
         var_mapping = {}
         continuous = relaxed_model.continuous_vartype
         for v in mdl.iter_variables():
-            cpx_code = v.vartype.get_cplex_typecode()
+            cpx_code = v.cplex_typecode
             if not v.is_generated() or cpx_code == 'C':
                 # if v has type semixxx, set lB to 0
                 if cpx_code in {'N', 'S'}:

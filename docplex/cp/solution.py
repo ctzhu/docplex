@@ -505,8 +505,9 @@ class CpoSequenceVarSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoSequenceVar`.
-            lvars: Ordered list of interval variable solutions that are in this sequence (objects CpoIntervalVarSolution).
-                   or list of interval variables (object of class CpoIntervalVar)
+            lvars: Ordered list of interval variable solutions that are in this sequence
+                   (objects of class :class:`CpoIntervalVarSolution`),
+                   or list of interval variables (object of class :class:`~docplex.cp.expression.CpoIntervalVar`).
         """
         assert isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
         super(CpoSequenceVarSolution, self).__init__(expr)
@@ -768,6 +769,9 @@ class CpoModelSolution(object):
          * :meth:`CpoSequenceVarSolution.get_value`
          * :meth:`CpoStateFunctionSolution.get_value`
 
+        Note that the builtin method *__getitem__()* is overwritten to call this method.
+        Writing *sol.get_value(x)* is then equivalent to write *sol[x]*.
+
         Args:
             expr: Variable expression, variable name or KPI name.
         Returns:
@@ -799,6 +803,9 @@ class CpoModelSolution(object):
          * If the variable is fully instantiated, a tuple of 3 integers (start, end, size).
          * If the variable is partially instantiated, a tuple (start, end, size, length) where each
            individual value can be an integer or an interval expressed as a tuple.
+
+        Note that the builtin method *__setitem__()* is overwritten to call this method.
+        Writing *sol.set_value(x, y)* is then equivalent to write *sol[x] = y*.
 
         *New in version 2.9.*
 
@@ -1058,7 +1065,10 @@ class CpoModelSolution(object):
             out.write(u"Objective values: {}".format(ovals))
         bvals = self.get_objective_bounds()
         if bvals:
-            out.write(u", bounds: {}".format(bvals))
+            if ovals:
+                out.write(u", bounds: {}".format(bvals))
+            else:
+                out.write(u"Bounds: {}".format(bvals))
         gvals = self.get_objective_gaps()
         if gvals:
             out.write(u", gaps: {}".format(gvals))
@@ -1077,6 +1087,14 @@ class CpoModelSolution(object):
             out.write(u'{}: {}\n'.format(k, kpis[k]))
 
 
+    def __str__(self):
+        """ Build a short string representation of this object.
+        Returns:
+            String representation of this object.
+        """
+        return "(objs: {}, bnds: {}, gaps: {}".format(self.get_objective_values(), self.get_objective_bounds(), self.get_objective_gaps())
+
+
     def __eq__(self, other):
         """ Overwrite equality comparison
 
@@ -1087,6 +1105,7 @@ class CpoModelSolution(object):
         """
         return utils.equals(self, other)
 
+
     def __ne__(self, other):
         """ Overwrite inequality comparison """
         return not self.__eq__(other)
@@ -1094,19 +1113,27 @@ class CpoModelSolution(object):
 
 class CpoRunResult(object):
     """ This class is an abstract class extended by classes representing the result of a call to the solver.
+
+    It contains the following elements:
+       * model that has been solved,
+       * solver parameters,
+       * solver information,
+       * solver output log, if configuration has been set to store it (default).
     """
     def __init__(self, model):
         super(CpoRunResult, self).__init__()
-        self.model = model
+        self.model = model                      # Source model
         self.solver_log = None                  # Solver log
         self.process_infos = CpoProcessInfos()  # Process information
+        self.parameters = CpoParameters()       # Solving parameters
+        self.solver_infos = CpoSolverInfos()    # Solving information
 
 
     def get_model(self):
         """ Gets the source model
 
         Returns:
-            Source model, object of class docplex.cp.model.CpoModel
+            Source model, object of class :class:`~docplex.cp.model.CpoModel`
         """
         return self.model
 
@@ -1138,6 +1165,61 @@ class CpoRunResult(object):
         return self.process_infos
 
 
+    def get_parameters(self):
+        """ Gets the complete dictionary of solving parameters.
+
+        Returns:
+            Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`.
+        """
+        return self.parameters
+
+
+    def get_parameter(self, name, default=None):
+        """ Get a particular solving parameter.
+
+        Args:
+            name:    Name of the parameter to get
+            default: (optional) Default value if not found. None by default.
+        Returns:
+            Parameter value, default value if not found.
+        """
+        if self.parameters is None:
+            return default
+        return self.parameters.get(name, default)
+
+
+    def get_infos(self):
+        """ Gets the complete dictionary of solver information attributes.
+
+        Deprecated. use :meth:`get_solver_infos` instead.
+
+        Returns:
+            Solver information, object of class :class:`CpoSolverInfos`.
+        """
+        return self.solver_infos
+
+
+    def get_solver_infos(self):
+        """ Gets the set of information provided by the solver concerning to the solving of the model.
+
+        Returns:
+            Solver information, object of class :class:`CpoSolverInfos`.
+        """
+        return self.solver_infos
+
+
+    def get_info(self, name, default=None):
+        """ Gets a particular information attribute.
+
+        Args:
+            name:    Name of the information to get
+            default: (optional) Default value if not found. None by default.
+        Returns:
+            Information attribute value, None if not found.
+        """
+        return self.solver_infos.get(name, default)
+
+
     def _set_json_doc(self, jdoc):
         """ Set the JSON document used to build this result.
 
@@ -1148,6 +1230,16 @@ class CpoRunResult(object):
         jver = jdoc.get('cpSerializationFormatVersion')
         if jver is not None:
             self.process_infos['JsonFormatVersion'] = jver
+
+        # Add parameters
+        prms = jdoc.get('parameters', None)
+        if prms is not None:
+            self.parameters.update(prms)
+
+        # Add information attributes
+        cpinf = jdoc.get('cpInfo', None)
+        if cpinf is not None:
+            self.solver_infos.update(cpinf)
 
 
     def _is_json_format_version(self, xver):
@@ -1162,15 +1254,21 @@ class CpoRunResult(object):
         return (jver is not None) and (jver >= xver)
 
 
+    def __str__(self):
+        """ Convert this object into representative string.
+        Returns:
+            String representing this object
+        """
+        return "(model: {}, log: {})".format(self.model.get_name(), "yes" if self.solver_log else "no")
+
+
 class CpoSolveResult(CpoRunResult):
     """ This class represents the result of a call to the solve of a model.
 
-    It contains the following elements:
+    On top of those already stored in :class:`CpoRunResult`, it contains the following elements:
        * solve status,
-       * solver parameters,
-       * solver information
        * output log
-       * solution, if any (class :class:`CpoModelSolution`)
+       * solution, if any, object of class :class:`CpoModelSolution`.
 
     If this result contains a solution, the methods implemented in the class :class:`CpoModelSolution`
     to access solution elements are available directly from this class.
@@ -1187,9 +1285,8 @@ class CpoSolveResult(CpoRunResult):
         self.search_status = None                  # Search status, with value in SEARCH_STATUS_*
         self.stop_cause = None                     # Stop cause, with values in STOP_CAUSE_*
         self.solveTime = 0                         # Solve time
-        self.parameters = CpoParameters()          # Solving parameters
+        self.is_a_solution = False                 # Solution indicator
         self.solution = CpoModelSolution()         # Solution
-        self.solver_infos = CpoSolverInfos()       # Solving information
 
         self.process_infos[CpoProcessInfos.MODEL_BUILD_TIME] = model.get_modeling_duration()
 
@@ -1251,16 +1348,19 @@ class CpoSolveResult(CpoRunResult):
 
 
     def is_solution(self):
-        """ Checks if this descriptor contains a valid solution to the problem.
+        """ Checks if this descriptor is a valid solution to the problem.
 
         A solution is present if the solve status is 'Feasible' or 'Optimal'.
         Optimality of the solution should be tested using method :meth:`is_solution_optimal()`.
 
         Returns:
-            True if there is a solution.
+            True if this descriptor is a valid solution to the problem.
         """
-        return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)) \
-                or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
+        return self.is_a_solution
+        #return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_FAILED_NORMALLY)) \
+        #        or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
+        #return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)) \
+        #        or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
 
 
     def is_solution_optimal(self):
@@ -1313,7 +1413,7 @@ class CpoSolveResult(CpoRunResult):
         """ Get the model solution
 
         Returns:
-            Model solution, object of class :class:`CpoModelSolution`:.
+            Model solution, object of class :class:`CpoModelSolution`.
         """
         return self.solution
 
@@ -1348,7 +1448,7 @@ class CpoSolveResult(CpoRunResult):
     def get_objective_gaps(self):
         """ Gets the numeric values of the gap between objective value and objective bound.
 
-        For a single objective, gap is calculated as gap = |value - bound| / max(1e-10, |value|)
+        For a single objective, gap is calculated as gap = \|value - bound\| / max(1e-10, \|value\|)
 
         For multiple objectives, each gap is the gap between corresponding value and bound.
         However, after the first gap whose value is not within optimality tolerance specified by
@@ -1359,61 +1459,6 @@ class CpoSolveResult(CpoRunResult):
             Array of all objective gap values, None if not defined.
         """
         return self.solution.objective_gaps
-
-
-    def get_parameters(self):
-        """ Gets the complete dictionary of solving parameters.
-
-        Returns:
-            Solving parameters (object of class CpoParameters).
-        """
-        return self.parameters
-
-
-    def get_parameter(self, name, default=None):
-        """ Get a particular solving parameter.
-
-        Args:
-            name:    Name of the parameter to get
-            default: (optional) Default value if not found. None by default.
-        Returns:
-            Parameter value, default value if not found.
-        """
-        if self.parameters is None:
-            return default
-        return self.parameters.get(name, default)
-
-
-    def get_infos(self):
-        """ Gets the complete dictionary of solver information attributes.
-
-        Deprecated. use :meth:`get_solver_infos` instead.
-
-        Returns:
-            Object of class :class:`CpoSolverInfos` that contains information on solve.
-        """
-        return self.solver_infos
-
-
-    def get_solver_infos(self):
-        """ Gets the set of information provided by the solver concerning to the solving of the model.
-
-        Returns:
-            Object of class :class:`CpoSolverInfos` that contains information on solve.
-        """
-        return self.solver_infos
-
-
-    def get_info(self, name, default=None):
-        """ Gets a particular information attribute.
-
-        Args:
-            name:    Name of the information to get
-            default: (optional) Default value if not found. None by default.
-        Returns:
-            Information attribute value, None if not found.
-        """
-        return self.solver_infos.get(name, default)
 
 
     def get_kpis(self):
@@ -1466,7 +1511,7 @@ class CpoSolveResult(CpoRunResult):
         Args:
             name: Variable name or variable expression.
         Returns:
-            Variable solution (class CpoVarSolution), None if not found.
+            Variable solution, object of class :class:`CpoVarSolution`, None if not found.
         """
         return self.solution.get_var_solution(name)
 
@@ -1475,7 +1520,7 @@ class CpoSolveResult(CpoRunResult):
         """ Gets the list of all variable solutions from this model solution.
 
         Returns:
-            List of all variable solutions (class CpoVarSolution).
+            List of all variable solutions (class :class:`CpoVarSolution`).
         """
         return self.solution.get_all_var_solutions()
 
@@ -1506,29 +1551,29 @@ class CpoSolveResult(CpoRunResult):
         # Notify run result about JSON document
         self._set_json_doc(jsol)
 
+        # Add solution
+        self.solution._add_json_solution(jsol, expr_map, self.model, self.parameters)
+
         # Add solver status
-        status = jsol.get('solutionStatus', ())
+        status = jsol.get('solutionStatus', None)
         if status:
             self.solve_status  = status.get('solveStatus', self.solve_status)
             self.fail_status   = status.get('failStatus', self.fail_status)
             self.search_status = status.get('SearchStatus')
             self.stop_cause    = status.get('SearchStopCause')
+
             nsts = status.get('nextStatus')
-            if nsts and (nsts != 'NextTrue'):
+            if nsts in ('NextFalse', 'NextTerminated'):
+                # Only for end of search_next
                 self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
-
-        # Add parameters
-        prms = jsol.get('parameters', None)
-        if prms is not None:
-            self.parameters.update(prms)
-
-        # Add information attributes
-        cpinf = jsol.get('cpInfo', None)
-        if cpinf is not None:
-            self.solver_infos.update(cpinf)
-
-        # Add solution
-        self.solution._add_json_solution(jsol, expr_map, self.model, self.parameters)
+                self.is_a_solution = (self.solve_status == SOLVE_STATUS_OPTIMAL) \
+                                     and (self.solution.get_objective_values() is not None)
+            else:
+                rto = jsol.get('responseTo', None)
+                if rto == 'Propagate':
+                    self.is_a_solution = (self.solve_status != SOLVE_STATUS_INFEASIBLE) and (self.search_status == SEARCH_STATUS_COMPLETED)
+                else:
+                    self.is_a_solution = self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)
 
 
     def __getitem__(self, name):
@@ -1601,7 +1646,8 @@ class CpoSolveResult(CpoRunResult):
 
         self.solution.write(out)
 
-    def __str__(self):
+
+    def write_in_string(self):
         """ Build a string representation of this object.
 
         The string that is returned is the same than what is printed by calling :meth:`write`.
@@ -1613,6 +1659,18 @@ class CpoSolveResult(CpoRunResult):
         self.write(out)
         res = out.getvalue()
         out.close()
+        return res
+
+
+    def __str__(self):
+        """ Build a short string representation of this object.
+        Returns:
+            String representation of this object.
+        """
+        res = "(model: {}, solve: {}, search: {}".format(self.model.get_name(), self.get_solve_status(), self.get_search_status())
+        if self.is_solution():
+            res += ", solution: {}".format(self.get_solution())
+        res += ")"
         return res
 
 
@@ -1843,7 +1901,6 @@ class CpoRefineConflictResult(CpoRunResult):
                 out.write(u"   " + line + "\n")
 
 
-
     def __str__(self):
         """ Build a string representation of this object.
 
@@ -1946,12 +2003,15 @@ class CpoProcessInfos(InfoDict):
     """ Dictionary of various process information.
 
     This class groups various information related to the processing of the model by the Python API.
-    It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
+    It is implemented as an extension of the class :class:`~docplex.cp.utils.InfoDict` and takes profit of
     the methods such as :meth:`~docplex.cp.utils.InfoDict.write` that allows to easily print
     the full content of the information structure.
 
     Note that the content is purely informative. Information names and values depends on the implementation
     of the solver agent that has been used to solve the model.
+
+    This class provides few methods to access the most important information stored in it.
+    All information is available using regular dictionary access expression.
     """
 
     # Name of the agent used to solve the model
@@ -2013,6 +2073,15 @@ class CpoProcessInfos(InfoDict):
             Total modeling time in seconds.
         """
         return self.get(CpoProcessInfos.MODEL_BUILD_TIME)
+
+
+    def get_total_solve_time(self):
+        """ Get the total solve time, including time to send model and retrieve result.
+
+        Returns:
+            Total solve time in seconds.
+        """
+        return self.get(CpoProcessInfos.SOLVE_TOTAL_TIME)
 
 
 ###############################################################################

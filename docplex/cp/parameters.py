@@ -58,7 +58,7 @@ The following list gives the summary of all public parameters.
    The value is a symbol in ['On', 'Off']. Default value is 'Off'.
  * :attr:`~CpoParameters.UseFileLocations`: Controls whether location information (file, line) is added to the model.
    The value is a symbol in ['On', 'Off']. Default value is 'On'.
- * :attr:`~CpoParameters.LogSearchTags`: Controls the log activation.
+ * :attr:`~CpoParameters.LogSearchTags`: Controls the activation of search failure tags.
    The value is a symbol in ['On', 'Off']. Default value is 'Off'.
  * :attr:`~CpoParameters.KPIDisplay`: Controls the display of the KPI values in the log.
    The value is a symbol in ['SingleLine', 'MultipleLines']. Default value is 'SingleLine'.

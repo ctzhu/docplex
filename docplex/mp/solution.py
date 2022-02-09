@@ -415,6 +415,11 @@ class SolveSolution(object):
                 for idx, attr_val in iteritems(attr_idx_map)
                 if attr_val and obj_mapper(idx) is not None}
 
+    @classmethod
+    def _resolve_attribute_list(cls, attr_list, obj_mapper):
+        # attr list is a list of length N and obj_mapper maps indices to objs
+        return {obj_mapper(idx): attr_val for idx, attr_val in enumerate(attr_list)}
+
     def store_reduced_costs(self, rcs, mapper):
         self._reduced_costs = self._resolve_attribute_index_map(rcs, mapper)
 
@@ -423,6 +428,13 @@ class SolveSolution(object):
 
     def store_slack_values(self, slacks, mapper):
         resolved_linear_slacks = self._resolve_attribute_index_map(slacks, mapper)
+        self._slack_values = defaultdict(dict)
+        self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
+
+    def store_attribute_lists(self, mdl, slacks):
+        def linct_mapper(idx):
+            return mdl.get_constraint_by_index(idx)
+        resolved_linear_slacks = self._resolve_attribute_list(slacks, linct_mapper)
         self._slack_values = defaultdict(dict)
         self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
 
@@ -640,15 +652,30 @@ class SolveSolution(object):
                 unsats.append(ct)
         return unsats
 
-    def restore(self, mdl, tolerance=1e-6, restore_all=False):
+    def restore(self, mdl, abs_tolerance=1e-6, rel_tolerance=1e-4, restore_all=False, match="auto"):
         # restores the solution in its model, adding ranges.
+        if mdl is self._model:
+            def find_matching_var(dvar_): return dvar_
+        elif match == "index" or match == "auto" and mdl.statistics == self._model.statistics:
+            def find_matching_var(dvar_):
+                return mdl.get_var_by_index(dvar_.index)
+        else:
+            def find_matching_var(dvar1):
+                return mdl.get_var_by_name(dvar1.name)
+
         lfactory = mdl._lfactory
         restore_ranges = []
         for dvar, val in self.iter_var_values():
             if not dvar.is_generated() or restore_all:
-                rlb = max(dvar.lb, val - tolerance)
-                rub = min(dvar.ub, val + tolerance)
-                restore_ranges.append(lfactory.new_range_constraint(rlb, dvar, rub))
+                dvar2 = find_matching_var(dvar)
+                if dvar2 is not None:
+                    rel_prec = abs(val) * rel_tolerance
+                    used_prec = max(abs_tolerance, rel_prec)
+                    rlb = max(dvar2.lb, val - used_prec)
+                    rub = min(dvar2.ub, val + used_prec)
+                    restore_ranges.append(lfactory.new_range_constraint(rlb, dvar2, rub))
+                else:
+                    print("could not find matching var for {0}".format(dvar))
         mdl.info("restored {0} variable values using range constraints".format(len(restore_ranges)))
         return mdl.add(restore_ranges)
 
@@ -661,29 +688,30 @@ class SolveSolution(object):
         return invalid_domain_vars
 
     def is_valid_solution(self, tolerance=1e-6, silent=True):
-        """ Returns True if the solution is valid.
+        """ Returns True if the solution is feasible.
 
-        This method checks that solution values for variables are acceptable for their types
-        and bounds. It also checks that all constraints are satisfied with these values.
+        This method checks that solution values for variables are compatible for their types
+        and bounds. It also checks that all constraints are satisfied, within the tolerance.
 
-        :param tolerance: a float number used to check constraint satisfaction. default is 1e-6.
-        :param silent: optional flag. If False, prints which avriable or constraint causes the solution to be invalid.
-            default is True (nothing is printed)
+        :param tolerance: a float number used to check satisfaction; default is 1e-6.
+        :param silent: optional flag. If False, prints which variable (or constraint)
+          causes the solution to be invalid. default is False(prints nothing.
 
         :return: True if the solution is valid, within the tolerance value.
 
         *New in version 2.13*
         """
         m = self.model
+        verbose = not silent
         invalid_domain_vars = self.find_invalid_domain_variables(m, tolerance)
-        if not silent and invalid_domain_vars:
+        if verbose and invalid_domain_vars:
             m.warning("invalid domain vars: {0}".format(len(invalid_domain_vars)))
             for v, ivd in enumerate(invalid_domain_vars, start=1):
                 dvv = self.get_var_value(ivd)
                 m.warning("{0} - invalid value {1} for variable {2!s}".format(v, dvv, ivd))
 
         unsat_cts = self.find_unsatisfied_constraints(m, tolerance)
-        if not silent and unsat_cts:
+        if verbose and unsat_cts:
             m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
             for u, uct in enumerate(unsat_cts, start=1):
                 m.warning("{0} - unsatisified constraint: {1!s}".format(u, uct))
@@ -691,7 +719,7 @@ class SolveSolution(object):
 
     is_feasible_solution = is_valid_solution
 
-    def equals_solution(self, other, check_models=False, obj_precision=1e-3, var_precision=1e-6):
+    def equals(self, other, check_models=False, obj_precision=1e-3, var_precision=1e-6):
         from itertools import dropwhile
         if check_models and (self.model != other.model):
             return False
@@ -715,14 +743,15 @@ class SolveSolution(object):
         other_triplets = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
                                                                                   other.iter_var_values())]
         # noinspection PyArgumentList
+        res = True
         for this_triple, other_triple in izip(this_triplets, other_triplets):
             this_index, this_name, this_val = this_triple
             other_index, other_name, other_val = other_triple
             if other_index != this_index or this_name != other_name or \
                     abs(this_val - other_val) >= var_precision:
-                return False
-        else:
-            return True
+                res = False
+                break
+        return res
 
     def ensure_reduced_costs(self, model, engine):
         if self._reduced_costs is None:
@@ -769,6 +798,20 @@ class SolveSolution(object):
         assert all_slacks is not None
         # first get cplex_scope, then fetch the slack: two indirections
         return [all_slacks[ct.cplex_scope].get(ct, 0) for ct in cts]
+
+    def slack_value(self, ct, handle_error='raise'):
+        all_slacks = self._slack_values
+        slack = 0
+        if all_slacks is None:
+            if handle_error == 'raise':
+                self.model.fatal("Solution contains no slack data")
+            elif handle_error == 'ignore':
+                pass
+            else:
+                raise ValueError("handle_error expects 'raise|ignore|None, {0} was passed".format(handle_error))
+        else:
+            slack = all_slacks[ct.cplex_scope].get(ct, 0)
+        return slack
 
     def get_var_basis_statuses(self, dvars):
         assert self._basis_statuses is not None
@@ -909,10 +952,12 @@ class SolveSolution(object):
         name_value_dict = {name_key: names, value_key: values}
         return pd.DataFrame(name_value_dict)
 
-    def print_mst(self, out=sys.stdout, **kwargs):
+    def print_mst(self, outs=None, **kwargs):
         """ Writes the solution in MST format in an output stream (default is sys.out)
         """
-        self.export(out, format='mst', **kwargs)
+        if outs is None:
+            outs = sys.stdout
+        self.export(outs, format='mst', **kwargs)
 
     def _export_as_string(self, fmt, **kwargs):
         oss = StringIO()
@@ -994,7 +1039,7 @@ class SolveSolution(object):
         Args:
             file_or_filename: If ``file_or_filename`` is a string, this argument contains the filename to
                 write to. If this is a file object, this argument contains the file object to write to.
-            format: The format of the solution. The format can be:
+            format: Name of format to use. Possible values are:
                 - "json"
                 - "mst": the MST cplex format for MIP starts
                 - "xml": same as MST
@@ -1062,8 +1107,11 @@ class SolveSolution(object):
         var_value_dict = {}
         for dvar, dval in self.iter_var_values():
             dvar_name = dvar.get_name()
-            if dvar_name and (keep_zeros or dval):
-                var_value_dict[dvar_name] = dval
+            if keep_zeros or dval:
+                if dvar_name:
+                    var_value_dict[dvar_name] = dval
+            else:
+                var_value_dict[dvar.lp_name] = dval
         return var_value_dict
 
     def kpi_value_by_name(self, name, match_case=False):
@@ -1086,3 +1134,118 @@ class SolveSolution(object):
         '''
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
         return kpi._get_solution_value(self)
+
+
+class SolutionPool(object):
+    """SolutionPool()
+
+     Solutions pools as returned by `Model.populate()`
+
+    This class is not to be instantiated by users, only used after returned by Model.populate.
+
+    Instances of this class can be used like lists. They are fully iterable,
+    and accessible by index.
+
+    See Also:
+        :func:`docplex.mp.model.Model.populate`
+
+    """
+
+    def __init__(self, sols, num_replaced=0):
+        self._solutions = tuple(sols)
+        self._num_replaced = num_replaced
+
+    def __iter__(self):
+        """ Returns an iterator on pool solutions.
+        """
+        return iter(self._solutions)
+
+    def __len__(self):
+        """ Returns the number of solutions in the pool.
+
+        """
+        return self.size
+
+    @property
+    def size(self):
+        """ Returns the number of solutions in the pool.
+
+        :return:
+        """
+        return len(self._solutions)
+
+    def __getitem__(self, item):
+        return self._solutions[item]
+
+    def __str__(self):
+        return 'SolutionPool[{0}](mean={1:.3f})'.format(len(self), self.mean_objective_value)
+
+    def __repr__(self):
+        return "docplex.mp.SolutionPool[{0}]".format(len(self))
+
+    @property
+    def num_replaced(self):
+        return self._num_replaced
+
+    @property
+    def mean_objective_value(self):
+        """ This property returns the mean objective value in the pool.
+
+        """
+        return self.stats[1]
+
+    def describe_objectives(self):
+        """ Prints statistical information about poolobjective values.
+
+        Relies on the `stats` property.
+
+        """
+        nb_solutions, obj_mean, obj_sd, obj_min, obj_med, obj_max = self.stats
+        print("count  = {0}".format(nb_solutions))
+        print("mean   = {0}".format(obj_mean))
+        print("std    = {0}".format(obj_sd))
+        print("min    = {0}".format(obj_min))
+        print("med    = {0}".format(obj_med))
+        print("max    = {0}".format(obj_max))
+
+    @property
+    def stats(self):
+        """ Returns statistics about pool objective values.
+
+        :return: a tuple of floats containing (in this order:
+            - number of solutions (same as len()
+            - mean objective value
+            - standard deviation
+            - minimum objective value
+            - median objective value
+            - maximum objective value
+
+        Note:
+            if pool is empty returns dummy values, only the first value (len of 0) is valid.
+        """
+        from math import sqrt
+        nb_solutions = len(self)
+        obj_min = 1e+75
+        obj_max = -1e+75
+        if not nb_solutions:
+            # dummy values
+            return 0, 0, 0, obj_min, obj_min, obj_max
+
+        objs = []
+        obj_sum1 = 0
+        obj_sum2 = 0
+        for ps in self._solutions:
+            obj = ps.objective_value
+            objs.append(obj)
+            if obj < obj_min:
+                obj_min = obj
+            if obj > obj_max:
+                obj_max = obj
+            obj_sum1 += obj
+            obj_sum2 += obj * obj
+        obj_med = sorted(objs)[nb_solutions//2]
+
+        obj_mean = obj_sum1 / nb_solutions
+        variance = (obj_sum2 / nb_solutions) - (obj_mean ** 2)
+        obj_sd = sqrt(variance)
+        return nb_solutions, obj_mean, obj_sd, obj_min, obj_med, obj_max

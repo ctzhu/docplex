@@ -140,7 +140,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 # check
                 safe_quads = self._new_term_dict()
                 for qvp, qk in six_iteritems(quads):
-                    model.typecheck_num(qk)
+                    model._typecheck_num(qk)
                     if not isinstance(qvp, VarPair):
                         self.fatal("Expecting variable-pair, got: {0!r}", qvp)
                     else:
@@ -151,9 +151,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
             try:
                 v1, v2, qk = quads
                 if not safe:
-                    model.typecheck_var(v1)
-                    model.typecheck_var(v2)
-                    model.typecheck_num(qk, 'QuadExpr')
+                    model._typecheck_var(v1)
+                    model._typecheck_var(v2)
+                    model._typecheck_num(qk, 'QuadExpr')
                 self._quadterms = model._lfactory._new_term_dict()
                 self._quadterms[VarPair(v1, v2)] = qk
 
@@ -167,6 +167,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
             self._quadterms = qterms
         else:
             self.fatal("unexpected argument for QuadExpr: {0!r}", quads)  # pragma: no cover
+
+        if quads is not None:
+            self._model._quad_count += 1
 
         if linexpr is None:
             self._linexpr = model._lfactory.linear_expr()
@@ -317,11 +320,11 @@ class QuadExpr(_SubscriptionMixin, Expr):
         Returns:
             The coefficient of one quadratic product term in the expression.
         '''
-        self.model.typecheck_var(var1)
+        self.model._typecheck_var(var1)
         if var2 is None:
             var2 = var1
         else:
-            self.model.typecheck_var(var2)
+            self.model._typecheck_var(var2)
         return self._get_quadratic_coefficient(var1, var2)
 
     def _get_quadratic_coefficient(self, var1, var2):
@@ -334,11 +337,11 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return self._quadterms.get(vp, 0)
 
     def set_quadratic_coefficient(self, var1, var2, k):
-        self.model.typecheck_var(var1)
+        self.model._typecheck_var(var1)
         if var2 is None:
             var2 = var1
         else:
-            self.model.typecheck_var(var2)
+            self.model._typecheck_var(var2)
         self._set_quadratic_coefficient(var1, var2, k)
 
     def _set_quadratic_coefficient(self, var1, var2, k):
@@ -425,7 +428,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
     def __repr__(self):
         return "docplex.mp.quad.QuadExpr(%s)" % self.truncated_str()
 
-    def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.print_name()):
+    def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.lp_name):
         q = 0
         # noinspection PyPep8Naming
         SP = u' '
@@ -654,14 +657,14 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return self
 
     def quotient(self, e):
-        self.model.typecheck_as_denominator(e, self)
+        self.model._typecheck_as_denominator(e, self)
         cloned = self.clone()
         cloned.divide(e, check=False)
         return cloned
 
     def divide(self, other, check=True):
         if check:
-            self.model.typecheck_as_denominator(other, self)  # only a nonzero number is allowed...
+            self.model._typecheck_as_denominator(other, self)  # only a nonzero number is allowed...
         inverse = 1.0 / other
         self._scale(inverse)
         self.notify_modified(event=UpdateEvent.QuadExprGlobal)

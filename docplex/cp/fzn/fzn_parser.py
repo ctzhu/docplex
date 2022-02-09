@@ -62,7 +62,7 @@ import docplex.cp.modeler as modeler
 import docplex.cp.config as config
 import docplex.cp.expression as expression
 import collections
-from docplex.cp.utils import xrange
+from docplex.cp.utils import xrange, is_int_value
 import traceback
 
 
@@ -1998,7 +1998,7 @@ class FznParser(object):
         if len(coefs) <= 2 or (all(c == 1 or c == -1 for c in coefs)):
             for c, v in zip(coefs, vars):
                 if c != 0:
-                    if res is 0:
+                    if is_int_value(res, 0):
                         res = _mutl_by_int(v, c)
                     elif c < 0:
                         res = res - _mutl_by_int(v, -c)
@@ -2008,7 +2008,7 @@ class FznParser(object):
 
         # Build normal scal_prod
         expr = modeler.scal_prod(coefs, vars)
-        if res is not 0:
+        if not is_int_value(res, 0):
             expr = res + expr
         return expr
 

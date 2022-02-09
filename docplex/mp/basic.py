@@ -11,7 +11,7 @@ from enum import Enum
 
 from docplex.mp.operand import Operand
 from docplex.mp.utils import is_number, is_string, str_maxed
-from docplex.mp.format import LP_format
+from docplex.mp.sttck import StaticTypeChecker
 
 
 class ModelingObjectBase(object):
@@ -44,9 +44,9 @@ class ModelingObjectBase(object):
     def get_name(self):
         return self._name
 
-    def set_name(self, name):
-        self.check_name(name)
-        self._set_name(name)
+    def set_name(self, new_name):
+        self.check_name(new_name)
+        self._set_name(new_name)
 
     def _set_name(self, name):
         self._name = name
@@ -59,16 +59,11 @@ class ModelingObjectBase(object):
         # INTERNAL: basic method for checking names.
         pass  # pragma: no cover
 
-    def check_lp_name(self, new_name):
-        # ModelingObject.check_name(self, new_name)
-        if not is_string(new_name) or not new_name:
-            self.fatal("Variable name accepts only non-empty strings, {0!r} was passed", new_name)
-        elif new_name.find(' ') >= 0:
-            self.warning("Variable name contains blank space, var: {0!s}, name: \'{1!s}\'", self, new_name)
-        elif not LP_format.is_lp_compliant(new_name):
-            self.warning(
-                "Candidate variable name is not LP-compliant: '{1}', old_name was: {0} (name will be changed to x<nn>)",
-                self.name, new_name)
+    def check_lp_name(self, qualifier, new_name, accept_empty, accept_none):
+        return StaticTypeChecker.check_lp_name(logger=self, qualifier=qualifier, obj=self, new_name=new_name,
+                                               accept_empty=accept_empty, accept_none=accept_none)
+
+
 
     def has_name(self):
         """ Checks whether the object has a name.
@@ -95,20 +90,19 @@ class ModelingObjectBase(object):
         """
         return self._model
 
-    def _get_model(self):
-        return self._model
-
     def get_linear_factory(self):
         return self._model._lfactory
 
-    def get_quadratic_factory(self):
+    @property
+    def lfactory(self):
+        return self._model._lfactory
+
+    @property
+    def qfactory(self):
         return self._model._qfactory
 
-    def is_in_model(self, model):
-        return model and self._model is model
-
     def _check_model_has_solution(self):
-        self.model.check_has_solution()
+        self.model._check_has_solution()
 
     def fatal(self, msg, *args):
         self.error_handler.fatal(msg, args)
@@ -187,13 +181,16 @@ class ModelingObject(ModelingObjectBase):
         return id(self)
 
     @property
-    def unchecked_index(self):
+    def index(self):
         return self._index
 
-    def get_index(self):
-        return self._index
+    @property
+    def index1(self):
+        raw  = self._index
+        return raw if raw == self._invalid_index else raw + 1
 
-    def set_index(self, idx):
+    @index.setter
+    def index(self, idx):
         self._index = idx
 
     def has_valid_index(self):
@@ -208,7 +205,6 @@ class ModelingObject(ModelingObjectBase):
             self.fatal("Modeling object {0!s} has invalid index: {1:d}", self, self._index)  # pragma: no cover
         return self._index
 
-    index = property(get_index, set_index)
 
     def get_container(self):
         # INTERNAL
@@ -250,8 +246,7 @@ class Expr(ModelingObjectBase, Operand):
         for v in self.iter_variables():
             if dvar is v:
                 return True
-        else:
-            return False
+        return False
 
     def to_string(self, nb_digits=None, use_space=False):
         oss = StringIO()
@@ -265,7 +260,6 @@ class Expr(ModelingObjectBase, Operand):
 
     def is_model_ordered(self):
         return self._model._keep_ordering
-
 
     def _num_to_stringio(self, oss, num, ndigits=None, print_sign=False, force_plus=False, use_space=False):
         k = num
@@ -322,14 +316,14 @@ class Expr(ModelingObjectBase, Operand):
 
     def __pow__(self, power):
         # INTERNAL
-        # power must be checke in {0, 1, 2}
-        self.model.typecheck_as_power(self, power)
         if 0 == power:
             return 1
         elif 1 == power:
             return self
-        else:
+        elif 2 == power:
             return self.square()
+        else:
+            self.model.unsupported_power_error(self, power)
 
     def square(self):
         # redefine for each class of expression
@@ -433,13 +427,12 @@ class Priority(Enum):
             for p in cls:
                 if key == p.name.lower() or key == str(p.value):
                     return p
+            if do_raise:
+                logger.fatal('String does not match priority type: {}', arg)
             else:
-                if do_raise:
-                    logger.fatal('String does not match priority type: {}', arg)
-                else:
-                    logger.error('String does not match priority type: {}', arg)
-                    return None
+                logger.error('String does not match priority type: {}', arg)
                 return None
+            return None
         elif accept_none and arg is None:
             return None
         else:

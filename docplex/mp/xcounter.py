@@ -245,11 +245,9 @@ def update_dict_from_item_value(ddict, item, value=1, normalize=False):
     if value:
         if item in ddict:
             new_value = ddict.get(item, 0) + value
-            if not normalize or new_value:
-                ddict[item] = new_value
-            else:
-                del ddict[item]
+            #if not normalize or new_value:
+            ddict[item] = new_value
+            # else:
+            #     del ddict[item]
         else:
             ddict[item] = value
-
-

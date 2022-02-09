@@ -4,16 +4,15 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
+import operator
 from enum import Enum
 
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.utils import is_string, is_int
 
-import operator
-
 
 class VarBoundType(Enum):
-    """This enumerated class renages over the two types of variable bounds:
+    """This enumerated class describes the two types of variable bounds:
         - LB is for lower bound
         - UB is for uupper bound
 
@@ -78,18 +77,18 @@ class ComparisonType(Enum):
         # INTERNAL
         # noinspection PyTypeChecker
         for op in cls:
-            if arg == op or arg == op.value:
+            if arg in (op, op.value):
                 return op
             elif is_string(arg):
                 if arg == op._cplex_code \
                         or arg == str(op.value) \
                         or arg.lower() == op.name.lower():
                     return op
+        # not found
+        if do_raise:
+            docplex_fatal('cannot convert this to a comparison type: {0!r}'.format(arg))
         else:
-            if do_raise:
-                docplex_fatal('cannot convert this to a comparison type: {0!r}'.format(arg))
-            else:
-                return None
+            return None
 
     @classmethod
     def cplex_ctsense_to_python_op(cls, cpx_sense):
@@ -114,20 +113,31 @@ class ComparisonType(Enum):
 
 
 class RelaxationMode(Enum):
-    """ This enumerated type describes the different strategies for model relaxation: MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad.
+    """ This enumerated type describes the different strategies for model relaxation:
+      - MinSum, OptSum,
+      - MinInf, OptInf,
+      - MinQuad, OptQuad.
 
-    Relaxation algorithms work in two phases: In the first phase, they attempt to find a
-    feasible solution while making minimal changes to the model (according to a metric). In the second phase, they
-    attempt to find an optimal solution while keeping the relaxation at the minimal value found in phase 1.
+    A relaxation algorithms works in two phases: In the first phase, it finds a
+    feasible solution while making minimal changes to the model (according to a metric).
+    In the second phase, it
+    searches for an optimal solution while keeping the relaxation at the minimal value found in phase 1.
 
-    Values of this type define two aspects of the algorithm:
-        - whether or not they should continue to a second phase: all OptXxx values continue to a
-          second phase, and MinXxx values stop at phase 1.
-        - which metric to use for evaluating the relaxation in the first phase. There are three metrics:
-              - the sum of relaxations for OptSum, MinSum, or
-              - the total number of constraints being relaxed for OptInf, MinInf, or
-              - the sum of squares of relaxations for OptQuad, MinQuad.
+    Enumerated values work in pairs: MinXXX, OptXXX
+        - MinXXX values stop at phase 1, they look for a feasible soluion, they do not
+            optimize the objective.
+        - OptXXX run the two phases, looking for an optimal relaxed solution. They take longer.
 
+    The metric used to evaluate the quality of the relaxation is determined by the XXX part of
+    the name. There are three metrics:
+      - Inf (MinInf, OptInf) minimizes the number of relaxed constraints.  This metric
+        will prefer to relax one constraint, even with a huge slack, instead of two.
+      - Sum (MinSum, OptSum): minimizes the sum of relaxations.
+      - Quand (MinQuad, OptQuad): minimizes the sum of squares of relaxations.
+        This metric is the most expensive in computation time,
+        but avoids huge discrepancies between relaxations:
+        two constraints with relaxations of 2,2 will have a better quality (2^2 + 2^2 = 8)
+        than relaxations of 3,1 (3^2 +1 = 10).
     """
 
     MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad = range(6)
@@ -142,8 +152,8 @@ class RelaxationMode(Enum):
             elif is_string(arg):
                 if arg == str(m.value) or arg.lower() == m.name.lower():
                     return m
-        else:
-            docplex_fatal('cannot parse this as a relaxation mode: {0!r}'.format(arg))
+
+        docplex_fatal('cannot parse this as a relaxation mode: {0!r}'.format(arg))
 
     @staticmethod
     def get_no_optimization_mode(mode):
@@ -234,11 +244,11 @@ class SolveAttribute(Enum):
             elif is_string(arg):
                 if arg == str(m.value) or arg.lower() == m.name.lower():
                     return m
+
+        if do_raise:
+            docplex_fatal('cannot convert this to a solve attribute: {0!r}'.format(arg))
         else:
-            if do_raise:
-                docplex_fatal('cannot convert this to a solve attribute: {0!r}'.format(arg))
-            else:
-                return None
+            return None
 
 
 class UpdateEvent(Enum):
@@ -272,7 +282,7 @@ class UpdateEvent(Enum):
     QuadraticConstraintGlobal = 256
 
     def __bool__(self):
-        return True if self.value else False
+        return bool(self.value)
 
 
 class ObjectiveSense(Enum):
@@ -299,6 +309,15 @@ class ObjectiveSense(Enum):
     @property
     def short_name(self):
         return self.verb[:3]
+
+    @classmethod
+    def from_cplex(cls, cpx_sense):
+        if cpx_sense == 1:
+            return cls.Minimize
+        elif cpx_sense == -1:
+            return cls.Maximize
+        else:
+            raise ValueError("expecting +1 or -1, {0} was passed".format(cpx_sense))
 
     @staticmethod
     def parse(arg, logger=None, default_sense=None):
@@ -456,13 +475,13 @@ class QualityMetric(Enum):
                 return qm
             elif txt == qm.cpx_codename:
                 return qm
+
+        fmt = '* cannot interpret this as a QualityMetric enum: {0!r}'
+        if raise_on_error:
+            docplex_fatal(fmt, txt)
         else:
-            fmt = '* cannot interpret this as a QualityMetric enum: {0!r}'
-            if raise_on_error:
-                docplex_fatal(fmt, txt)
-            else:
-                print(fmt.format(txt))
-                return None
+            print(fmt.format(txt))
+            return None
 
 
 class BasisStatus(Enum):
@@ -479,9 +498,9 @@ class BasisStatus(Enum):
     - FreeNonBasic, means the variable is nonbasic and is not at a bound.
 
     See Also:
-        The different values for basis status can be found in the CPLEX documentation:
+        The list of possible values for basis status can be found in the CPLEX documentation:
 
-        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.9.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getbase.html
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getbase.html
 
     """
 
@@ -503,8 +522,8 @@ class BasisStatus(Enum):
         for bs in cls:
             if bs.value == code:
                 return bs
-        else:
-            return cls.NotABasisStatus
+
+        return cls.NotABasisStatus
 
 
 class WriteLevel(Enum):
@@ -518,7 +537,6 @@ class WriteLevel(Enum):
         - DiscreteVars: all discrete variables are  written (binary, integer, semi-integer)
         - NonZeroVars: all non-zero vars are written, regardless of their type.
         - DiscreteNonZeroVars: all discrete non-zero vars are written.
-
         - Auto: automatic value, same as DiscreteVars.
 
     *New in version 2.10*
@@ -557,8 +575,7 @@ class WriteLevel(Enum):
                     llevel = level.lower()
                     if llevel == wl.name.lower() or llevel == wl.short_name:
                         return wl
-            else:
-                return cls.Auto
+            return cls.Auto
 
 
 class EffortLevel(Enum):
@@ -566,7 +583,11 @@ class EffortLevel(Enum):
     This enumerated class controls the effort level used for a MIP start.
     The numeric value is identical to the CPLEX EffortLevel parameter values.
 
-    *New in version 2.10*
+    See Also:
+        The list of possible values for effort level status can be found in the CPLEX documentation:
+
+https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/refcppcplex/html/enumerations/IloCplex_MIPStartEffort.html
+
 
     """
     Auto = 0
@@ -589,8 +610,8 @@ class EffortLevel(Enum):
                     return eff
                 elif is_string(arg) and arg.lower() == eff.name.lower():
                     return eff
-            else:
-                return fallback
+
+            return fallback
 
 
 # problem type conversion

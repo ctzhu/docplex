@@ -1,3 +1,11 @@
+# --------------------------------------------------------------------------
+# Source file provided under Apache License, Version 2.0, January 2004,
+# http://www.apache.org/licenses/
+# (c) Copyright IBM Corp. 2015, 2020
+# --------------------------------------------------------------------------
+
+# gendoc: ignore
+
 import importlib
 import platform
 import sys
@@ -49,9 +57,9 @@ def run_docplex_check_list():
 
     # check pandas
     try:
-        import pandas as pd
+        import pandas as pd  # @UnusedImport
         # noinspection PyUnresolvedReferences
-        from pandas import DataFrame, Series
+        from pandas import DataFrame
         DataFrame({})
     except ImportError:
         print("-- pandas is not present, some features might be unavailable.")
@@ -67,13 +75,13 @@ def run_docplex_check_list():
         cpx = Cplex()
         cpxv = cpx.get_version()
         cpxvt = tuple(float(x) for x in cpx.get_version().split("."))[:2]
-        lcpxv = ".".join(str(z for z in cplex_latest_version_as_tuple))
+        lcpxv = ".".join(str(z) for z in cplex_latest_version_as_tuple)
         if cpxvt < cplex_latest_version_as_tuple:
-            print("* Your cplex version {0} is not the latest, {1} is available".format(cpxv, lcpxv))
+            print("Warning: Your cplex version {0} is not the latest, {1} is available".format(cpxv, lcpxv))
         elif cpxvt > cplex_latest_version_as_tuple:
-            print("* Your cplex version {0} is ahead of the latest DOcplex-compatible version {1}, thismight not be compatible.".format(cpxv, lcpxv))
+            print("* Your cplex version {0} is ahead of the latest DOcplex-compatible version {1}, this might not be compatible.".format(cpxv, lcpxv))
         else:
-            print("* you have the latest cplex version")
+            print("* Your cplex version {0} is the latest available".format(cpxv))
         cpx.end()
 
     except ImportError as ie:

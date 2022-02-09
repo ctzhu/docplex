@@ -8,6 +8,9 @@
 """
 Miscellaneous utility functions. Some of theme are here to prevent possible
 port problems between the different versions of Python.
+
+This module is theoretically not public, but documented because some public classes are extending
+classes defined here.
 """
 
 import os
@@ -23,11 +26,12 @@ import copy
 import gzip
 import zipfile
 import importlib
+from collections import deque
 
 try:
-    from collections.abc import deque, Iterable  # Python >= 3.7
+    from collections.abc import Iterable  # Python >= 3.7
 except:
-    from collections import deque, Iterable      # Python < 3.7
+    from collections import Iterable      # Python < 3.7
 
 try:
     from StringIO import StringIO  # Python 2
@@ -75,7 +79,7 @@ IS_WINDOWS = platform.system() == 'Windows'
 ###############################################################################
 
 class CpoException(Exception):
-    """ Exception thrown in case of CPO errors
+    """ Exception thrown in case of CPO errors.
     """
     def __init__(self, msg):
         """ Create a new exception
@@ -99,12 +103,12 @@ class CpoNotSupportedException(CpoException):
 
 
 class Context(dict):
-    """ Class handling miscellaneous list of parameters """
+    """ Class handling miscellaneous list of parameters. """
     def __init__(self, **kwargs):
         """ Create a new context
 
         Args:
-            List of key=value to initialize context with.
+            **kwargs: List of key=value to initialize context with.
         """
         super(Context, self).__init__()
         vars(self)['parent'] = None
@@ -186,6 +190,30 @@ class Context(dict):
             return False
 
 
+    def set_by_path(self, path, value):
+        """ Set a context attribute using its path.
+
+        Attribute path is a sequence of attribute names separated by dots.
+
+        Args:
+            path:   Attribute path
+            value:  Attribute value
+        """
+        path = path.split('.')
+        trgt = self
+        # Go down in sub-contexts
+        for k in path[:-1]:
+            sc = trgt.get(k)
+            if sc is None:
+                sc = Context()
+                trgt.set_attribute(k, sc)
+            elif not isinstance(sc, Context):
+                raise Exception("Attribute '" + k + "' should be a Context")
+            trgt = sc
+        # Set final value
+        trgt.set_attribute(path[-1], value)
+
+
     def get_by_path(self, path, default=None):
         """ Get a context attribute using its path.
 
@@ -226,18 +254,19 @@ class Context(dict):
             if isinstance(v, Context):
                 sctxs.append((k, v))
             else:
-                path = path + "." + k
                 if k == name:
                     ov = self.get_attribute(name)
+                    npath = path + "." + k if path else k
                     if ov is not None:
                         if isinstance(value, Context):
                             if not isinstance(ov, Context):
-                                raise Exception("Attribute '" + path + "' is a Context and can only be replaced by a Context")
-                    self.set_attribute(name, value)
-                    return path
+                                raise Exception("Attribute '" + npath + "' is a Context and can only be replaced by a Context")
+                    self.__setattr__(name, value)
+                    return npath
         # Search then in sub-contexts
         for (k, v) in sctxs:
-            apth = v.search_and_replace_attribute(name, value, path=path)
+            npath = path + "." + k if path else k
+            apth = v.search_and_replace_attribute(name, value, path=npath)
             if apth:
                 return apth
         return None
@@ -399,7 +428,7 @@ class Context(dict):
 
 
 class IdAllocator(object):
-    """ Allocator of identifiers
+    """ Allocator of identifiers.
 
     This implementation is not thread-safe.
     Use SafeIdAllocator for a usage in a multi-thread environment.
@@ -411,7 +440,7 @@ class IdAllocator(object):
     DIGITS = "0123456789"
     LETTERS_AND_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     def __init__(self, prefix, bdgts="0123456789"):
-        """ Create a new id allocator
+        """ Create a new id allocator.
 
         Args:
             prefix:  Prefix of all ids
@@ -439,7 +468,7 @@ class IdAllocator(object):
         return self.count
 
     def allocate(self):
-        """ Allocate a new id
+        """ Allocate a new id.
 
         Returns:
             Next id for this allocator
@@ -457,10 +486,10 @@ class IdAllocator(object):
 
 
 class SafeIdAllocator(object):
-    """ Allocator of identifiers
+    """ Allocator of identifiers.
 
     This implementation uses a lock to protect the increment of the counter,
-    allowing to use as shared between multiple threads.
+    allowing to use it by multiple threads.
     """
     __slots__ = ('prefix',  # Id prefix
                  'count',   # Allocated id count
@@ -468,11 +497,11 @@ class SafeIdAllocator(object):
                  'lock',    # Lock to protect counter
                  )
     def __init__(self, prefix, bdgts="0123456789"):
-        """ Create a new id allocator
+        """ Create a new id allocator.
 
         Args:
             prefix:  Prefix of all ids
-            bdgts:   List of digit characters to be use for counter conversion
+            bdgts:   (Optional) List of digit characters to be use for counter conversion
         """
         super(SafeIdAllocator, self).__init__()
         self.prefix = prefix
@@ -534,7 +563,7 @@ class KeyIdDict(object):
         self.kdict = {}
 
     def set(self, key, value):
-        """ Set a value in the dictionary
+        """ Set a value in the dictionary.
 
         Args:
             key:   Key
@@ -545,7 +574,7 @@ class KeyIdDict(object):
         self.kdict[kid] = (key, value)
 
     def get(self, key, default=None):
-        """ Get a value from the dictionary
+        """ Get a value from the dictionary.
 
         Args:
             key:     Key
@@ -667,7 +696,7 @@ class ObjectCacheById(object):
         self.key_list = deque()
 
     def set(self, key, value):
-        """ Set a value in the cache
+        """ Set a value in the cache.
 
         Args:
             key:   Key
@@ -688,7 +717,7 @@ class ObjectCacheById(object):
             self.key_list.append(key)
 
     def get(self, key):
-        """ Get a value from the cache
+        """ Get a value from the cache.
 
         Args:
             key:  Key
@@ -716,7 +745,7 @@ class ObjectCacheById(object):
 
 
 class IdentityAccessor(object):
-    """ Object implementing a __getitem__ that returns the key as value """
+    """ Object implementing a __getitem__ that returns the key as value. """
     def __getitem__(self, key):
         return key
 
@@ -728,7 +757,7 @@ class TextFileLineReader(object):
                  )
 
     def __init__(self, file, encoding='utf-8-sig'):
-        """ Create a text file line reader
+        """ Create a text file line reader.
 
         Args:
             file:      File name
@@ -748,17 +777,17 @@ class TextFileLineReader(object):
         self.encoding = encoding
 
     def __del__(self):
-        """ Release resources """
+        """ Release resources. """
         self.close()
 
     def close(self):
-        """ Close this reader """
+        """ Close this reader. """
         if self.input is not None:
             self.input.close()
             self.input = None
 
     def readline(self):
-        """ Read next line of text
+        """ Read next line of text.
 
         Returns:
             Next line of text, including ending end of line character, empty line if end of file
@@ -781,13 +810,13 @@ class Chrono(object):
     __slots__ = ('startTime',  # Chrono start time
                  )
     def __init__(self):
-        """ Create a new chronometer initialized with current time
+        """ Create a new chronometer initialized with current time.
         """
         super(Chrono, self).__init__()
         self.restart()
 
     def get_start(self):
-        """ Get the chrono start time
+        """ Get the chrono start time.
 
         Returns:
             Time when chronometer has been started
@@ -795,7 +824,7 @@ class Chrono(object):
         return self.startTime
 
     def get_elapsed(self):
-        """ Get the chrono elapsed time
+        """ Get the chrono elapsed time.
 
         Returns:
             Time spent from chronometer start time (float), in seconds
@@ -808,7 +837,7 @@ class Chrono(object):
         self.startTime = time.time()
 
     def __str__(self):
-        """ Convert this chronometer into a string
+        """ Convert this chronometer into a string.
 
         Returns:
             String of the chrono elapsed time
@@ -817,7 +846,7 @@ class Chrono(object):
 
 
 class Barrier(object):
-    """ Barrier blocking multiple threads
+    """ Barrier blocking multiple threads.
 
     This class implements a simple barrier with no timeout.
     Implemented here because not available in Python 2
@@ -829,6 +858,7 @@ class Barrier(object):
                  )
     def __init__(self, parties):
         """ Create a new barrier
+
         Args:
             parties:  Number of parties required before unlocking the barrier
         """
@@ -897,13 +927,14 @@ class FunctionCache(object):
 
 
 class InfoDict(dict):
-    """ Dictionary of various informations.
+    """ Dictionary used to store information of various types.
     """
 
     def incr(self, key, val):
-        """ Increment the value of an attribute by a given value
+        """ Increment the value of an attribute considered as a number.
 
-        If the attribute was not set, it is set to the value.
+        If the attribute is not already in the dictionary, it is set to the given increment value.
+
         Args:
             key:  Attribute key
             val:  Value to add
@@ -973,7 +1004,7 @@ class InfoDict(dict):
 
 
 class ListDict(dict):
-    """ Dictionary of lists of things.
+    """ Dictionary specialized to associate lists to the keys.
 
     This class is a dictionary that enables to associate to each key a list of values.
     When adding a value, key and list are created if not present, otherwise element is added to the existing list.
@@ -1114,7 +1145,7 @@ def replace(obj, rfun):
 
 
 def assert_arg_int_interval(val, mn, mx, name=None):
-    """ Check that an argument is an integer in a given interval
+    """ Check that an argument is an integer in a given interval.
 
     Args:
         val:  Argument value
@@ -1129,7 +1160,7 @@ def assert_arg_int_interval(val, mn, mx, name=None):
 
 
 def to_string(val):
-    """ Convert a value into a string, recursively for lists and tuples
+    """ Convert a value into a string, recursively for lists and tuples.
 
     Args:
         val: Value to convert value
@@ -1151,7 +1182,7 @@ def to_string(val):
 
 
 def _get_vars(obj):
-    """ Get the list variable names of an object
+    """ Get the list variable names of an object.
     """
     # Check if a dictionary is present
     if hasattr(obj, '__dict__'):
@@ -1186,7 +1217,7 @@ def _equals_lists(l1, l2):
 
 
 def equals(v1, v2):
-    """ Check that two values are logically equal, i.e. with the same attributes with the same values, recursively
+    """ Check that two values are logically equal, i.e. with the same attributes with the same values, recursively.
 
     This method does not call __eq__ except on basic types, and is then proof to possible overloads of '=='
 
@@ -1244,7 +1275,7 @@ def equals(v1, v2):
 
 
 def make_directories(path):
-    """ Ensure a directory path exists
+    """ Ensure a directory path exists.
 
     Args:
         path: Directory path to check or create
@@ -1256,7 +1287,7 @@ def make_directories(path):
 
 
 def create_stdout_logger(name):
-    """ Create a default logger on stdout with default formatter printing time at the beginning
+    """ Create a default logger on stdout with default formatter printing time at the beginning.
         of the line.
 
     Args:
@@ -1271,7 +1302,7 @@ def create_stdout_logger(name):
 
 
 def get_file_name_only(file):
-    """ Get the name of a file, without directory or extension
+    """ Get the name of a file, without directory or extension.
     Args:
         file:  File name
     Returns:
@@ -1281,7 +1312,7 @@ def get_file_name_only(file):
 
 
 def read_string_file(file):
-    """ Read a file as a string
+    """ Read a file as a string.
     Args:
         file:  File name
     Returns:
@@ -1303,7 +1334,7 @@ def write_string_file(file, str):
 
 
 def format_text(txt, size):
-    """ Format a given text in multiple lines
+    """ Format a given text in multiple lines.
     Args:
         txt:  Text to format
         size: Line size
@@ -1335,8 +1366,32 @@ def format_text(txt, size):
         return res
 
 
+def encode_integer_big_endian_4(value, frame, start):
+    """ Encode an integer in a byte array using big endian on 4 bytes.
+    Args:
+        value:  Integer value to encode
+        frame:   Target byte array
+        start:  Write start index
+    """
+    frame[start]     = (value >> 24) & 0xFF
+    frame[start + 1] = (value >> 16) & 0xFF
+    frame[start + 2] = (value >> 8)  & 0xFF
+    frame[start + 3] = value         & 0xFF
+
+
+def decode_integer_big_endian_4(frame, start):
+    """ Encode an integer in a byte array using big endian on 4 bytes.
+    Args:
+        frame:  Source byte array
+        start:  Read start index
+    Returns:
+        Decoded integer value
+    """
+    return (frame[start] << 24) | (frame[start + 1] << 16) | (frame[start + 2] << 8) | frame[start + 3]
+
+
 def open_utf8(file, mode='r'):
-    """ Open a stream for read or write with UTF-8 encoding
+    """ Open a stream for read or write with UTF-8 encoding.
 
     Args:
         file:  File to open
@@ -1361,7 +1416,7 @@ def list_module_public_functions(mod, excepted=()):
 
 
 def get_module_element_from_path(opath):
-    """ Retrieve an element from a python module using its path <package>.<module>.<object>
+    """ Retrieve an element from a python module using its path <package>.<module>.<object>.
 
     This can be for example a global function or a class.
 
@@ -1424,7 +1479,7 @@ BASIC_TYPES   = frozenset(NUMBER_TYPES.union(BOOL_TYPES).union(STRING_TYPES))
 
 
 def is_bool(val):
-    """ Check if a value is a boolean, including numpy variants if any
+    """ Check if a value is a boolean, including numpy variants if any.
 
     Args:
         val: Value to check
@@ -1436,7 +1491,7 @@ def is_bool(val):
 if IS_NUMPY_AVAILABLE:
 
     def is_int(val):
-        """ Check if a value is an integer, including numpy variants if any
+        """ Check if a value is an integer, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1447,7 +1502,7 @@ if IS_NUMPY_AVAILABLE:
 
 
     def is_float(val):
-        """ Check if a value is a float, including numpy variants if any
+        """ Check if a value is a float, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1458,7 +1513,7 @@ if IS_NUMPY_AVAILABLE:
 
 
     def is_number(val):
-        """ Check if a value is a number, including numpy variants if any
+        """ Check if a value is a number, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1469,7 +1524,7 @@ if IS_NUMPY_AVAILABLE:
 
 
     def is_array(val):
-        """ Check if a value is an array (list or tuple)
+        """ Check if a value is an array (list or tuple).
 
         Args:
             val: Value to check
@@ -1482,7 +1537,7 @@ if IS_NUMPY_AVAILABLE:
 else:
 
     def is_int(val):
-        """ Check if a value is an integer, including numpy variants if any
+        """ Check if a value is an integer, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1493,7 +1548,7 @@ else:
 
 
     def is_float(val):
-        """ Check if a value is a float, including numpy variants if any
+        """ Check if a value is a float, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1504,7 +1559,7 @@ else:
 
 
     def is_number(val):
-        """ Check if a value is a number, including numpy variants if any
+        """ Check if a value is a number, including numpy variants if any.
 
         Args:
             val: Value to check
@@ -1515,7 +1570,7 @@ else:
 
 
     def is_array(val):
-        """ Check if a value is an array (list or tuple)
+        """ Check if a value is an array (list or tuple).
 
         Args:
             val: Value to check
@@ -1528,7 +1583,7 @@ else:
 if IS_PANDA_AVAILABLE:
 
     def is_panda_series(val):
-        """ Check if a value is a panda serie
+        """ Check if a value is a panda serie.
 
         Args:
             val: Value to check
@@ -1540,7 +1595,7 @@ if IS_PANDA_AVAILABLE:
 else:
 
     def is_panda_series(val):
-        """ Check if a value is a panda serie
+        """ Check if a value is a panda serie.
 
         Args:
             val: Value to check
@@ -1550,8 +1605,21 @@ else:
         return False
 
 
+def is_int_value(val, xv):
+    """ Check if a value is an integer equal to an expected value.
+    Allows to check integer value equality even if == operator is overloaded
+
+    Args:
+        val:  Value to check
+        xv:   Expected integer value
+    Returns:
+        True if value is an integer.
+    """
+    return (type(val) is int) and (val == xv)
+
+
 def is_string(val):
-    """ Check if a value is a string or a variant
+    """ Check if a value is a string or a variant.
 
     Args:
         val: Value to check
@@ -1562,7 +1630,7 @@ def is_string(val):
 
 
 def is_iterable(val):
-    """ Check if a value is iterable, but not a string
+    """ Check if a value is iterable, but not a string.
 
     Args:
         val: Value to check
@@ -1573,7 +1641,7 @@ def is_iterable(val):
 
 
 def is_int_array(val):
-    """ Check that a value is an array of integers
+    """ Check that a value is an array of integers.
 
     Args:
         val: Value to check
@@ -1584,7 +1652,7 @@ def is_int_array(val):
 
 
 def is_array_of_type(val, typ):
-    """ Check that a value is an array with all elements instances of a given type
+    """ Check that a value is an array with all elements instances of a given type.
 
     Args:
         val: Value to check
@@ -1627,7 +1695,7 @@ _DIGIT_CHARS = frozenset(x for x in "0123456789")
 
 
 def is_symbol_char(c):
-    """ Check whether a character can be used in a symbol
+    """ Check whether a character can be used in a symbol.
 
     Args:
         c: Character
@@ -1640,7 +1708,7 @@ def is_symbol_char(c):
 
 
 def to_printable_string(id):
-    """ Build a printable string from raw string (add escape sequences and quotes if necessary)
+    """ Build a printable string from raw string (add escape sequences and quotes if necessary).
 
     Args:
         id: Identifier string
@@ -1658,7 +1726,7 @@ def to_printable_string(id):
 
 
 def to_internal_string(strg):
-    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences)
+    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences).
 
     Args:
         strg: String to convert
@@ -1681,7 +1749,7 @@ def to_internal_string(strg):
 
 
 def to_internal_string(strg):
-    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences)
+    """ Convert a string (without enclosing quotes) into internal string (interpret escape sequences).
 
     Args:
         strg: String to convert
@@ -1705,7 +1773,7 @@ def to_internal_string(strg):
 
 if IS_PYTHON_2:
     def make_unicode(s):
-        """ Convert a string in unicode
+        """ Convert a string in unicode.
 
         Args:
             s: String to convert
@@ -1715,7 +1783,7 @@ if IS_PYTHON_2:
         return s if type(s) is unicode else unicode(s)
 else:
     def make_unicode(s):
-        """ Convert a string in unicode
+        """ Convert a string in unicode.
 
         Args:
             s: String to convert
@@ -1726,7 +1794,7 @@ else:
 
 
 def int_to_base(val, bdgts):
-    """ Convert an integer into a string with a given base
+    """ Convert an integer into a string with a given base.
 
     Args:
         val:   Integer value to convert
@@ -1768,24 +1836,33 @@ def is_exe_file(f):
     return os.path.isfile(f) and os.access(f, os.X_OK)
 
 
-def search_file_in_path(f, pext=None):
-    """ Search a given file in system path
+def get_system_path():
+    """ Get the system path as a list of files
+
+    Returns:
+        List of names in the system path
+    """
+    path = os.getenv('PATH')
+    if path:
+        return path.split(os.pathsep)
+    return []
+
+
+
+def search_exec_file(f, path):
+    """ Search the first occurrence of an executable file in a given path.
 
     Args:
-        f:  File name
-        pext (Optional): Extension to the path, expressed as a list of folders, and scanned prior to system path.
+        f:    Executable file name
+        path: Path where search the file
     Returns:
-        First file found with full path, None if not found
+        Full path of the first executable file found, None if not found
     """
     # Check if given file is directly executable
     if is_exe_file(f):
         return f
 
     # Search first executable in the path
-    path = os.getenv('PATH')
-    path = path.split(os.pathsep) if path else []
-    if pext is not None:
-        path = pext + path
     for d in path:
         nf = os.path.join(d, f)
         if is_exe_file(nf):
@@ -1794,7 +1871,7 @@ def search_file_in_path(f, pext=None):
 
 
 def parse_json_string(jstr):
-    """ Parse a JSON string
+    """ Parse a JSON string.
 
     Args:
         jstr: String containing JSON document
@@ -1805,7 +1882,7 @@ def parse_json_string(jstr):
 
 
 def encode_csv_string(str):
-    """ Encode a string to be used in CSV file
+    """ Encode a string to be used in CSV file.
 
     Args:
         str:  String to encode
@@ -1822,7 +1899,7 @@ def encode_csv_string(str):
 
 
 def compare_natural(s1, s2):
-    """ Compare two strings in natural order (for numbers that are inside)
+    """ Compare two strings in natural order (for numbers that are inside).
 
     Args:
         s1:  First string

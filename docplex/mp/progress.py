@@ -207,6 +207,11 @@ class ProgressListener(object):
 
         Args:
             s: solution
+
+        Note:
+            if you need to access runtime information (time, gap, number of nodes), use
+            :function:`SolutionListener.current_progress_data`, which contains the latest
+            priogress information as a tuple.
         """
         pass  # pragma: no cover
 
@@ -310,7 +315,7 @@ class Watcher(object):
                 delta = abs(new_watched - old)
                 reldiff = self._reldiff
                 absdiff = self._absdiff
-                if absdiff > 0 and abs(new_watched - old) >= absdiff:
+                if 0 < absdiff <= abs(new_watched - old):
                     accepted = True
                 elif reldiff and delta / (1 + abs(old)) >= reldiff:
                     accepted = True
@@ -325,8 +330,10 @@ class Watcher(object):
         ws = '--' if self._watched is None else self._watched
         return 'W_{0}[{1}]'.format(self.name, ws)
 
-def clock_filter_accept_stop_here():
+
+def clock_filter_accept_stop_here(watcher, pdata):
     pass
+
 
 class ClockFilter(object):
 
@@ -363,7 +370,7 @@ class ClockFilter(object):
         if poke is None:
             return False
         else:
-            clock_filter_accept_stop_here()
+            clock_filter_accept_stop_here(poke, progress_data)
             # print("- accepting event #{0}, reason: {1}".format(progress_data.id, poke.name))
             for w in self._watchers:
                 w.sync(progress_data)
@@ -623,6 +630,7 @@ class KpiListener(SolutionListener):
         kpis_as_dict[self.objective_kpi_name] = sol.objective_value
         kpis_as_dict[self.time_kpi_name] = pdata.time
         self.publish(kpis_as_dict)
+
 
 class KpiPrinter(KpiListener):
 

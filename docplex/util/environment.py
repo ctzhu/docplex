@@ -263,12 +263,15 @@ class Environment(object):
         self.record_history_time_decimals = 2  # number of decimals for time
         self.record_history_size = 100
         self.record_min_time = 1
+        self.recorded_solve_details_count = 0  # number of solve details that have been sent to recording
         self.autoreset = True
 
     def _reset_record_history(self, force=False):
         if self.autoreset or force:
             self.record_history = {}
             self.unpublished_details = None
+            self.last_history_record = {}
+            self.recorded_solve_details_count = 0
 
     def get_record_history_fields(self):
         if self._record_history_fields is None:
@@ -541,6 +544,7 @@ class Environment(object):
             self.publish_solve_details(to_publish)
 
     def record_in_history(self, details):
+        self.recorded_solve_details_count += 1
         for f in self.record_history_fields:
             if f in details:
                 current_ts = round(time.time(), self.record_history_time_decimals)
@@ -552,8 +556,25 @@ class Environment(object):
                     l.append(current_history_element)
                     details['%s.history' % f] = json.dumps(list(l))  # make new copy
                 else:
-                    self.last_history_record['%s.history' % f] = current_history_element
+                    self.last_history_record[f] = current_history_element
         return details
+    
+    def prepare_last_history(self):
+        details = {}
+        details.update(self.last_solve_details)
+        any_added = False
+        for k, v in self.last_history_record.items():
+            the_list = self.record_history[k]
+            do_append = True
+            if len(the_list) >= 1:
+                last_date_history = the_list[-1][0]
+                last_date = v[0]
+                do_append = (abs(last_date - last_date_history) >= 0.01)
+            if do_append:
+                the_list.append(v)
+                any_added = True
+            details['%s.history' % k] = json.dumps(list(the_list))
+        return details if any_added else False
 
     def publish_solve_details(self, details):
         '''Actually publish the solve specified details.
@@ -585,6 +606,10 @@ class Environment(object):
         # ===============================================================================
         if self.unpublished_details:
             self.publish_solve_details(self.unpublished_details)
+        if self.recorded_solve_details_count >= 1 and self.last_history_record:
+            last_details = self.prepare_last_history()
+            if last_details:
+                self.publish_solve_details(last_details)
 
     def set_stop_callback(self, cb):
         '''Sets a callback that is called when the script is run on

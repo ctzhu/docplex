@@ -6,9 +6,12 @@
 
 # gendoc: ignore
 
+from itertools import product, islice
+
 from docplex.mp.sosvarset import SOSVariableSet
 from docplex.mp.operand import LinearOperand
-from docplex.mp.linear import Var, LinearExpr, AbstractLinearExpr, ZeroExpr, ConstantExpr
+from docplex.mp.dvar import Var
+from docplex.mp.linear import MonomialExpr, LinearExpr, AbstractLinearExpr, ZeroExpr, ConstantExpr
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
@@ -18,12 +21,16 @@ from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, Lo
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.compat23 import fast_range, izip_longest
 from docplex.mp.environment import Environment
-from docplex.mp.utils import *
+from docplex.mp.utils import DOcplexException, DocplexQuadToLinearException
+from docplex.mp.utils import MultiObjective
+from docplex.mp.utils import is_string, is_pandas_dataframe, is_function, is_iterable, is_int, is_number, has_len,\
+                              is_iterator, str_maxed, generate_constant, is_ordered_sequence
+
+
+from docplex.mp.compat23 import izip
 from docplex.mp.kpi import KPI
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sttck import StaticTypeChecker
-
-from itertools import product, islice
 
 
 class ModificationBlocker(object):
@@ -57,7 +64,7 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
          --- key_format is the format in which the %s is embedded. By default '_%s'
              for example if each item has to be surrounded by {} set key_format to _{%s}
     '''
-    assert (dimen >= 1)
+    assert dimen >= 1
     actual_nb_slots = 0
     curpos = 0
     str_size = len(fmt)
@@ -201,29 +208,27 @@ class ModelFactory(_AbstractModelFactory):
         # the model has already disposed the old engine, if any
         self._engine = engine
 
-    def new_var(self, vartype, lb=None, ub=None, varname=None):
+    def _make_new_var(self, vartype, lb, ub, varname, origin=None):
         self_model = self._model
-        self._checker.check_var_domain(lb, ub, varname)
-        logger = self_model.logger
-        rlb = vartype.resolve_lb(lb, logger)
-        rub = vartype.resolve_ub(ub, logger)
-        used_varname = None if self_model.ignore_names else varname
-        var = Var(self_model, vartype, used_varname, rlb, rub, _safe_lb=True, _safe_ub=True)
-
-        idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
+        idx = self._engine.create_one_variable(vartype, lb, ub, varname)
+        var = Var(self_model, vartype, varname, lb, ub, _safe_lb=True, _safe_ub=True)
         self_model._register_one_var(var, idx, varname)
+        if origin is not None:
+            var.notify_origin(origin)
         return var
 
-    def new_safe_var(self, vartype, lb=None, ub=None, varname=None):
-        # INTERNAL
+    def new_var(self, vartype, lb=None, ub=None, varname=None, safe=False):
         self_model = self._model
+        if not safe:
+            self._checker.check_var_domain(lb, ub, varname)
+            logger = self_model.logger
+            rlb = vartype.resolve_lb(lb, logger)
+            rub = vartype.resolve_ub(ub, logger)
+        else:
+            rlb = vartype.get_default_lb() if lb is None else lb
+            rub = vartype.get_default_ub() if ub is None else ub
         used_varname = None if self_model.ignore_names else varname
-        rlb = vartype._lb if lb is None else lb
-        rub = vartype._ub if ub is None else ub
-        var = Var(self_model, vartype, used_varname, rlb, rub, _safe_lb=True, _safe_ub=True)
-        idx = self._engine.create_one_variable(vartype, rlb, rub, varname)
-        self_model._register_one_var(var, idx, used_varname)
-        return var
+        return self._make_new_var(vartype, rlb, rub, used_varname, origin=None)
 
     def new_constraint_status_var(self, ct):
         # INTERNAL
@@ -238,12 +243,7 @@ class ModelFactory(_AbstractModelFactory):
             # if name is already taken, use unique index at end to disambiguate
             varname = model._get_non_ambiguous_varname(base_varname)
 
-        svar = Var(model, binary_vartype, lb=0, ub=1, _safe_lb=True, _safe_ub=True, name=varname)
-        svar.notify_origin(ct)  # generated
-
-        idx = self._engine.create_one_variable(binary_vartype, 0, 1, varname)
-        model._register_one_var(svar, idx, varname)
-        return svar
+        return self._make_new_var(binary_vartype, 0, 1, varname, origin=ct)
 
     # --- sequences
     def make_key_seq(self, keys, name):
@@ -429,7 +429,6 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
         actual_name, key_seq = self.make_key_seq(keys, name)
-
         ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
         var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
         return self._make_var_dict(key_seq, var_list, ordered)
@@ -483,6 +482,9 @@ class ModelFactory(_AbstractModelFactory):
                 k = self_number_validation_fn(cst)
         return ConstantExpr(self._model, k)
 
+    def _new_safe_constant_expr(self, cst):
+        return ConstantExpr(self._model, cst)
+
     use_constant_expr = True
 
     def constant_expr(self, cst, safe_number=False):
@@ -490,19 +492,15 @@ class ModelFactory(_AbstractModelFactory):
             return self.new_zero_expr()
         else:
             return self._new_constant_expr(cst, safe_number=safe_number)
-        # else:  # pragma: no cover
-        #     if safe_number:
-        #         k = cst
-        #     else:
-        #         self_number_validation_fn = self.number_validation_fn
-        #         k = self_number_validation_fn(cst) if self_number_validation_fn else cst
-        #     return LinearExpr(self._model, e=None, constant=k, safe=True)
 
-    def linear_expr(self, arg=None, constant=0, name=None, safe=False):
-        return LinearExpr(self._model, arg, constant, name, safe=safe)
+    def linear_expr(self, arg=None, constant=0, name=None, safe=False, transient=False):
+        return LinearExpr(self._model, arg, constant, name, safe=safe, transient=transient)
 
-    # def to_valid_number(self, e, checked_num=False, context_msg=None, infinity=1e+20):
-    #     return self._checker.to_valid_number(e, checked_num, context_msg, infinity)
+    def _new_monomial_expr(self, dvar, coeff, safe=True):
+        if coeff:
+            return MonomialExpr(self._model, dvar, coeff, safe)
+        else:
+            return self.new_zero_expr()
 
     _operand_types = (AbstractLinearExpr, Var, ZeroExpr)
 
@@ -615,8 +613,35 @@ class ModelFactory(_AbstractModelFactory):
         return equiv_ct
 
     def new_if_then_constraint(self, if_ct, then_ct, negate=False):
+        def check_bvar_eq_10(lhs, rhs):
+            return isinstance(lhs, Var) and\
+                   lhs.is_binary() and\
+                   rhs.is_constant() and\
+                   (rhs.get_constant() == 0 or rhs.get_constant() == 1)
+
         # INTERNAL
-        indicator_ct = IfThenConstraint(self._model, if_ct, then_ct, negate=negate)
+        m = self._model
+        indicator_ct = None
+        if if_ct.sense == ComparisonType.EQ:
+            if_ct_lhs = if_ct.left_expr
+            if_ct_rhs = if_ct.right_expr
+            if check_bvar_eq_10(if_ct_lhs, if_ct_rhs):
+                bvar = if_ct_lhs
+                true_value = if_ct_rhs.get_constant()
+            elif check_bvar_eq_10(if_ct_rhs, if_ct_lhs):
+                bvar = if_ct_rhs
+                true_value = if_ct_lhs.get_constant()
+            else:
+                bvar = true_value = None
+            if bvar is not None:
+                assert true_value in {0, 1}
+                if negate:
+                    true_value = 1 - true_value
+                m.info("If_then constraint has been simplified to an indicator constraint, binary variable: '{0}', true_value={1}"
+                       .format(if_ct_lhs, true_value))
+                indicator_ct = IndicatorConstraint(self._model, if_ct_lhs, linear_ct=then_ct, active_value=true_value)
+        if indicator_ct is None:
+            indicator_ct = IfThenConstraint(self._model, if_ct, then_ct, negate=negate)
         return indicator_ct
 
     def new_batch_equivalence_constraints(self, bvars, linear_cts, active_values, names):
@@ -767,9 +792,9 @@ class ModelFactory(_AbstractModelFactory):
             # do not call create_one_var public API
             # or resync would loop
             idx = self_engine.create_one_variable(var.vartype, var.lb, var.ub, var.name)
-            if idx != var.get_index():  # pragma: no cover
+            if idx != var.index:  # pragma: no cover
                 print("index discrepancy: {0!s}, new index= {1}, old index={2}"
-                      .format(var, idx, var.get_index()))
+                      .format(var, idx, var.index))
 
         for ct in self_model.iter_constraints():
             if isinstance(ct, LinearConstraint):
@@ -1037,7 +1062,7 @@ class _VariableContainer(object):
     def get_var_key(self, dvar):
         # INTERNAL
         # containers store expanded keys (as tuples).
-        dvar_index = dvar.get_index()
+        dvar_index = dvar.index
         relative_offset = dvar_index - self._index_offset
         if self.nb_dimensions == 1:
             try:

@@ -21,7 +21,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.15'
+    readme = 'DOcplex 2.16'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -29,25 +29,30 @@ if changelog is None:
 
 ss = str(readme) + str(changelog)
 
+packages=['docplex',
+          'docplex.cp',
+          'docplex.cp.solver',
+          'docplex.cp.cpo',
+          'docplex.cp.fzn',
+          'docplex.cp.lp',
+          'docplex.mp',
+          'docplex.mp.callbacks',
+          'docplex.mp.internal',
+          'docplex.mp.params',
+          'docplex.mp.sktrans',
+          'docplex.mp.sparktrans',
+          'docplex.mp.worker',
+          'docplex.util',
+          'docplex.util.dods',
+          'docplex.util.ws']
+
+if os.path.isdir(os.path.join("docplex", "worker")):
+    packages.append('docplex.worker')
+
 setup(
     name='docplex',
-    packages=['docplex',
-               'docplex.cp',
-               'docplex.cp.solver',
-               'docplex.cp.cpo',
-               'docplex.cp.fzn',
-               'docplex.cp.lp',
-               'docplex.mp',
-               'docplex.mp.callbacks',
-               'docplex.mp.internal',
-               'docplex.mp.params',
-               'docplex.mp.sktrans',
-               'docplex.mp.sparktrans',
-               'docplex.mp.worker',
-               'docplex.util',
-               'docplex.util.dods',
-               'docplex.util.ws'],
-    version = '2.15.194',  # replaced at build time
+    packages=packages,
+    version = '2.16.196',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',

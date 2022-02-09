@@ -254,6 +254,8 @@ class SolveDetails(object):
         """
         return self._miprelgap
 
+    gap = mip_relative_gap
+
     @property
     def best_bound(self):
         """ This property returns the MIP best bound at the end of the solve.

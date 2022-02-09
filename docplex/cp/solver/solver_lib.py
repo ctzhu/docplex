@@ -14,8 +14,8 @@ See https://docs.python.org/2/library/ctypes.html for details.
 
 from docplex.cp.solution import *
 from docplex.cp.solution import CpoSolveResult
-from docplex.cp.utils import CpoException, compare_natural
-import docplex.cp.solver.solver as solver
+from docplex.cp.utils import compare_natural
+from docplex.cp.solver.solver import CpoSolver, CpoSolverAgent, CpoSolverException
 
 import ctypes
 from ctypes.util import find_library
@@ -60,33 +60,19 @@ _LIB_FUNCTION_PROTYTYPES = \
     'refineConflict'       : (ctypes.c_int,    (ctypes.c_void_p,)),
     'refineConflictWithCpo': (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_bool)),
     'runSeeds'             : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int,)),
+    'setExplainFailureTags': (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int))),
     'setCpoCallback'       : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_void_p,)),
 }
 
 # Optional lib functions
-_LIB_FUNCTION_OPTIONAL = set(['refineConflictWithCpo'])
+_LIB_FUNCTION_OPTIONAL = set(['refineConflictWithCpo', 'setExplainFailureTags'])
 
 
 ###############################################################################
 ##  Public classes
 ###############################################################################
 
-class CpoLibException(CpoException):
-    """ The base class for exceptions raised by the library client
-    """
-    def __init__(self, msg):
-        """ Create a new exception
-        Args:
-            msg: Error message
-        """
-        super(CpoLibException, self).__init__(msg)
-
-
-###############################################################################
-##  Public classes
-###############################################################################
-
-class CpoSolverLib(solver.CpoSolverAgent):
+class CpoSolverLib(CpoSolverAgent):
     """ Interface to a local solver through a shared library """
     __slots__ = ('lib_handler',         # Lib handler
                  'session',             # Solve session in the library
@@ -105,7 +91,7 @@ class CpoSolverLib(solver.CpoSolverAgent):
             params:   Solving parameters
             context:  Solver agent context
         Raises:
-            CpoLibException if library is not found
+            CpoSolverException if library is not found
         """
         # Call super
         super(CpoSolverLib, self).__init__(solver, params, context)
@@ -127,16 +113,13 @@ class CpoSolverLib(solver.CpoSolverAgent):
 
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
+        if sver:
+            self.process_infos['SolverVersion'] = sver
         mver = solver.get_model_format_version()
         if sver and mver and compare_natural(mver, sver) > 0:
-            raise CpoLibException("Solver version {} is lower than model format version {}.".format(sver, mver))
+            raise CpoSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
 
-        # Send CPO model to solver
-        cpostr = self._get_cpo_model_string()
-        self._set_cpo_model(cpostr)
-        self.context.log(3, "Model set into solver.")
-
-        # Initialize CPO callback setting
+        # Initialize settings indicators
         self.callback_proto = None
 
 
@@ -160,8 +143,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
         Raises:
             CpoException if error occurs
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Solve the model
         self._call_lib_function('solve', True)
@@ -173,8 +156,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
     def start_search(self):
         """ Start a new search. Solutions are retrieved using method search_next().
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         self._call_lib_function('startSearch', False)
 
@@ -221,14 +204,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
             Conflict result,
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
-        # Ensure cpo model is generated with all constraints named
-        if not self.context.model.name_all_constraints:
-            self.context.model.name_all_constraints = True
-            cpostr = self._get_cpo_model_string()
-            self._set_cpo_model(cpostr)
-
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Check if cpo format required
         self.last_conflict_cpo = None
@@ -255,8 +232,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
             Propagation result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Call library function
         self._call_lib_function('propagate', True)
@@ -280,8 +257,8 @@ class CpoSolverLib(solver.CpoSolverAgent):
         Returns:
             Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Call library function
         self._call_lib_function('runSeeds', False, nbrun)
@@ -289,6 +266,31 @@ class CpoSolverLib(solver.CpoSolverAgent):
         # Build result object
         self.last_json_result = None
         return self._create_result_object(CpoRunResult)
+
+
+    def set_explain_failure_tags(self, ltags=None):
+        """ This method allows to set the list of failure tags to explain in the next solve.
+
+        The failure tags are displayed in the log when the parameter :attr:`~docplex.cp.CpoParameters.LogSearchTags`
+        is set to 'On'.
+        All existing failure tags previously set are cleared prior to set the new ones.
+        Calling this method with an empty list is then equivalent to just clear tags.
+
+        Args:
+            ltags:  List of tag ids to explain
+        """
+        # Initialize model if needed
+        self._init_model_in_solver()
+
+        # Build list of tags
+        if ltags is None:
+            ltags = []
+        elif not is_array(ltags):
+            ltags = (ltags,)
+        nbtags = len(ltags)
+
+        # Call the function
+        self._call_lib_function('setExplainFailureTags', False, nbtags, (ctypes.c_int * nbtags)(*ltags))
 
 
     def end(self):
@@ -315,16 +317,19 @@ class CpoSolverLib(solver.CpoSolverAgent):
             self.last_json_result = None
 
         # Call library function
-        rc = getattr(self.lib_handler, dfname)(self.session, *args)
+        try:
+            rc = getattr(self.lib_handler, dfname)(self.session, *args)
+        except:
+            raise CpoNotSupportedException("The function '{}' is not found in the library. Try with a most recent version.".format(dfname))
         if rc != 0:
             errmsg = "Call to '{}' failure (rc={})".format(dfname, rc)
             if self.first_error_line:
                errmsg += ": {}".format(self.first_error_line)
-            raise CpoLibException(errmsg)
+            raise CpoSolverException(errmsg)
 
         # Check if JSON result is present
         if json and self.last_json_result is None:
-            raise CpoLibException("No JSON result provided by function '{}'".format(dfname))
+            raise CpoSolverException("No JSON result provided by function '{}'".format(dfname))
 
 
     def _notify_event(self, event, data):
@@ -385,49 +390,20 @@ class CpoSolverLib(solver.CpoSolverAgent):
         self.solver._notify_callback_event(event, res)
 
 
-    def _set_cpo_model(self, cpostr):
-        """ Set the cpo model in the solver
-        Args:
-            cpostr:  CPO model as a string
-        """
-        # Encode model
-        stime = time.time()
-        cpostr = cpostr.encode('utf-8')
-        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_ENCODE_TIME, time.time() - stime)
-
-        # Send CPO model to process
-        stime = time.time()
-        self._call_lib_function('setCpoModel', False, cpostr)
-        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - stime)
-
-
     def _get_lib_handler(self):
         """ Access the CPO library
         Returns:
             Library handler, with function prototypes defined.
         Raises:
-            CpoLibException if library is not found
+            CpoSolverException if library is not found
         """
         # Access library
-        listlibs = self.context.libfile
-        if not listlibs:
-            raise CpoLibException("CPO library file should be given in 'solver.lib.libfile' context attribute.")
+        libf = self.context.libfile
+        if not libf:
+            raise CpoSolverException("CPO library file should be given in 'solver.lib.libfile' context attribute.")
 
-        # Ensure it is a list of values
-        if not is_array(listlibs):
-            listlibs = (listlibs, )
-
-        # Search the first available library
-        lib = None
-        for libf in listlibs[:-1]:
-            try:
-                lib = self._load_lib(libf)
-                break
-            except:
-                pass
-        # If not found, search last one, without catching exceptions
-        if lib is None:
-           lib = self._load_lib(listlibs[-1])
+        # Load library
+        lib = self._load_lib(libf)
 
         # Define function prototypes
         self.absent_funs = set()
@@ -438,7 +414,7 @@ class CpoSolverLib(solver.CpoSolverAgent):
                 f.argtypes = proto[1]
             except:
                 if not name in _LIB_FUNCTION_OPTIONAL:
-                    raise CpoLibException("Function '{}' not found in the library {}".format(name, lib))
+                    raise CpoSolverException("Function '{}' not found in the library {}".format(name, lib))
                 else:
                     self.absent_funs.add(name)
 
@@ -451,34 +427,47 @@ class CpoSolverLib(solver.CpoSolverAgent):
         Returns:
             Library handler
         Raises:
-            CpoLibException or other Exception if library is not found
+            CpoSolverException or other Exception if library is not found
         """
         # Search for library file
         if not os.path.isfile(libf):
             lf = find_library(libf)
             if lf is None:
-                raise CpoLibException("Can not find library '{}'".format(libf))
+                raise CpoSolverException("Can not find library '{}'".format(libf))
             libf = lf
+        # Check library is executable
+        if not is_exe_file(libf):
+            raise CpoSolverException("Library file '{}' is not executable".format(libf))
         # Load library
         try:
             return ctypes.CDLL(libf)
         except Exception as e:
-            raise CpoLibException("Can not load library '{}': {}".format(libf, e))
+            raise CpoSolverException("Can not load library '{}': {}".format(libf, e))
 
 
-    def _add_callback_if_needed(self):
-        """ Ask solver to add callback if needed. """
-        if not self.callback_proto and self.solver.callbacks:
-            # Check solver version
-            lver = self.version_info.get('LibVersion', 0)
-            sver = self.version_info.get('SolverVersion', "1")
-            if (compare_natural(sver, "12.10") >= 0) and (lver >= 2):
-                # Create session
-                # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
-                self.callback_proto = _CPE_CALLBACK_PROTOTYPE(self._cpo_callback)
-                self._call_lib_function('setCpoCallback', False, self.callback_proto)
-                self.context.log(3, "CPO callback created.")
-            else:
-                raise CpoLibException("This version of the CPO solver does not support solver callbacks. Solver: {}, lib: {}".format(sver, lver))
+    def _send_model_to_solver(self, cpostr):
+        """ Send the model to the solver.
+        This method must be extended by agent implementations to actually do the operation.
+        Args:
+            copstr:  String containing the model in CPO format
+        """
+        # Encode model
+        stime = time.time()
+        cpostr = cpostr.encode('utf-8')
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_ENCODE_TIME, time.time() - stime)
+
+        # Send CPO model to process
+        stime = time.time()
+        self._call_lib_function('setCpoModel', False, cpostr)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - stime)
+
+
+    def _add_callback_processing(self):
+        """ Add the processing of solver callback.
+        This method must be extended by agent implementations to actually do the operation.
+        """
+        # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
+        self.callback_proto = _CPE_CALLBACK_PROTOTYPE(self._cpo_callback)
+        self._call_lib_function('setCpoCallback', False, self.callback_proto)
 
 

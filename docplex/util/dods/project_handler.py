@@ -10,7 +10,7 @@
 import glob
 import json
 import os
-from os.path import join, dirname, basename
+from os.path import join, dirname, basename, splitext
 from zipfile import ZipFile, BadZipfile
 
 try:
@@ -41,6 +41,15 @@ def get_model_names(root, zipfile):
     return modelnames
 
 
+def get_all_inputs(directory=None):
+    inputs = {}
+    all_csv = "*.csv"
+    g = join(directory, all_csv) if directory else all_csv
+    for f in glob.glob(g):
+        name = splitext(basename(f))[0]
+        inputs[name] = pandas.read_csv(f, index_col=None)
+    return inputs
+
 class MultipleRootException(Exception):
     '''The exception raised if multiple roots are found in an exported project.
     '''
@@ -54,6 +63,81 @@ def normalized(path):
     p = os.path.normpath(path)
     p = p.replace('\\', '/')
     return p
+
+
+class WSProjectDirectoryHandler(object):
+    @staticmethod
+    def accepts(path):
+        '''Returns true if the path can be read by this handler.
+
+        This returns true if some .scenarios are found
+        '''
+        if not os.path.isdir(path):
+            return False
+        return os.path.isfile(join(path, '.decision.json')) and os.path.isdir(join(path, '.containers'))
+
+    def __init__(self, path):
+        '''Creates a new directory projec handler
+        '''
+        super(WSProjectDirectoryHandler, self).__init__()
+        self.path = path
+
+    def get_inputs(self, model, scenario, project=None):
+        '''Returns inputs for the model handled by this
+        '''
+        if not pandas:
+            raise RuntimeError('Input can only be read if pandas is installed')
+        in_df = {}
+        rootpath = join(self.path, '.containers', scenario)
+        descriptor_name = '/'.join([rootpath, 'scenario.json'])
+        with open(descriptor_name) as f:
+            descriptor = json.load(f)
+        assets = descriptor['categories']['input']['assets']
+        for t in assets:
+            if assets[t]["type"] == 'Table':
+                table_path = '/'.join([rootpath, t])
+                table_name= os.path.splitext(t)[0]
+                with open(normalized(table_path)) as t_input:
+                    # get columns
+                    data = pandas.read_csv(t_input, index_col=None)
+                    in_df[table_name] = data
+        return in_df
+
+    def get_input_stream(self, model, scenario, path, project=None):
+        rootpath = join(self.path, '.containers', scenario)
+        return open(join(rootpath, path), 'r')
+
+
+class SimpleCSVProjectDirectoryHandler(object):
+    @staticmethod
+    def accepts(path):
+        '''Returns true if the path can be read by this handler.
+
+        This returns true if there is a model.py files with some .csv files
+        '''
+        if not os.path.isdir(path):
+            return False
+        has_csv = any([os.path.isfile(f) for f in glob.glob(join(path, "*.csv"))])
+        return os.path.isfile(join(path, 'model.py')) and has_csv
+
+    def __init__(self, path):
+        '''Creates a new directory projec handler
+        '''
+        super(SimpleCSVProjectDirectoryHandler, self).__init__()
+        self.path = path
+
+    def get_inputs(self, model, scenario, project=None):
+        '''Returns inputs for the model handled by this
+        '''
+        if not pandas:
+            raise RuntimeError('Input can only be read if pandas is installed')
+        in_df = get_all_inputs(self.path)
+        return in_df
+
+    def get_input_stream(self, model, scenario, path, project=None):
+        rootpath = self.path
+        return open(join(rootpath, path), 'r')
+
 
 
 class ProjectDirectoryHandler(object):

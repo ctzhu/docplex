@@ -3,13 +3,14 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
+import warnings
+
 from docplex.mp.basic import ModelingObject, ModelingObjectBase, Priority, _BendersAnnotatedMixin
 from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
 from docplex.mp.utils import DocplexLinearRelaxationError
 
-import warnings
 
 
 class _ExtraConstraintUsage(object):
@@ -132,6 +133,10 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def short_typename(self):
         return "constraint"
 
+    @property
+    def lp_name(self):
+        return self._name or "c%s" % (self.index + 1)
+
     def is_trivial(self):
         return False
 
@@ -176,7 +181,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
         # INTERNAL
         pass  # pragma: no cover
 
-    def notify_expr_replaced(self, expr, new_expr):
+    def notify_expr_replaced(self, old_expr, new_expr):
         # INTERNAL
         pass  # pragma: no cover
 
@@ -416,8 +421,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         right_expr.notify_used(self)
 
     def check_name(self, new_name):
-        if new_name is not None:
-            self.check_lp_name(new_name)
+        self.check_lp_name('constraint', new_name, accept_empty=True, accept_none=True)
 
     def set_name(self, new_name):
         # INTERNAL
@@ -452,6 +456,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def short_typename(self):
         return "linear constraint"
 
+    # noinspection PyMethodMayBeStatic
     def cplex_range_value(self):
         return 0.0
 
@@ -467,11 +472,11 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         copy_name = None if target_model.ignore_names else self.name
         return self.__class__(target_model, copied_left, self.sense, copied_right, copy_name)
 
-    def relaxed_copy(self, target_model, var_map):
-        copied_left = self.left_expr.relaxed_copy(target_model, var_map)
-        copied_right = self.right_expr.relaxed_copy(target_model, var_map)
+    def relaxed_copy(self, relaxed_model, var_map):
+        copied_left = self.left_expr.relaxed_copy(relaxed_model, var_map)
+        copied_right = self.right_expr.relaxed_copy(relaxed_model, var_map)
         copy_name = self.name
-        return self.__class__(target_model, copied_left, self.sense, copied_right, copy_name)
+        return self.__class__(relaxed_model, copied_left, self.sense, copied_right, copy_name)
 
     @property
     def sense(self):
@@ -495,6 +500,10 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     def set_sense(self, new_sense):
         self.get_linear_factory().set_linear_constraint_sense(self, new_sense)
+
+    @property
+    def sense_string(self):
+        return self.sense.name
 
     # compatibility
     @property
@@ -541,11 +550,15 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     rhs = right_expr
 
     def _no_linear_ct_in_logical_test_error(self):
+        # if self.sense == ComparisonType.EQ:
+        #     # for equality testing there -is- a workaround
+        #     msg = "Cannot use == to test expression equality, try using Python is operator or method equals: {0!s}".format(self)
+        # else:
+        msg = "Cannot convert linear constraint to a boolean value: {0!s}".format(self)
         if self.sense == ComparisonType.EQ:
             # for equality testing there -is- a workaround
-            msg = "Cannot use == to test expression equality, try using Python is operator or method equals: {0!s}".format(self)
-        else:
-            msg = "Cannot convert a linear constraint to boolean: {0!s}".format(self)
+            msg += "\n  try using Python 'is' operator or method 'equals' for expression equality"
+
         raise TypeError(msg)
 
     def _cannot_promote_from_linear_to_quadratic(self, old_expr, new_expr):
@@ -559,13 +572,13 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         for usage in self._iter_usages():
             usage.notify_expr_modified(self, new_expr, engine)
 
-    def notify_expr_modified(self, expr, expr_event):
+    def notify_expr_modified(self, expr, event):
         # INTERNAL
-        if expr_event:
-            if expr_event is UpdateEvent.LinExprPromotedToQuad:
+        if event:
+            if event is UpdateEvent.LinExprPromotedToQuad:
                 self._cannot_promote_from_linear_to_quadratic(old_expr=expr, new_expr=None)
             else:
-                self.get_linear_factory().update_linear_constraint_exprs(ct=self, expr_event=expr_event)
+                self.get_linear_factory().update_linear_constraint_exprs(ct=self, expr_event=event)
 
     def notify_expr_replaced(self, old_expr, new_expr):
         # INTERNAL
@@ -615,31 +628,22 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
     def is_trivial(self):
         # Checks whether the constraint is equivalent to a comparison between numbers.
         # For example, x <= x+1 is trivial, but 1.5 X <= X + 1 is not.
+        def has_nonzero_coef(term_iter):
+            return any(tk for _, tk in term_iter)
+
         self_left_expr = self._left_expr
         self_right_expr = self._right_expr
         if self_right_expr.is_constant():
-            for rv, rk in self_left_expr.iter_terms():
-                if rk:
-                    return False
-            else:
-                return True
-
+            return not has_nonzero_coef(self.left_expr.iter_terms())
         elif self_left_expr.is_constant():
-            for lv, lk in self_right_expr.iter_terms():
-                if lk:
-                    return False
-            else:
-                return True
+            return not has_nonzero_coef(self.right_expr.iter_terms())
         else:
-            for _, nk in BinaryConstraint._generate_net_linear_coefs2_unsorted(self_left_expr, self_right_expr):
-                if nk:
-                    return False
-            else:
-                return True
+            return not has_nonzero_coef(BinaryConstraint._generate_net_linear_coefs2_unsorted(self_left_expr, self_right_expr))
+
 
     def _post_meta_constraint(self, rhs, ctsense):
         status_var = self.get_resolved_status_var()
-        return self._model._qfactory.new_xconstraint(lhs=status_var, rhs=rhs, comparaison_type=ctsense)
+        return self._model._new_xconstraint(lhs=status_var, rhs=rhs, comparaison_type=ctsense)
 
     def le(self, rhs):
         return self._post_meta_constraint(rhs, ComparisonType.LE)
@@ -677,7 +681,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
         Note:
             This method will raise an exception if the model has not been solved successfully.
-            
             This method is OK with small numbers of constraints. For large numbers of constraints (>100),
             consider using Model.dual_values() with a sequence of constraints.
             
@@ -760,7 +763,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         if status_var is not None:
             return status_var
 
-        self._model.check_logical_constraint_support()
+        self._model._check_logical_constraint_support()
 
         # TODO: issue a meaningful message on why the ct is not discrete
         self._check_is_discrete(self, msg=caller_msg)
@@ -777,7 +780,9 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         # store ct in model
         eqct = lfactory.new_equivalence_constraint(status_var, linear_ct=self)
         eqct.notify_origin(self)
-        self._model._register_implicit_equivalence_ct(eqct)
+        engine = self._model.get_engine()
+        eqx = engine.create_logical_constraint(eqct, is_equivalence=True)
+        self._model._register_implicit_equivalence_ct(eqct, eqx)
         return status_var
 
     def to_linear_expr(self):
@@ -823,7 +828,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     def quotient(self, e):
         svar = self.get_resolved_status_var()
-        self._model.typecheck_as_denominator(e, svar)
+        self._model._typecheck_as_denominator(e, svar)
         inverse = 1.0 / float(e)
         return self.times(inverse)
 
@@ -916,7 +921,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         self._untag_as_extra_ct(self._lazy_constraint_tag)
 
 
-
 class RangeConstraint(AbstractConstraint):
     """ This class models range constraints.
 
@@ -992,7 +996,7 @@ class RangeConstraint(AbstractConstraint):
 
     @lb.setter
     def lb(self, new_lb):
-        self._model.typecheck_num(new_lb)
+        self._model._typecheck_num(new_lb)
         self.get_linear_factory().set_range_constraint_lb(self, new_lb)
 
     @property
@@ -1004,7 +1008,7 @@ class RangeConstraint(AbstractConstraint):
 
     @ub.setter
     def ub(self, new_ub):
-        self._model.typecheck_num(new_ub)
+        self._model._typecheck_num(new_ub)
         self.get_linear_factory().set_range_constraint_ub(self, new_ub)
 
     @property
@@ -1018,8 +1022,8 @@ class RangeConstraint(AbstractConstraint):
     def bounds(self, new_bounds):
         try:
             new_lb, new_ub = new_bounds
-            self._model.typecheck_num(new_lb)
-            self._model.typecheck_num(new_ub)
+            self._model._typecheck_num(new_lb)
+            self._model._typecheck_num(new_ub)
             self.get_linear_factory().set_range_constraint_bounds(self, new_lb, new_ub)
         except ValueError:
             self.fatal('RangeConstraint.bounds expects a 2-tuple of numbers, {0!r} was passed', new_bounds)
@@ -1383,7 +1387,6 @@ class IndicatorConstraint(LogicalConstraint):
             return True
 
 
-
 class EquivalenceConstraint(LogicalConstraint):
     """ This class models equivalence constraints.
 
@@ -1416,7 +1419,11 @@ class EquivalenceConstraint(LogicalConstraint):
 
     def is_satisfied(self, solution, tolerance=1e-6):
         is_ct_satisfied = self._linear_ct.is_satisfied(solution, tolerance)
-        binary_value = solution.get_value(self._binary_var)
+        bvar = self._binary_var
+        if bvar.is_generated() and not bvar in solution:
+            # bvar is not mentioned, ok
+            return True
+        binary_value = solution.get_value(bvar)
         expected_value = self._active_value if is_ct_satisfied else 1 - self._active_value
         return ComparisonType.almost_equal(binary_value, expected_value, tolerance)
 
@@ -1467,12 +1474,12 @@ class QuadraticConstraint(BinaryConstraint):
     __slots__ = ()
 
     def is_trivial(self):
-        for qv, nqk in self.iter_net_quads():
+        for _, nqk in self.iter_net_quads():
             if nqk:
                 return False
         # now check linear parts
 
-        for lv, lk in self.iter_net_linear_coefs():
+        for _, lk in self.iter_net_linear_coefs():
             if lk:
                 return False
         return True
@@ -1493,7 +1500,8 @@ class QuadraticConstraint(BinaryConstraint):
         else:
             return self.generate_ordered_net_quads(left_expr, right_expr)
 
-    def generate_ordered_net_quads(self, qleft, qright):
+    @classmethod
+    def generate_ordered_net_quads(cls, qleft, qright):
         # left first, then right
         for lqv, lqk in qleft.iter_sorted_quads():
             net_k = lqk - qright._get_quadratic_coefficient_from_var_pair(lqv)
@@ -1504,12 +1512,12 @@ class QuadraticConstraint(BinaryConstraint):
                 yield rqv, -rqk
 
     def _set_left_expr(self, new_left_expr):
-        self.get_quadratic_factory().set_quadratic_constraint_expr_from_pos(self, pos=0, new_expr=new_left_expr)
+        self.qfactory.set_quadratic_constraint_expr_from_pos(self, pos=0, new_expr=new_left_expr)
 
     left_expr = property(BinaryConstraint.get_left_expr, _set_left_expr)
 
     def _set_right_expr(self, new_right_expr):
-        self.get_quadratic_factory().set_quadratic_constraint_expr_from_pos(self, pos=1, new_expr=new_right_expr)
+        self.qfactory.set_quadratic_constraint_expr_from_pos(self, pos=1, new_expr=new_right_expr)
 
     right_expr = property(BinaryConstraint.get_right_expr, _set_right_expr)
 
@@ -1556,7 +1564,7 @@ class QuadraticConstraint(BinaryConstraint):
         self.set_sense(new_sense)
 
     def set_sense(self, new_sense):
-        self.get_quadratic_factory().set_quadratic_constraint_sense(self, new_sense)
+        self.qfactory.set_quadratic_constraint_sense(self, new_sense)
 
     # compat
     @property
@@ -1569,16 +1577,16 @@ class QuadraticConstraint(BinaryConstraint):
 
     def notify_expr_modified(self, expr, event):
         # INTERNAL
-        self.get_quadratic_factory().update_quadratic_constraint(self, expr, event)
+        self.qfactory.update_quadratic_constraint(self, expr, event)
 
     def notify_expr_replaced(self, old_expr, new_expr):
-        qfact = self.get_quadratic_factory()
+        qfact = self.qfactory
         if old_expr is self._left_expr:
             qfact.set_quadratic_constraint_expr_from_pos(qct=self, pos=0, new_expr=new_expr,
-                                                                          update_subscribers=False)
+                                                         supdate_subscribers=False)
         elif old_expr is self._right_expr:
             qfact.set_quadratic_constraint_expr_from_pos(qct=self, pos=1, new_expr=new_expr,
-                                                                          update_subscribers=False)
+                                                         update_subscribers=False)
         else:
             # should not happen
             pass

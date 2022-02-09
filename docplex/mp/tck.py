@@ -13,7 +13,8 @@ from docplex.mp.compat23 import izip
 from docplex.mp.constr import AbstractConstraint, LinearConstraint,\
     LogicalConstraint, EquivalenceConstraint, IndicatorConstraint, QuadraticConstraint
 from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.linear import Var, Expr
+from docplex.mp.linear import Expr
+from docplex.mp.dvar import Var
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.progress import ProgressListener
 from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
@@ -21,7 +22,7 @@ from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate
 from docplex.mp.vartype import VarType
 import six
 
-_vartype_code_map = {sc().get_cplex_typecode(): sc().short_name for sc in VarType.__subclasses__()}
+_vartype_code_map = {sc().cplex_typecode: sc().short_name for sc in VarType.__subclasses__()}
 
 
 def vartype_code_to_string(vartype_code):
@@ -56,7 +57,7 @@ class DocplexNumericCheckerMixin(object):
                     msg = "{0}: {1}".format(context_msg, msg)
             docplex_fatal(msg)
         elif math.isinf(e):
-            msg = "Infinite value forbidden in expression"
+            msg = "Infinite value detected"
             if context_msg is not None:
                 try:
                     msg = "{0}: {1}".format(context_msg(), msg)
@@ -286,7 +287,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         # INTERNAL: check for Var instance
         if not isinstance(obj, Var):
             self.fatal("Expecting decision variable, got: {0!s} type: {1!s}", obj, type(obj))
-        if vartype and obj.vartype.get_cplex_typecode() != vartype:
+        if vartype and obj.cplex_typecode != vartype:
             self.fatal("Expecting {0} variable, got: {1!s} type: {2!s}",
                        vartype_code_to_string(vartype), obj, obj.vartype)
 
@@ -297,7 +298,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             if not isinstance(x, Var):
                 caller_s = resolve_caller_as_string(caller)
                 self.fatal("{2}Expecting an iterable returning variables, {0!r} was passed at position {1}", x, i, caller_s)
-            if vtype and x.vartype.get_cplex_typecode() != vtype:
+            if vtype and x.cplex_typecode != vtype:
                 caller_s = resolve_caller_as_string(caller)
                 self.fatal("{3}Expecting an iterable returning variables of type {0}, {1!r} was passed at position {2}",
                            vtype.short_name, x, i, caller_s)
@@ -352,11 +353,11 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             s_caller = resolve_caller_as_string(caller, sep=' ')
             if do_raise:
                 self.fatal('{0}expects a non-added constraint, {1} is added (index={2})',
-                           s_caller, ct, ct.get_index()
+                           s_caller, ct, ct.index
                            )
             else:
                 self.warning('{0}expects a non-added constraint, {1} is added (index={2})',
-                             s_caller, ct, ct.get_index()
+                             s_caller, ct, ct.index
                              )
 
     def typecheck_cts_added_to_model(self, mdl, cts, caller=None):
@@ -515,8 +516,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
             self.fatal('Expecting ProgressListener instance, got: {0!r}', arg)
 
     def typecheck_two_in_model(self, model, mobj1, mobj2, ctx_msg):
-        mobj1_model = mobj1._get_model()
-        mobj2_model = mobj2._get_model()
+        mobj1_model = mobj1.model
+        mobj2_model = mobj2.model
         if mobj1_model != mobj2_model:
             self.fatal("Cannot mix objects from different models in {0}. obj1={1!s}, obj2={2!s}"
                        .format(ctx_msg, mobj1, mobj2))

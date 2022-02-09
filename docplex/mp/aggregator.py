@@ -13,7 +13,8 @@ from docplex.mp.xcounter import update_dict_from_item_value
 
 from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_series, \
     is_numpy_ndarray, is_pandas_dataframe, is_numpy_matrix, is_ordered_sequence
-from docplex.mp.linear import Var, MonomialExpr, AbstractLinearExpr, LinearExpr, ZeroExpr
+from docplex.mp.linear import MonomialExpr, AbstractLinearExpr, LinearExpr, ZeroExpr
+from docplex.mp.dvar import Var
 from docplex.mp.functional import _FunctionalExpr
 from docplex.mp.operand import LinearOperand
 from docplex.mp.quad import QuadExpr, VarPair
@@ -172,23 +173,22 @@ class ModelAggregator(object):
 
     def sum(self, sum_args):
         if is_iterator(sum_args):
-            return self._sum_with_iter(sum_args)
-
+            sum_res = self._sum_with_iter(sum_args)
         elif is_numpy_ndarray(sum_args):
-            return self._sum_with_iter(sum_args.flat)
+            sum_res = self._sum_with_iter(sum_args.flat)
         elif is_pandas_series(sum_args):
-            return self.sum(sum_args.values)
+            sum_res = self.sum(sum_args.values)
         elif isinstance(sum_args, dict):
             # handle dict: sum all values
-            return self._sum_with_iter(itervalues(sum_args))
+            sum_res = self._sum_with_iter(itervalues(sum_args))
         elif is_iterable(sum_args):
-            return self._sum_with_seq(sum_args)
+            sum_res = self._sum_with_seq(sum_args)
 
         elif is_number(sum_args):
-            return sum_args
+            sum_res = sum_args
         else:
-            # TODO: use linear operand here
-            return self._linear_factory._to_linear_operand(sum_args)
+            sum_res = self._linear_factory._to_linear_operand(sum_args)
+        return sum_res
 
     def _sum_with_iter(self, args):
         sum_of_nums = 0

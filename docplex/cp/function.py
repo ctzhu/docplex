@@ -508,9 +508,12 @@ class CpoSegmentedFunction(CpoFunction):
             segments.append((self.x[i], self.v[i], self.s[i]))
         return segments
 
-    def _get_expr_string(self):
-        """ Get the string representing this expression, name excluded. """
-        return "SegmentedFunction(...)"
+    def __str__(self):
+        """ Build a string representing this function. """
+        res = "SegmentedFunction(" + str(self.get_segment_list()) + ")"
+        if self.name:
+            res = self.name + "=" + res
+        return res
 
 
 class CpoStepFunction(CpoFunction):
@@ -523,13 +526,18 @@ class CpoStepFunction(CpoFunction):
 
     When two consecutive steps of the function have the same value, these steps are merged so that the function
     is always represented with the minimal number of steps.
+
+    The function steps are expressed as a list of couples (x, val) specifying that the value of the function is *val*
+    after *x*, up to the next step.
+    By default, the value of the function is zero up to the first step.
+    To change this default value, the first step should be (INTERVAL_MIN, value).
     """
     def __init__(self, steps=None, name=None):
         """ Step function.
 
         Args:
-            steps:  Function steps
-            name: Function name
+            steps: (Optional) Function steps, expressed as a list of couples (x, val).
+            name:  (Optional) Function name
         """
         if steps is None or len(steps) == 0:
             super(CpoStepFunction, self).__init__(Type_StepFunction, name=name)
@@ -557,8 +565,11 @@ class CpoStepFunction(CpoFunction):
             steps.append((self.x[i], self.v[i]))
         return steps
 
-    def _get_expr_string(self):
-        """ Get the string representing this expression, name excluded. """
-        return "StepFunction(...)"
+    def __str__(self):
+        """ Build a string representing this function. """
+        res = "StepFunction(" + str(self.get_step_list()) + ")"
+        if self.name:
+            res = self.name + "=" + res
+        return res
 
 

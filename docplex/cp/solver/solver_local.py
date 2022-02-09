@@ -12,7 +12,7 @@ a local CP Optimizer Interactive (cpoptimizer(.exe)).
 
 from docplex.cp.solution import *
 from docplex.cp.utils import CpoException
-import docplex.cp.solver.solver as solver
+from docplex.cp.solver.solver import CpoSolver, CpoSolverAgent, CpoSolverException
 
 import subprocess
 import sys
@@ -27,16 +27,17 @@ import signal, os
 ###############################################################################
 
 # List of command ids that can be sent to solver
-CMD_EXIT            = "Exit"           # End process (no data)
-CMD_SET_CPO_MODEL   = "SetCpoModel"    # CPO model as string
-CMD_SOLVE_MODEL     = "SolveModel"     # Complete solve of the model (no data)
-CMD_START_SEARCH    = "StartSearch"    # Start search (no data)
-CMD_SEARCH_NEXT     = "SearchNext"     # Get next solution (no data)
-CMD_END_SEARCH      = "EndSearch"      # End search (no data)
-CMD_REFINE_CONFLICT = "RefineConflict" # Refine conflict (no data)
-CMD_PROPAGATE       = "Propagate"      # Propagate (no data)
-CMD_RUN_SEEDS       = "RunSeeds"       # Run with multiple seeds.
-CMD_ADD_CALLBACK    = "AddCallback"    # Add callback proxy to the solver
+CMD_EXIT            = "Exit"            # End process (no data)
+CMD_SET_CPO_MODEL   = "SetCpoModel"     # CPO model as string
+CMD_SOLVE_MODEL     = "SolveModel"      # Complete solve of the model (no data)
+CMD_START_SEARCH    = "StartSearch"     # Start search (no data)
+CMD_SEARCH_NEXT     = "SearchNext"      # Get next solution (no data)
+CMD_END_SEARCH      = "EndSearch"       # End search (no data)
+CMD_REFINE_CONFLICT = "RefineConflict"  # Refine conflict (no data)
+CMD_PROPAGATE       = "Propagate"       # Propagate (no data)
+CMD_RUN_SEEDS       = "RunSeeds"        # Run with multiple seeds.
+CMD_ADD_CALLBACK    = "AddCallback"     # Add callback proxy to the solver
+MD_SET_FAILURE_TAGS = "SetFailureTags"  # Give list of failure tags to explain.
 
 # List of events received from solver
 EVT_VERSION_INFO        = "VersionInfo"        # Local solver version info (String in JSON format)
@@ -68,19 +69,15 @@ CLIENT_VERSION = 3
 ##  Public classes
 ###############################################################################
 
-class LocalSolverException(CpoException):
-    """ The base class for exceptions raised by the local solver client
-    """
-    def __init__(self, msg):
-        """ Create a new exception
-        Args:
-            msg: Error message
-        """
-        super(LocalSolverException, self).__init__(msg)
-
-
-class CpoSolverLocal(solver.CpoSolverAgent):
+class CpoSolverLocal(CpoSolverAgent):
     """ Interface to a local solver through an external process """
+    __slots__ = ('process',             # Sub-process handler
+                 'active',              # Agent active indicator
+                 'pout',                # Sub-process output stream
+                 'pin',                 # Sub-process input stream
+                 'available_commands',  # List of available commands
+                 'timeout_kill',        # Indicates process have been killed by timeout
+                )
 
     def __init__(self, solver, params, context):
         """ Create a new solver that solves locally with CP Optimizer Interactive.
@@ -95,15 +92,17 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         # Call super
         self.process = None
         self.active = True
+        self.timeout_kill = False
         super(CpoSolverLocal, self).__init__(solver, params, context)
 
         # Check if executable file exists
-        if context.execfile is None:
+        xfile = context.execfile
+        if xfile is None or not is_string(xfile):
             raise CpoException("Executable file should be given in 'execfile' context attribute.")
-        if not is_string(context.execfile):
-            raise CpoException("Executable file should be given in 'execfile' as a string.")
-        #if not os.path.isfile(context.execfile):
-        #    raise CpoException("Executable file '" + str(context.execfile) + "' does not exists")
+        if not os.path.isfile(xfile):
+            raise CpoException("Executable file '{}' does not exists".format(xfile))
+        if not is_exe_file(xfile):
+            raise CpoException("Executable file '{}' is not executable".format(xfile))
 
         # Create solving process
         cmd = [context.execfile]
@@ -119,14 +118,22 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Read initial version info from process
         self.version_info = None
-        timer = threading.Timer(1, lambda: self.process.kill() if self.version_info is None else None)
+        timeout = context.process_start_timeout
+        timer = threading.Timer(timeout, self._process_start_timeout)
         timer.start()
-        evt, data = self._read_message()
+        try:
+            evt, data = self._read_message()
+        except Exception as e:
+            if self.timeout_kill:
+                raise CpoSolverException("Solver process was too long to start and respond ({} seconds). Process has been killed.".format(timeout))
+            raise CpoSolverException("Solver sub-process start failure: {}".format(e))
         timer.cancel()
+
+        # Check received message
         if evt != EVT_VERSION_INFO:
-            raise LocalSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
+            raise CpoSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
         self.version_info = verinf = json.loads(data)
-        self.available_command = self.version_info['AvailableCommands']
+        self.available_commands = self.version_info['AvailableCommands']
         # Normalize information
         verinf['AgentModule'] = __name__
 
@@ -134,18 +141,20 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
+        if sver:
+            self.process_infos['SolverVersion'] = sver
         mver = solver.get_model_format_version()
         if sver and mver and compare_natural(mver, sver) > 0:
-            raise LocalSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
+            raise CpoSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
 
-        # Send CPO model to process
-        cpostr = self._get_cpo_model_string()
-        self._write_message(CMD_SET_CPO_MODEL, cpostr)
-        self._wait_json_result(EVT_SUCCESS)  # JSON stored
-        context.log(3, "Model sent.")
 
-        # Initialize CPO callback setting
-        self.callback_added = False
+    def _process_start_timeout(self):
+        """ Process the raise of start timeout timer """
+        # Check if version info has been read
+        if not self.version_info:
+            # Kill sub-process
+            self.timeout_kill = True
+            self.process.kill()
 
 
     def __del__(self):
@@ -168,8 +177,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             Model solve result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Start solve
         self._write_message(CMD_SOLVE_MODEL)
@@ -184,8 +193,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
     def start_search(self):
         """ Start a new search. Solutions are retrieved using method search_next().
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         self._write_message(CMD_START_SEARCH)
 
@@ -242,18 +251,9 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             Conflict result,
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
-        # Ensure cpo model is generated with all constraints named
-        if not self.context.model.name_all_constraints:
-            self.context.model.name_all_constraints = True
-            cpostr = self._get_cpo_model_string()
-            self.context.model.name_all_constraints = False
-            # Send CPO model to process
-            self._write_message(CMD_SET_CPO_MODEL, cpostr)
-            self._wait_event(EVT_SUCCESS)
+        # Initialize model if needed
+        self._init_model_in_solver()
 
-        # Add callback if needed
-        self._add_callback_if_needed()
-        
         # Check if cpo format required
         pver = self.version_info.get('ProxyVersion')
         if self.context.add_conflict_as_cpo and pver and (int(pver) >= 9):
@@ -286,8 +286,8 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             Propagation result,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Request propagation
         self._write_message(CMD_PROPAGATE)
@@ -316,19 +316,16 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         Raises:
             CpoNotSupportedException: method not available in local solver.
         """
-        # Add callback if needed
-        self._add_callback_if_needed()
+        # Initialize model if needed
+        self._init_model_in_solver()
 
         # Check command availability
-        if CMD_RUN_SEEDS not in self.available_command:
+        if CMD_RUN_SEEDS not in self.available_commands:
             raise CpoNotSupportedException("Method 'run_seeds' is not available in local solver '{}'".format(self.context.execfile))
 
         # Request run seeds
         nbfrm = bytearray(4)
-        nbfrm[0] = (nbrun >> 24) & 0xFF
-        nbfrm[1] = (nbrun >> 16) & 0xFF
-        nbfrm[2] = (nbrun >> 8)  & 0xFF
-        nbfrm[3] = nbrun         & 0xFF
+        encode_integer_big_endian_4(nbrun, nbfrm, 0)
 
         self._write_message(CMD_RUN_SEEDS, data=nbfrm)
 
@@ -337,6 +334,40 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
         # Build result object
         return self._create_result_object(CpoRunResult)
+
+
+    def set_explain_failure_tags(self, ltags=None):
+        """ This method allows to set the list of failure tags to explain in the next solve.
+
+        The failure tags are displayed in the log when the parameter :attr:`~docplex.cp.CpoParameters.LogSearchTags`
+        is set to 'On'.
+        All existing failure tags previously set are cleared prior to set the new ones.
+        Calling this method with an empty list is then equivalent to just clear tags.
+
+        Args:
+            ltags:  List of tag ids to explain
+        """
+        # Initialize model if needed
+        self._init_model_in_solver()
+
+        # Check command availability
+        if MD_SET_FAILURE_TAGS not in self.available_commands:
+            raise CpoNotSupportedException("Method 'set_explain_failure_tags' is not available in local solver '{}'".format(self.context.execfile))
+
+        # Build list of tags
+        if ltags is None:
+            ltags = []
+        elif not is_array(ltags):
+            ltags = (ltags,)
+        nbtags = len(ltags)
+        tagfrm = bytearray(4 * (nbtags + 1))
+        encode_integer_big_endian_4(nbtags, tagfrm, 0)
+        for i, t in enumerate(ltags):
+            encode_integer_big_endian_4(t, tagfrm, 4 * (i + 1))
+
+        # Send command
+        self._write_message(MD_SET_FAILURE_TAGS, data=tagfrm)
+        self._wait_event(EVT_SUCCESS)
 
 
     def end(self):
@@ -375,7 +406,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         Returns:
             Message data
         Raises:
-            LocalSolverException if an error occurs
+            SolverException if an error occurs
         """
         # Initialize first error string to enrich exception if any
         firsterror = None
@@ -403,13 +434,13 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                     out.flush()
 
             elif evt == EVT_TRACE:
-                self.context.log(4, "ANGEL: " + data)
+                self.context.log(4, "ANGEL TRACE: " + data)
 
             elif evt == EVT_ERROR:
                 if firsterror is not None:
                     data += " (" + firsterror + ")"
                 self.end()
-                raise LocalSolverException("Solver error: " + data)
+                raise CpoSolverException("Solver error: " + data)
 
             elif evt == EVT_CALLBACK_EVENT:
                 event = data
@@ -421,7 +452,7 @@ class CpoSolverLocal(solver.CpoSolverAgent):
 
             else:
                 self.end()
-                raise LocalSolverException("Unknown event received from local solver: " + str(evt))
+                raise CpoSolverException("Unknown event received from local solver: " + str(evt))
 
 
     def _wait_json_result(self, evt):
@@ -461,14 +492,11 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         if data is not None:
             tlen += len(data) + 1
         if tlen > 0xffffffff:
-            raise LocalSolverException("Try to send a message with length {}, greater than {}.".format(tlen, 0xffffffff))
+            raise CpoSolverException("Try to send a message with length {}, greater than {}.".format(tlen, 0xffffffff))
         frame = bytearray(6)
         frame[0] = 0xCA
         frame[1] = 0xFE
-        frame[2] = (tlen >> 24) & 0xFF
-        frame[3] = (tlen >> 16) & 0xFF
-        frame[4] = (tlen >> 8)  & 0xFF
-        frame[5] = tlen         & 0xFF
+        encode_integer_big_endian_4(tlen, frame, 2)
 
         # Add data if any
         self.context.log(5, "Send message: cmd=", cid, ", tsize=", tlen)
@@ -497,10 +525,10 @@ class CpoSolverLocal(solver.CpoSolverAgent):
             erline = frame + self._read_error_message()
             erline = erline.decode()
             self.end()
-            raise LocalSolverException("Invalid message header. Possible error generated by solver: " + erline)
+            raise CpoSolverException("Invalid message header. Possible error generated by solver: " + erline)
 
         # Read message data
-        tsize = (frame[2] << 24) | (frame[3] << 16) | (frame[4] << 8) | frame[5]
+        tsize = decode_integer_big_endian_4(frame, 2)
         data = self._read_frame(tsize)
 
         # Split name and data
@@ -543,18 +571,18 @@ class CpoSolverLocal(solver.CpoSolverAgent):
                 # Check if first read of data
                 if self.process_infos.get(CpoProcessInfos.TOTAL_DATA_RECEIVE_SIZE, 0) == 0:
                     if IS_WINDOWS:
-                        raise LocalSolverException("Nothing to read from local solver process. Possibly not started because cplex dll is not accessible.")
+                        raise CpoSolverException("Nothing to read from local solver process. Possibly not started because cplex dll is not accessible.")
                     else:
-                        raise LocalSolverException("Nothing to read from local solver process. Check its availability.")
+                        raise CpoSolverException("Nothing to read from local solver process. Check its availability.")
                 else:
                     try:
                         self.process.wait()
                         rc = self.process.returncode
                     except:
                         rc = "unknown"
-                    raise LocalSolverException("Nothing to read from local solver process. Process seems to have been stopped (rc={}).".format(rc))
+                    raise CpoSolverException("Nothing to read from local solver process. Process seems to have been stopped (rc={}).".format(rc))
             else:
-                raise LocalSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
+                raise CpoSolverException("Read only {} bytes when {} was expected.".format(len(data), nbb))
 
         # Return
         if IS_PYTHON_2:
@@ -583,19 +611,26 @@ class CpoSolverLocal(solver.CpoSolverAgent):
         return bytearray(data)
 
 
-    def _add_callback_if_needed(self):
-        """ Ask solver to add callback if needed. """
-        if not self.callback_added and self.solver.callbacks:
-            # Check solver version
-            aver = self.version_info.get('AngelVersion', 0)
-            sver = self.version_info.get('SolverVersion', "1")
-            if (compare_natural(sver, "12.10") >= 0) and (aver >= 8):
-                self._write_message(CMD_ADD_CALLBACK)
-                self._wait_event(EVT_SUCCESS)
-                self.callback_added = True
-                self.context.log(3, "CPO callback created.")
-            else:
-                raise LocalSolverException("This version of the CPO solver does not support solver callbacks. Solver: {}, agent: {}".format(sver, aver))
+    def _send_model_to_solver(self, cpostr):
+        """ Send the model to the solver.
+
+        Args:
+            copstr:  String containing the model in CPO format
+        """
+        self._write_message(CMD_SET_CPO_MODEL, cpostr)
+        self._wait_json_result(EVT_SUCCESS)  # JSON stored
+
+
+    def _add_callback_processing(self):
+        """ Add the processing of solver callback.
+        """
+        # Check angel version
+        aver = self.version_info.get('AngelVersion', 0)
+        if aver < 8:
+            raise CpoSolverException("This version of the CPO solver angel ({}) does not support solver callbacks.".format(aver))
+        self._write_message(CMD_ADD_CALLBACK)
+        self._wait_event(EVT_SUCCESS)
+
 
 
 ###############################################################################
@@ -625,7 +660,7 @@ def get_solver_info():
         Solver information dictionary, or None if not available.
     """
     try:
-        with solver.CpoSolver(CpoModel()) as slvr:
+        with CpoSolver(CpoModel()) as slvr:
             if isinstance(slvr.agent, CpoSolverLocal):
                 return slvr.agent.version_info
     except:

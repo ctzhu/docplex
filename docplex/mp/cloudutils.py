@@ -41,6 +41,10 @@ def context_must_use_docloud(__context, **kwargs):
         return False
     docloud_agent_name = "docloud"  # this might change
     have_docloud_context = kwargs.get('docloud_context') is not None
+    if have_docloud_context:
+        warnings.warn(
+            "Model construction with DOcloudContext is deprecated, use initializer with docplex.mp.context.Context instead.",
+            DeprecationWarning, stacklevel=2)
     # TODO: remove have_api_key = get_key_in_kwargs(__context, kwargs)
     # TODO: remove have_url = get_url_in_kwargs(__context, kwargs)
 

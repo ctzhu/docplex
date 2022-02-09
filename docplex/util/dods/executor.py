@@ -10,12 +10,18 @@
 import os
 import sys
 import traceback
+import json
+
+try:
+    import numpy
+except ImportError:
+    numpy = None
 
 from docplex.util.environment import get_environment, WorkerEnvironment, \
     Environment, LocalEnvironment, OverrideEnvironment
 
 
-from .project_handler import ProjectZipHandler, ProjectDirectoryHandler
+from .project_handler import ProjectZipHandler, ProjectDirectoryHandler, WSProjectDirectoryHandler, SimpleCSVProjectDirectoryHandler
 
 
 def get_line_of_model(n, handler, model, scenario):
@@ -36,6 +42,7 @@ class _WorkerEnvironmentOverride(WorkerEnvironment):
     def __init__(self, env, solve_hook=None):
         super(_WorkerEnvironmentOverride, self).__init__(None)
         self.env = env
+        self.solveDetailsAsJson = []  # Keep a list of these
 
     def get_available_core_count(self):
         return self.env.get_available_core_count()
@@ -53,13 +60,15 @@ class _WorkerEnvironmentOverride(WorkerEnvironment):
         return self.env.get_parameter(name)
 
     def update_solve_details(self, details):
-        return self.env.update_solve_details(details)
+        r = self.env.update_solve_details(details)
+        self.solveDetailsAsJson.append(json.dumps(details))
+        return r
 
     def notify_start_solve(self, solve_details):
         return self.env.notify_start_solve(solve_details)
 
-    def notify_end_solve(self, status):
-        return self.env.notify_end_solve(status)
+    def notify_end_solve(self, status, **kwargs):
+        return self.env.notify_end_solve(status, **kwargs)
 
     def set_stop_callback(self, cb):
         return self.env.set_stop_callback(cb)
@@ -81,11 +90,17 @@ class Executor(object):
             handler = ProjectZipHandler(path)
         elif ProjectDirectoryHandler.accepts(path):
             handler = ProjectDirectoryHandler(path)
+        elif WSProjectDirectoryHandler.accepts(path):
+            handler = WSProjectDirectoryHandler(path)
+        elif SimpleCSVProjectDirectoryHandler.accepts(path):
+            handler = SimpleCSVProjectDirectoryHandler(path)
         else:
             raise ValueError('No handler for %s' % path)
+        print("OPENING %s with %s handler" % (path, type(handler)))
         self.handler = handler
+        self.override_env = None
 
-    def run_model(self, model, scenario, is_dods=True):
+    def run_model(self, model, scenario, is_dods=True, override_env=None):
         '''Run the scenario from the specified model.
 
         Returns:
@@ -96,19 +111,24 @@ class Executor(object):
         variables['output_lock'] = get_environment().output_lock
         variables['outputs'] = {}
 
-        override_env = None
+        self.override_env = None
         if isinstance(get_environment(), LocalEnvironment):
-            override_env = _WorkerEnvironmentOverride(get_environment())
+            if override_env is None:
+                override_env = _WorkerEnvironmentOverride(get_environment())
+            self.override_env = override_env
 
-        with OverrideEnvironment(override_env):
+        with OverrideEnvironment(self.override_env):
             saved_environ = os.environ.copy()
             try:
                 if is_dods:
                     os.environ['IS_DODS'] = 'True'
-
+                    os.environ['DOCPLEX_CONTEXT'] = 'solver.auto_publish=True'
                 with self.handler.get_input_stream(model, scenario, 'model.py') as m:
                     try:
-                        exec(m.read().decode('utf-8'), variables)
+                        contents = m.read()
+                        if not isinstance(contents, str):
+                            contents = contents.decode('utf-8')
+                        exec(contents, variables)
                     except SyntaxError as err:
                         error_class = err.__class__.__name__
                         detail = err.args[0]

@@ -8,6 +8,7 @@ from __future__ import print_function
 from docplex.mp.utils import DOcplexException, DOcplexLimitsExceeded, resolve_pattern, is_int, is_string
 
 from enum import Enum
+import os
 
 ##########################
 # Error handling
@@ -254,6 +255,14 @@ def docplex_fatal(msg, *args):
     resolved_message = resolve_pattern(msg, args)
     docplex_error_stop_here()
     raise DOcplexException(resolved_message)
+
+is_debug = os.environ.get('DOCPLEX_DEBUG')
+
+def docplex_debug_msg(*args):
+    if is_debug:
+        msg = ' '.join(str(x) for x in args)
+        #print(f"-- {msg}")
+        print("-- {0}".format(msg))
 
 
 class DefaultErrorHandler(AbstractErrorHandler):

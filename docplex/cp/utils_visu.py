@@ -47,6 +47,7 @@ def is_visu_enabled():
         return False
     return True
 
+
 # Timeline objects
 class _TLObject(object):
     __slots__ = ('_tl',       # Timeline
@@ -956,14 +957,21 @@ class _Visu(object):
             timeline()
         self.active_timeline.pause(start, end)
 
-    def show(self):
+    def show(self, pngfile=None):
+        """ Show the figure
+        Args:
+            pngfile (optional):  Destination PNG file, None for screen
+        """
         if self.has_active_timeline:
             panel()
         for f in self._all_figures:
             f.show()
         if self._active_figure is not None:
             self._active_figure.show()
-        plt.show()
+        if pngfile is None:
+            plt.show()
+        else:
+            plt.savefig(pngfile)
         self._active_figure = None
         self._all_figures = []
 
@@ -1572,7 +1580,7 @@ def naming(function=None):
     _visu._naming = function
 
 
-def show(object=None, name=None, origin=None, horizon=None):
+def show(object=None, name=None, origin=None, horizon=None, pngfile=None):
     """ Shows the active figures.
 
     Active figures are all the ones that have been created since last call to
@@ -1586,24 +1594,32 @@ def show(object=None, name=None, origin=None, horizon=None):
         name (str): Name of the object in the display.
         origin (int): Value of the origin of the x-axis of the timeline.
         horizon (int): Value of the horizon of the x-axis of the timeline.
+        file (string): Name of the file where store the figure instead of displaying it on the screen
     """
-    if config.context.visu_enabled:
-        if object is not None:
-            if isinstance(object, CpoSolveResult):
-                # use default display for an instance of CPOSolution
-                _define_solution(object, name)
-            elif isinstance(object, CpoTransitionMatrix):
-                # use default display for an instance of CpoTransitionMatrix
-                _visu.matrix(title=name, tuples=object.value)
-            elif isinstance(object, (CpoFunction, CpoStateFunctionSolution)):
-                # use default display for an instance of CpoFunction or
-                # CpoStateFunctionSolution
-                timeline(name, origin, horizon)
-                function(segments=object, name=name, origin=origin, horizon=horizon)
-            elif isinstance(object, CpoSequenceVarSolution):
-                timeline(name, origin, horizon)
-                sequence(intervals=object, name=name)
-            elif isinstance(object, CpoStateFunctionSolution):
-                timeline(name, origin, horizon)
-                function(segments=object, name=name, origin=origin, horizon=horizon)
-        _visu.show()
+    # Check if visu enabled
+    if not config.context.visu_enabled:
+        return
+
+    # Check if particular object has to be displayed
+    if object is not None:
+        if isinstance(object, CpoSolveResult):
+            # use default display for an instance of CPOSolution
+            _define_solution(object, name)
+        elif isinstance(object, CpoTransitionMatrix):
+            # use default display for an instance of CpoTransitionMatrix
+            _visu.matrix(title=name, tuples=object.value)
+        elif isinstance(object, (CpoFunction, CpoStateFunctionSolution)):
+            # use default display for an instance of CpoFunction or
+            # CpoStateFunctionSolution
+            timeline(name, origin, horizon)
+            function(segments=object, name=name, origin=origin, horizon=horizon)
+        elif isinstance(object, CpoSequenceVarSolution):
+            timeline(name, origin, horizon)
+            sequence(intervals=object, name=name)
+        elif isinstance(object, CpoStateFunctionSolution):
+            timeline(name, origin, horizon)
+            function(segments=object, name=name, origin=origin, horizon=horizon)
+
+    # Display active figure(s)
+    _visu.show(pngfile=pngfile)
+

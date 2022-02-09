@@ -62,7 +62,7 @@ class IEngine(object):
         """
         raise NotImplementedError  # pragma: no cover
 
-    def populate(self):
+    def populate(self, **kwargs):
         raise NotImplementedError  # pragma: no cover
 
     def get_solve_status(self):
@@ -98,9 +98,6 @@ class IEngine(object):
         raise NotImplementedError  # pragma: no cover
 
     def get_solve_details(self):
-        raise NotImplementedError  # pragma: no cover
-
-    def clean_before_solve(self):
         raise NotImplementedError  # pragma: no cover
 
     def supports_logical_constraints(self):
@@ -161,6 +158,9 @@ class IEngine(object):
 
     def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
                                   priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
+        raise NotImplementedError  # pragma: no cover
+
+    def set_multi_objective_tolerances(self, abstols, reltols):
         raise NotImplementedError  # pragma: no cover
 
     def end(self):
@@ -224,36 +224,34 @@ class MinimalEngine(IEngine):
 
     def register_callback(self, cb):
         # no callbacks
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def connect_progress_listeners(self, listeners, model):
         # no listeners
-        self.only_cplex(mname="connect_progress_listeners")   # pragma: no cover
+        if listeners:
+            self.only_cplex(mname="connect_progress_listeners")  # pragma: no cover
 
     def set_parameter(self, parameter, value):
         #
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def get_parameter(self, parameter):
         # engine value of a parameter is its own
-        return parameter.get()   # pragma: no cover
-
-    def clean_before_solve(self):
-        pass   # pragma: no cover
+        return parameter.get()  # pragma: no cover
 
     def get_infinity(self):
-        return 1e+20   # pragma: no cover
+        return 1e+20  # pragma: no cover
 
     def create_one_variable(self, vartype, lb, ub, name):
         # define create one var in terms of create batch vars
         xs = self.create_variables(1, vartype, [lb], [ub], [name])
-        return xs[0]   # pragma: no cover
+        return xs[0]  # pragma: no cover
 
     def set_var_lb(self, var, lb):
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def set_var_ub(self, var, ub):
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def rename_var(self, var, new_name):
         pass  # pragma: no cover
@@ -268,7 +266,7 @@ class MinimalEngine(IEngine):
         pass  # pragma: no cover
 
     def remove_constraints(self, cts):
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def update_constraint(self, ct, event, *args):
         self.only_cplex(mname="update_constraint")
@@ -277,49 +275,49 @@ class MinimalEngine(IEngine):
         self.only_cplex(mname="update_extra_constraint")
 
     def remove_constraint(self, ct):
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
-    def create_sos(self, sos):   # pragma: no cover
+    def create_sos(self, sos):  # pragma: no cover
         self.only_cplex("create SOS set")
 
     def clear_all_sos(self):
-        pass   # pragma: no cover
+        pass  # pragma: no cover
 
     def create_linear_constraint(self, ct):
-        return self.create_block_linear_constraints([ct])[0]   # pragma: no cover
+        return self.create_block_linear_constraints([ct])[0]  # pragma: no cover
 
     def get_solve_details(self):
         from docplex.mp.sdetails import SolveDetails
-        return SolveDetails()   # pragma: no cover
+        return SolveDetails()  # pragma: no cover
 
     def get_basis(self, mdl):
-        self.only_cplex("get_basis")   # pragma: no cover
+        self.only_cplex("get_basis")  # pragma: no cover
 
     def set_lp_start(self, var_stats, ct_stats):
-        self.only_cplex("set_lp_start")   # pragma: no cover
+        self.only_cplex("set_lp_start")  # pragma: no cover
 
     def supports_logical_constraints(self):
-        return False   # pragma: no cover
+        return False  # pragma: no cover
 
     def change_var_types(self, dvars, new_types):
-        self.only_cplex(mname="change_var_type")   # pragma: no cover
+        self.only_cplex(mname="change_var_type")  # pragma: no cover
 
     def get_cplex(self):
-        docplex_fatal("No cplex is available.")   # pragma: no cover
+        docplex_fatal("No cplex is available.")  # pragma: no cover
 
     def create_batch_logical_constraints(self, logcts, is_equivalence):
-        self.only_cplex(mname="create_batch_logical_constraints")   # pragma: no cover
+        self.only_cplex(mname="create_batch_logical_constraints")  # pragma: no cover
 
     def create_logical_constraint(self, logct, is_equivalence):
-        self.only_cplex(mname="create_logical_constraint")   # pragma: no cover
+        self.only_cplex(mname="create_logical_constraint")  # pragma: no cover
 
     def refine_conflict(self, mdl, preferences=None, groups=None, parameters=None):
-        self.only_cplex(mname="refine_conflict")   # pragma: no cover
+        self.only_cplex(mname="refine_conflict")  # pragma: no cover
 
     def solve_relaxed(self, mdl, prio_name, relaxable_groups, relax_mode, parameters=None):
         self.only_cplex(mname="solve_relaxed")  # pragma: no cover
 
-    def populate(self):
+    def populate(self, **kwargs):
         self.only_cplex(mname="populate")  # pragma: no cover
 
     def create_pwl_constraint(self, pwl_ct):
@@ -332,6 +330,8 @@ class MinimalEngine(IEngine):
                                   priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
         self.only_cplex(mname="set_multi_objective_exprs")  # pragma: no cover
 
+    def set_multi_objective_tolerances(self, abstols, reltols):
+        self.only_cplex(mname="set_multi_objective_tolerances")  # pragma: no cover
 
 
 # noinspection PyAbstractClass,PyMethodMayBeStatic
@@ -406,6 +406,9 @@ class DummyEngine(IEngine):
                                   priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
         pass  # pragma: no cover
 
+    def set_multi_objective_tolerances(self, abstols, reltols):
+        pass
+
     def end(self):
         pass  # pragma: no cover
 
@@ -436,9 +439,6 @@ class DummyEngine(IEngine):
 
     def get_cplex(self):
         raise DOcplexException("No CPLEX is available.")  # pragma: no cover
-
-    def clean_before_solve(self):
-        pass  # pragma: no cover
 
     def update_objective(self, expr, event, *args):
         # nothing to do except for cplex
@@ -569,10 +569,6 @@ class IndexerEngine(DummyEngine):
         pass
 
     def set_objective_expr(self, new_objexpr, old_objexpr):
-        pass
-
-    def set_multi_objective_exprs(self, new_multiobjexprs, old_multiobjexprs,
-                                  priorities=None, weights=None, abstols=None, reltols=None, objnames=None):
         pass
 
     def set_parameter(self, parameter, value):

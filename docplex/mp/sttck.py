@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from docplex.mp.utils import resolve_caller_as_string, is_number, is_ordered_sequence
+from docplex.mp.utils import resolve_caller_as_string, is_number, is_ordered_sequence, is_iterable, is_string
 from docplex.mp.constants import BasisStatus
 
 import math
@@ -13,11 +13,33 @@ import math
 
 class StaticTypeChecker(object):
 
-    @staticmethod
-    def typecheck_as_power(mdl, e, power):
-        # INTERNAL: checks <power> is 0,1,2
-        if power < 0 or power > 2:
-            mdl.fatal("Cannot raise {0!s} to the power {1}. A variable's exponent must be 0, 1 or 2.", e, power)
+    @classmethod
+    def typecheck_optional_num_seq(cls, mdl, nums, accept_none=True, expected_size=None, caller=None):
+        # INTERNAL
+        # accepting either a num an iterable, or None (if accept_none
+        if nums is None and accept_none:
+            return nums
+        elif is_iterable(nums, accept_string=False):
+            nums_ = mdl._checker.typecheck_num_seq(nums, caller)
+            lnums = list(nums_)
+            if expected_size is not None:
+                if len(lnums) != expected_size:
+                    caller_string = '' if not caller else '%s: ' % caller
+                    mdl.fatal('{0}Expecting a sequence of numbers of size {1}, actual size is {2}',
+                               caller_string, expected_size, len(lnums))
+
+            return lnums
+
+        elif is_number(nums):
+            if expected_size is not None:
+                return [nums] * expected_size
+            else:
+                return nums
+        else:
+            caller_string = '' if not caller else '%s: ' % caller
+            msg = "{0}Expecting a number, a sequence of numbers{1}, {2!r} was passed"
+            none_msg = ' or None' if accept_none else ''
+            mdl.fatal(msg, caller_string, none_msg, nums)
 
     @staticmethod
     def cannot_be_used_as_denominator_error(mdl, denominator, numerator):
@@ -101,6 +123,22 @@ class StaticTypeChecker(object):
                 logger.fatal('{0}expects a sequence of {3} basis status, {1} was passed at pos {2}',
                              caller_s, stat, s, stat_type)
         return l_stats
+
+    @classmethod
+    def check_lp_name(cls, logger, qualifier, obj, new_name, accept_empty, accept_none):
+        from docplex.mp.format import LP_format
+        if accept_none and new_name is None:
+            pass
+        elif not is_string(new_name):
+            logger.fatal("{0} name expects a string, {1!r} was passed", qualifier, new_name)
+        elif not accept_empty and not new_name:
+            logger.fatal("{0} name expects a non-empty string, {0!r} was passed", qualifier, new_name)
+        elif new_name.find(' ') >= 0:
+            logger.warning("{0} name contains blank space, var: {0!s}, name: \'{1!s}\'", qualifier, obj, new_name)
+        elif not LP_format.is_lp_compliant(new_name):
+            logger.warning(
+                "{0} name is not LP-compliant: '{2}', old_name was: {1} (name will be changed to x<nn>)",
+                qualifier, obj.name, new_name)
 
     @classmethod
     def typecheck_logical_op(cls, logger, arg, caller):

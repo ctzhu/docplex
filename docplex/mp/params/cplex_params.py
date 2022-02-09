@@ -16,7 +16,9 @@ from docplex.mp.params.parameter_hierarchy_20100 import make_root_params_20100
 
 
 def _make_default_parameters():
-    return make_root_params_121000()
+    params = make_root_params_121000()
+    print("-- no cplex version found, using default parameter version: {0}".format(params.cplex_version))
+    return params
 
 
 def get_params_from_cplex_version(cpx_version):
@@ -26,15 +28,7 @@ def get_params_from_cplex_version(cpx_version):
     if cpx_version is None:
         # this can happen, protect from startswith failure
         return _make_default_parameters()
-    if cpx_version.startswith("12.6.2."):
-        return make_root_params_12620()
-    elif cpx_version.startswith("12.6.3."):
-        return make_root_params_12630()
-    elif cpx_version.startswith("12.7.0"):
-        return make_root_params_12700()
-    elif cpx_version.startswith("12.7.1"):
-        return make_root_params_12710()
-    elif cpx_version.startswith("12.8.0"):
+    if cpx_version.startswith("12.8.0"):
         return make_root_params_12800()
     elif cpx_version.startswith("12.9.0"):
         return make_root_params_12900()

@@ -468,7 +468,7 @@ class Relaxer(PublishResultAsDf, object):
             mdl.set_log_output(mdl.context.solver.log_output)
 
             # engine parameters, if needed to
-            parameters = apply_thread_limitations(relax_context, relax_context.solver)
+            parameters = apply_thread_limitations(relax_context)
 
             mdl._apply_parameters_to_engine(parameters)
 

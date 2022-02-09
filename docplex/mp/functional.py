@@ -50,28 +50,29 @@ class _FunctionalExpr(Expr, LinearOperand):
     def unchecked_get_coef(self, dvar):
         return 1 if dvar is self._f_var else 0
 
-    def _new_generated_free_continuous_var(self, name=None):
+    def _new_generated_free_continuous_var(self, artefact_pos, name=None):
         # INTERNAL
         inf = self._model.infinity
-        return self._new_generated_continuous_var(lb=-inf, ub=inf, name=name)
+        return self._new_generated_continuous_var(artefact_pos, lb=-inf, ub=inf, name=name)
 
-    def _new_generated_continuous_var(self, lb=None, ub=None, name=None):
-        return self._new_generated_var(vartype=self._model.continuous_vartype, lb=lb, ub=ub, name=name)
+    def _new_generated_continuous_var(self, artefact_pos, lb=None, ub=None, name=None):
+        return self._new_generated_var(artefact_pos, vartype=self._model.continuous_vartype, lb=lb, ub=ub, name=name)
 
-    def _new_generated_binary_var(self, name=None):
-        return self._new_generated_var(self._model.binary_vartype, name=name)
+    def _new_generated_binary_var(self, artefact_pos, name=None):
+        return self._new_generated_var(artefact_pos, self._model.binary_vartype, name=name)
 
-    def _new_generated_var(self, vartype, lb=None, ub=None, name=None):
+    def _new_generated_var(self, artefact_pos, vartype, lb=None, ub=None, name=None):
         # INTERNAL
+        assert artefact_pos >= 0
         m = self._model
-        gvar = m._lfactory.new_safe_var(vartype, lb=lb, ub=ub, varname=name)
-        gvar.notify_origin(self)
+        gvar = m._lfactory.new_var(vartype, lb=lb, ub=ub, varname=name, safe=True)
+        gvar.notify_origin((self, artefact_pos))
         return gvar
 
-    def _new_generated_binary_varlist(self, keys, name=None):
+    def _new_generated_binary_varlist(self, keys, offset=0, name=None):
         bvars = self.model.binary_var_list(keys, name)
-        for bv in bvars:
-            bv.notify_origin(self)
+        for b, bv in enumerate(bvars, start=offset):
+            bv.notify_origin((self, b))
         return bvars
 
     def new_generated_sos1(self, dvars):
@@ -130,7 +131,7 @@ class _FunctionalExpr(Expr, LinearOperand):
         fvar.set_name(fname)
 
     def _create_functional_var(self, named=True):
-        fvar = self._new_generated_free_continuous_var(name=None)
+        fvar = self._new_generated_free_continuous_var(artefact_pos=0, name=None)
         if named:
             self._name_functional_var_name(fvar)
         return fvar
@@ -140,6 +141,10 @@ class _FunctionalExpr(Expr, LinearOperand):
         return self._get_resolved_f_var()
 
     as_var = functional_var
+
+    def get_artefact(self, pos):
+        assert pos == 0
+        return self.as_var
 
     def square(self):
         return self.functional_var.square()
@@ -198,18 +203,17 @@ class _FunctionalExpr(Expr, LinearOperand):
         # the "-e" unary minus returns a linear expression
         return self.functional_var.__neg__()
 
-    def _allocate_arg_var_if_necessary(self, arg_expr):
+    def _allocate_arg_var_if_necessary(self, arg_expr, pos):
         # INTERNAL
         # allocates a new variables if only the argument expr is not a variable
         # and returns it
         try:
-
             arg_var = arg_expr.as_variable()
         except AttributeError:
             arg_var = None
 
         if arg_var is None:
-            arg_var = self._new_generated_free_continuous_var()
+            arg_var = self._new_generated_free_continuous_var(artefact_pos=pos)
             self._new_generated_binary_ct(arg_var, arg_expr)
         return arg_var
 
@@ -219,7 +223,13 @@ class UnaryFunctionalExpr(_FunctionalExpr):
     def __init__(self, model, argument_expr, name=None):
         _FunctionalExpr.__init__(self, model, name)
         self._argument_expr = model._lfactory._to_linear_operand(argument_expr)
-        self._x_var = self._allocate_arg_var_if_necessary(argument_expr)
+        self._x_var = self._allocate_arg_var_if_necessary(argument_expr, pos=1)
+
+    def get_artefact(self, pos):
+        if pos == 0:
+            return self.as_var
+        elif pos == 1:
+            return self._x_var
 
     @property
     def argument_expr(self):
@@ -231,11 +241,17 @@ class UnaryFunctionalExpr(_FunctionalExpr):
     def to_string(self):
         return "{0:s}({1!s})".format(self.function_symbol, self._argument_expr)
 
+    def copy(self, target_model, memo):
+        copy_key = id(self)
+        cloned_expr = memo.get(copy_key)
+        if cloned_expr is None:
+            copied_arg_expr = self._argument_expr.copy(target_model, memo)
+            cloned_expr = self.__class__(model=target_model, argument_expr=copied_arg_expr)
+            memo[copy_key] = cloned_expr
+        return cloned_expr
+
 
 class AbsExpr(UnaryFunctionalExpr):
-    def copy(self, target_model, var_mapping):
-        copied_arg_expr = self._argument_expr.copy(target_model, var_mapping)
-        return AbsExpr(model=target_model, argument_expr=copied_arg_expr)
 
     def relaxed_copy(self, relaxed_model, var_map):
         raise DocplexLinearRelaxationError(self, cause='abs')
@@ -256,8 +272,8 @@ class AbsExpr(UnaryFunctionalExpr):
         abs_index = self_f_var.index
         abs_names = ["_abs_pp_%d" % abs_index, "_abs_np_%d" % abs_index] if use_debug_names else [None, None]
         # 1. allocate two variables in one pass.
-        positive_var = self._new_generated_continuous_var(lb=0, name=abs_names[0])
-        negative_var = self._new_generated_continuous_var(lb=0, name=abs_names[1])
+        positive_var = self._new_generated_continuous_var(artefact_pos=2, lb=0, name=abs_names[0])
+        negative_var = self._new_generated_continuous_var(artefact_pos=3, lb=0, name=abs_names[1])
 
         # F(x) = p + n
         ct1 = (self_f_var == positive_var + negative_var)
@@ -268,8 +284,15 @@ class AbsExpr(UnaryFunctionalExpr):
 
         self._post_generated_cts([ct1, ct2])
         # store
-        self.positive_var = positive_var
-        self.negative_var = negative_var
+        self._artefact_vars = (positive_var, negative_var)
+
+    def get_artefact(self, pos):
+        if pos <= 1:
+            return super(AbsExpr, self).get_artefact(pos)
+        else:
+            # offset is 2
+            assert 2 <= pos <= 3
+            return self._artefact_vars[pos - 2]
 
     def _get_solution_value(self, s=None):
         raw = abs(self._argument_expr._get_solution_value(s))
@@ -290,7 +313,11 @@ class _SequenceExpr(_FunctionalExpr):
         else:
             self._exprs = [model._lfactory._to_linear_operand(exprs)]
         # allocate xvars iff necessary
-        self._xvars = [self._allocate_arg_var_if_necessary(e) for e in self._exprs]
+        self._xvars = [self._allocate_arg_var_if_necessary(expr, pos=e) for e, expr in enumerate(self._exprs, start=1)]
+
+    @property
+    def nb_args(self):
+        return len(self._exprs)
 
     def is_discrete(self):
         return all(map(lambda ex: ex.is_discrete(), self._exprs))
@@ -332,13 +359,34 @@ class _SequenceExpr(_FunctionalExpr):
     def compute_solution_value(self, s):
         raise NotImplementedError  # pragma: no cover
 
-    def copy(self, target_model, var_mapping):
-        copied_exprs = [expr.copy(target_model, var_mapping) for expr in self._exprs]
-        return self.__class__(target_model, copied_exprs, self.name)
+    def copy(self, target_model, memo):
+        copy_key = id(self)
+        cloned_expr = memo.get(copy_key)
+        if cloned_expr is None:
+            copied_exprs = [expr.copy(target_model, memo) for expr in self._exprs]
+            cloned_expr = self.__class__(target_model, copied_exprs, self.name)
+            # add in mapping
+            memo[copy_key] = cloned_expr
+        return cloned_expr
 
     def clone(self):
         # generic clone
         return self.__class__(self.model, self._exprs, self.name)
+
+    def get_logical_seq_artefact(self, zvars, pos):
+        # 0 -> fvar
+        # 1 .. N -> xargs
+        # N+1 .. 2N -> zvars
+        if pos == 0:
+            return self.as_var
+        else:
+            nb_args = self.nb_args
+            if 1 <= pos <= nb_args:
+                return self._xvars[pos - 1]
+            else:
+                assert nb_args + 1 <= pos <= 2 * nb_args
+                zvar_pos = pos - (nb_args + 1)
+                return zvars[zvar_pos]
 
 
 class MinimumExpr(_SequenceExpr):
@@ -373,7 +421,9 @@ class MinimumExpr(_SequenceExpr):
             for xv in self_x_vars:
                 cts.append(self_min_var <= xv)
             # allocate N _generated_ binaries
-            z_vars = self._new_generated_binary_varlist(keys=nb_args)
+            # reserve 1 + nb_args slots for artefacts
+            z_vars = self._new_generated_binary_varlist(offset=nb_args + 1, keys=nb_args)
+            self.z_vars = z_vars
             # sos?
             cts.append(self.model.sum(z_vars) == 1)
             self._post_generated_cts(cts)
@@ -386,6 +436,9 @@ class MinimumExpr(_SequenceExpr):
 
     def compute_solution_value(self, s):
         return min(expr._get_solution_value(s) for expr in self._exprs)
+
+    def get_artefact(self, pos):
+        return self.get_logical_seq_artefact(self.z_vars, pos)
 
 
 class MaximumExpr(_SequenceExpr):
@@ -418,7 +471,8 @@ class MaximumExpr(_SequenceExpr):
             for xv in self_x_vars:
                 self._new_generated_binary_ct(self_max_var, xv, 'GE')
             # allocate N binaries
-            z_vars = self._new_generated_binary_varlist(keys=nb_args)
+            z_vars = self._new_generated_binary_varlist(keys=nb_args, offset=nb_args + 1)
+            self.z_vars = z_vars
             # sos?
             self._new_generated_binary_ct(self.model.sum(z_vars), 1)
             # indicators
@@ -430,11 +484,14 @@ class MaximumExpr(_SequenceExpr):
     def compute_solution_value(self, s):
         return max(expr._get_solution_value(s) for expr in self._exprs)
 
+    def get_artefact(self, pos):
+        return self.get_logical_seq_artefact(self.z_vars, pos)
+
 
 class LogicalNotExpr(UnaryFunctionalExpr):
     def _create_functional_var(self, named=True):
         # the resulting variable is a binary variable...
-        bvar = self._new_generated_binary_var(name=None)
+        bvar = self._new_generated_binary_var(artefact_pos=0, name=None)
         self._name_functional_var_name(bvar)
         return bvar
 
@@ -446,10 +503,6 @@ class LogicalNotExpr(UnaryFunctionalExpr):
 
     def as_logical_operand(self):
         return self._get_resolved_f_var()
-
-    def copy(self, target_model, var_mapping):
-        copied_arg_expr = self._argument_expr.copy(target_model, var_mapping)
-        return LogicalNotExpr(model=target_model, argument_expr=copied_arg_expr)
 
     def __init__(self, model, argument_expr):
         UnaryFunctionalExpr.__init__(self, model, argument_expr)
@@ -489,7 +542,7 @@ class _LogicalSequenceExpr(_SequenceExpr):
 
     def _create_functional_var(self, named=True):
         # the resulting variable is a binary variable...
-        bvar = self._new_generated_binary_var(name=None)
+        bvar = self._new_generated_binary_var(artefact_pos=0, name=None)
         self._name_functional_var_name(bvar)
         return bvar
 
@@ -501,10 +554,15 @@ class _LogicalSequenceExpr(_SequenceExpr):
         self._xvars = exprs
 
     def _get_args_string(self, sep=","):
-        s = sep.join(str(b.origin()) if b.is_generated() else str(b) for b in self._xvars)
+        def first_or_id(x):
+            try:
+                r = x[0]
+            except TypeError:
+                r = x
+            return r
+
+        s = sep.join(str(first_or_id(b.origin())) if b.is_generated() else str(b) for b in self._xvars)
         return s
-
-
 
     def is_discrete(self):
         return True
@@ -536,7 +594,7 @@ class LogicalAndExpr(_LogicalSequenceExpr):
             nb_vars = len(self_x_vars)
             # rtc-39600: subtract n-1 from the sum.
             # the -and- var is propagated to 1 if all sum vars are 1.
-            cts.append(self_and_var >= m._aggregator._sum_with_seq(self._xvars) - (nb_vars-1))
+            cts.append(self_and_var >= m._aggregator._sum_with_seq(self._xvars) - (nb_vars - 1))
             self._post_generated_cts(cts)
 
 
@@ -568,7 +626,12 @@ class LogicalOrExpr(_LogicalSequenceExpr):
 
 class PwlExpr(UnaryFunctionalExpr):
 
-    def __init__(self, model, pwl_func, argument_expr, usage_counter, y_var=None,  add_counter_suffix=True, resolve=True):
+    def __init__(self, model,
+                 pwl_func, argument_expr,
+                 usage_counter,
+                 y_var=None,
+                 add_counter_suffix=True,
+                 resolve=True):
         UnaryFunctionalExpr.__init__(self, model, argument_expr)
         self._pwl_func = pwl_func
         self._usage_counter = usage_counter
@@ -615,16 +678,22 @@ class PwlExpr(UnaryFunctionalExpr):
         return "docplex.mp.PwlExpr({0:s}, {1:s})".format(self._get_function_symbol(),
                                                          self._argument_expr.truncated_str())
 
-    def copy(self, target_model, var_map):
-        copied_pwl_func = var_map[self.pwl_func]
-        copied_x_var = var_map[self._x_var]
-        copied_pwl_expr = PwlExpr(target_model, copied_pwl_func, copied_x_var, self.usage_counter)
-        copied_pwl_expr_f_var = var_map.get(self._f_var)
-        if copied_pwl_expr_f_var:
-            copied_pwl_expr._f_var = copied_pwl_expr_f_var
-            # Need to set the _origin attribute of the copied var
-            copied_pwl_expr_f_var._origin = copied_pwl_expr
-        return copied_pwl_expr
+    def copy(self, target_model, memo):
+        copy_key = id(self)
+        cloned_expr = memo.get(copy_key)
+        if cloned_expr is None:
+            copied_pwl_func = memo[self.pwl_func]
+            copied_x_var = memo[self._x_var]
+            cloned_expr = PwlExpr(target_model, copied_pwl_func, copied_x_var, self.usage_counter)
+            copied_pwl_expr_f_var = memo.get(self._f_var)
+            if copied_pwl_expr_f_var:
+                cloned_expr._f_var = copied_pwl_expr_f_var
+                # Need to set the _origin attribute of the copied var
+                copied_pwl_expr_f_var._origin = cloned_expr
+
+            memo[copy_key] = cloned_expr
+
+        return cloned_expr
 
     def relaxed_copy(self, relaxed_model, var_map):
         raise DocplexLinearRelaxationError(self, cause='pwl')

@@ -75,6 +75,8 @@ class EngineFactory(object):
             docplex_fatal("need an environment to resolve cplex, got None")
         if not self._is_cplex_resolved():
             if env.has_cplex:
+                env.check_cplex_version()
+
                 from docplex.mp.cplex_engine import CplexEngine
 
                 self._cplex_engine_type = CplexEngine
@@ -111,6 +113,8 @@ class EngineFactory(object):
 
         if has_credentials(context.solver.docloud):
             kwargs['docloud_context'] = context.solver.docloud
+        if context is not None:
+            kwargs['context'] = context
 
         engine_type = self._get_engine_type_from_agent(agent=agent,
                                                        default_engine=default_engine_type,
@@ -125,7 +129,6 @@ class EngineFactory(object):
     def new_docloud_engine(self, model, **kwargs):
         # noinspection PyDeprecation
         return DOcloudEngine(model, **kwargs)
-
 
     def extend(self, new_agent, new_engine):
         # INTERNAL

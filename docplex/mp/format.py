@@ -125,11 +125,15 @@ class LPFormat(ExchangeFormat):
 
     @classmethod
     def lp_var_name(cls, dvar):
-        return cls.lp_name(dvar.get_name(), "x", dvar.get_index())
+        return cls.lp_name(dvar.get_name(), "x", dvar.index)
 
     # @classmethod
     # def lp_ct_name(cls, linct):
     #     return cls.lp_name(linct.get_name(), "c", linct.get_index())
+
+    @classmethod
+    def is_truth_value_name(cls, name):
+        return name.startswith('_bool{')
 
     @classmethod
     def lp_name(cls, raw_name, prefix, local_index, hide_names=False,
@@ -148,7 +152,8 @@ class LPFormat(ExchangeFormat):
                 if cls.is_lp_compliant(fixed_name):
                     return fixed_name
             # -- stats
-            if noncompliant_hook:
+            # TODO: map truth values to LP names
+            if not cls.is_truth_value_name(raw_name) and noncompliant_hook:
                 noncompliant_hook(raw_name)
             # --
             return cls.make_prefix_name(prefix, local_index, offset=1)

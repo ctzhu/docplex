@@ -46,7 +46,6 @@ from os.path import isfile, isabs
 from docplex.util.environment import get_environment
 
 from docplex.mp.utils import is_string, open_universal_newline
-from docplex.mp.environment import Environment
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.params.parameters import RootParameterGroup
 from docplex.mp.utils import DOcplexException
@@ -61,12 +60,13 @@ except ImportError:
 def init_cplex_parameters(x):
     return x.init_cplex_parameters()
 
+
 class StreamWithCustomClose(object):
     # wrapper for streams, so that we can keep track of those who need
     # to be closed by us.
     def __init__(self, target):
         self._target = target
-        
+
     def __getattr__(self, name):
         return getattr(self._target, name)
 
@@ -109,7 +109,7 @@ class StreamWithCustomClose(object):
 
 
 _boolean_map = {'1': True, 'yes': True, 'true': True, 'on': True,
-                   '0': False, 'no': False, 'false': False, 'off': False}
+                '0': False, 'no': False, 'false': False, 'off': False}
 
 
 def _convert_to_bool(value):
@@ -134,6 +134,7 @@ class InvalidSettingsFileError(Exception):
 
     *New in version 2.8*
     '''
+
     def __init__(self, mesg, filename=None, source=None, *args, **kwargs):
         super(InvalidSettingsFileError, self).__init__(mesg)
         self.filename = filename
@@ -151,8 +152,6 @@ def is_auto_publishing_solve_details(context):
     return auto_publish_details
 
 
-
-
 def check_credentials(context):
     #     Checks if the context has syntactically valid credentials. The context
     #     has valid credentials when it has an `url` and a `key` fields and that
@@ -164,19 +163,19 @@ def check_credentials(context):
     #     Returns:
     #         (has_credentials, message): has_credentials` - True if the context contains syntactical credentials.
     #            and `message`  - contains a message if applicable.
-    has_credentials = True
+    credentials_ok = True
     message = None
     if not context.url or not context.key:
-        has_credentials = False
+        credentials_ok = False
     elif not is_string(context.url):
         message = "DOcplexcloud: URL is not a string: {0!s}".format(context.url)
-        has_credentials = False
+        credentials_ok = False
     elif not is_string(context.key):
         message = "API key is not a string: {0!s}".format(context.key)
-        has_credentials = False
-    if context.key and has_credentials:
-        has_credentials = isinstance(context.key, six.string_types)
-    return has_credentials, message
+        credentials_ok = False
+    if context.key and credentials_ok:
+        credentials_ok = isinstance(context.key, six.string_types)
+    return credentials_ok, message
 
 
 def has_credentials(context):
@@ -273,10 +272,9 @@ class SolverContext(BaseContext):
                 value = deepcopy(v, memo)
             setattr(result, k, value)
         return result
-    
-  
-    
-    def get_log_output_as_stream(self):
+
+    @property
+    def log_output_as_stream(self):
         try:
             log_output = self.log_output
         except AttributeError:  # pragma: no cover
@@ -307,8 +305,6 @@ class SolverContext(BaseContext):
             output_stream = log_output
 
         return output_stream
-
-    log_output_as_stream = property(get_log_output_as_stream)
 
 
 class Context(BaseContext):
@@ -377,7 +373,9 @@ class Context(BaseContext):
         else:
             solver_context = SolverContext(docloud=create_default_docloud_context())
 
-        super(Context, self).__init__(solver=solver_context, docplex_tests=BaseContext())
+        super(Context, self).__init__(solver=solver_context,
+                                      cos=BaseContext(),
+                                      docplex_tests=BaseContext())
         # update will also ensure compatibility with older kwargs like
         # 'url' and 'api_key'
         self.update(kwargs, create_missing_nodes=True)
@@ -385,8 +383,12 @@ class Context(BaseContext):
         self.model_build_hook = None
 
     def init_cplex_parameters(self):
+        # we need a local import here so that docplex.mp.environment
+        # does not depend on context
+        from docplex.mp.environment import Environment
         local_env = self.get('_env_at_init') or Environment.get_default_env()
         cplex_version = local_env.cplex_version
+        local_env.check_cplex_version()
         cplex_parameters = get_params_from_cplex_version(cplex_version)
         return cplex_parameters
 
@@ -559,14 +561,14 @@ class Context(BaseContext):
             self.solver.docloud.key = value
         elif k == 'log_output':
             self.solver.log_output = value
-        elif k  == 'override':
+        elif k == 'override':
             self.update_from_list(iteritems(value))
         elif k == 'proxies':
             self.solver.docloud.proxies = value
-        elif k ==  '_env':
+        elif k == '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
-        elif k ==  'agent':
+        elif k == 'agent':
             self.solver.agent = value
         else:
             if create_missing_nodes:
@@ -671,6 +673,7 @@ def create_default_auto_publish_context(defaults=True):
         auto_publish.relaxations_output = None
         auto_publish.conflicts_output = None
     return auto_publish
+
 
 def create_default_docloud_context():
     # for internal use.
@@ -824,3 +827,38 @@ class ContextOverride(Context):
             except (AttributeError, TypeError):
                 # no set(), just setattr
                 setattr(o, to_be_set, property_value)
+
+
+class OverridenOutputContext(object):
+
+    def __init__(self, mdl, stream):
+        self._model = mdl
+        self._stream = stream
+        self._saved_context_log_output = mdl.context.solver.log_output
+        self._saved_log_output_stream = mdl.log_output
+
+    def __enter__(self):
+        mdl = self._model
+        # change stream
+        mdl.set_log_output(self._stream)
+        return mdl
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        mdl = self._model
+        log_stream = mdl.log_output
+        if log_stream:
+            try:
+                log_stream.flush()
+            except AttributeError:
+                pass
+            try:
+                log_stream.custom_close()
+            except AttributeError:
+                pass
+
+        saved_log_output_stream = self._saved_log_output_stream
+        saved_context_log_output = self._saved_context_log_output
+        if self._saved_log_output_stream != mdl.log_output:
+            mdl.set_log_output_as_stream(saved_log_output_stream)
+        if saved_context_log_output != mdl.context.solver.log_output:
+            mdl.context.solver.log_output = saved_context_log_output

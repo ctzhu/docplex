@@ -14,7 +14,6 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
         This class is not meant to be instantiated directly.
         To create an SOS, use the :func:`docplex.mp.model.Model.add_sos`, :func:`docplex.mp.model.Model.add_sos1`,
         and :func:`docplex.mp.model.Model.add_sos2` methods in Model.
-        
     '''
 
     def __init__(self, model, variable_sequence, sos_type, weights=None, name=None):
@@ -33,7 +32,7 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
             nb_vars = len(self._variables)
             if len(weight_list) != nb_vars:
                 self._model.fatal("Expecting {0} SOS weights, a list with size {1} was passed",
-                            nb_vars, len(weight_list))
+                                  nb_vars, len(weight_list))
             self._weights = weight_list[:]
 
     @property

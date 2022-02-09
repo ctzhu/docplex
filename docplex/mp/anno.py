@@ -62,7 +62,7 @@ class ModelAnnotationPrinter(object):
             if anno_objtype is not None and annotated:
                 osa.write("  <object type='{0:d}'>\n".format(anno_objtype))
                 for obj, benders_value in annotated:                   # FIXME: what if no name??
-                    obj_index = obj.get_index()  # not checked
+                    obj_index = obj.index  # not checked
                     anno_name = cls._anno_name(cplex_scope, obj.get_name(), obj_index)
                     if obj_index >= 0 :
                         # ignore objects not added to the model

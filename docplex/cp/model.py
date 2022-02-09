@@ -1280,6 +1280,38 @@ class CpoModel(object):
         return rsol
 
 
+    def explain_failure(self, ltags=None, **kwargs):
+        """ This method allows to explain solve failures.
+
+        If called with no arguments, this method invokes a solve of the model with appropriate parameters
+        that enable, in the log, the print of a number tag for each solve failure.
+
+        If called with a list of failure tag to explain, the solver is invoked again in a way that it explains,
+        in the log, the reason for the failure of the required failure tags.
+
+        This method sets the following solve parameters before calling the solver:
+
+         * :attr:`~docplex.cp.CpoParameters.LogSearchTags` = 'On'
+         * :attr:`~docplex.cp.CpoParameters.Workers` = 1
+         * :attr:`~docplex.cp.CpoParameters.LogPeriod` = 1
+         * :attr:`~docplex.cp.CpoParameters.SearchType` = 'DepthFirst'
+
+        Args:
+            ltags (Optional) :   List of tag ids to explain. If empty or None, the solver is just invoked with
+                                 appropriate solve parameters to make failure tags displayed in the log.
+            (others) (Optional): Any other solve attribute as it can be passed to method :meth:`~CpoModel.solve`.
+        Returns:
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        Raises:
+            :class:`~docplex.cp.utils.CpoNotSupportedException`: if method not available in the solver agent.
+            :class:`~docplex.cp.utils.CpoException`: (or derived) if error.
+        """
+        solver = self.create_solver(**kwargs)
+        msol = solver.explain_failure(ltags)
+        solver.end()
+        return msol
+
+
     def add_solver_listener(self, lstnr):
         """ Add a solver listener.
 
@@ -1457,7 +1489,7 @@ class CpoModel(object):
             if not x1.equals(x2):
                 print("X1 = {}".format(x1))
                 print("X2 = {}".format(x2))
-                raise CpoException("The expression {} differs: {} vs {}".format(i, x1, x2))
+                raise CpoException("The expression {} differs: '{}' vs '{}'".format(i, x1, x2))
 
 
     def equals(self, other):

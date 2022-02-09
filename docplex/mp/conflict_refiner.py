@@ -3,8 +3,9 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-
+import warnings
 from collections import namedtuple, defaultdict
+
 from docplex.mp.utils import is_string
 from docplex.mp.constants import ComparisonType, VarBoundType
 from docplex.mp.context import check_credentials
@@ -13,7 +14,7 @@ from docplex.mp.cloudutils import context_must_use_docloud
 from docplex.mp.utils import str_maxed
 from docplex.mp.publish import PublishResultAsDf
 
-import warnings
+
 
 TConflictConstraint = namedtuple("_TConflictConstraint", ["name", "element", "status"])
 
@@ -179,8 +180,8 @@ class VarBoundWrapper(object):
     def index(self):
         return self._var.index
 
-    @classmethod
-    def short_typename(cls):  # pragma: no cover
+    @property
+    def short_typename(self):  # pragma: no cover
         return "Variable Bound"
 
     def as_constraint(self):  # pragma: no cover
@@ -214,11 +215,6 @@ class VarLbConstraintWrapper(VarBoundWrapper):
     To check whether the lower bound of a variable causes a conflict, wrap the variable and
     include the resulting constraint in a ConstraintsGroup.
     """
-
-    def __init__(self, dvar):
-        super(VarLbConstraintWrapper, self).__init__(dvar)
-        self._var = dvar
-
     @property
     def short_typename(self):
         return "Lower Bound"
@@ -238,9 +234,6 @@ class VarUbConstraintWrapper(VarBoundWrapper):
     To check whether the upper bound of a variable causes a conflict, wrap the variable and
     include the resulting constraint in a ConstraintsGroup.
     """
-
-    def __init__(self, var):
-        super(VarUbConstraintWrapper, self).__init__(var)
 
     @property
     def short_typename(self):

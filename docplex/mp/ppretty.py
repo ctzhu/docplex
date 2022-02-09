@@ -199,7 +199,7 @@ class ModelPrettyPrinter(TextModelPrinter):
         wrapper.set_indent(' ')
 
     def _print_logicals(self, wrapper, model):
-        for ct in model.iter_logical_constraints(include_implicits=True):
+        for ct in model.iter_logical_constraints():
             ctname = self.logicalct_print_name(ct)
             if ctname:
                 wrapper.set_indent('  ')

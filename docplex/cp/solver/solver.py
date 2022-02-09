@@ -90,6 +90,17 @@ _ENDING_STATUSES = frozenset((STATUS_RELEASED, STATUS_ABORTED))
 ##  Public classes
 ###############################################################################
 
+class CpoSolverException(CpoException):
+    """ Exceptions raised for problems related to solver.
+    """
+    def __init__(self, msg):
+        """ Create a new exception
+        Args:
+            msg: Error message
+        """
+        super(CpoSolverException, self).__init__(msg)
+
+
 class CpoSolverAgent(object):
     """ This class is an abstract class that must be extended by every solver agent that intend
     to be called by :class:`CpoSolver` to solve a CPO model.
@@ -108,6 +119,8 @@ class CpoSolverAgent(object):
                  'log_data',         # Log data buffer (list of strings)
                  'log_enabled',      # Global log enabled indicator
                  'expr_map',         # Map of expressions to rebuild result
+                 'model_init',       # Indicates whether model has been initialized in the solver
+                 'callback_added',   # Indicates that the callback has been added
                 )
 
     def __init__(self, solver, params, context):
@@ -129,6 +142,8 @@ class CpoSolverAgent(object):
         self.rename_map = None
         self.version_info = None
         self.process_infos = CpoProcessInfos()
+        self.model_init = False
+        self.callback_added = False
 
         # Initialize log
         self.log_output = context.get_log_output()
@@ -257,6 +272,21 @@ class CpoSolverAgent(object):
         self._raise_not_supported()
 
 
+    def set_explain_failure_tags(self, ltags):
+        """ This method allows to set the list of failure tags to explain in the next solve.
+
+        The failure tags are displayed in the log when the parameter :attr:`~docplex.cp.CpoParameters.LogSearchTags`
+        is set to 'On'.
+        All existing failure tags previously set are cleared prior to set the new ones.
+        Calling this method with an empty list is then equivalent to just clear tags.
+
+        Args:
+            ltags:  List of tag ids to explain
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        self._raise_not_supported()
+
     def end(self):
         """ End solver agent and release all resources.
         """
@@ -267,7 +297,7 @@ class CpoSolverAgent(object):
 
 
     def _get_cpo_model_string(self):
-        """ Get the CPO model as a string, according to configuration
+        """ Get the CPO model as a string, according to configuration.
 
         Return:
             String containing the CPO model in CPO file format
@@ -312,6 +342,42 @@ class CpoSolverAgent(object):
         return cpostr
 
 
+    def _send_model_to_solver(self, cpostr):
+        """ Send the model to the solver.
+        This method must be extended by agent implementations to actually do the operation.
+        Args:
+            copstr:  String containing the model in CPO format
+        """
+        pass
+
+
+    def _add_callback_processing(self):
+        """ Add the processing of solver callback.
+        This method must be extended by agent implementations to actually do the operation.
+        """
+        pass
+
+
+    def _init_model_in_solver(self):
+        """ Send the model to the solver if not already done. """
+        if not self.model_init:
+            # Send model to solver
+            self._send_model_to_solver(self._get_cpo_model_string())
+            self.context.log(3, "Model sent to solver.")
+            self.model_init = True
+
+        # Add callback if needed.
+        if not self.callback_added and self.solver.callbacks:
+            # Check solver version
+            sver = self.version_info.get('SolverVersion', "1")
+            if compare_natural(sver, "12.10") >= 0:
+                self._add_callback_processing()
+                self.callback_added = True
+                self.context.log(3, "CPO callback created.")
+            else:
+                raise CpoSolverException("This version of the CPO solver ({}) does not support solver callbacks.".format(sver))
+
+
     def _add_log_data(self, data):
         """ Add new log data
         Args:
@@ -326,7 +392,6 @@ class CpoSolverAgent(object):
                 self.log_data.append(data)
         # Update statistics
         self.process_infos.incr(CpoProcessInfos.TOTAL_LOG_DATA_SIZE, len(data))
-
 
 
     def _set_last_json_result_string(self, json):
@@ -359,7 +424,7 @@ class CpoSolverAgent(object):
         res.process_infos.update(self.process_infos)
 
         # Process JSON solution
-        self.context.log(3, "JSON data:\n", jsol)
+        #self.context.log(3, "JSON data:\n", jsol)
         self.last_json_result = jsol
 
         # Parse JSON solution
@@ -682,8 +747,19 @@ class CpoSolver(object):
         for lstnr in self.listeners:
             lstnr.start_refine_conflict(self)
 
-        # Start refine conflict
+        # Ensure cpo model is generated with all constraints named
+        namecstrs = self.context.model.name_all_constraints
+        if not namecstrs:
+            self.context.model.name_all_constraints = True
+            self.agent.model_init = False
+
+        # Refine conflict
         msol = self.agent.refine_conflict()
+
+        # Restore previous name constraints indicator
+        self.context.model.name_all_constraints = namecstrs
+
+        # Call listeners with conflict result
         for lstnr in self.listeners:
             lstnr.conflict_found(self, msol)
 
@@ -691,7 +767,6 @@ class CpoSolver(object):
         self._set_status(STATUS_IDLE)
         for lstnr in self.listeners:
             lstnr.end_refine_conflict(self)
-
 
         return msol
 
@@ -750,6 +825,52 @@ class CpoSolver(object):
         return rsol
 
 
+    def explain_failure(self, ltags=None):
+        """ This method allows to explain solve failures.
+
+        If called with no arguments, this method invokes a solve of the model with appropriate parameters
+        that enable, in the log, the print of a number tag for each solve failure.
+
+        If called with a list of failure tag to explain, the solver is invoked again in a way that it explains,
+        in the log, the reason for the failure of the required failure tags.
+
+        This method sets the following solve parameters before calling the solver:
+
+         * :attr:`~docplex.cp.CpoParameters.LogSearchTags` = 'On'
+         * :attr:`~docplex.cp.CpoParameters.Workers` = 1
+         * :attr:`~docplex.cp.CpoParameters.LogPeriod` = 1
+         * :attr:`~docplex.cp.CpoParameters.SearchType` = 'DepthFirst'
+
+        Args:
+            ltags:  List of tag ids to explain. If empty or None, the solver is just invoked with appropriate
+                    solve parameters to make failure tags displayed in the log.
+        Returns:
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        Raises:
+            CpoNotSupportedException: method not available in this solver agent.
+        """
+        # Set solver parameters
+        params = self.agent.params
+        params.LogSearchTags = 'On'
+        params.Workers = 1
+        params.LogPeriod = 1
+        params.SearchType = 'DepthFirst'
+
+        # Add failure tags if any
+        if ltags:
+            self.agent.set_explain_failure_tags(ltags)
+
+        # Solve the model
+        msol = self.solve()
+
+        # Remove failure tags if any
+        if ltags:
+            self.agent.set_explain_failure_tags()
+
+        # Return
+        return msol
+
+
     def get_last_solution(self):
         """ Get the last result returned by this solver
 
@@ -771,7 +892,7 @@ class CpoSolver(object):
 
 
     def abort_search(self):
-        # Abort current search if any. Temporarily, end the process
+        # Abort current search if any.
         self._set_status(STATUS_ABORTED)
         agt = self.agent
         self.agent = None
@@ -796,10 +917,12 @@ class CpoSolver(object):
         # Returns:
         #     Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         # """
-        # Get next solution
-        msol = self.search_next()
-        if msol:
-            return msol
+        # Check if last solution was optimal
+        if not self.last_result or self.last_result.fail_status != FAIL_STATUS_SEARCH_COMPLETED:
+            # Get next solution
+            msol = self.search_next()
+            if msol:
+                return msol
         self.end_search()
         raise StopIteration()
 
@@ -935,18 +1058,24 @@ class CpoSolver(object):
         while True:
             # Search for next solution
             msol = self.search_next()
+            if msol.get_solve_status() == SOLVE_STATUS_JOB_ABORTED:
+                return last_sol if last_sol is not None else self.last_result
 
             # Check successful search
             if msol:
                 last_sol = msol
+                if msol.is_solution_optimal():
+                    break
             else:
                 break
 
         # Process end of search
+        # print("msol: {}, is_sol: {}, isoptimal: {}".format(msol,  msol.is_solution(), msol.is_solution_optimal()))
+        # print("last_sol: {}".format(last_sol))
         if last_sol is None:
             last_sol = msol
         else:
-            # Merge last valid solution with last solve infos
+            # Update last solution with last solver infos
             last_sol.solver_infos = msol.solver_infos
         self.end_search()
         return last_sol
@@ -990,6 +1119,7 @@ class CpoSolver(object):
         res.fail_status = FAIL_STATUS_ABORT
         res.search_status = SEARCH_STATUS_STOPPED
         res.stop_cause = STOP_CAUSE_ABORT
+        res.is_a_solution = False
         return res
 
 
@@ -1048,23 +1178,23 @@ class CpoSolver(object):
         # Get agent context
         sctx = self.context.solver.get(aname)
         if not isinstance(sctx, Context):
-            raise CpoException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
+            raise CpoSolverException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
         if sctx.is_log_enabled(3):
             sctx.log(3, "Context for solving agent '", aname, "':")
             sctx.write(out=sctx.get_log_output())
         cpath = sctx.class_name
         if cpath is None:
-            raise CpoException("Solving agent '" + aname + "' context should contain an attribute 'class_name'")
+            raise CpoSolverException("Solving agent '" + aname + "' context should contain an attribute 'class_name'")
 
         # Retrieve solver agent class
         try:
             sclass = utils.get_module_element_from_path(cpath)
         except Exception as e:
-            raise CpoException("Unable to retrieve solver agent class '{}': {}".format(cpath, e))
+            raise CpoSolverException("Unable to retrieve solver agent class '{}': {}".format(cpath, e))
         if not inspect.isclass(sclass):
-            raise CpoException("Solver agent '{}' is not a class.".format(cpath))
+            raise CpoSolverException("Solver agent '{}' is not a class.".format(cpath))
         if not issubclass(sclass, CpoSolverAgent):
-            raise CpoException("Solver agent class '{}' should extend CpoSolverAgent.".format(cpath))
+            raise CpoSolverException("Solver agent class '{}' should extend CpoSolverAgent.".format(cpath))
 
         # Create agent instance
         agent = sclass(self, sctx.params, sctx)
@@ -1133,12 +1263,12 @@ def _get_solver_agent_class(aname, sctx):
         raise CpoException("Unknown solving agent '" + aname + "'. Check config.context.solver.agent parameter.")
     cpath = sctx.class_name
     if cpath is None:
-        raise CpoException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")
+        raise CpoSolverException("Solving agent '" + aname + "' context does not contain attribute 'class_name'")
 
     # Split class name
     pnx = cpath.rfind('.')
     if pnx < 0:
-        raise CpoException("Invalid class name '" + cpath + "' for solving agent '" + aname + "'. Should be <package>.<module>.<class>.")
+        raise CpoSolverException("Invalid class name '" + cpath + "' for solving agent '" + aname + "'. Should be <package>.<module>.<class>.")
     mname = cpath[:pnx]
     cname = cpath[pnx + 1:]
 
@@ -1146,16 +1276,16 @@ def _get_solver_agent_class(aname, sctx):
     try:
         module = importlib.import_module(mname)
     except Exception as e:
-        raise CpoException("Module '" + mname + "' import error: " + str(e))
+        raise CpoSolverException("Module '" + mname + "' import error: " + str(e))
 
     # Create and check class
     sclass = getattr(module, cname, None)
     if sclass is None:
-        raise CpoException("Module '" + mname + "' does not contain a class '" + cname + "'")
+        raise CpoSolverException("Module '" + mname + "' does not contain a class '" + cname + "'")
     if not inspect.isclass(sclass):
-        raise CpoException("Agent class '" + cpath + "' is not a class.")
+        raise CpoSolverException("Agent class '" + cpath + "' is not a class.")
     if not issubclass(sclass, CpoSolverAgent):
-        raise CpoException("Solver agent class '" + cpath + "' does not extend CpoSolverAgent.")
+        raise CpoSolverException("Solver agent class '" + cpath + "' does not extend CpoSolverAgent.")
 
     # Return
     return sclass

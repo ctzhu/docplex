@@ -3,7 +3,6 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
-# Generated automatically
 
 """
 This module contains the Python descriptors of the different CPO types and operations.
@@ -436,7 +435,22 @@ Oper_var_success_rate            = CpoOperation("varSuccessRate", "var_success_r
 import sys
 _module = sys.modules[__name__]
 _attrs = dir(_module)
-ALL_TYPES = tuple(getattr(_module, x) for x in _attrs if x.startswith("Type_"))
-ALL_OPERATIONS = tuple(getattr(_module, x) for x in _attrs if x.startswith("Oper_"))
+
+# Build sorted list of all types, starting by those used in variables, in declaration order
+_VAR_TYPES_IN_ORDER = (Type_Bool, Type_Int, Type_Float, Type_IntArray, Type_FloatArray, Type_TupleSet,
+                       Type_SegmentedFunction, Type_StepFunction, Type_TransitionMatrix,
+                       Type_IntVar, Type_FloatVar, Type_StateFunction, Type_IntervalVar, Type_SequenceVar)
+ALL_TYPES = list(_VAR_TYPES_IN_ORDER)
+_tset = set(ALL_TYPES)
+for t in [getattr(_module, x) for x in _attrs if x.startswith("Type_")]:
+    if t not in _tset:
+        ALL_TYPES.append(t)
+        _tset.add(t)
+ALL_TYPES = tuple(ALL_TYPES)
+
+# Compute all dependency links between types
 compute_all_type_links(ALL_TYPES)
+
+# Build list of all operations
+ALL_OPERATIONS = tuple(getattr(_module, x) for x in _attrs if x.startswith("Oper_"))
 

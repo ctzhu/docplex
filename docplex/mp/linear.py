@@ -13,7 +13,7 @@ from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.compat23 import unitext
 from docplex.mp.basic import Expr, ModelingObjectBase, _SubscriptionMixin
 from docplex.mp.operand import LinearOperand
-from docplex.mp.utils import is_int, is_string, is_number, iter_emptyset
+from docplex.mp.utils import is_int, is_string, is_number, iter_emptyset, is_quad_expr
 from docplex.mp.dvar import Var
 from docplex.mp.sttck import StaticTypeChecker
 
@@ -23,9 +23,8 @@ class DOCplexQuadraticArithException(Exception):
     pass
 
 
-
 # noinspection PyAbstractClass
-class AbstractLinearExpr(Expr, LinearOperand):
+class AbstractLinearExpr(LinearOperand, Expr):
     __slots__ = ('_discrete_locked',)
 
     def get_coef(self, dvar):
@@ -295,7 +294,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
             product = self.model._qfactory.new_var_product(e, self)
         elif isinstance(e, MonomialExpr):
             product = self.model._qfactory.new_monomial_product(self, e)
-        elif isinstance(e, Expr) and e.is_quad_expr():
+        elif is_quad_expr(e):
             if e.has_quadratic_term():
                 StaticTypeChecker.mul_quad_lin_error(self._model, self, e)
             else:
@@ -347,6 +346,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
+
 
 # from private.debug_deco import count_instances
 #
@@ -829,7 +829,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             valid_e = validfn(e) if validfn else e
             self._constant += valid_e
             event = UpdateEvent.ExprConstant
-        elif isinstance(e, Expr) and e.is_quad_expr():
+        elif is_quad_expr(e):
             raise DOCplexQuadraticArithException
         else:
             try:
@@ -888,7 +888,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             self._add_term(e.var, -e.coef)
         elif isinstance(e, ZeroExpr):
             event = None
-        elif isinstance(e, Expr) and e.is_quad_expr():
+        elif is_quad_expr(e):
             #
             raise DOCplexQuadraticArithException
         else:
@@ -950,7 +950,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(e, ZeroExpr):
             self._scale(factor=0)
 
-        elif isinstance(e, Expr) and e.is_quad_expr():
+        elif is_quad_expr(e):
             if not e.number_of_quadratic_terms:
                 return self.multiply(e.linear_part)
             elif self.is_constant():
@@ -1222,8 +1222,6 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
             cexpr = self.get_linear_factory().constant_expr(newk, safe_number=False)
             self.notify_replaced(cexpr)
 
-
-
     def negate(self):
         return self
 
@@ -1284,7 +1282,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def equals(self, other):
         return (isinstance(other, LinearOperand) and (
-                           0 == other.get_constant() and (0 == other.number_of_terms()))) or\
+                0 == other.get_constant() and (0 == other.number_of_terms()))) or \
                (is_number(other) and other == 0)
 
     def square(self):

@@ -292,9 +292,13 @@ class ObjectiveSense(Enum):
     Minimize, Maximize = 1, 2
 
     def is_minimize(self):
+        """ Returns True if objective is a minimizing objective.
+        """
         return self is ObjectiveSense.Minimize
 
     def is_maximize(self):
+        """ Returns True if objective is a maximizing objective.
+        """
         return self is ObjectiveSense.Maximize
 
     @property
@@ -303,11 +307,19 @@ class ObjectiveSense(Enum):
 
     @property
     def verb(self):
-        # INTERNAL
+        """ Returns a string describing the objective (in lowercase)
+
+            - 'minimize' for the Minimize objective
+            - 'maximize' for the Maximize objective
+
+        """
         return self.name.lower()
 
     @property
     def short_name(self):
+        """ Returns a short (three letters) string describing the objective: min or max
+
+        """
         return self.verb[:3]
 
     @classmethod

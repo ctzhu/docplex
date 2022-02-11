@@ -433,7 +433,7 @@ class CplexEngine(IEngine):
         self._last_solve_details = None
 
         # for unpickling, remember to resync with model
-        self._resync = _CplexSyncMode.InSync
+        self._sync_mode = _CplexSyncMode.InSync
 
         # remember truly allocated indices
         self._lincts_scope = IndexScope(name='lincts')
@@ -449,7 +449,7 @@ class CplexEngine(IEngine):
         self._ccb = None
 
     def _mark_as_out_of_sync(self):
-        self._resync = _CplexSyncMode.OutOfSync
+        self._sync_mode = _CplexSyncMode.OutOfSync
 
     @classmethod
     def _cpx_set_all_streams(cls, cpx, ofs):
@@ -617,13 +617,6 @@ class CplexEngine(IEngine):
         indices = self.create_variables(1, vartype, lbs, ubs, names)
         assert 1 == len(indices)
         return indices[0]
-        # self._resync_if_needed()
-        # alltypes = self.compute_cpx_vartype(vartype.get_cplex_typecode(), size=1)
-        # names1 = [name] if name is not None else []
-        # lbs1 = [float(lb)] if lb is not None else []
-        # ubs1 = [float(ub)] if ub is not None else []
-        # ret_val = self.fast_add_cols(alltypes, lbs1, ubs1, names1)
-        # return self._allocate_one_index(ret_value=ret_val, scope=self._vars_scope, expect_range=True)
 
     def create_variables(self, nb_vars, vartype, lbs, ubs, names):
         self._resync_if_needed()
@@ -1291,7 +1284,7 @@ class CplexEngine(IEngine):
 
     # ---
 
-    def switch_linear_expr(self, index, old_expr, new_expr):
+    def _switch_linear_expr(self, index, old_expr, new_expr):
         # INTERNAL
         # clears all linear coefs from an old expr, then set the new coefs
         old_indices = [dv._index for dv in old_expr.iter_variables()]
@@ -1347,6 +1340,7 @@ class CplexEngine(IEngine):
             self._unexpected_event(event, msg='update_linear-constraint')
 
     def update_range_constraint(self, rngct, event, *args):
+        self._resync_if_needed()
         rng_index = rngct.index
         assert rng_index >= 0
         cpx_linear = self._cplex.linear_constraints
@@ -1368,7 +1362,7 @@ class CplexEngine(IEngine):
                 # TODO: check positive??
                 cpx_linear.set_rhs(rng_index, cpx_rhs_value)
             # change expr linear components anyway
-            self.switch_linear_expr(rng_index, old_expr, new_expr)
+            self._switch_linear_expr(rng_index, old_expr, new_expr)
 
         else:  # pragma: no cover
             self._unexpected_event(event, msg='update_range_constraints')
@@ -1380,6 +1374,7 @@ class CplexEngine(IEngine):
         self._model.fatal('CPLEX cannot modify {1}: {0!s}', lct, qualifier)
 
     def update_logical_constraint(self, lgct, event, *args):
+        self._resync_if_needed()
         if isinstance(lgct, IndicatorConstraint):
             self._model.fatal('CPLEX cannot modify a linear constraint used in an indicator: ({0!s})', lgct)
         elif isinstance(lgct, EquivalenceConstraint):
@@ -1392,6 +1387,7 @@ class CplexEngine(IEngine):
             self._model.fatal('Unexpected type for logical constraint: {0!r}', lgct)
 
     def update_constraint(self, ct, event, *args):
+        self._resync_if_needed()
         if event and ct.index >= 0:
             scope = ct.cplex_scope
             if scope == CplexScope.LINEAR_CT_SCOPE:
@@ -1439,6 +1435,7 @@ class CplexEngine(IEngine):
                 cpxobj.set_quadratic(zap_quads)
 
     def update_objective(self, expr, event, *args):
+        self._resync_if_needed()
         cpxobj = self._cplex.objective
         if event is upd.ExprConstant:
             # update the constant
@@ -1465,6 +1462,7 @@ class CplexEngine(IEngine):
             self._unexpected_event(event, msg='update_objective')
 
     def set_objective_expr(self, new_objexpr, old_objexpr):
+        self._resync_if_needed()
         cpx_objective = self._cplex.objective
         # old objective
         if old_objexpr is new_objexpr:
@@ -1751,22 +1749,6 @@ class CplexEngine(IEngine):
 
     def clear_user_cuts(self):
         self._cplex.linear_constraints.advanced.free_user_cuts()
-
-    # def _sync_equivalence_cts(self, mdl):
-    #     # INTERNAL
-    #     if self.supports_typed_indicators:
-    #         posted_eqcts = [imp_eq for imp_eq in mdl._iter_implicit_equivalence_cts() if imp_eq._index < 0]
-    #         if posted_eqcts:
-    #             eq_indices = self.create_batch_equivalence_constraints(posted_eqcts)
-    #             # noinspection PyArgumentList
-    #             for eqct, eqx in izip(posted_eqcts, eq_indices):
-    #                 eqct.index = eqx
-    #
-    #             # nb_equivs = len(posted_eqcts)
-    #             #     print('-- posted: {0} equivalence cts'.format(nb_equivs))
-    #     else:
-    #         self._model.fatal("Constraint status variables require CPLEX version >= 12.8.0, this is {0}",
-    #                             self._cplex.get_version())
 
     def _format_cplex_message(self, cpx_msg):
         if 'CPLEX' not in cpx_msg:
@@ -2771,16 +2753,18 @@ class CplexEngine(IEngine):
             solnpool = SolutionPool(pool_sols, num_replaced)
             return populate_sol, solnpool
 
+    def resync(self):
+        # life buoy
+        self._resync_if_needed()
 
     def _resync_if_needed(self):
-        if self._resync is _CplexSyncMode.OutOfSync:
+        if self._sync_mode is _CplexSyncMode.OutOfSync:
             # print("-- resync cplex from model...")
-            # send whole model to engine.
             try:
-                self._resync = _CplexSyncMode.InResync
+                self._sync_mode = _CplexSyncMode.InResync
                 self._model._resync()
             finally:
-                self._resync = _CplexSyncMode.InSync
+                self._sync_mode = _CplexSyncMode.InSync
 
 
 @contextmanager

@@ -63,8 +63,6 @@ class ModelingObjectBase(object):
         return StaticTypeChecker.check_lp_name(logger=self, qualifier=qualifier, obj=self, new_name=new_name,
                                                accept_empty=accept_empty, accept_none=accept_none)
 
-
-
     def has_name(self):
         """ Checks whether the object has a name.
 
@@ -130,9 +128,6 @@ class ModelingObjectBase(object):
     def _unsupported_binary_operation(self, lhs, op, rhs):
         self.fatal("Unsupported operation: {0!s} {1:s} {2!s}", lhs, op, rhs)
 
-    def is_quad_expr(self):
-        return False
-
     def __unicode__(self):
         return self.to_string()
 
@@ -143,8 +138,8 @@ class ModelingObjectBase(object):
             return self.__unicode__()
 
 
-class ModelingObject(ModelingObjectBase):
-    __slots__ = ("_index", "_origin", "_container")
+class IndexableObject(ModelingObjectBase):
+    __slots__ = ("_index",)
 
     @staticmethod
     def is_valid_index(idx):
@@ -168,14 +163,15 @@ class ModelingObject(ModelingObjectBase):
         Returns:
             True if the objects has been generated.
         """
-        return hasattr(self, '_origin') and self._origin is not None
+        return self.origin is not None
 
-    def notify_origin(self, origin):
-        if origin is not None:
-            self._origin = origin
-
+    @property
     def origin(self):
-        return getattr(self, '_origin', None)
+        return self.model.get_obj_origin(self)
+
+    @origin.setter
+    def origin(self, origin):
+        self.model.set_obj_origin(self, origin)
 
     def __hash__(self):
         return id(self)
@@ -186,7 +182,7 @@ class ModelingObject(ModelingObjectBase):
 
     @property
     def index1(self):
-        raw  = self._index
+        raw = self._index
         return raw if raw == self._invalid_index else raw + 1
 
     @index.setter
@@ -205,10 +201,13 @@ class ModelingObject(ModelingObjectBase):
             self.fatal("Modeling object {0!s} has invalid index: {1:d}", self, self._index)  # pragma: no cover
         return self._index
 
+    @property
+    def container(self):
+        return self.model.get_var_container(self)
 
-    def get_container(self):
-        # INTERNAL
-        return getattr(self, '_container', None)
+    @container.setter
+    def container(self, ctn):
+        self._model.set_var_container(self, ctn)
 
 
 class Expr(ModelingObjectBase, Operand):
@@ -218,10 +217,11 @@ class Expr(ModelingObjectBase, Operand):
     """
     __slots__ = ()
 
-    def __init__(self, model, name=None):
-        ModelingObjectBase.__init__(self, model, name)
-
     def clone(self):
+        raise NotImplementedError  # pragma: no cover
+
+    def iter_variables(self):
+        # internal
         raise NotImplementedError  # pragma: no cover
 
     def copy(self, target_model, var_mapping):
@@ -243,10 +243,7 @@ class Expr(ModelingObjectBase, Operand):
         Returns:
             Boolean: True if the variable is present in the expression, else False.
         """
-        for v in self.iter_variables():
-            if dvar is v:
-                return True
-        return False
+        return any(dvar is v for v in self.iter_variables())
 
     def to_string(self, nb_digits=None, use_space=False):
         oss = StringIO()
@@ -292,6 +289,15 @@ class Expr(ModelingObjectBase, Operand):
 
     def is_discrete(self):
         raise NotImplementedError  # pragma: no cover
+
+    def is_quad_expr(self):
+        """ Returns True if the expression is quadratic
+
+        """
+        return False
+
+    def get_linear_part(self):
+        return self # should be not implemented...
 
     def is_zero(self):
         return False

@@ -63,9 +63,6 @@ try:
 except:
     IS_PANDA_AVAILABLE = False
 
-# Indicator that program is running inside a notebook
-IS_IN_NOTEBOOK = 'ipykernel' in sys.modules
-
 # Constant used to indicate to set a parameter to its default value
 # Useful if default value is not static
 DEFAULT = "default"
@@ -1949,6 +1946,24 @@ def compare_natural(s1, s2):
 
     # No digits
     return ord(c1) - ord(c2)
+
+
+def get_module_version(mname):
+    """ Get the version of a Python module
+
+    Args:
+        mname:  Module name
+    Returns:
+        Version of the module, None if not installed, "Unknown" if not set in the module
+    """
+    try:
+        m = importlib.import_module(mname)
+        try:
+            return m.__version__
+        except AttributeError:
+            return "Unknown"
+    except ImportError:
+        return None
 
 
 #-----------------------------------------------------------------------------

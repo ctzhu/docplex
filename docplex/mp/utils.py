@@ -1115,4 +1115,9 @@ def resolve_caller_as_string(caller, sep=': '):
     except TypeError:
         return "%s%s" % (caller, sep)
 
-    
+
+def is_quad_expr(obj):
+    try:
+        return obj.is_quad_expr()
+    except AttributeError:
+        return False

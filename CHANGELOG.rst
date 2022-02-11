@@ -1,8 +1,24 @@
 Changelog
 ---------
 
-Changed in 2.16.196:
+Changed in 2.17.199:
 ````````````````````
+* In ``docplex.mp``:
+    * Fixed a bug with pickling: edition of a constraint in a pickled model raised an error
+    * Fixed a bug with pickling: models with piecewise-linear constraints could not be pickled
+
+* In ``docplex.cp``:
+    * Add environment variable DOCPLEX_CP_CONTEXT to modify configuration
+    * Add new module check_list that print a report on execution environment
+    * Remove DOcloud from documentation (including code)
+    * Rework customization of configuration and better support of default directory
+    * Add new configuration parameter model.sort_names to drive sort of variable declarations in CPO file format.
+    * Fix a problem that may crash Python in case of abort_search with local solve.
+
+    
+Changed in 2.16.196 (2020.11):
+``````````````````````````````
+
 * In ``docplex.mp``:
     * add `Model.add_quadratic_constraints()` to add a batch of quadratic constraints
     * add `Model.populate_solution_pool()` for a native support of solurtion pools
@@ -15,7 +31,6 @@ Changed in 2.16.196:
       checks for the latest installed version of CPLEX Optimization Studio (COS) (using the CPLEX_STUDIO_DIRXXX
       environment variables) and use the `cplex` if a COS is found, unless the configuration of the engine
       states otherwise.
-
 
 * In ``docplex.cp``:
     * Add pngfile= parameter to visu.show() method to store in a PNG file instead of display on screen.
@@ -35,8 +50,7 @@ Changed in 2.16.196:
       states otherwise.
     * Support last optimal solution in search/next sequence
     * Support of solver parameters in all next() solutions
-    * Add solver version in process infos attached to a run result
-
+    * Add solver version in process info attached to a run result
 
 
 Changed in 2.15.194 (2020.07):

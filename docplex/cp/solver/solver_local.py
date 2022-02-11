@@ -62,7 +62,7 @@ _MAX_RECEIVED_DATA_SIZE = 1000000
 IS_PYTHON_2 = (sys.version_info[0] == 2)
 
 # Version of this client
-CLIENT_VERSION = 3
+CLIENT_VERSION = 4
 
 
 ###############################################################################
@@ -77,6 +77,7 @@ class CpoSolverLocal(CpoSolverAgent):
                  'pin',                 # Sub-process input stream
                  'available_commands',  # List of available commands
                  'timeout_kill',        # Indicates process have been killed by timeout
+                 'out_lock',            # Lock to protect output stream
                 )
 
     def __init__(self, solver, params, context):
@@ -115,6 +116,7 @@ class CpoSolverLocal(CpoSolverAgent):
             raise CpoException("Can not execute command '{}'. Please check availability of required executable file.".format(' '.join(cmd)))
         self.pout = self.process.stdin
         self.pin = self.process.stdout
+        self.out_lock = threading.Lock()
 
         # Read initial version info from process
         self.version_info = None
@@ -139,10 +141,12 @@ class CpoSolverLocal(CpoSolverAgent):
 
         context.log(3, "Local solver info: '", verinf, "'")
 
+        # Transfer infos in process info
+        for x in ('ProxyVersion', 'AngelVersion', 'SourceDate', 'SolverVersion'):
+            self.process_infos[x] = self.version_info.get(x)
+
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
-        if sver:
-            self.process_infos['SolverVersion'] = sver
         mver = solver.get_model_format_version()
         if sver and mver and compare_natural(mver, sver) > 0:
             raise CpoSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
@@ -239,7 +243,10 @@ class CpoSolverLocal(CpoSolverAgent):
         """ Abort current search.
         This method is designed to be called by a different thread than the one currently solving.
         """
-        self.end()
+        try:
+            self.process.kill()
+        except:
+            pass
 
 
     def refine_conflict(self):
@@ -498,16 +505,19 @@ class CpoSolverLocal(CpoSolverAgent):
         frame[1] = 0xFE
         encode_integer_big_endian_4(tlen, frame, 2)
 
-        # Add data if any
+        # Log message to send
         self.context.log(5, "Send message: cmd=", cid, ", tsize=", tlen)
+
+        # Add data if any
         if data is None:
             frame = frame + cid
         else:
             frame = frame + cid + bytearray(1) + data
 
         # Write message frame
-        self.pout.write(frame)
-        self.pout.flush()
+        with self.out_lock:
+           self.pout.write(frame)
+           self.pout.flush()
 
         # Update statistics
         self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - nstime)

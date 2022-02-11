@@ -220,6 +220,7 @@ class AutoStopListener(CpoSolverListener):
         self.last_sol_time = None                            # Time of the last solution
         # Set time checking active indicator
         self.time_active = self.qsc_time is not None or self.qsc_sols is not None
+        self.condition = Condition()
 
     def start_solve(self, solver):
         # Store solver
@@ -229,7 +230,6 @@ class AutoStopListener(CpoSolverListener):
             self.abort_time = self._compute_next_abort_time()
             # Start time waiting thread
             self.time_active = True
-            self.condition = Condition()
             thread = Thread(target=self._waiting_loop)
             thread.start()
 
@@ -273,25 +273,29 @@ class AutoStopListener(CpoSolverListener):
         return None
 
     def _waiting_loop(self):
-        with self.condition:
-            while self.time_active:
+        """ Timer thread body """
+        abort_search = False
+        self.condition.acquire()
+        while self.time_active:
+            if self.abort_time is None:
+                self.condition.wait()
+            else:
                 ctime = time.time()
-                atime = self.abort_time
-                if atime is None:
-                    self.condition.wait()
+                if self.abort_time <= ctime:
+                    self.time_active = False
+                    abort_search = True
                 else:
-                    if atime <= ctime:
-                        self.time_active = False
-                        self.solver.abort_search()
-                    else:
-                        self.condition.wait(atime - ctime)
+                    self.condition.wait(self.abort_time - ctime)
+        self.condition.release()
+        if abort_search:
+            self.solver.abort_search()
 
     def _stop_waiting_loop(self):
         # Stop time control thread if any
-        if self.time_active:
-            with self.condition:
-                self.time_active = False
-                self.condition.notify()
+        self.condition.acquire()
+        self.time_active = False
+        self.condition.notify()
+        self.condition.release()
 
 
 ###############################################################################

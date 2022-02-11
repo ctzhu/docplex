@@ -360,7 +360,8 @@ class Model(object):
         self._semiinteger_vartype = SemiIntegerVarType()
 
         #
-        self.__allvarctns = []
+        self._container_map = {}
+        self._origin_map = {}
         self.__vars_by_name = {}
         self._cts_by_name = None
         self.__allpwlfuncs = []
@@ -1003,7 +1004,8 @@ class Model(object):
         self._clear_internal()
 
     def _clear_internal(self, terminate=False):
-        self.__allvarctns = []
+        self._container_map = {}
+        self._origin_map = {}
         self.__vars_by_name = {}
         self._cts_by_name = None
         self.__allpwlfuncs = []
@@ -1234,11 +1236,36 @@ class Model(object):
     # iterators
     def iter_var_containers(self):
         # INTERNAL
-        return iter(self.__allvarctns)
+        setof_ctns = set(self._container_map.values())
+        sorted_ctns = sorted(setof_ctns, key=lambda ctn_: ctn_._index)
+        return iter(sorted_ctns)
 
-    def _add_var_container(self, ctn):
+    def get_var_container(self, dvar):
         # INTERNAL
-        self.__allvarctns.append(ctn)
+        return self._container_map.get(dvar)
+
+    def set_var_container(self, dvar, ctn):
+        # INTERNAL
+        if ctn is not None:
+            self._container_map[dvar] = ctn
+
+    @staticmethod
+    def origin_key(obj):
+        # use id()here to allow case where index is not valid
+        return id(obj)
+
+    def get_obj_origin(self, obj):
+        # INTERNAL: retrieve origin of object
+        objkey = self.origin_key(obj)
+        return self._origin_map.get(objkey)
+
+    def set_obj_origin(self, obj, new_origin):
+        # INTERNAL: set origin of object
+        okey = self.origin_key(obj)
+        if new_origin is not None:
+            self._origin_map[okey] = new_origin
+        elif obj in self._origin_map:
+            del self._origin_map[okey]
 
     def _is_binary_var(self, dvar):
         return dvar.cplex_typecode == 'B'
@@ -1926,9 +1953,11 @@ class Model(object):
         self._checker.typecheck_num(lb)  # lb cannot be None
         return self._var(self.semiinteger_vartype, lb, ub, name)
 
-
     def var_list(self, keys, vartype, lb=None, ub=None, name=str, key_format=None):
         self._checker.typecheck_vartype(vartype)
+        return self._var_list(keys, vartype, lb, ub, name, key_format)
+
+    def _var_list(self, keys, vartype, lb=None, ub=None, name=str, key_format=None):
         return self._lfactory.var_list(keys, vartype, lb, ub, name, key_format)
 
     def var_dict(self, keys, vartype, lb=None, ub=None, name=str, key_format=None):
@@ -1962,7 +1991,7 @@ class Model(object):
             containing three binary decision variables with names `z_0`, `z_1`, `z_2`.
 
         """
-        return self.var_list(keys, self.binary_vartype, name=name, lb=lb, ub=ub, key_format=key_format)
+        return self._var_list(keys, self.binary_vartype, name=name, lb=lb, ub=ub, key_format=key_format)
 
     def integer_var_list(self, keys, lb=None, ub=None, name=str, key_format=None):
         """ Creates a list of integer decision variables with type `IntegerVarType`, stores them in the model,
@@ -1993,7 +2022,7 @@ class Model(object):
         :returns: A list of :class:`doc.mp.linear.Var` objects with type `IntegerVarType`.
 
         """
-        return self.var_list(keys, self.integer_vartype, lb, ub, name, key_format)
+        return self._var_list(keys, self.integer_vartype, lb, ub, name, key_format)
 
     def continuous_var_list(self, keys, lb=None, ub=None, name=str, key_format=None):
         """
@@ -2040,7 +2069,7 @@ class Model(object):
             :attr:`infinity`
 
         """
-        return self.var_list(keys, self.continuous_vartype, lb, ub, name, key_format)
+        return self._var_list(keys, self.continuous_vartype, lb, ub, name, key_format)
 
     def semicontinuous_var_list(self, keys, lb, ub=None, name=str, key_format=None):
         """
@@ -2087,7 +2116,7 @@ class Model(object):
             :attr:`infinity`
 
         """
-        return self.var_list(keys, self.semicontinuous_vartype, lb, ub, name, key_format)
+        return self._var_list(keys, self.semicontinuous_vartype, lb, ub, name, key_format)
 
     def semiinteger_var_list(self, keys, lb, ub=None, name=str, key_format=None):
         """
@@ -2134,7 +2163,7 @@ class Model(object):
             :attr:`infinity`
 
         """
-        return self.var_list(keys, self.semiinteger_vartype, lb, ub, name, key_format)
+        return self._var_list(keys, self.semiinteger_vartype, lb, ub, name, key_format)
 
     def continuous_var_dict(self, keys, lb=None, ub=None, name=None, key_format=None):
         """ Creates a dictionary of continuous decision variables, indexed by key objects.
@@ -4725,7 +4754,8 @@ class Model(object):
                         pass_ct = m._post_constraint(prev_goal <= prev_obj + tolerance)
                     else:
                         pass_ct = m._post_constraint(prev_goal >= prev_obj - tolerance)
-                    self.info("lexicographic solve: tolerance={0}", tolerance)
+                    lex_info("pass #{0} generated constraint with rhs: {1}, tolerance={2:.3f}"
+                             .format(pass_count, str(pass_ct.rhs), tolerance))
                     extra_cts.append(pass_ct)
 
 
@@ -4733,11 +4763,11 @@ class Model(object):
 
                 lex_info("starting pass %d, %s: %s" % (pass_count, sense.verb, str_maxed(goal_expr, 64)))
                 m.set_objective(sense, goal_expr)
-                # print("-- current objective is: {0!s}".format(goal_expr))
+
                 if lp_dump:  # pragma: no cover
                     pass_basename = 'lex_%s_%s#%d' % (self.name, goal_name, pass_count)
                     self.dump_as_lp(basename=pass_basename)
-                    lex_info("generating LP file: p{0}".format(pass_basename))
+                    lex_info("generating LP file: {0}".format(pass_basename))
 
                 # --- update pass parameters, if any
                 pass_param = next(iter_pass_params)
@@ -4760,6 +4790,7 @@ class Model(object):
                     results.append(current_obj)
                     prev_step = (goal_expr, current_obj, sense)
                     all_solutions.append(current_sol)
+                    lex_info("objective value for pass #{0} is: {1}".format(pass_count, current_sol.objective_value))
 
 
                 else:  # pragma: no cover
@@ -5557,7 +5588,7 @@ class Model(object):
         return False
 
     def print_solution(self, print_zeros=False,
-                       objective_fmt=DEFAULT_OBJECTIVE_FMT,
+                       solution_header_fmt=None,
                        var_value_fmt=None,
                        **kwargs):
         """  Prints the values of the model variables after a solve.
@@ -5567,10 +5598,12 @@ class Model(object):
 
         Args:
             print_zeros (Boolean): If False, only non-zero values are printed. Default is False.
-
-            objective_fmt : A format string in format syntax. The default printout is objective: xx where xx is formatted as a float with prec digits. The value of prec is computed automatically by DOcplex, either 0 if the objective expression is discrete or the model's float precision.
-
+            solution_header_fmt: a solution header string in format syntax, or None.
+                This format will be passed to  :function:`SolveSolution.display`.
             var_value_fmt : A format string to format the variable name and value. Again, the default uses the automatically computed precision.
+
+        See Also:
+            :func: `docplex.mp.solution.SolveSolution.display`
 
         """
         if self._solution is None:
@@ -5587,7 +5620,7 @@ class Model(object):
         iter_vars = self.iter_variables() if print_zeros else None
         # if some username has a whitespace, use quoted format
         self.solution.display(print_zeros=print_zeros,
-                              header_fmt=None,
+                              header_fmt=solution_header_fmt,
                               value_fmt=var_value_fmt,
                               iter_vars=iter_vars, **kwargs)
 
@@ -5961,7 +5994,6 @@ class Model(object):
         ctn_map = {}
         for ctn in self.iter_var_containers():
             copied_ctn = ctn.copy(copy_model)
-            copy_model._add_var_container(copied_ctn)
             ctn_map[ctn] = copied_ctn
 
         # clone variables
@@ -5978,13 +6010,13 @@ class Model(object):
                 generated_vars.append(v)
             else:
                 copied_var = copy_model._var(v.vartype, v.lb, v.ub, v.name)
-                var_ctn = v._container
+                var_ctn = v.container
                 if var_ctn:
-                    copied_var._container = ctn_map.get(var_ctn)
+                    copied_var.container = ctn_map.get(var_ctn)
                 memo[v] = copied_var
 
         for gv in generated_vars:
-            gvoo = gv.origin()
+            gvoo = gv.origin
             try:
                 gvo, gvx = gvoo
             except TypeError:
@@ -6189,6 +6221,10 @@ class Model(object):
     def _resync(self):
         # INTERNAL
         self._lfactory.resync_whole_model()
+
+    def resync_engine(self):
+        # INTERNAL: resync after pickle
+        self.__engine.resync()
 
     def add_sos1(self, dvars, name=None):
         ''' Adds  an SOS of type 1 to the model.

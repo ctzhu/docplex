@@ -14,19 +14,28 @@ class VarType(object):
     Specialized sub-classes are defined for each type of decision variable.
 
     """
-
     def __init__(self, short_name, lb, ub, cplex_typecode):
         self._short_name = short_name
         self._lb = lb
         self._ub = ub
         self._cpx_typecode = cplex_typecode
 
-    def get_cplex_typecode(self):
-        # INTERNAL
-        return self._cpx_typecode
+    # def get_cplex_typecode(self):
+    #     # INTERNAL
+    #     return self._cpx_typecode
 
     @property
     def cplex_typecode(self):
+        """ This property returns the CPLEX type code for this type.
+        Possible values are:
+            'B' for binary type
+            'I' for integer type
+            'C' for continuous type
+            'S' for semicontinuous type
+            'N' for semiinteger type
+
+        :return: a one-letter string.
+        """
         return self._cpx_typecode
 
     @property
@@ -41,37 +50,31 @@ class VarType(object):
         """
         return self._lb
 
-    def get_default_lb(self):
-        return self._lb
-
     @property
     def default_ub(self):
         """  This property returns the default upper bound for the type.
         """
         return self._ub
 
-    def get_default_ub(self):
-        return self._ub
-
     def resolve_lb(self, candidate_lb, logger):
         if candidate_lb is None:
             resolved_lb = self._lb
         else:
-            resolved_lb = self.compute_lb(candidate_lb, logger)
+            resolved_lb = self._compute_lb(candidate_lb, logger)
         return resolved_lb
 
     def resolve_ub(self, candidate_ub, logger):
         if candidate_ub is None:
             resolved_ub = self._ub
         else:
-            resolved_ub = self.compute_ub(candidate_ub, logger)
+            resolved_ub = self._compute_ub(candidate_ub, logger)
         return resolved_ub
 
-    def compute_lb(self, candidate_lb, logger):  # pragma: no cover
+    def _compute_lb(self, candidate_lb, logger):  # pragma: no cover
         # INTERNAL
         raise NotImplementedError
 
-    def compute_ub(self, candidate_ub, logger):  # pragma: no cover
+    def _compute_ub(self, candidate_ub, logger):  # pragma: no cover
         # INTERNAL
         raise NotImplementedError
 
@@ -84,30 +87,10 @@ class VarType(object):
         raise NotImplementedError  # pragma: no cover
 
     def accept_value(self, numeric_value, tolerance=1e-6):
-        # """ Checks if the `numeric_value` is valid for the type.
-        #
-        # Accepted values depend on the type:
-        #
-        # - Binary type accepts only 0 or 1.
-        #
-        # - Integer type accepts only integers.
-        #
-        # - Continuous type accepts any floating-point number within -inf and +inf, where inf
-        #   is the model's infinity value.
-        #
-        # This method never raises an exception.
-        #
-        # Args:
-        #     numeric_value: The candidate value.
-        #
-        # Returns:
-        #     Boolean: True if the candidate value is valid, else False.
-        #
-        # """
         raise NotImplementedError  # pragma: no cover
 
     @classmethod
-    def is_within_bounds_and_tolerance(cls, candidate_value, lb, ub, tolerance):
+    def _is_within_bounds_and_tolerance(cls, candidate_value, lb, ub, tolerance):
         assert tolerance >= 0
         if candidate_value <= lb - tolerance:
             res = False
@@ -118,14 +101,13 @@ class VarType(object):
         return res
 
     @classmethod
-    def is_int_within_tolerance(cls, candidate_value, tolerance):
+    def _is_int_within_tolerance(cls, candidate_value, tolerance):
         assert tolerance >= 0
         return abs(candidate_value - round(candidate_value)) <= tolerance
 
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
-        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
         return self.accept_value(candidate_value, tolerance) and\
-               self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
+               self._is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def to_string(self):
         """
@@ -143,7 +125,7 @@ class VarType(object):
     def __ne__(self, other):
         return type(other) != type(self)
 
-    def hash_vartype(self):  # pragma: no cover
+    def _hash_vartype(self):  # pragma: no cover
         return hash(self.cplex_typecode)
 
 
@@ -158,14 +140,14 @@ class BinaryVarType(VarType):
     def __init__(self):
         VarType.__init__(self, short_name="binary", lb=0, ub=1, cplex_typecode='B')
 
-    def compute_lb(self, candidate_lb, logger):
+    def _compute_lb(self, candidate_lb, logger):
         # INTERNAL
         if candidate_lb >= 1 + 1e-6:
             logger.fatal('Lower bound for binary variable should be less than 1, {0} was passed '.format(candidate_lb))
         # return the user bound anyway
         return candidate_lb
 
-    def compute_ub(self, candidate_ub, logger):
+    def _compute_ub(self, candidate_ub, logger):
         # INTERNAL
         if candidate_ub <= -1e-6:
             logger.fatal('Upper bound for binary variable should be greater than 0, {0} was passed'.format(candidate_ub))
@@ -181,19 +163,11 @@ class BinaryVarType(VarType):
         return True
 
     def accept_value(self, numeric_value, tolerance=1e-6):
-        # """ Checks if `numeric_value` equals 0 or 1.
-        #
-        # Args:
-        #     numeric_value: The candidate value.
-        #
-        # Returns:
-        #     Boolean: True if `numeric_value` equals 0 or 1.
-        # """
         return -tolerance <= numeric_value <= tolerance or\
                (1-tolerance <= numeric_value <= 1 + tolerance)
 
     def __hash__(self):  # pragma: no cover
-        return VarType.hash_vartype(self)
+        return VarType._hash_vartype(self)
 
 
 class ContinuousVarType(VarType):
@@ -208,10 +182,10 @@ class ContinuousVarType(VarType):
         self._plus_infinity = plus_infinity
         self._minus_infinity = - plus_infinity
 
-    def compute_ub(self, candidate_ub, logger):
+    def _compute_ub(self, candidate_ub, logger):
         return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb, logger):
+    def _compute_lb(self, candidate_lb, logger):
         return max(candidate_lb, self._minus_infinity)
 
     def is_discrete(self):
@@ -223,19 +197,10 @@ class ContinuousVarType(VarType):
         return False
 
     def accept_value(self, numeric_value, tolerance=1e-6):
-        # """ Checks if the value is within the minus infinity to positive infinity range.
-        #
-        # Args:
-        #     numeric_value: The candidate value.
-        #
-        # Returns:
-        #     Boolean: True if the candidate value is a valid floating-point number
-        #     with respect to the model's infinity.
-        # """
         return self._minus_infinity <= numeric_value <= self._plus_infinity
 
     def __hash__(self):  # pragma: no cover
-        return VarType.hash_vartype(self)
+        return VarType._hash_vartype(self)
 
 
 class IntegerVarType(VarType):
@@ -251,10 +216,10 @@ class IntegerVarType(VarType):
         self._plus_infinity = plus_infinity
         self._minus_infinity = -plus_infinity
 
-    def compute_ub(self, candidate_ub, logger):
+    def _compute_ub(self, candidate_ub, logger):
         return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb, logger):
+    def _compute_lb(self, candidate_lb, logger):
         return max(candidate_lb, self._minus_infinity)
 
     def is_discrete(self):
@@ -266,20 +231,10 @@ class IntegerVarType(VarType):
         return True
 
     def accept_value(self, numeric_value, tolerance=1e-6):
-        # """ Redefines the generic `accept_value` method.
-        #
-        # A value is valid if is an integer and belongs to the variable's domain.
-        #
-        # Args:
-        #     numeric_value: The numeric value being tested.
-        #
-        # Returns:
-        #     True if the value is valid for the type, else False.
-        # """
-        return self.is_int_within_tolerance(numeric_value, tolerance)
+        return self._is_int_within_tolerance(numeric_value, tolerance)
 
     def __hash__(self):  # pragma: no cover
-        return VarType.hash_vartype(self)
+        return VarType._hash_vartype(self)
 
 
 class SemiContinuousVarType(VarType):
@@ -293,10 +248,10 @@ class SemiContinuousVarType(VarType):
         VarType.__init__(self, short_name="semi-continuous", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
         self._plus_infinity = plus_infinity
 
-    def compute_ub(self, candidate_ub, logger):
+    def _compute_ub(self, candidate_ub, logger):
         return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
 
-    def compute_lb(self, candidate_lb, logger):
+    def _compute_lb(self, candidate_lb, logger):
         if candidate_lb <= 0:
             logger.fatal(
                 'semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
@@ -311,23 +266,13 @@ class SemiContinuousVarType(VarType):
         return False
 
     def accept_value(self, numeric_value, tolerance=1e-6):
-        # """ Checks if the value is within the minus infinity to positive infinity range.
-        #
-        # Args:
-        #     numeric_value: The candidate value.
-        #
-        # Returns:
-        #     Boolean: True if the candidate value is a valid floating-point number
-        #     with respect to the model's infinity.
-        # """
         return 0 <= numeric_value <= self._plus_infinity
 
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
-        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return 0 == candidate_value or self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
+        return 0 == candidate_value or self._is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def __hash__(self):  # pragma: no cover
-        return VarType.hash_vartype(self)
+        return VarType._hash_vartype(self)
 
 
 class SemiIntegerVarType(VarType):
@@ -341,10 +286,10 @@ class SemiIntegerVarType(VarType):
         VarType.__init__(self, short_name="semi-integer", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
         self._plus_infinity = plus_infinity
 
-    def compute_ub(self, candidate_ub, logger):
+    def _compute_ub(self, candidate_ub, logger):
         return min(candidate_ub, self._plus_infinity)
 
-    def compute_lb(self, candidate_lb, logger):
+    def _compute_lb(self, candidate_lb, logger):
         if candidate_lb <= 0:
             logger.fatal('semi-integer variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
@@ -360,11 +305,10 @@ class SemiIntegerVarType(VarType):
     def accept_value(self, numeric_value, tolerance=1e-6):
         if 0 == numeric_value:
             return True
-        return numeric_value >= 0 and self.is_int_within_tolerance(numeric_value, tolerance)
+        return numeric_value >= 0 and self._is_int_within_tolerance(numeric_value, tolerance)
 
     def accept_domain_value(self, candidate_value, lb, ub, tolerance):
-        # INTERNAL: check that a value is OK w.r.t the ttype and a domain [lb,ub]
-        return 0 == candidate_value or self.is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
+        return 0 == candidate_value or self._is_within_bounds_and_tolerance(candidate_value, lb, ub, tolerance)
 
     def __hash__(self):  # pragma: no cover
-        return VarType.hash_vartype(self)
+        return VarType._hash_vartype(self)

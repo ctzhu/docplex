@@ -1,15 +1,15 @@
 from six import PY3
 from docplex.mp.constants import CplexScope
 
-from docplex.mp.basic import ModelingObject, Expr, ModelingObjectBase, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, ModelingObjectBase, _BendersAnnotatedMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
-from docplex.mp.utils import is_number
+from docplex.mp.utils import is_number, is_quad_expr
 
 from docplex.mp.sttck import StaticTypeChecker
 
 
-class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
+class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
     """Var()
 
     This class models decision variables.
@@ -21,20 +21,18 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def __init__(self, model, vartype, name,
                  lb=None, ub=None,
-                 container=None,
                  _safe_lb=False, _safe_ub=False):
-        ModelingObject.__init__(self, model, name)
+        IndexableObject.__init__(self, model, name)
         self._vartype = vartype
-        self._container = container
 
         if _safe_lb:
             self._lb = lb
         else:
-            self._lb = vartype.compute_lb(lb, model)
+            self._lb = vartype._compute_lb(lb, model)
         if _safe_ub:
             self._ub = ub
         else:
-            self._ub = vartype.compute_ub(ub, model)
+            self._ub = vartype._compute_ub(ub, model)
 
     @property
     def cplex_scope(self):
@@ -147,7 +145,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
     def _reset_bounds(self):
         vartype = self._vartype
-        vtype_lb, vtype_ub = vartype.get_default_lb(), vartype.get_default_ub()
+        vtype_lb, vtype_ub = vartype.default_lb, vartype.default_ub
         self.set_lb(vtype_lb)
         self.set_ub(vtype_ub)
 
@@ -236,7 +234,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return sol._get_var_value(self)
 
     def get_container_index(self):
-        ctn = self.get_container()
+        ctn = self.container
         return ctn.index if ctn else -1
 
     def get_key(self):
@@ -253,8 +251,8 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         :return:
             a Python object, possibly None.
         """
-        self_container = self.get_container()
-        return self_container.get_var_key(self) if self_container else None
+        ctn = self.container
+        return ctn.get_var_key(self) if ctn else None
 
     def __mul__(self, e):
         return self.times(e)
@@ -344,7 +342,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
 
         elif is_number(e):
             return self._make_linear_expr(constant=e, safe=False)
-        elif e.is_quad_expr():
+        elif is_quad_expr(e):
             return e.plus(self)
         else:
             return self.to_linear_expr().add(e)
@@ -370,7 +368,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             # v -k -> expression(v,-1) -k
             return self._make_linear_expr(constant=-e, safe=False)
 
-        elif isinstance(e, Expr) and e.is_quad_expr():
+        elif is_quad_expr(e):
             return e.rminus(self)
         else:
             return self.to_linear_expr().subtract(e)
@@ -529,7 +527,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
         return  self._vartype.cplex_typecode
 
     def _must_print_lb(self):
-        return self.cplex_typecode not in 'SN' and self.lb == self._vartype.get_default_lb()
+        return self.cplex_typecode not in 'SN' and self.lb == self._vartype.default_lb
 
     def __repr__(self):
         self_vartype, self_lb, self_ub = self._vartype, self.lb, self.ub
@@ -538,7 +536,7 @@ class Var(ModelingObject, LinearOperand, _BendersAnnotatedMixin):
             repr_lb = ''
         else:
             repr_lb = ',lb={0:g}'.format(self_lb)
-        if self_vartype.get_default_ub() == self_ub:
+        if self_vartype.default_ub == self_ub:
             repr_ub = ''
         else:
             repr_ub = ',ub={0:g}'.format(self_ub)

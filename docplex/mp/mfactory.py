@@ -213,8 +213,7 @@ class ModelFactory(_AbstractModelFactory):
         idx = self._engine.create_one_variable(vartype, lb, ub, varname)
         var = Var(self_model, vartype, varname, lb, ub, _safe_lb=True, _safe_ub=True)
         self_model._register_one_var(var, idx, varname)
-        if origin is not None:
-            var.notify_origin(origin)
+        var.origin = origin
         return var
 
     def new_var(self, vartype, lb=None, ub=None, varname=None, safe=False):
@@ -225,8 +224,8 @@ class ModelFactory(_AbstractModelFactory):
             rlb = vartype.resolve_lb(lb, logger)
             rub = vartype.resolve_ub(ub, logger)
         else:
-            rlb = vartype.get_default_lb() if lb is None else lb
-            rub = vartype.get_default_ub() if ub is None else ub
+            rlb = vartype.default_lb if lb is None else lb
+            rub = vartype.default_ub if ub is None else ub
         used_varname = None if self_model.ignore_names else varname
         return self._make_new_var(vartype, rlb, rub, used_varname, origin=None)
 
@@ -412,13 +411,15 @@ class ModelFactory(_AbstractModelFactory):
                        all_names[k] if all_names else None,
                        xlbs[k] if xlbs else default_lb,
                        xubs[k] if xubs else default_ub,
-                       container=var_container,
                        _safe_lb=safe_lbs,
                        _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
 
         # query the engine for a list of indices.
         indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, all_names)
         mdl._register_block_vars(allvars, indices, all_names)
+        if var_container:
+            for dv in allvars:
+                mdl.set_var_container(dv, var_container)
         return allvars
 
     def _make_var_dict(self, keys, var_list, ordered):
@@ -807,6 +808,8 @@ class ModelFactory(_AbstractModelFactory):
                 self_engine.create_logical_constraint(ct, is_equivalence=True)
             elif isinstance(ct, QuadraticConstraint):
                 self_engine.create_quadratic_constraint(ct)
+            elif isinstance(ct, PwlConstraint):
+                self_engine.create_pwl_constraint(ct)
             else:
                 self_model.fatal("Unexpected constraint type: {0!s} - ignored", type(ct))  # pragma: no cover
 
@@ -961,7 +964,6 @@ class ModelFactory(_AbstractModelFactory):
         ctn._index_offset = self._model.number_of_variables  # nb of variables before ctn
         self._var_container_counter = old_varctn_counter + 1
 
-        self._model._add_var_container(ctn)
         return ctn
 
 

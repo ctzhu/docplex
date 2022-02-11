@@ -111,10 +111,12 @@ class CpoSolverLib(CpoSolverAgent):
         self.session = self.lib_handler.createSession(self.notify_event_proto)
         self.context.log(5, "Solve session: {}".format(self.session))
 
+        # Transfer infos in process info
+        for x in ('ProxyVersion', 'LibVersion', 'SourceDate', 'SolverVersion'):
+            self.process_infos[x] = self.version_info.get(x)
+
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
-        if sver:
-            self.process_infos['SolverVersion'] = sver
         mver = solver.get_model_format_version()
         if sver and mver and compare_natural(mver, sver) > 0:
             raise CpoSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
@@ -312,6 +314,15 @@ class CpoSolverLib(CpoSolverAgent):
         Raises:
             CpoDllException if function call fails or if expected JSON is absent
         """
+        # Log call
+        if self.context.is_log_enabled(5):
+            self.context.log(5, "Call library function: '", dfname, "' with arguments:")
+            if args:
+                for a in args:
+                    self.context.log(5, "   ", a)
+            else:
+                self.context.log(5, "   None")
+
         # Reset JSON result if JSON required
         if json:
             self.last_json_result = None
@@ -328,9 +339,10 @@ class CpoSolverLib(CpoSolverAgent):
             raise CpoSolverException(errmsg)
 
         # Check if JSON result is present
-        if json and self.last_json_result is None:
-            raise CpoSolverException("No JSON result provided by function '{}'".format(dfname))
-
+        if json:
+            if self.last_json_result is None:
+               raise CpoSolverException("No JSON result provided by function '{}'".format(dfname))
+            self.context.log(5, "JSON result: ", self.last_json_result)
 
     def _notify_event(self, event, data):
         """ Callback called by the library to notify Python of an event (log, error, etc)
@@ -458,7 +470,7 @@ class CpoSolverLib(CpoSolverAgent):
 
         # Send CPO model to process
         stime = time.time()
-        self._call_lib_function('setCpoModel', False, cpostr)
+        self._call_lib_function('setCpoModel', True, cpostr)
         self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_SEND_TIME, time.time() - stime)
 
 

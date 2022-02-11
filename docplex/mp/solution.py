@@ -652,8 +652,7 @@ class SolveSolution(object):
                 unsats.append(ct)
         return unsats
 
-    def restore(self, mdl, abs_tolerance=1e-6, rel_tolerance=1e-4, restore_all=False, match="auto"):
-        # restores the solution in its model, adding ranges.
+    def _var_match_function(self, mdl, match="auto"):
         if mdl is self._model:
             def find_matching_var(dvar_): return dvar_
         elif match == "index" or match == "auto" and mdl.statistics == self._model.statistics:
@@ -662,7 +661,22 @@ class SolveSolution(object):
         else:
             def find_matching_var(dvar1):
                 return mdl.get_var_by_name(dvar1.name)
+        return find_matching_var
 
+    def number_of_var_diffs(self, other_sol, precision=1e-6, match="auto"):
+        var_match_fn = self._var_match_function(other_sol.model, match)
+        nb_diffs = 0
+        for dv, dvv in self.iter_var_values():
+            other_dv = var_match_fn(dv)
+            if other_dv:
+                other_dvv = other_sol[other_dv]
+                if abs(dvv - other_dvv) >= precision:
+                    nb_diffs += 1
+        return nb_diffs
+
+    def restore(self, mdl, abs_tolerance=1e-6, rel_tolerance=1e-4, restore_all=False, match="auto"):
+        # restores the solution in its model, adding ranges.
+        find_matching_var = self._var_match_function(mdl, match)
         lfactory = mdl._lfactory
         restore_ranges = []
         for dvar, val in self.iter_var_values():

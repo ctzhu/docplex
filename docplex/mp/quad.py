@@ -244,6 +244,19 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return self.generate_quad_triplets()
 
     def iter_terms(self):
+        """ Iterates over the linear terms in the quadratic expression.
+
+        Equivalent to self.linear_part.iter_terms()
+
+        Returns:
+            An iterator over the (variable, coefficient) pairs in the linear part of the expression.
+
+        Example:
+            Calling this method on (x^2 +2x+1) will return one pair (x, 2).
+
+        See Also:
+            :function:`docplex.mp.linear.LinearExpr.iter_terms`
+        """
         return self._linexpr.iter_terms()
 
     @property
@@ -383,10 +396,24 @@ class QuadExpr(_SubscriptionMixin, Expr):
             event = UpdateEvent.ExprConstant
         self.notify_modified(event)
 
-    constant = property(get_constant, set_constant)
+    @property
+    def constant(self):
+        """This property is used to get or set the constant part of a quadratic expression
+        """
+        return self.get_constant()
+
+    @constant.setter
+    def constant(self, new_cst):
+        self.set_constant(new_cst)
 
     @property
     def linear_part(self):
+        """ This property returns the linear part of a quadratic expression.
+
+        For example, the linear part of x^2 +2x+1 is (2x+1)
+
+        :return: an instance of :class:`docplex.mp.LinearExpr`
+        """
         return self.get_linear_part()
 
     def get_linear_part(self):
@@ -635,7 +662,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
         else:
             # self is actually a linear expression
-            if other.is_quad_expr():
+            if is_quad_expr(other):
                 if other.has_quadratic_term():
                     StaticTypeChecker.mul_quad_lin_error(self.model, self, other)
                 else:

@@ -3,11 +3,11 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import ModelingObject, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin
 from docplex.mp.constants import CplexScope
 
 
-class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
+class SOSVariableSet(_BendersAnnotatedMixin, IndexableObject):
     ''' This class models :index:`Special Ordered Sets` (SOS) of decision variables.
         An SOS has a type (SOS1, SOS2) and an ordered list of variables.
 
@@ -17,7 +17,7 @@ class SOSVariableSet(_BendersAnnotatedMixin, ModelingObject):
     '''
 
     def __init__(self, model, variable_sequence, sos_type, weights=None, name=None):
-        ModelingObject.__init__(self, model, name)
+        IndexableObject.__init__(self, model, name)
         self._sos_type = sos_type
         self._variables = variable_sequence[:]  # copy sequence
         self._set_weights(weights)

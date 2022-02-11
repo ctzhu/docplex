@@ -66,23 +66,23 @@ class _FunctionalExpr(Expr, LinearOperand):
         assert artefact_pos >= 0
         m = self._model
         gvar = m._lfactory.new_var(vartype, lb=lb, ub=ub, varname=name, safe=True)
-        gvar.notify_origin((self, artefact_pos))
+        gvar.origin = (self, artefact_pos)
         return gvar
 
     def _new_generated_binary_varlist(self, keys, offset=0, name=None):
         bvars = self.model.binary_var_list(keys, name)
         for b, bv in enumerate(bvars, start=offset):
-            bv.notify_origin((self, b))
+            bv.origin = (self, b)
         return bvars
 
     def new_generated_sos1(self, dvars):
         sos1 = self.model._add_sos(dvars, SOSType.SOS1)
-        sos1.notify_origin(self)
+        sos1.origin = self
         return sos1
 
     def _new_generated_indicator(self, binary_var, linear_ct, active_value=1, name=None):
         ind = self._model._lfactory.new_indicator_constraint(binary_var, linear_ct, active_value, name)
-        ind.notify_origin(self)
+        ind.origin = self
         self._model.add(ind)
         return ind
 
@@ -91,7 +91,7 @@ class _FunctionalExpr(Expr, LinearOperand):
         m = self._model
         ct = m._lfactory.new_binary_constraint(lhs=lhs, sense=sense, rhs=rhs)
         m._post_constraint(ct)
-        ct.notify_origin(self)
+        ct.origin = self
         return ct
 
     def _post_generated_cts(self, cts):
@@ -99,7 +99,7 @@ class _FunctionalExpr(Expr, LinearOperand):
         # posts a constraint and marks it as generated.
         self._model._lfactory._post_constraint_block(cts)
         for c in cts:
-            c.notify_origin(self)
+            c.origin =self
         return cts
 
     def _get_resolved_f_var(self):
@@ -561,7 +561,7 @@ class _LogicalSequenceExpr(_SequenceExpr):
                 r = x
             return r
 
-        s = sep.join(str(first_or_id(b.origin())) if b.is_generated() else str(b) for b in self._xvars)
+        s = sep.join(str(first_or_id(b.origin)) if b.is_generated() else str(b) for b in self._xvars)
         return s
 
     def is_discrete(self):

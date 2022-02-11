@@ -2345,9 +2345,6 @@ def build_cpo_transition_matrix(val):
     return cpval
 
 
-_VAR_TYPE_ORDER = (Type_Bool, Type_Int, Type_Float, Type_IntArray, Type_FloatArray, Type_TupleSet,
-                   Type_SegmentedFunction, Type_StepFunction, Type_TransitionMatrix,
-                   Type_IntVar, Type_FloatVar, Type_StateFunction, Type_IntervalVar, Type_SequenceVar)
 def compare_expressions(x1, x2):
     """ Compare two expressions for declaration order
 
@@ -2358,13 +2355,13 @@ def compare_expressions(x1, x2):
         Integer value that is negative if v1 < v2, zero if v1 == v2 and positive if v1 > v2.
     """
     # First sort by expression type
-    if x1.type != x2.type:
-        return _VAR_TYPE_ORDER.index(x1.type) - _VAR_TYPE_ORDER.index(x2.type)
+    if x1.type is not x2.type:
+        return x1.type.id - x2.type.id
     # Check object type
     tx1 = type(x1)
     tx2 = type(x2)
     if tx1 is not tx2:
-        # Alias always lost
+        # Alias always loss
         if tx1 is CpoAlias:
             return 1
         if tx2 is CpoAlias:

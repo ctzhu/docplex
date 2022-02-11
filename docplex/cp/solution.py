@@ -1165,6 +1165,20 @@ class CpoRunResult(object):
         return self.process_infos
 
 
+    def get_process_info(self, name, default=None):
+        """ Get a particular process information.
+
+        Args:
+            name:    Name of the process info to get
+            default: (optional) Default value if not found. None by default.
+        Returns:
+            Value of the process info, default value if not found.
+        """
+        if self.process_infos is None:
+            return default
+        return self.process_infos.get(name, default)
+
+
     def get_parameters(self):
         """ Gets the complete dictionary of solving parameters.
 
@@ -1209,7 +1223,21 @@ class CpoRunResult(object):
 
 
     def get_info(self, name, default=None):
-        """ Gets a particular information attribute.
+        """ Gets a particular solver information attribute.
+
+        Deprecated. use :meth:`get_solver_info` instead.
+
+        Args:
+            name:    Name of the information to get
+            default: (optional) Default value if not found. None by default.
+        Returns:
+            Information attribute value, None if not found.
+        """
+        return self.solver_infos.get(name, default)
+
+
+    def get_solver_info(self, name, default=None):
+        """ Gets a particular solver information attribute.
 
         Args:
             name:    Name of the information to get
@@ -2025,6 +2053,9 @@ class CpoProcessInfos(InfoDict):
 
     # Attribute name for time needed to dump model in file and/or on log
     MODEL_DUMP_TIME = "ModelDumpTime"
+
+    # Attribute name for time needed to submit the model to solver
+    MODEL_SUBMIT_TIME = "ModelSubmitTime"
 
     # Attribute name for the size of the generated CPO model
     MODEL_DATA_SIZE = "ModelDataSize"

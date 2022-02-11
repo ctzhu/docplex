@@ -5,12 +5,11 @@
 # --------------------------------------------------------------------------
 import warnings
 
-from docplex.mp.basic import ModelingObject, ModelingObjectBase, Priority, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, ModelingObjectBase, Priority, _BendersAnnotatedMixin
 from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
 from docplex.mp.utils import DocplexLinearRelaxationError
-
 
 
 class _ExtraConstraintUsage(object):
@@ -44,11 +43,11 @@ class _ConstraintLogicalUsage(object):
             engine.update_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
 
 
-class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
+class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
     __slots__ = ()
 
     def __init__(self, model, name=None):
-        ModelingObject.__init__(self, model, name)
+        IndexableObject.__init__(self, model, name)
 
     @property
     def priority(self):
@@ -72,6 +71,7 @@ class AbstractConstraint(ModelingObject, _BendersAnnotatedMixin):
     def is_mandatory(self):
         return Priority.MANDATORY == self.priority
 
+    # noinspection PyUnusedLocal
     def _unsupported_relational_op(self, op_string, other):
         self.fatal("Relational operator: {1} is unavailable with constraint: {0!s}", self, op_string)
 
@@ -205,7 +205,7 @@ class BinaryConstraint(AbstractConstraint):
         self._ctsense = new_sense
 
     def __init__(self, model, left_expr, ctsense, right_expr, name=None):
-        ModelingObject.__init__(self, model, name)
+        IndexableObject.__init__(self, model, name)
         self._ctsense = ctsense
         # noinspection PyPep8
         self._left_expr = left_expr
@@ -638,8 +638,8 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         elif self_left_expr.is_constant():
             return not has_nonzero_coef(self.right_expr.iter_terms())
         else:
-            return not has_nonzero_coef(BinaryConstraint._generate_net_linear_coefs2_unsorted(self_left_expr, self_right_expr))
-
+            return not has_nonzero_coef(
+                BinaryConstraint._generate_net_linear_coefs2_unsorted(self_left_expr, self_right_expr))
 
     def _post_meta_constraint(self, rhs, ctsense):
         status_var = self.get_resolved_status_var()
@@ -751,8 +751,8 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         if not self.is_discrete():
             return None
         else:
-            return self.get_resolved_status_var\
-                (caller_msg='Conversion to logical operand is available only for discrete constraints')
+            return self.get_resolved_status_var(caller_msg=
+                                                'Conversion to logical operand is available only for discrete constraints')
 
     def _check_is_discrete(self, ct, msg=None):
         err_msg = msg or "Conversion from constraint to expression is available only for discrete constraints"
@@ -779,7 +779,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         self._status_var = status_var
         # store ct in model
         eqct = lfactory.new_equivalence_constraint(status_var, linear_ct=self)
-        eqct.notify_origin(self)
+        eqct.origin = self
         engine = self._model.get_engine()
         eqx = engine.create_logical_constraint(eqct, is_equivalence=True)
         self._model._register_implicit_equivalence_ct(eqct, eqx)
@@ -1087,7 +1087,8 @@ class RangeConstraint(AbstractConstraint):
         yield self._expr
 
     def cplex_range_value(self, do_raise=True):
-        return self.static_cplex_range_value(self, self._lb, self._ub, lambda: "Range has infeasible domain: {0!s}".format(self),
+        return self.static_cplex_range_value(self, self._lb, self._ub,
+                                             lambda: "Range has infeasible domain: {0!s}".format(self),
                                              do_raise=do_raise)
 
     @classmethod
@@ -1134,7 +1135,7 @@ class RangeConstraint(AbstractConstraint):
 
     def __repr__(self):
         printable_name = self.safe_name
-        return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})".\
+        return "docplex.mp.RangeConstraint[{0}]({1},{2!s},{3})". \
             format(printable_name, self.lb, self._expr, self.ub)
 
     def resolve(self):
@@ -1514,12 +1515,28 @@ class QuadraticConstraint(BinaryConstraint):
     def _set_left_expr(self, new_left_expr):
         self.qfactory.set_quadratic_constraint_expr_from_pos(self, pos=0, new_expr=new_left_expr)
 
-    left_expr = property(BinaryConstraint.get_left_expr, _set_left_expr)
+    @property
+    def left_expr(self):
+        return BinaryConstraint.get_left_expr(self)
+
+    @left_expr.setter
+    def left_expr(self, new_left_expr):
+        self._set_left_expr(new_left_expr)
 
     def _set_right_expr(self, new_right_expr):
         self.qfactory.set_quadratic_constraint_expr_from_pos(self, pos=1, new_expr=new_right_expr)
 
-    right_expr = property(BinaryConstraint.get_right_expr, _set_right_expr)
+    @property
+    def right_expr(self):
+        return BinaryConstraint.get_right_expr(self)
+
+    @right_expr.setter
+    def right_expr(self, new_right_expr):
+        self._set_right_expr(new_right_expr)
+
+    # aliases
+    rhs = right_expr
+    lhs = left_expr
 
     @property
     def benders_annotation(self):
@@ -1659,7 +1676,6 @@ class PwlConstraint(AbstractConstraint):
         yield self.y
         yield self._input_var
 
-
     def iter_extended_variables(self):
         # iterates on all extended variables involved in the computation
         # yvar, xavr, plus all argument rexpr vars
@@ -1668,7 +1684,6 @@ class PwlConstraint(AbstractConstraint):
         yield self._input_var
         for v in self._pwl_expr._argument_expr.iter_variables():
             yield v
-
 
     def get_var_coef(self, dvar):
         if dvar is self.y:
@@ -1703,5 +1718,5 @@ class PwlConstraint(AbstractConstraint):
 
     def __repr__(self):
         printable_name = self.safe_name
-        return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})".\
+        return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})". \
             format(printable_name, self.y, self.pwl_func, self.expr)

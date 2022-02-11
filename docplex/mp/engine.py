@@ -203,10 +203,13 @@ class IEngine(object):
         raise NotImplementedError  # pragma: no cover
 
     def set_lp_start(self, var_stats, ct_stats):  # pragma: no cover
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     def export(self, out, fmt):  # pragma: no cover
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
+
+    def resync(self):
+        raise NotImplementedError  # pragma: no cover
 
 
 # noinspection PyAbstractClass
@@ -332,6 +335,9 @@ class MinimalEngine(IEngine):
 
     def set_multi_objective_tolerances(self, abstols, reltols):
         self.only_cplex(mname="set_multi_objective_tolerances")  # pragma: no cover
+
+    def resync(self):
+        pass
 
 
 # noinspection PyAbstractClass,PyMethodMayBeStatic
@@ -486,6 +492,9 @@ class DummyEngine(IEngine):
     def update_extra_constraint(self, lct, qualifier, *args):
         pass
 
+    def resync(self):
+        pass
+
 
 # noinspection PyAbstractClass,PyUnusedLocal,PyMethodMayBeStatic
 class IndexerEngine(DummyEngine):
@@ -590,6 +599,10 @@ class IndexerEngine(DummyEngine):
 
 
 class NoSolveEngine(IndexerEngine):
+
+    def populate(self, **kwargs):
+        return None
+
     def get_solve_details(self):
         SolveDetails.make_fake_details(time=0, feasible=False)
 
@@ -633,6 +646,9 @@ class NoSolveEngine(IndexerEngine):
 
 # noinspection PyUnusedLocal
 class ZeroSolveEngine(IndexerEngine):
+    def populate(self, **kwargs):
+        return []
+
     # INTERNAL: a dummy engine that says it can solve
     # but returns an all-zero solution.
     def __init__(self, mdl, **kwargs):
@@ -669,7 +685,7 @@ class ZeroSolveEngine(IndexerEngine):
 
     def make_zero_solution(self, mdl):
         # return a feasible value: max of zero and the lower bound
-        zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb != 0}
+        zlb_map = {v: self.get_var_zero_solution(v) for v in mdl.iter_variables() if v.lb}
         obj = mdl.objective_expr.constant
         return SolveSolution(mdl, obj=obj, var_value_map=zlb_map, solved_by=self.name)  # pragma: no cover
 

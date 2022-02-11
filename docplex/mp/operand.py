@@ -45,8 +45,6 @@ class Operand(object):
         # used for lazy expansions
         pass
 
-    def get_linear_part(self):
-        return self
 
     def __le__(self, rhs):
         return self._model._new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.LE)
@@ -78,6 +76,16 @@ class LinearOperand(Operand):
         """
         for v, k in self.iter_terms():
             yield v
+
+    def get_linear_part(self):
+        """ Returns the linear part of the expression: for a linear expression,
+        returns the expression itself.
+
+        Defined for compatibility with quadratic expressions.
+
+        :return: a linear expression
+        """
+        return self
 
     def iter_terms(self):
         # iterates over all linear terms, if any

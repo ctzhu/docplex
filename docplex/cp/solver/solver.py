@@ -19,13 +19,13 @@ The :class:`CpoSolver` identifies and creates the required :class:`CpoSolverAgen
 parameter *context.solver.agent' that contains the name of the agent to be used. This name is used to
 access the configuration context *context.solver.<agent>* that contains the details about this agent.
 
-For example, the default configuration refers to *docloud* as default solver agent, to solve model using *DOcplexcloud*
-services. This means that at least following configuration elements must be set:
+For example, the default configuration refers to *local* as default solver agent, to solve model using local process
+*CP Optimizer Interactive*.
+This means that at least following configuration elements must be set:
 ::
 
-   context.solver.agent = 'docloud'
-   context.solver.docloud.url = <URL of the service>
-   context.solver.docloud.key = <Access key of the service>
+   context.solver.agent = 'local'
+   context.solver.local.execfile = <Name or path of the process 'CP Optimizer Interactive'>
 
 The different methods that can be called on a CpoSolver object are:
 
@@ -65,6 +65,7 @@ from docplex.cp.solver.cpo_callback import CpoCallback
 import time, importlib, inspect
 import traceback
 import threading
+import time
 
 
 ###############################################################################
@@ -291,9 +292,10 @@ class CpoSolverAgent(object):
         """ End solver agent and release all resources.
         """
         self.solver = None
-        self.model = None
-        self.params = None
-        self.context = None
+        # Other resources not released because can be called after the end
+        #self.model = None
+        #self.params = None
+        #self.context = None
 
 
     def _get_cpo_model_string(self):
@@ -362,7 +364,9 @@ class CpoSolverAgent(object):
         """ Send the model to the solver if not already done. """
         if not self.model_init:
             # Send model to solver
+            stime = time.time()
             self._send_model_to_solver(self._get_cpo_model_string())
+            self.process_infos.incr(CpoProcessInfos.MODEL_SUBMIT_TIME, time.time() - stime)
             self.context.log(3, "Model sent to solver.")
             self.model_init = True
 
@@ -666,7 +670,7 @@ class CpoSolver(object):
                 return self.last_result
             if self.context.log_exceptions:
                 traceback.print_exc()
-            raise e
+            raise CpoSolverException("Solver exception catched: {}".format(e))
         self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")
@@ -692,12 +696,12 @@ class CpoSolver(object):
         This function is available only with local CPO solver with release number greater or equal to 12.7.0.
 
         Returns:
-            Last (fail) model solution with last solve information,
+            Last model solution with last solve information,
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
-        if self.status == STATUS_RELEASED or self.status == STATUS_ABORTED:
+        if self.status in (STATUS_IDLE, STATUS_RELEASED, STATUS_ABORTED):
            return self.last_result
         self._check_status(STATUS_SEARCH_WAITING)
         msol = self.agent.end_search()
@@ -1115,7 +1119,7 @@ class CpoSolver(object):
         """ Create an empty solution with aborted status
         """
         res = CpoSolveResult(self.model)
-        res.solve_status = SOLVE_STATUS_JOB_ABORTED
+        res.solve_status = SOLVE_STATUS_UNKNOWN if self.last_result is None else self.last_result.get_solve_status()
         res.fail_status = FAIL_STATUS_ABORT
         res.search_status = SEARCH_STATUS_STOPPED
         res.stop_cause = STOP_CAUSE_ABORT
@@ -1136,7 +1140,8 @@ class CpoSolver(object):
 
         alist = sctx.agent
         if alist is None:
-            alist = 'docloud'
+            # Return empty solver agent
+            return CpoSolverAgent(self, sctx.params, sctx)
         elif not (is_string(alist) or is_array(alist)):
             raise CpoException("Agent identifier in config.context.solver.agent should be a string or a list of strings.")
 

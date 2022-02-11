@@ -68,6 +68,7 @@ class CpoCompiler(object):
                  'expr_by_names',            # Map of expressions by CPO name. Used to retrieve expressions from solutions.
                  'alias_name_map',           # Map of variable renamed with a shorter name. key = old name, value = new name
                  'factorize',                # Indicate to factorize expressions used more than ones
+                 'sort_names',               # Type of expressions (variables) sorting: O:None, 1:basic, 2:natural
                  )
 
     def __init__(self, model, **kwargs):
@@ -104,6 +105,7 @@ class CpoCompiler(object):
         self.name_all_constraints = False
         self.verbose_output = False
         self.factorize = True
+        self.sort_names = 'none'
 
         # Set model parameters
         mctx = context.model
@@ -112,6 +114,7 @@ class CpoCompiler(object):
             self.name_all_constraints = mctx.name_all_constraints
             self.verbose_output = not mctx.short_output
             self.factorize = mctx.factorize_expressions
+            self.sort_names = str(mctx.sort_names).lower()
 
         # Determine CPO format version
         self.format_version = None if model is None else model.get_format_version()
@@ -927,10 +930,19 @@ class CpoCompiler(object):
             elif xname or xinfo[4] or (factorize and (xinfo[2] > 1)):
                 list_exprs.append(xinfo)
 
-        # Sort list of constants and variables by natural name order
-        sortkey = functools.cmp_to_key(lambda v1, v2: compare_expressions(v1[0], v2[0]))
-        self.list_consts = sorted(list_consts, key=sortkey)
-        self.list_vars = sorted(list_vars, key=sortkey)
+        # Sort list of constants and variables
+        if self.sort_names == 'natural':
+            sortkey = functools.cmp_to_key(_compare_xinfo_natural)
+            self.list_consts = sorted(list_consts, key=sortkey)
+            self.list_vars = sorted(list_vars, key=sortkey)
+        elif self.sort_names == 'alphabetical':
+            sortkey = functools.cmp_to_key(_compare_xinfo_alphabetical)
+            self.list_consts = sorted(list_consts, key=sortkey)
+            self.list_vars = sorted(list_vars, key=sortkey)
+        else:
+            self.list_consts = list_consts
+            self.list_vars = list_vars
+
 
         # Set other attributes
         self.list_exprs = list_exprs
@@ -1221,6 +1233,68 @@ def _compile_segmented_function(sgfct, cout):
     cout.append("segmentedFunction(")
     cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
     cout.append(")")
+
+
+def _compare_xinfo_natural(x1, x2):
+    """ Compare two expressions infos using natural order
+
+    Args:
+        x1: Expression info 1
+        x2: Expression info 2
+    Returns:
+        Integer value that is negative if v1 < v2, zero if v1 == v2 and positive if v1 > v2.
+    """
+    # Retrieve expressions only
+    x1 = x1[0]
+    x2 = x2[0]
+    # First sort by expression type
+    if x1.type is not x2.type:
+        return x1.type.id - x2.type.id
+    # Check object type
+    tx1 = type(x1)
+    tx2 = type(x2)
+    if tx1 is not tx2:
+        # Alias always loss
+        if tx1 is CpoAlias:
+            return 1
+        if tx2 is CpoAlias:
+            return -1
+    # Compare by name in natural order
+    return compare_natural(x1.get_name(), x2.get_name())
+
+
+def _compare_xinfo_alphabetical(x1, x2):
+    """ Compare two expressions infos using alphabetical order
+
+    Args:
+        x1: Expression info 1
+        x2: Expression info 2
+    Returns:
+        Integer value that is negative if v1 < v2, zero if v1 == v2 and positive if v1 > v2.
+    """
+    # Retrieve expressions only
+    x1 = x1[0]
+    x2 = x2[0]
+    # First sort by expression type
+    if x1.type is not x2.type:
+        return x1.type.id - x2.type.id
+    # Check object type
+    tx1 = type(x1)
+    tx2 = type(x2)
+    if tx1 is not tx2:
+        # Alias always loss
+        if tx1 is CpoAlias:
+            return 1
+        if tx2 is CpoAlias:
+            return -1
+    # Compare by name in alphabetical order
+    xn1 = x1.get_name()
+    xn2 = x2.get_name()
+    if xn1 is None:
+        return 0 if xn2 is None else -1
+    if xn2 is None:
+        return 1
+    return 0 if xn1 == xn2 else -1 if xn1 < xn2 else 1
 
 
 

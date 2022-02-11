@@ -78,7 +78,6 @@ class LinearRelaxer(object):
         ctn_map = {}
         for ctn in mdl.iter_var_containers():
             copied_ctn = ctn.copy_relaxed(relaxed_model)
-            relaxed_model._add_var_container(copied_ctn)
             ctn_map[ctn] = copied_ctn
 
         # transfer variables
@@ -93,9 +92,9 @@ class LinearRelaxer(object):
                 else:
                     rx_lb = v.lb
                 copied_var = relaxed_model._var(continuous, rx_lb, v.ub, v.name)
-                var_ctn = v._container
+                var_ctn = v.container
                 if var_ctn:
-                    copied_var._container = ctn_map.get(var_ctn)
+                    copied_var.container = ctn_map.get(var_ctn)
                 var_mapping[v] = copied_var
 
         # transfer all non-logical cts

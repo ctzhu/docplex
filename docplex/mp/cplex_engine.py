@@ -2283,7 +2283,7 @@ class CplexEngine(IEngine):
         try:
             # sync parameters
             mdl._apply_parameters_to_engine(parameters)
-
+            self.sync_cplex(mdl)
             cpx = self._cplex
             use_all = False
             if not groups:

@@ -499,6 +499,26 @@ class Model(object):
             except Exception as me:
                 print("* Error in model_build_hook: {0!s}".format(me))
 
+
+    def get_name(self):
+        return self._name
+
+    @property
+    def name(self):
+        """ This property is used to get or set the model name.
+        """
+        return self._name
+
+    @name.setter
+    def name(self, name):
+        self._check_name(name)
+        self._name = name
+
+    def _check_name(self, new_name):
+        self._checker.typecheck_string(arg=new_name, accept_empty=False, accept_none=False)
+        if ' ' in new_name:
+            self.warning("Model name contains whitespaces: |{0:s}|", new_name)
+
     def _constraint_scopes(self):
         return self._scopes[1:]
 
@@ -636,22 +656,7 @@ class Model(object):
                               extension='.ord',
                               cpx_read_fn=lambda cpx_, path_: cpx_.order.read(path_))
 
-    def get_name(self):
-        return self._name
 
-    @property
-    def name(self):
-        return self._name
-
-    @name.setter
-    def name(self, name):
-        self._check_name(name)
-        self._name = name
-
-    def _check_name(self, new_name):
-        self._checker.typecheck_string(arg=new_name, accept_empty=False, accept_none=False)
-        if ' ' in new_name:
-            self.warning("Model name contains whitespaces: |{0:s}|", new_name)
 
     # adjust the maximum length of repr.. strings
     @property
@@ -4649,6 +4654,7 @@ class Model(object):
                          abstols=None,
                          reltols=None,
                          lp_dump=False,
+                         solution_callbackfn=None,
                          **kwargs):
         """ Performs a solve from an ordered collection of goals.
 
@@ -4754,6 +4760,7 @@ class Model(object):
                         pass_ct = m._post_constraint(prev_goal <= prev_obj + tolerance)
                     else:
                         pass_ct = m._post_constraint(prev_goal >= prev_obj - tolerance)
+                    pass_ct.name = "lex_{0}_ct".format(pass_count)
                     lex_info("pass #{0} generated constraint with rhs: {1}, tolerance={2:.3f}"
                              .format(pass_count, str(pass_ct.rhs), tolerance))
                     extra_cts.append(pass_ct)
@@ -4791,6 +4798,8 @@ class Model(object):
                     prev_step = (goal_expr, current_obj, sense)
                     all_solutions.append(current_sol)
                     lex_info("objective value for pass #{0} is: {1}".format(pass_count, current_sol.objective_value))
+                    if solution_callbackfn:
+                        solution_callbackfn(current_sol)
 
 
                 else:  # pragma: no cover

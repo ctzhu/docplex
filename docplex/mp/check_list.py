@@ -77,7 +77,7 @@ def run_docplex_check_list():
         cpxvt = tuple(float(x) for x in cpx.get_version().split("."))[:2]
         lcpxv = ".".join(str(z) for z in cplex_latest_version_as_tuple)
         if cpxvt < cplex_latest_version_as_tuple:
-            print("Warning: Your cplex version {0} is not the latest, {1} is available".format(cpxv, lcpxv))
+            diagnostics.append("Your cplex version is '{0}', a newer version '{1}' is available".format(cpxv, lcpxv))
         elif cpxvt > cplex_latest_version_as_tuple:
             print("* Your cplex version {0} is ahead of the latest DOcplex-compatible version {1}, this might not be compatible.".format(cpxv, lcpxv))
         else:
@@ -109,7 +109,7 @@ def run_docplex_check_list():
         diagnostics.append("Your installation of DOcplex may be corrupted.")
 
     if diagnostics:
-        print("\n!! diagnostics: {0}".format(len(diagnostics)))
+        print("\n* diagnostics: {0}".format(len(diagnostics)))
         for s in diagnostics:
             print("  -- {0}".format(s))
     else:

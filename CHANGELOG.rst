@@ -1,8 +1,13 @@
 Changelog
 ---------
 
-Changed in 2.17.199:
+Changed in 2.18.200:
 ````````````````````
+* Latest supported CPLEX Optimization Studio is now 20.1
+
+Changed in 2.17.196 (2020.11.#2):
+`````````````````````````````````
+
 * In ``docplex.mp``:
     * Fixed a bug with pickling: edition of a constraint in a pickled model raised an error
     * Fixed a bug with pickling: models with piecewise-linear constraints could not be pickled

@@ -1,6 +1,6 @@
 Metadata-Version: 1.1
 Name: docplex
-Version: 2.17.199
+Version: 2.18.200
 Summary: The IBM Decision Optimization CPLEX Modeling for Python
 Home-page: https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/
 Author: The IBM Decision Optimization on Cloud team
@@ -37,8 +37,13 @@ Description: DOcplex, IBM Decision Optimization Modeling for Python
         Changelog
         ---------
         
-        Changed in 2.17.199:
+        Changed in 2.18.200:
         ````````````````````
+        * Latest supported CPLEX Optimization Studio is now 20.1
+        
+        Changed in 2.17.196 (2020.11.#2):
+        `````````````````````````````````
+        
         * In ``docplex.mp``:
             * Fixed a bug with pickling: edition of a constraint in a pickled model raised an error
             * Fixed a bug with pickling: models with piecewise-linear constraints could not be pickled

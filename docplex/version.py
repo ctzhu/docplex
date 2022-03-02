@@ -8,9 +8,9 @@
 # This file is generated !
 # See script tools/gen_version.py
 docplex_version_major = 2
-docplex_version_minor = 17
-docplex_version_micro = 199
-docplex_version_string = '2.17.199'
+docplex_version_minor = 18
+docplex_version_micro = 200
+docplex_version_string = '2.18.200'
 
-latest_cplex_major = 12
-latest_cplex_minor = 10
+latest_cplex_major = 20
+latest_cplex_minor = 1

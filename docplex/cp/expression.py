@@ -351,7 +351,7 @@ class CpoExpr(object):
     def __str__(self):
         """ Convert this expression into a string """
         if is_string(self.name):
-            return to_printable_string(self.name) + " = " + _to_string(self)
+            return to_printable_id(self.name) + " = " + _to_string(self)
         else:
             return _to_string(self)
 

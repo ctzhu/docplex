@@ -447,7 +447,7 @@ class CpoCompiler(object):
         res = self.id_printable_strings.get(id)
         if res is None:
             # Convert id into string and store result for next call
-            res = to_printable_string(id)
+            res = to_printable_id(id)
             self.id_printable_strings[id] = res
         return res
 
@@ -906,7 +906,7 @@ class CpoCompiler(object):
                                 ndx += 1
                                 nname = xname + str(ndx)
                             xname = nname
-                        xinfo[3] = to_printable_string(xname)
+                        xinfo[3] = to_printable_id(xname)
                     expr_by_names[xname] = expr
             elif (xinfo[3] is None) and ((factorize and (xinfo[2] > 1)) or typ.is_variable):
                 # Allocate name

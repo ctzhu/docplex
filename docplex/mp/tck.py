@@ -117,9 +117,6 @@ class DocplexNumericCheckerMixin(object):
 
 class DocplexTypeCheckerI(object):
 
-    def check_sync_indices(self):
-        return True
-
     def typecheck_iterable(self, arg):
         raise NotImplementedError  # pragma: no cover
 
@@ -560,9 +557,6 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
 
 class DummyTypeChecker(DOcplexLoggerTypeChecker):
-
-    def check_sync_indices(self):
-        return False
 
     # noinspection PyUnusedLocal
     def __init__(self, logger):

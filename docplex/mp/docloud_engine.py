@@ -26,7 +26,7 @@ except ImportError as ie:
 from docplex.mp.internal.json_solution_handler import JSONSolutionHandler
 from docplex.mp.internal.json_infeasibility_handler import JSONInfeasibilityHandler
 from docplex.mp.internal.json_conflict_handler import JSONConflictHandler
-from docplex.mp.printer_factory import ModelPrinterFactory
+from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.solution import SolveSolution, SolutionMSTPrinter
 from docplex.mp.anno import ModelAnnotationPrinter
 from docplex.mp.sdetails import SolveDetails
@@ -223,7 +223,7 @@ class DOcloudEngine(IndexerEngine):
         self._exchange_format = exchange_format or docloud_context.exchange_format or _DEFAULT_EXCHANGE_FORMAT
 
         mangle_names = mdl.ignore_names or mdl.context.solver.docloud.mangle_names
-        self._printer = ModelPrinterFactory.new_printer(self._exchange_format, full_obj=True)
+        self._printer = LPModelPrinter(full_obj=True)
         if mangle_names:
             self._printer.set_mangle_names(True)
 

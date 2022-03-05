@@ -7,7 +7,8 @@
 # gendoc: ignore
 
 import re
-import six
+from six import PY2
+from docplex.mp.utils import is_string
 
 
 class ExchangeFormat(object):
@@ -71,11 +72,10 @@ class ExchangeFormat(object):
     def fromstring(definition):
         if definition:
             definition = definition.lower()
-        return _FORMAT_MAPPER.get(definition, None)
+        return _xtension2fmt_dict.get(definition, None)
 
 
 class LPFormat(ExchangeFormat):
-
     __raw = " -+/\\<>"
     __cooked = "_mp____"
 
@@ -100,7 +100,7 @@ class LPFormat(ExchangeFormat):
         return raw_name.translate(cls._unicode_translate_table)
 
     # which translate_method to use
-    if six.PY2:
+    if PY2:
         _translate_chars = _translate_chars_py2
     else:  # pragma: no cover
         _translate_chars = _translate_chars_py3
@@ -166,9 +166,38 @@ class LPFormat(ExchangeFormat):
 # noinspection PyPep8
 LP_format  = LPFormat()
 SAV_format = ExchangeFormat("SAV", "sav", requires_cplex=True, is_binary=True)
+SAVgz_format = ExchangeFormat("SAVgz", "sav.gz", requires_cplex=True, is_binary=True)
 OPL_format = ExchangeFormat("OPL", ".mod", requires_cplex=False)
 MPS_format = ExchangeFormat("MPS", ".mps", requires_cplex=True)
 
-_FORMAT_MAPPER = {"lp": LP_format,
-                  "opl": OPL_format
-                  }
+_xtension2fmt_dict = {"lp": LP_format,
+                      "opl": OPL_format,
+                      "mod": OPL_format,
+                      "mps": MPS_format,
+                      "sav": SAV_format,
+                      "sav.gz": SAVgz_format
+                      }
+
+
+def parse_format(format_arg, error="raise"):
+
+    def fmt_error():
+        expected = "lp|mps|sav|sav.gz" #  "|".join(sorted(fk for fk in iterkeys(_xtension2fmt_dict)))
+        if error == "raise":
+            raise ValueError("unexpected format spec: {0}, possible: {1}".format(format_arg, expected))
+        elif error == "warn":
+            print("unexpected format spec: {0}, possible: {1}".format(format_arg, expected))
+        else:
+            pass
+
+    fmt = None
+    if isinstance(format_arg, ExchangeFormat):
+        fmt = format_arg
+    elif is_string(format_arg):
+        fmt_key = format_arg[1:] if format_arg.startswith(".") else format_arg
+        fmt = _xtension2fmt_dict.get(fmt_key.lower())
+        if fmt is None:
+            fmt_error()
+    else:
+        fmt_error()
+    return fmt

@@ -96,15 +96,9 @@ class EngineFactory(object):
         # compute a default engine and kwargs to use..
         kwargs = {}
         if self._cplex_engine_type:
-            # CPLEX ahs been resolved and has a non-None type
             # default is CPLEX if we have it
             default_engine_type = self._cplex_engine_type
             default_engine_name = 'cplex'
-
-        # elif has_credentials(context.solver.docloud):
-        #     # default is docloud
-        #     default_engine_type = DOcloudEngine
-        #     default_engine_name = 'docloud'
 
         else:
             # no CPLEX, no credentials

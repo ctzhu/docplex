@@ -6,13 +6,13 @@
 
 # gendoc: ignore
 from docplex.mp.constants import ComparisonType
-from docplex.mp.linear import LinearExpr, Var
+from docplex.mp.linear import Var
+from docplex.mp.operand import LinearOperand
 from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper
-from docplex.mp.vartype import ContinuousVarType, IntegerVarType, BinaryVarType
 
 
 class ModelPrettyPrinter(TextModelPrinter):
-    vartype_map = {ContinuousVarType: "float", IntegerVarType: "int", BinaryVarType: "bool"}
+    vartype_map = {'C': "float", 'I': "int", 'B': "bool"}
 
     ct_symbol_map = {ComparisonType.EQ: "==",
                      ComparisonType.LE: "<=",
@@ -59,7 +59,7 @@ class ModelPrettyPrinter(TextModelPrinter):
 
     def _vartype_name(self, vartype):
         # INTERNA: returns a printable string for a vartype
-        return self.vartype_map.get(type(vartype), "unknown")
+        return self.vartype_map.get(vartype.cplex_typecode, "unknown")
 
     def _print_var_containers(self, out, mdl):
         gensym_count = 1
@@ -241,7 +241,7 @@ class ModelPrettyPrinter(TextModelPrinter):
                 kpi_typename = 'int' if kpi_expr.is_discrete() else 'float'
                 wrapper.write('dexpr {0} {1}'.format(kpi_typename, self._translate_chars(kpi.name)))
                 wrapper.write('=')
-                if isinstance(kpi_expr, LinearExpr):
+                if isinstance(kpi_expr, LinearOperand):
                     self._print_lexpr(wrapper, self._num_printer, self._var_name_map, kpi_expr, print_constant=True)
                 elif isinstance(kpi_expr, Var):
                     wrapper.write(kpi_expr.name)

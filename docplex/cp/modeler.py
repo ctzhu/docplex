@@ -1360,8 +1360,14 @@ def constant(v):
         A integer expression or float expression depending on the type of *v*.
     """
     v = build_cpo_expr(v)
-    assert v.is_kind_of(Type_Float), "Argument should be a integer or float constant"
-    return CpoFunctionCall(Oper_constant, v.type, (v,))
+    vt = v.type
+    if vt is Type_Int:
+        nt = Type_IntExpr
+    elif vt is Type_Float:
+        nt = Type_FloatExpr
+    else:
+        raise AssertionError("Argument should be a integer or float constant")
+    return CpoFunctionCall(Oper_constant, nt, (v,))
 
 
 def element(array, index):

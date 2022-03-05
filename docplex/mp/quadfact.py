@@ -34,9 +34,7 @@ class IQuadFactory(_AbstractModelFactory):
 
 class QuadFactory(IQuadFactory):
     def __init__(self, model, engine):
-        _AbstractModelFactory.__init__(self, model)
-        self._model = model
-        self._engine = engine
+        _AbstractModelFactory.__init__(self, model, engine)
         self._lfactory = model._lfactory
 
     def new_zero_expr(self):

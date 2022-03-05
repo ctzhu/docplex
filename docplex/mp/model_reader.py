@@ -9,6 +9,7 @@ import os
 # docplex
 from docplex.mp.model import Model
 from docplex.mp.utils import DOcplexException
+from docplex.mp.environment import Environment
 
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
 from docplex.mp.constants import ComparisonType
@@ -59,6 +60,43 @@ class _CplexReaderFileContext(object):
             del cpx
             self._cplex = None
 
+
+def compute_full_dotf(mdl, coefs, constant=0):
+    """
+
+    :param constant:
+    :param mdl:
+    :param coefs:
+    :return:
+    """
+    def coef_fn(dvx):
+        return coefs[dvx]
+
+    lfactory = mdl._lfactory
+    terms_dict = lfactory._new_term_dict()
+    for dv in mdl.iter_variables():
+        coef = coef_fn(dv.index)
+        if coef:
+            terms_dict[dv] = coef
+    linear_expr = lfactory.linear_expr(terms_dict, constant=constant, safe=True)
+    return linear_expr
+
+
+def compute_full_dot(mdl, coefs, constant=0):
+    """
+
+    :param constant:
+    :param mdl:
+    :param coefs:
+    :return:
+    """
+    lfactory = mdl._lfactory
+    terms_dict = lfactory._new_term_dict()
+    for dv, k in zip(mdl.iter_variables(), coefs):
+        if k:
+            terms_dict[dv] = k
+    linear_expr = lfactory.linear_expr(terms_dict, constant=constant, safe=True)
+    return linear_expr
 
 
 # noinspection PyArgumentList
@@ -166,38 +204,15 @@ class ModelReader(object):
             raise ModelReaderError("*CPLEX error {0!s} reading file {1} - exiting".format(cpx_e, filename))
 
     @classmethod
-    def _make_expr_from_coef_vector(cls, mdl, index_2var_map, coeffs, offset):
-        all_obj_vars = []
-        all_obj_coefs = []
-        for v in range(mdl.number_of_variables):
-            if v in index_2var_map:
-                obj_coeff = coeffs[v]
-                if obj_coeff:
-                    all_obj_coefs.append(obj_coeff)
-                    all_obj_vars.append(index_2var_map[v])
-
-        expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
-        if offset:
-            expr += offset
-        return expr
-
-    @classmethod
-    def _make_expr_from_vars_coefs(cls, mdl, dvars, coefs, offset=0):
-        terms_dict = mdl._lfactory._new_term_dict()
-
-        for dv, k in izip(dvars, coefs):
-            if k:
-                terms_dict[dv] = k
-        return mdl._lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
-
-    @classmethod
-    def _make_expr_from_varmap_coefs(cls, lfactory, varmap, dvarxs, coefs, offset=0):
-        terms_dict = lfactory._new_term_dict()
-
-        for dvx, k in izip(dvarxs, coefs):
-            dv = varmap.get(dvx)
-            if dv is not None:
-                terms_dict[dv] = k
+    def _make_expr_from_varmap_coefs(cls, lfactory, varmap, var_indices, coefs, offset=0):
+        if Environment.env_is_python36:
+            terms_dict = {varmap.get(dvx): k for dvx, k in izip(var_indices, coefs)}
+        else:
+            terms_dict = lfactory._new_term_dict()
+            for dvx, k in izip(var_indices, coefs):
+                dv = varmap.get(dvx)
+                if dv is not None:
+                    terms_dict[dv] = k
         return lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
 
     @classmethod
@@ -278,6 +293,7 @@ class ModelReader(object):
             # -------------
 
             mdl = model_class(name=name_to_use, **kwargs)
+            mdl._provenance = filename
             lfactory = mdl._lfactory
             qfactory = mdl._qfactory
             mdl.set_quiet()  # output level set to ERROR
@@ -286,14 +302,11 @@ class ModelReader(object):
                            'I': mdl.integer_vartype,
                            'C': mdl.continuous_vartype,
                            'S': mdl.semicontinuous_vartype}
+
+            def cpx_type_to_docplex_type(cpxt):
+                return vartype_map.get(cpxt, vartype_cont)
             # 1 upload variables
             cpx_nb_vars = cpx.variables.get_num()
-
-            def make_constant_expr(k):
-                if k:
-                    return lfactory._new_safe_constant_expr(k)
-                else:
-                    return lfactory.new_zero_expr()
 
             if verbose:
                 print("-- uploading {0} variables...".format(cpx_nb_vars))
@@ -301,30 +314,56 @@ class ModelReader(object):
             cpx_var_names = [] if ignore_names else cls._safe_call_get_names(cpx_adapter,
                                                                              cpx.variables.get_names)
 
+            # check whether all varianbles have same type, it's worth it.
+            unique_type = None
+            cpx_vartypes = []
             if cpx._is_MIP():
-                cpx_vartypes = [vartype_map.get(cpxt, vartype_cont) for cpxt in cpx.variables.get_types()]
+                cpx_types = cpx.variables.get_types()
+                first_cpxtype = cpx_types[0]
+                if all(cpxt == first_cpxtype for cpxt in cpx_types):
+                    unique_type = cpx_type_to_docplex_type(first_cpxtype)
+                else:
+                    cpx_vartypes = [cpx_type_to_docplex_type(cpxt) for cpxt in cpx_types]
             else:
-                cpx_vartypes = [vartype_cont] * cpx_nb_vars
-            cpx_var_lbs = cpx.variables.get_lower_bounds()
-            cpx_var_ubs = cpx.variables.get_upper_bounds()
-            # map from cplex variable indices to docplex's
-            # use to skip range vars
-            # cplex : [x, Rg1, y] -> {0:0, 2: 1}
+                unique_type = vartype_cont
 
-            if cpx_var_names:
-                model_varnames = cpx_var_names
+            cpx_var_lbs = cpx.variables.get_lower_bounds()
+            if not any(cpx_var_lbs):
+                cpx_var_lbs = []
             else:
-                model_varnames = [None] * cpx_nb_vars
+                cpx_var_lbs = list(cpx_var_lbs)
+
+            cpx_var_ubs = cpx.variables.get_upper_bounds()
+            if all(cpxu >= 1e+20 for cpxu in cpx_var_ubs):
+                cpx_var_ubs = []
+            else:
+                cpx_var_ubs = list(cpx_var_ubs)
+
+            # if no names, None is fine.
+            model_varnames = cpx_var_names or None
+
             model_lbs = cpx_var_lbs
             model_ubs = cpx_var_ubs
             model_types = cpx_vartypes
 
             # vars
-            model_vars = lfactory.new_multitype_var_list(cpx_nb_vars,
-                                                         model_types,
-                                                         model_lbs,
-                                                         model_ubs,
-                                                         model_varnames)
+            if unique_type:
+                model_vars = lfactory.new_var_list(var_container=None,
+                                                   key_seq=range(cpx_nb_vars),
+                                                   vartype=unique_type,
+                                                   lb=model_lbs,
+                                                   ub=model_ubs,
+                                                   name=model_varnames,
+                                                   _safe_bounds=True,
+                                                   _safe_names=True
+                                                   )
+            else:
+                assert model_types
+                model_vars = lfactory.new_multitype_var_list(cpx_nb_vars,
+                                                             model_types,
+                                                             model_lbs,
+                                                             model_ubs,
+                                                             model_varnames)
 
             # inverse map from indices to docplex vars
             cpx_var_index_to_docplex = {v: model_vars[v] for v in range(cpx_nb_vars)}
@@ -332,15 +371,21 @@ class ModelReader(object):
             # 2. upload linear constraints and ranges (mixed in cplex)
             cpx_linearcts = cpx.linear_constraints
             nb_linear_cts = cpx_linearcts.get_num()
-            # all_rows1 = cpx_linearcts.get_rows()
             all_rows = cpx_adapter.fast_get_rows(cpx)
             all_rhs = cpx_linearcts.get_rhs()
             all_senses = cpx_linearcts.get_senses()
-            all_range_values = cpx_linearcts.get_range_values()
+            if 'R' in all_senses:
+                all_range_values = cpx_linearcts.get_range_values()
+            else:
+                # do not query ranges if no R in senses...
+                all_range_values = []
             cpx_ctnames = [] if ignore_names else cls._safe_call_get_names(cpx_adapter,
                                                                            cpx_linearcts.get_names)
 
             deferred_cts = []
+
+            def make_constant_expr(k):
+                return lfactory.constant_expr(k, safe_number=True)
 
             if verbose:
                 print("-- uploading {0} linear constraints...".format(nb_linear_cts))
@@ -349,12 +394,13 @@ class ModelReader(object):
                 sense = all_senses[c]
                 rhs = all_rhs[c]
                 ctname = cpx_ctnames[c] if cpx_ctnames else None
-                range_val = all_range_values[c]
 
                 indices, coefs = row
                 expr = cls._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
 
                 if sense == 'R':
+                    # no use of querying range vars if no R constraints
+                    range_val = all_range_values[c]
                     # rangeval can be negative !!! issue 52
                     if range_val >= 0:
                         range_lb = rhs
@@ -493,17 +539,7 @@ class ModelReader(object):
                 cpx_sense = cpx_obj.get_sense()
 
                 cpx_all_lin_obj_coeffs = cpx_obj.get_linear()
-                all_obj_vars = []
-                all_obj_coefs = []
-
-                for v in range(cpx_nb_vars):
-                    if v in cpx_var_index_to_docplex:
-                        obj_coeff = cpx_all_lin_obj_coeffs[v]
-                        all_obj_coefs.append(obj_coeff)
-                        all_obj_vars.append(cpx_var_index_to_docplex[v])
-
-                # obj_expr = mdl._aggregator._scal_prod(all_obj_vars, all_obj_coefs)
-                obj_expr = cls._make_expr_from_vars_coefs(mdl, all_obj_vars, all_obj_coefs)
+                obj_expr = compute_full_dot(mdl, cpx_all_lin_obj_coeffs)
 
                 if cpx_obj.get_num_quadratic_variables() > 0:
                     cpx_all_quad_cols_coeffs = cpx_obj.get_quadratic()
@@ -532,11 +568,14 @@ class ModelReader(object):
                 weights = [1] * nb_multiobjs
                 abstols = [0] * nb_multiobjs
                 reltols = [0] * nb_multiobjs
-                names = cpx_multiobj.get_names()
+                if ignore_names:
+                    names = ["Goal_{0}".format(g) for g in range(1, nb_multiobjs+1)]
+                else:
+                    names = cpx_multiobj.get_names()
 
                 for m in range(nb_multiobjs):
                     (obj_coeffs, obj_offset, weight, prio, abstol, reltol) = cpx_multiobj.get_definition(m)
-                    obj_expr = cls._make_expr_from_coef_vector(mdl, cpx_var_index_to_docplex, obj_coeffs, obj_offset)
+                    obj_expr = compute_full_dot(mdl, obj_coeffs, obj_offset)
                     exprs[m] = obj_expr
                     priorities[m] = prio
                     weights[m] = weight
@@ -610,3 +649,7 @@ class ModelReader(object):
         import warnings
         warnings.warn("ModelReader.read_model is deprecated, use class method ModelReader.read()", DeprecationWarning)
         return cls.read(filename, model_name, verbose, model_class, **kwargs)
+
+
+def read_model(filename, model_name=None, verbose=False, **kwargs):
+    return ModelReader.read(filename, model_name=model_name, verbose=verbose, **kwargs)

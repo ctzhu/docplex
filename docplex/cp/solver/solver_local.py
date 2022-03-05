@@ -161,11 +161,6 @@ class CpoSolverLocal(CpoSolverAgent):
             self.process.kill()
 
 
-    def __del__(self):
-        # End solve
-        self.end()
-
-
     def solve(self):
         """ Solve the model
 
@@ -387,14 +382,6 @@ class CpoSolverLocal(CpoSolverAgent):
             except:
                 pass
             try:
-                self.pout.close()
-            except:
-                pass
-            try:
-                self.pin.close()
-            except:
-                pass
-            try:
                 self.process.kill()
             except:
                 pass
@@ -403,6 +390,14 @@ class CpoSolverLocal(CpoSolverAgent):
             except:
                 pass
             self.process = None
+            try:
+                self.pout.close()
+            except:
+                pass
+            try:
+                self.pin.close()
+            except:
+                pass
             super(CpoSolverLocal, self).end()
 
 

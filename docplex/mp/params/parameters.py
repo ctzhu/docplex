@@ -172,7 +172,7 @@ class ParameterGroup(object):
 
     def _restore_dict_recursive(self):
         # internal use for  deepcopy
-        param_dict = {p._short_name: p for p in self.iter_params()}
+        param_dict = {p._name: p for p in self.iter_params()}
         subgroup_dict = {sg._name: sg for sg in self.iter_subgroups()}
         # update the __dict__ itself
         self._update_self_dict(param_dict, do_check=False)
@@ -303,7 +303,7 @@ class Parameter(object):
     This class is not meant to be instantiated but subclassed.
 
     """
-    __slots__ = ('_parent', '_short_name', '_cpx_name', '_id', '_description', '_default_value',
+    __slots__ = ('_parent', '_name', '_cpx_name', '_id', '_description', '_default_value',
                  '_current_value', '_synchronous')
 
     # This global flag controls checking new values.
@@ -314,7 +314,7 @@ class Parameter(object):
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value):
         assert isinstance(group, ParameterGroup)
         self._parent = group
-        self._short_name = short_name
+        self._name = short_name
         self._cpx_name = cpx_name
         self._id = param_key
         self._description = description
@@ -333,7 +333,11 @@ class Parameter(object):
 
     @property
     def short_name(self):
-        return self._short_name
+        return self._name
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def qualified_name(self):
@@ -355,9 +359,9 @@ class Parameter(object):
     def get_qualified_name(self, sep='.', include_root=True):
         parent_qname = self._parent.qualified_name(sep=sep, include_root=include_root)
         if parent_qname:
-            return "%s.%s" % (parent_qname, self.short_name)
+            return "%s.%s" % (parent_qname, self.name)
         else:
-            return self.short_name
+            return self.name
 
     @property
     def cpx_name(self):
@@ -516,7 +520,7 @@ class Parameter(object):
         :rtype:
             string
         """
-        return "{0}:{1:s}({2!s})".format(self._short_name, self.type_name(), self._current_value)
+        return "{0}:{1:s}({2!s})".format(self._name, self.type_name(), self._current_value)
 
     def __str__(self):
         return self.to_string()

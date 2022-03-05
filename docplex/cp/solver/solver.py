@@ -63,9 +63,9 @@ from docplex.cp.solver.solver_listener import CpoSolverListener
 from docplex.cp.solver.cpo_callback import CpoCallback
 
 import time, importlib, inspect
-import traceback
 import threading
 import time
+import traceback
 
 
 ###############################################################################
@@ -151,6 +151,11 @@ class CpoSolverAgent(object):
         self.log_print = context.trace_log and (self.log_output is not None)
         self.log_data = [] if context.add_log_to_solution else None
         self.log_enabled = self.log_print or (self.log_data is not None)
+
+
+    def __del__(self):
+        # End solver
+        self.end()
 
 
     def solve(self):
@@ -481,15 +486,21 @@ class CpoSolver(object):
            - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
            - the optional arguments of this method.
 
+        If an optional argument other than `context` or `params` is given to this method, it is searched in the
+        context where its value is replaced by the new one.
+        If not found, it is then considered as a solver parameter.
+        In this case, only public parameters are allowed, except if the context attribute `solver.enable_undocumented_params`
+        is set to True. This can be done directly when creating the solver, as for example:
+        ::
+
+            slvr = CpoSolver(mdl, enable_undocumented_params=True, MyPrivateParam=MyValue)
+
         Args:
             context (Optional): Complete solving context.
                                 If not given, solving context is the default one that is defined in the module
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context

@@ -1164,6 +1164,9 @@ class CplexEngine(IEngine):
         self.error_handler.warning('{0} Unexpected event: {1} - ignored', msg, event.name)
 
     # -- fast 'procedural' api
+    @classmethod
+    def safe_len(cls, x):
+        return 0 if x is None else len(x)
 
     def fast_add_cols(self, cpx_vartype, lbs, ubs, names):
         # assume lbs, ubs, names are list that are either [] or have len size
@@ -1171,7 +1174,7 @@ class CplexEngine(IEngine):
         cpx_e = cpx._env._e
         cpx_lp = cpx._lp
         old = cpx.variables.get_num()
-        size = max(len(cpx_vartype), len(lbs), len(ubs), len(names))
+        size = max(len(cpx_vartype), self.safe_len(lbs), self.safe_len(ubs), self.safe_len(names))
         self.cpx_adapter.newcols(cpx_e, cpx_lp, obj=[], lb=lbs, ub=ubs, xctype=cpx_vartype, colname=names)
         return fast_range(old, old + size)
 
@@ -1507,14 +1510,8 @@ class CplexEngine(IEngine):
         self._check_multi_objective_support()
 
         cpx_multiobj = self._cplex.multiobj
-        if old_multiobjexprs is not None:
-            # Not safe to use the old expressions for clearing, in case they have been modified for the new expressions
+        if  old_multiobjexprs:
             self._clear_multiobj_from_cplex(cpx_multiobj=cpx_multiobj)
-
-        # # if a regular single objective has been defined, clear it
-        # cpx_objective = self._cplex.objective
-        # if cpx_objective is not None:
-        #     self._clear_objective_from_cplex(cpxobj=cpx_objective)
 
         # --- set number of objectives
         cpx_multiobj.set_num(len(new_multiobjexprs))
@@ -1840,11 +1837,9 @@ class CplexEngine(IEngine):
         return paramsets
 
     def sync_cplex(self, mdl):
-        # wrap all syncs
+        # INTERNAL: wrap all syncs
         self._sync_var_bounds()
         self._sync_annotations(mdl)
-        #self._sync_equivalence_cts(mdl)
-
 
     def solve(self, mdl, parameters=None, **kwargs):
         self._resync_if_needed()
@@ -2510,7 +2505,7 @@ class CplexEngine(IEngine):
     def set_parameter(self, parameter, value):
         # no value check is up to the caller.
         # parameter is a DOcplex parameter object
-        self.set_parameter_from_id(parameter.cpx_id, value, param_short_name=parameter.short_name)
+        self.set_parameter_from_id(parameter.cpx_id, value, param_short_name=parameter.name)
 
 
     def get_parameter(self, parameter):

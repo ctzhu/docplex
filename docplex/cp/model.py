@@ -46,7 +46,6 @@ The most important of these parameters are:
  * **context** sets a complete customized context to be used instead of the default one defined in the module :mod:`docplex.cp.config`,
  * **params** overwrites the solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
    that are defined in the *context* object,
- * **url** and **key** modify access to *DOcplexcloud* (if it is the selected solving agent),
  * **agent** forces the selection of a particular solving agent,
  * **trace_cpo** activates the printing of the model in CPO format before its solve,
  * any CP Optimizer solving parameter, as defined in module :mod:`docplex.cp.parameters`, such as:
@@ -72,11 +71,11 @@ from docplex.cp.solver.solver_listener import CpoSolverListener
 from docplex.cp.solver.cpo_callback import CpoCallback
 
 # Imports required locally
+import docplex.cp.config as config
 import docplex.cp.expression as expression
 import docplex.cp.modeler as modeler
 from docplex.cp.solver.solver import CpoSolver
 from docplex.cp.cpo.cpo_compiler import CpoCompiler
-import docplex.cp.config as config
 import docplex.cp.utils as utils
 import inspect
 import sys
@@ -84,6 +83,7 @@ import time
 import copy
 import types
 from collections import OrderedDict
+
 
 
 ###############################################################################
@@ -270,34 +270,8 @@ class CpoModel(object):
         # Store model name
         self.name = name
 
-        # Duplicate constructor functions to make them callable from the model
-        self.integer_var       = expression.integer_var
-        self.integer_var_list  = expression.integer_var_list
-        self.integer_var_dict  = expression.integer_var_dict
-        self.binary_var        = expression.binary_var
-        self.binary_var_list   = expression.binary_var_list
-        self.binary_var_dict   = expression.binary_var_dict
-        self.interval_var      = expression.interval_var
-        self.interval_var_list = expression.interval_var_list
-        self.interval_var_dict = expression.interval_var_dict
-        self.sequence_var      = expression.sequence_var
-        self.transition_matrix = expression.transition_matrix
-        self.tuple_set         = expression.tuple_set
-        self.state_function    = expression.state_function
-        self.float_var         = expression.float_var
-
-        # Copy all modeler public functions in the model object
-        for f in list_module_public_functions(modeler, ('maximize', 'minimize')):
-            setattr(self, f.__name__, f)
-
-        # Special case for builtin functions
-        self.min = modeler.min_of
-        self.max = modeler.max_of
-        self.sum = modeler.sum_of
-        self.abs = modeler.abs_of
-        self.range = modeler.in_range
-        self.all = modeler.all_of
-        self.any = modeler.any_of
+        # Duplicate model expressions constructor functions to make them callable from the model
+        _set_all_modeling_functions(self)
 
 
     def __enter__(self):
@@ -410,24 +384,60 @@ class CpoModel(object):
 
 
     def remove(self, expr):
-        """ Remove an expression from the model.
+        """ Remove a single expression from the model.
 
         This method removes from the model the first occurrence of the expression given as parameter.
-        It does not remove the expression if it used as sub-expression of another expression.
+        It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
+        it does not remove the expression if it used as sub-expression of another expression.
+
+        If you have multiple expressions to remove, use method :meth:`~CpoModel.remove_expressions` instead.
 
         Args:
             expr: Expression to remove.
         Returns:
             True if expression has been removed, False if not found
         """
-        etyp = expr.type
-
         # Check if it is current objective expression
         if expr is self.objective:
             self.objective = None
-
         # Remove from list of expressions
-        return self._remove_from_expr_list(expr, self.expr_list)
+        for ix, (x, l) in enumerate(self.expr_list):
+            if x is expr:
+                del self.expr_list[ix]
+                return True
+        return False
+
+
+    def remove_expressions(self, lexpr):
+        """ Remove a list of expressions from the model.
+
+        This method removes from the model all occurrences of the expressions given in the list.
+        It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
+        it does not remove the expressions that are used as sub-expression of another expression.
+
+        This method is more efficient than calling :meth:`~CpoModel.remove` multiple times.
+
+        Args:
+            lexpr: List of expressions to remove from the model.
+        Returns:
+            Number of expressions actually removed from the model
+        """
+        # Build a set of ids of expressions to remove
+        idset = set(id(x) for x in lexpr)
+        # Check if objective is in the expressions to remove
+        if id(self.objective) in idset:
+            self.objective = None
+        # Build a new list of expressions, removing all that are in the list
+        nbrem = 0
+        nlist = []
+        for x in self.expr_list:
+            if id(x[0]) in idset:
+                nbrem += 1
+            else:
+                nlist.append(x)
+        self.expr_list = nlist
+        # Return
+        return nbrem
 
 
     def minimize(self, expr):
@@ -734,8 +744,8 @@ class CpoModel(object):
         """ Gets the list of all model expressions
 
         Returns:
-            List of model expressions.
-            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line).
+            List of model expressions including there location (if any).
+            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line), or None if not set.
         """
         return self.expr_list
 
@@ -798,6 +808,15 @@ class CpoModel(object):
         return result
 
 
+    def get_objective(self):
+        """ Gets the objective expression (maximization or minimization).
+
+        Returns:
+            Objective expression, None if satisfaction problem.
+        """
+        return self.objective
+
+
     def get_objective_expression(self):
         """ Gets the objective expression (maximization or minimization).
 
@@ -805,6 +824,17 @@ class CpoModel(object):
             Objective expression, None if satisfaction problem.
         """
         return self.objective
+
+
+    def get_optimization_expression(self):
+        """ Gets the optimization expression (maximization or minimization).
+
+        DEPRECATED. Use :meth:`~CpoModel.get_objective` instead.
+
+        Returns:
+            Optimization expression, None if satisfaction problem.
+        """
+        return self.get_objective()
 
 
     def is_minimization(self):
@@ -832,17 +862,6 @@ class CpoModel(object):
             True if this model represents a satisfaction problem.
         """
         return self.objective is None
-
-
-    def get_optimization_expression(self):
-        """ Gets the optimization expression (maximization or minimization).
-
-        DEPRECATED. Use :meth:`~CpoModel.get_objective_expression` instead.
-
-        Returns:
-            Optimization expression, None if satisfaction problem.
-        """
-        return self.get_objective_expression()
 
 
     def replace_expression(self, oexpr, nexpr):
@@ -1061,6 +1080,15 @@ class CpoModel(object):
            - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
            - the optional arguments of this method.
 
+        If an optional argument other than `context` or `params` is given to this method, it is searched in the
+        context where its value is replaced by the new one.
+        If not found, it is then considered as a solver parameter.
+        In this case, only public parameters are allowed, except if the context attribute `solver.enable_undocumented_params`
+        is set to True. This can be done directly when calling this method, as for example:
+        ::
+
+            mdl.solve(enable_undocumented_params=True, MyPrivateParam=MyValue)
+
         Args:
             context (Optional): Complete solving context.
                                 If not given, solving context is the default one that is defined in the module
@@ -1100,15 +1128,14 @@ class CpoModel(object):
         Note that, to be sure to retrieve all solutions and only once each,
         recommended parameters are *start_search(SearchType='DepthFirst', Workers=1)*
 
+        Optional arguments are the same than those available in the method :meth:`solve`
+
         Args:
             context (Optional): Complete solving context.
                                 If not given, solving context is the default one that is defined in the module
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context
@@ -1162,9 +1189,6 @@ class CpoModel(object):
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context
@@ -1213,9 +1237,6 @@ class CpoModel(object):
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context
@@ -1261,9 +1282,6 @@ class CpoModel(object):
                                 :mod:`~docplex.cp.config`.
             params (Optional):  Solving parameters (object of class :class:`~docplex.cp.parameters.CpoParameters`)
                                 that overwrite those in the solving context.
-            url (Optional):     URL of the DOcplexcloud service that overwrites the one defined in the solving context.
-            key (Optional):     Authentication key of the DOcplexcloud service that overwrites the one defined in
-                                the solving context.
             (param) (Optional): Any individual solving parameter as defined in class :class:`~docplex.cp.parameters.CpoParameters`
                                (for example *TimeLimit*, *Workers*, *SearchType*, etc).
             (others) (Optional): Any leaf attribute with the same name in the solving context
@@ -1515,7 +1533,11 @@ class CpoModel(object):
 
 
     def clone(self):
-        """ Create a copy of this model """
+        """ Create a copy of this model.
+
+        Result copy duplicates only the attributes of the model and the list of expressions.
+        It does not create a deep copy of the expressions.
+        """
         res = copy.copy(self)
         res.expr_list = list(self.expr_list)
         if self.parameters is not None:
@@ -1542,22 +1564,6 @@ class CpoModel(object):
     def __str__(self):
         """ Convert the model into string (returns model name) """
         return self.get_name()
-
-
-    @staticmethod
-    def _remove_from_expr_list(expr, elist):
-        """ Remove an expression from a list of expressions (and map of names)
-        Args:
-            expr:  Expression to remove.
-            elist: List of expressions where search
-        Returns:
-            True if expression has been removed, False if not found
-        """
-        for ix, (x, l) in enumerate(elist):
-            if x is expr:
-                del elist[ix]
-                return True
-        return False
 
 
     def _search_named_expression(self, name):
@@ -1615,3 +1621,42 @@ class CpoModel(object):
 ##  Private Functions
 ###############################################################################
 
+def _set_all_modeling_functions(trgt):
+    """ Copy modeling function in the given target object
+
+    Args:
+        trgt: Target object
+    """
+
+    # Duplicate constructor functions to make them callable from the model
+    trgt.integer_var       = expression.integer_var
+    trgt.integer_var_list  = expression.integer_var_list
+    trgt.integer_var_dict  = expression.integer_var_dict
+    trgt.binary_var        = expression.binary_var
+    trgt.binary_var_list   = expression.binary_var_list
+    trgt.binary_var_dict   = expression.binary_var_dict
+    trgt.interval_var      = expression.interval_var
+    trgt.interval_var_list = expression.interval_var_list
+    trgt.interval_var_dict = expression.interval_var_dict
+    trgt.sequence_var      = expression.sequence_var
+    trgt.transition_matrix = expression.transition_matrix
+    trgt.tuple_set         = expression.tuple_set
+    trgt.state_function    = expression.state_function
+    trgt.float_var         = expression.float_var
+
+    # Copy all modeler public functions in the model object
+    for f in list_module_public_functions(modeler, ('maximize', 'minimize')):
+        setattr(trgt, f.__name__, f)
+
+    # Special case for builtin functions
+    trgt.min = modeler.min_of
+    trgt.max = modeler.max_of
+    trgt.sum = modeler.sum_of
+    trgt.abs = modeler.abs_of
+    trgt.range = modeler.in_range
+    trgt.all = modeler.all_of
+    trgt.any = modeler.any_of
+
+
+# Set all modeling functions to the CpoModel class
+#_set_all_modeling_functions(CpoModel)

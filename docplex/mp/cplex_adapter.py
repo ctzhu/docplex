@@ -87,6 +87,8 @@ class CplexAdapter(object):
         self.getnumrows = self.cplex_module._internal._procedural.getnumrows
         self.getrows = self.cplex_module._internal._procedural.getrows
         self.getcolname = self.cplex_module._internal._procedural.getcolname
+        self.getlb = self.cplex_module._internal._procedural.getlb
+        self.getub = self.cplex_module._internal._procedural.getub
         try:
             # needs cplex > 12.9
             self.multiobjsetobj = self.cplex_module._internal._procedural.multiobjsetobj

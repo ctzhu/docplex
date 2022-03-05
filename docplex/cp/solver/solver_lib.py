@@ -125,11 +125,6 @@ class CpoSolverLib(CpoSolverAgent):
         self.callback_proto = None
 
 
-    def __del__(self):
-        # End solve
-        self.end()
-
-
     def solve(self):
         """ Solve the model
 

@@ -27,11 +27,12 @@ from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
 from docplex.mp.error_handler import DefaultErrorHandler, \
     docplex_add_trivial_infeasible_ct
-from docplex.mp.format import LP_format, SAV_format, MPS_format
+from docplex.mp.format import parse_format
+from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.mfactory import ModelFactory
 from docplex.mp.model_stats import ModelStatistics
 from docplex.mp.numutils import round_nearest_towards_infinity1, _NumPrinter
-from docplex.mp.printer_factory import ModelPrinterFactory
+
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.tck import get_typechecker
 from docplex.mp.sttck import StaticTypeChecker
@@ -159,7 +160,7 @@ class Model(object):
         return [self._binary_vartype, self._integer_vartype, self._continuous_vartype,
                 self._semicontinuous_vartype, self._semiinteger_vartype]
 
-    def parse_vartype(self, arg):
+    def _parse_vartype(self, arg):
         if isinstance(arg, VarType):
             return arg
         else:
@@ -349,6 +350,7 @@ class Model(object):
         if name is None:
             name = Model._name_generator.new_symbol()
         self._name = name
+        self._provenance = None
 
         self._error_handler = DefaultErrorHandler(output_level='warning')
 
@@ -466,7 +468,7 @@ class Model(object):
         self._scope_dict = {sc.cplex_scope: sc for sc in self._scopes}
 
         # init engine
-        engine = self._make_new_engine_from_agent(self.solver_agent, self.context)
+        engine = self._make_new_engine_from_agent(self.solver_agent)
         self.__engine = engine
 
         self._lfactory = ModelFactory(self, engine)
@@ -499,7 +501,6 @@ class Model(object):
             except Exception as me:
                 print("* Error in model_build_hook: {0!s}".format(me))
 
-
     def get_name(self):
         return self._name
 
@@ -518,6 +519,10 @@ class Model(object):
         self._checker.typecheck_string(arg=new_name, accept_empty=False, accept_none=False)
         if ' ' in new_name:
             self.warning("Model name contains whitespaces: |{0:s}|", new_name)
+
+    @property
+    def provenance(self):
+        return self._provenance
 
     def _constraint_scopes(self):
         return self._scopes[1:]
@@ -542,14 +547,13 @@ class Model(object):
                 # cplex is more recent than parameters. must update defaults.
                 self.info(
                     "reset parameter defaults, from parameter version: {0} to installed version: {1}"  # pragma: no cover
-                        .format(self_cplex_parameters_version, installed_cplex_version))  # pragma: no cover
+                    .format(self_cplex_parameters_version, installed_cplex_version))  # pragma: no cover
                 resets = self_engine._sync_parameter_defaults_from_cplex(params)  # pragma: no cover
                 if resets:
                     for p, old, new in resets:
-                        if p.short_name != 'randomseed':  # usual practice to change randomseed at each version
+                        if p.name != 'randomseed':  # usual practice to change randomseed at each version
                             self.info('parameter changed, name: {0}, old default: {1}, new default: {2}',
-                                      p.short_name, old, new)
-
+                                      p.name, old, new)
 
     @property
     def infinity(self):
@@ -655,8 +659,6 @@ class Model(object):
         self._read_cplex_file(name='priority order', path=ord_path,
                               extension='.ord',
                               cpx_read_fn=lambda cpx_, path_: cpx_.order.read(path_))
-
-
 
     # adjust the maximum length of repr.. strings
     @property
@@ -1029,10 +1031,6 @@ class Model(object):
         if not terminate:
             self.set_objective(sense=self._lfactory.default_objective_sense(),
                                expr=self._new_default_objective_expr())
-            # set a brand new engine....
-            old_engine = self.get_engine()
-            if old_engine:
-                old_engine.end()
             self._set_engine(self._make_new_engine_from_agent(self.solver_agent, self.context))
         else:
             self._terminate_engine()
@@ -1051,25 +1049,36 @@ class Model(object):
             self._lfactory._checker = new_checker
             self._qfactory._checker = new_checker
 
-    def _make_new_engine_from_agent(self, solver_agent, context):
-        new_engine = self._engine_factory.new_engine(solver_agent, self.environment, model=self, context=context)
+    def _make_new_engine_from_agent(self, solver_agent, context=None):
+        ctx = context or self.context
+        new_engine = self._engine_factory.new_engine(solver_agent, self.environment, model=self, context=ctx)
         new_engine.set_streams(self.context.solver.log_output_as_stream)
         return new_engine
 
     def _set_engine(self, e2):
+        # INTERNAL
+        old_engine = self.get_engine()
         self.__engine = e2
         self._lfactory.update_engine(e2)
+        self._qfactory.update_engine(e2)
+        try:
+            self._static_terminate_engine(old_engine)
+        finally:
+            pass
 
     def _terminate_engine(self):
         # INTERNAL
         old_engine = self.__engine
-        if old_engine:
-            # dispose of old engine.
-            old_engine.end()
-            # from Ryan
-            del old_engine
-            self.__engine = None
+        self._static_terminate_engine(old_engine)
+        self.__engine = None
 
+    @classmethod
+    def _static_terminate_engine(cls, engine_to_terminate):
+        if engine_to_terminate is not None:
+            # dispose of old engine.
+            engine_to_terminate.end()
+            # from Ryan
+            del engine_to_terminate
 
     # def set_new_engine_from_agent(self, new_agent):
     #     self_context = self.context
@@ -1251,8 +1260,8 @@ class Model(object):
 
     def set_var_container(self, dvar, ctn):
         # INTERNAL
-        if ctn is not None:
-            self._container_map[dvar] = ctn
+        assert ctn is not None
+        self._container_map[dvar] = ctn
 
     @staticmethod
     def origin_key(obj):
@@ -1601,7 +1610,7 @@ class Model(object):
 
     def _set_var_type(self, dvar, new_vartype_):
         # INTERNAL
-        new_vartype = self.parse_vartype(new_vartype_)
+        new_vartype = self._parse_vartype(new_vartype_)
         self._checker.typecheck_vartype(new_vartype)
         if new_vartype != dvar.vartype:
             self.__engine.change_var_types([dvar], [new_vartype])
@@ -2368,7 +2377,7 @@ class Model(object):
 
         *New in version 2.9*
         """
-        return self.var_multidict(self.semiinteger_vartype, [keys1, keys2], lb, ub, name, key_format)
+        return self._var_multidict(self.semiinteger_vartype, [keys1, keys2], lb, ub, name, key_format)
 
     def semicontinuous_var_dict(self, keys, lb, ub=None, name=str, key_format=None):
         """  Creates a dictionary of semi-continuous decision variables, indexed by key objects.
@@ -2422,7 +2431,7 @@ class Model(object):
         return self._var_dict(keys, self.semicontinuous_vartype, lb, ub, name, key_format)
 
     def semicontinuous_var_matrix(self, keys1, keys2, lb, ub=None, name=None, key_format=None):
-        """ Creates a dictionary of semivpntinuous decision variables, indexed by pairs of key objects.
+        """ Creates a dictionary of semicontinuous decision variables, indexed by pairs of key objects.
 
         Creates a dictionary that allows the retrieval of variables from  a tuple
         of two keys, the first one from `keys1`, the second one from `keys2`.
@@ -2434,16 +2443,59 @@ class Model(object):
 
         *New in version 2.9*
         """
-        return self.var_multidict(self.semicontinuous_vartype, [keys1, keys2], lb, ub, name, key_format)
+        return self._var_multidict(self.semicontinuous_vartype, [keys1, keys2], lb, ub, name, key_format)
 
-    def var_multidict(self, vartype, seq_of_key_seqs, lb=None, ub=None, name=None, key_format=None):
-        # INTERNAL
+    def var_hypercube(self, vartype_spec, seq_of_keys, lb=None, ub=None, name=None, key_format=None):
+        """ Creates a dictionary of  decision variables, indexed by tuples
+            of arbitrary size.
+
+            Arguments are analogous to methods of the type xxx_var_matrix,
+            except a type argument has to be passed.
+
+        Args:
+            vartype_spec: type specificsation: accepts either an instance of class
+                `docplex.mp.VarType`, or a string that can be translated into a vartype.
+                Possible strings are:
+                    cplex type codes, e.g. B,I,C,N,S or type short names
+                    (e.g.: binary, integer, continuous, semicontinuous, semiinteger)
+
+            seq_of_keys: a sequence of sequence of keys. Typically of length >= 4,
+                as other dimensions are handled by the 'list', 'matrix' and 'cube'
+                series of methods.
+                Variables are indexed by tuples formed by the cartesian product of elements
+                form the sequences; all sequences of keys must be non-empty.
+
+        All other arguments have the same meaning as for all the "xx_var_matrix" family of methods.
+
+        Example:
+            >>> hc = Model().var_hypercube(vartype_spec='B', seq_of_keys=[[1,2], [3], ['a','b'], [1,2,3,4]]
+            >>> len(hc)
+            16
+            returns a dict of 2x2x4 = 16 variables indexed by tuples formed by the cartesian product
+            of the four lists, for example (1,3,'a',4)is a valid key for the hypercube.
+
+        *New in 2.19*
+
+        See Also:
+            :class:`docplex.mp.vartype.VarType`
+
+        """
+        vartype = self._parse_vartype(vartype_spec)
         self._checker.typecheck_vartype(vartype)
-        self._checker.typecheck_iterable(seq_of_key_seqs)
-        return self._lfactory.new_var_multidict(seq_of_key_seqs, vartype, lb, ub, name, key_format, ordered=self._keep_ordering)
+        self._checker.typecheck_iterable(seq_of_keys)
+        lkeys = list(seq_of_keys)
+        arity = len(lkeys)
+        if arity == 0:
+            self.fatal("Variable hypercube with zero dimension")
+
+        return self._var_multidict(vartype, lkeys, lb, ub, name, key_format)
+
+    def _var_multidict(self, vartype, keys, lb=None, ub=None, name=None, key_format=None):
+        assert isinstance(vartype, VarType)
+        return self._lfactory.new_var_multidict(keys, vartype, lb, ub, name, key_format, ordered=self._keep_ordering)
 
     def var_matrix(self, vartype, keys1, keys2, lb=None, ub=None, name=None, key_format=None):
-        return self.var_multidict(vartype, seq_of_key_seqs=[keys1, keys2],
+        return self._var_multidict(vartype, keys=[keys1, keys2],
                                   lb=lb, ub=ub, name=name, key_format=key_format)
 
     def binary_var_matrix(self, keys1, keys2, name=None, key_format=None):
@@ -2478,7 +2530,7 @@ class Model(object):
                   :class:`docplex.mp.vartype.BinaryVarType` indexed by
                   all couples `(k1, k2)` with `k1` in `keys1` and `k2` in `keys2`.
         """
-        return self.var_multidict(self.binary_vartype, [keys1, keys2], 0, 1, name=name, key_format=key_format)
+        return self._var_multidict(self.binary_vartype, [keys1, keys2], 0, 1, name=name, key_format=key_format)
 
     def integer_var_matrix(self, keys1, keys2, lb=None, ub=None, name=None, key_format=None):
         """ Creates a dictionary of integer decision variables, indexed by pairs of key objects.
@@ -2491,8 +2543,7 @@ class Model(object):
 
         Arguments `lb`, `ub`, `name`, and `key_format` are interpreted as in :func:`integer_var_dict`.
         """
-
-        return self.var_multidict(self.integer_vartype, [keys1, keys2], lb, ub, name, key_format)
+        return self._var_multidict(self.integer_vartype, [keys1, keys2], lb, ub, name, key_format)
 
     def continuous_var_matrix(self, keys1, keys2, lb=None, ub=None, name=None, key_format=None):
         """ Creates a dictionary of continuous decision variables, indexed by pairs of key objects.
@@ -2506,7 +2557,7 @@ class Model(object):
         Arguments `lb`, `ub`, `name`, and `key_format` are interpreted the same as in :func:`integer_var_dict`.
 
         """
-        return self.var_multidict(self.continuous_vartype, [keys1, keys2], lb, ub, name, key_format)
+        return self._var_multidict(self.continuous_vartype, [keys1, keys2], lb, ub, name, key_format)
 
     def continuous_var_cube(self, keys1, keys2, keys3, lb=None, ub=None, name=None, key_format=None):
         """ Creates a dictionary of continuous decision variables, indexed by triplets of key objects.
@@ -2514,7 +2565,7 @@ class Model(object):
         Same as :func:`continuous_var_matrix`, except that variables are indexed by triplets of
         the form `(k1, k2, k3)` with `k1` in `keys1`, `k2` in `keys2`, `k3` in `keys3`.
         """
-        return self.var_multidict(self.continuous_vartype, [keys1, keys2, keys3], lb, ub, name, key_format)
+        return self._var_multidict(self.continuous_vartype, [keys1, keys2, keys3], lb, ub, name, key_format)
 
     def integer_var_cube(self, keys1, keys2, keys3, lb=None, ub=None, name=str):
         """ Creates a dictionary of integer decision variables, indexed by triplets.
@@ -2525,7 +2576,7 @@ class Model(object):
         See Also:
             :func:`integer_var_matrix`
         """
-        return self.var_multidict(self.integer_vartype, [keys1, keys2, keys3], lb, ub, name)
+        return self._var_multidict(self.integer_vartype, [keys1, keys2, keys3], lb, ub, name)
 
     def binary_var_cube(self, keys1, keys2, keys3, name=None, key_format=None):
         """Creates a dictionary of binary decision variables, indexed by triplets.
@@ -2537,7 +2588,7 @@ class Model(object):
             triplets.
 
         """
-        return self.var_multidict(self.binary_vartype, [keys1, keys2, keys3], name=name, key_format=key_format)
+        return self._var_multidict(self.binary_vartype, [keys1, keys2, keys3], name=name, key_format=key_format)
 
     def linear_expr(self, arg=None, constant=0, name=None):
         ''' Returns a new empty linear expression.
@@ -4541,6 +4592,7 @@ class Model(object):
             :func:`docplex.mp.SolveDetails.status` to get the Cplex status as a string (eg. "optimal")
             :func:`docplex.mp.SolveDetails.status_code` to get the Cplex status as an integer code..
         """
+        warnings.warn("Model.get_solve_status() is deprecated with cloud solve, use Model.solve_details instead", DeprecationWarning)
         return self._last_solve_status
 
     @property
@@ -4552,6 +4604,7 @@ class Model(object):
 
         :returns: The solve status of the last successful solve, a string, or None.
         """
+        warnings.warn("Model.solve_status is deprecated with cloud solve, use Model.solve_details instead", DeprecationWarning)
         return self._last_solve_status
 
     def _new_docloud_engine(self, ctx):
@@ -4653,7 +4706,7 @@ class Model(object):
                          senses='min',
                          abstols=None,
                          reltols=None,
-                         lp_dump=False,
+                         write_pass_files=False,
                          solution_callbackfn=None,
                          **kwargs):
         """ Performs a solve from an ordered collection of goals.
@@ -4771,10 +4824,10 @@ class Model(object):
                 lex_info("starting pass %d, %s: %s" % (pass_count, sense.verb, str_maxed(goal_expr, 64)))
                 m.set_objective(sense, goal_expr)
 
-                if lp_dump:  # pragma: no cover
+                if write_pass_files:  # pragma: no cover
                     pass_basename = 'lex_%s_%s#%d' % (self.name, goal_name, pass_count)
-                    self.dump_as_lp(basename=pass_basename)
-                    lex_info("generating LP file: {0}".format(pass_basename))
+                    dump_path = self.export_as_sav(basename=pass_basename)
+                    lex_info("saved pass file: {0}".format(dump_path))
 
                 # --- update pass parameters, if any
                 pass_param = next(iter_pass_params)
@@ -4786,6 +4839,7 @@ class Model(object):
                 # ---
                 if current_sol and pass_count > 1:
                     solve_kwargs['_lex_mipstart'] = current_sol
+
                 current_sol = m.solve(**solve_kwargs)
                 # restore params if need be
                 if baseline_params:
@@ -4793,7 +4847,7 @@ class Model(object):
 
                 if current_sol is not None:
                     current_sol.set_name("lex_{0}_{1}_{2}".format(self.name, goal_name, pass_count))
-                    current_obj = m.objective_value
+                    current_obj = current_sol.objective_value
                     results.append(current_obj)
                     prev_step = (goal_expr, current_obj, sense)
                     all_solutions.append(current_sol)
@@ -4803,8 +4857,10 @@ class Model(object):
 
 
                 else:  # pragma: no cover
-                    status = m.solve_details.status
-                    self.error("lexicographic: pass {0} fails, status={1}, stopping", pass_count, status)
+                    sd = m.solve_details
+                    status = sd.status
+                    self.error("lexicographic: pass {0} fails, status={1} ({2}), stopping",
+                               pass_count, status, sd.status_code)
                     break
         finally:
             # print("-> start restoring model at end of lexicographic")
@@ -5032,21 +5088,22 @@ class Model(object):
     def _make_output_path(self, extension, basename, path=None):
         return make_output_path2(self.name, extension, basename, path)
 
-    lp_format = LP_format
-
-    def _get_printer(self, exchange_format, do_raise=False, silent=False):
+    def _get_printer(self, format_spec, do_raise=False, silent=False):
         # INTERNAL
         printer_kwargs = {'full_obj': self._print_full_obj}
-        printer = ModelPrinterFactory.new_printer(exchange_format, do_raise=False, **printer_kwargs)
-        if not printer:  # pragma: no cover
+        format_ = parse_format(format_spec)
+        printer = None
+        if format_.name == 'LP':
+            printer = LPModelPrinter(**printer_kwargs)
+        else:
             if do_raise:
-                self.fatal("Unsupported output format: {0!s}", exchange_format)
+                self.fatal("Unsupported output format: {0!s}", format_spec)
             elif not silent:
-                self.error("Unsupported output format: {0!s}", exchange_format)
+                self.error("Unsupported output format: {0!s}", format_spec)
         return printer
 
     def dump_as_lp(self, path=None, basename=None):
-        return self.dump(path, basename, exchange_format=LP_format)
+        return self._export_from_cplex(path, basename, format_spec="lp")
 
     def export_as_lp(self, path=None, basename=None, hide_user_names=False):
         """ Exports a model in LP format.
@@ -5071,6 +5128,9 @@ class Model(object):
                 variables and constraints. If True, all names are replaced by `x1`, `x2`, ... for variables,
                 and `c1`, `c2`, ... for constraints.
 
+        Returns:
+            The full path of the generated file, or None if an error occured.
+
         Examples:
             Assuming the model's name is `mymodel`:
             
@@ -5094,7 +5154,7 @@ class Model(object):
             
             will write file ``e:/home/docplex/docplex_mymodel.lp``.
         """
-        return self.export(path, basename, hide_user_names, exchange_format=LP_format)
+        return self.export(path, basename, hide_user_names=hide_user_names, format_spec='lp')
 
     def export_as_sav(self, path=None, basename=None):
         """ Exports a model in CPLEX SAV format.
@@ -5118,14 +5178,17 @@ class Model(object):
                 the basename argument is not used.
                 If passed None, the output directory will be ``tempfile.gettempdir()``.
 
+        Returns:
+            The full path of the generated file, or None if an error occured.
+
         Examples:
             See the documentation of  :func:`export_as_lp` for examples of pathname generation.
             The logic is identical for both methods.
 
         """
-        return self._export(path, basename, use_engine=True,
-                            hide_user_names=False,
-                            exchange_format=SAV_format)
+        return self._export_from_cplex(path, basename, format_spec="sav")
+
+    dump_as_sav = export_as_sav
 
     def export_as_mps(self, path=None, basename=None):
         """ Exports a model in MPS format.
@@ -5149,80 +5212,104 @@ class Model(object):
                 the basename argument is not used.
                 If passed None, the output directory will be ``tempfile.gettempdir()``.
 
+        Returns:
+            The full path of the generated file, or None if an error occured.
+
         Examples:
             See the documentation of  :func:`export_as_lp` for examples of pathname generation.
             The logic is identical for both methods.
 
         """
-        return self._export(path, basename, use_engine=True,
-                            hide_user_names=False,
-                            exchange_format=MPS_format)
+        return self._export_from_cplex(path, basename, format_spec="mps")
 
-    def dump(self, path=None, basename=None, hide_user_names=False, exchange_format=LP_format):
+    def export_as_savgz(self, path=None, basename=None):
+        """ Exports a model in compressed SAV format.
+
+        Exporting to SAV compressed format requires that CPLEX is installed and
+        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+
+        Arguments 'path' and 'basename' have similar usage as for :func:`export_as_lp`.
+
+        Returns:
+            The full path of the generated file, or None if an error occured.
+
+        Examples:
+            See the documentation of  :func:`export_as_lp` for examples of pathname generation.
+            The logic is identical for both methods.
+
+        *New In 2.19*
+
+        """
+        return self._export_from_cplex(path, basename, format_spec="sav.gz")
+
+
+    def _export_from_cplex(self, path=None, basename=None, hide_user_names=False,
+                           format_spec="lp"):
         return self._export(path, basename,
                             use_engine=True,
                             hide_user_names=hide_user_names,
-                            exchange_format=exchange_format)
+                            format_spec=format_spec)
 
     def export(self, path=None, basename=None,
-               hide_user_names=False, exchange_format=LP_format):
+               hide_user_names=False, format_spec="lp"):
         # INTERNAL
         return self._export(path, basename,
+                            use_engine=False,
                             hide_user_names=hide_user_names,
-                            exchange_format=exchange_format)
+                            format_spec=format_spec)
 
     def _export(self, path=None, basename=None,
                 use_engine=False, hide_user_names=False,
-                exchange_format=LP_format):
+                format_spec="lp"):
         # INTERNAL
         # path is either a nonempty path string or None
         self._checker.typecheck_string(path, accept_none=True, accept_empty=False)
         self._checker.typecheck_string(basename, accept_none=True, accept_empty=False)
         # INTERNAL
-        extension = ""
-        try:
-            extension = exchange_format.extension
-        except AttributeError:
-            self.fatal("Not a supported exchange format: {0!s}", exchange_format)
+        _format = parse_format(format_spec)
+        if not _format:
+            self.fatal("Not a supported exchange format: {0!s}", format_spec)
+        extension = _format.extension
 
         # combination of path/directory and basename resolution are done in resolve_path
         path = self._resolve_path(path, basename, extension)
-        ret = self._export_to_path(path, hide_user_names, use_engine, exchange_format)
+        ret = self._export_to_path(path, hide_user_names, use_engine, _format)
         if ret:
             self.trace("model file: {0} overwritten", path)
         return ret
 
-    def _export_to_path(self, path, hide_user_names=False, use_engine=False, exchange_format=LP_format):
+    def _export_to_path(self, path, hide_user_names=False, use_engine=False, format_spec="lp"):
         # INTERNAL
-        #self.ensure_setup()
+        format_ = parse_format(format_spec)
         try:
             if use_engine:
                 # rely on engine for the dump
                 if self.has_cplex():
-                    self.__engine.export(path, exchange_format)
+                    self.__engine.export(path, format_)
                 else:  # pragma: no cover
                     self.fatal(
                         "Exporting to {0} requires CPLEX, but a local CPLEX installation could not be found, file: {1} could not be written",
-                        exchange_format.name, path)
+                        format_.name, path)
                     return None
             else:
                 # a path is not a stream but anyway it will work
-                self._export_to_stream(stream=path, hide_user_names=hide_user_names, exchange_format=exchange_format)
+                self._export_to_stream(stream=path, hide_user_names=hide_user_names, format_spec=format_)
             return path
 
         except IOError:
             self.error("Cannot open file: \"{0}\", model: {1} not exported".format(path, self.name))
             raise
 
-    def _export_to_stream(self, stream, hide_user_names=False, exchange_format=LP_format):
-        printer = self._get_printer(exchange_format, do_raise=False, silent=True)
+    def _export_to_stream(self, stream, hide_user_names=False, format_spec="lp"):
+        format_ = parse_format(format_spec)
+        printer = self._get_printer(format_, do_raise=False, silent=True)
         if printer:
             printer.set_mangle_names(hide_user_names)
             printer.printModel(self, stream)
         else:
-            self.__engine.export(stream, exchange_format)
+            self.__engine.export(stream, format_spec)
 
-    def export_to_stream(self, stream, hide_user_names=False, exchange_format=LP_format):
+    def export_to_stream(self, stream, hide_user_names=False, format_spec="lp"):
         """ Export the model to an output stream in LP format.
 
         A stream can be one of:
@@ -5238,7 +5325,7 @@ class Model(object):
                 and `c1`, `c2`, ,... for constraints. Default is to keep user names.
 
         """
-        self._export_to_stream(stream, hide_user_names, exchange_format)
+        self._export_to_stream(stream, hide_user_names, format_spec)
 
     def export_as_lp_string(self, hide_user_names=False):
         """ Exports the model to a string in LP format.
@@ -5253,10 +5340,14 @@ class Model(object):
         Returns:
             A string, containing the model exported in LP format.
         """
-        return self.export_to_string(hide_user_names, LP_format)
+        return self.export_to_string(hide_user_names, "lp")
 
     @property
     def lp_string(self):
+        """ This property returns a string encoding the model in LP format.
+
+            *New in version 2.16*
+        """
         return self.export_as_lp_string()
 
     def export_as_mps_string(self):
@@ -5267,7 +5358,7 @@ class Model(object):
 
         *New in version 2.13*
         """
-        return self._export_as_cplex_string(MPS_format)
+        return self._export_as_cplex_string("mps")
 
     def export_as_sav_string(self):
         """ Exports the model to a string of bytes in SAV format.
@@ -5277,18 +5368,20 @@ class Model(object):
 
         *New in version 2.13*
         """
-        return self._export_as_cplex_string(SAV_format)
+        return self._export_as_cplex_string("sav")
 
-    def _export_as_cplex_string(self, xformat):
+    def _export_as_cplex_string(self, format_spec):
+        # INTERNAL
+        _format = parse_format(format_spec)
         if not self.has_cplex():
             self.fatal("Exporting to {0} requires CPLEX, but a local CPLEX installation could not be found",
-                       xformat.name)
-        # INTERNAL
+                       _format.name)
+
         from io import BytesIO
         bs = BytesIO()
-        self.__engine.export(bs, xformat)
+        self.__engine.export(bs, _format)
         raw_res = bs.getvalue()
-        if xformat.is_binary:
+        if _format.is_binary:
             # for b, by in enumerate(raw_res):
             #     nl = (b % 21 == 20)
             #     print(f" {by}", end='\n' if nl else '')
@@ -5297,10 +5390,10 @@ class Model(object):
         else:
             return raw_res.decode(self.parameters.read.fileencoding.get())
 
-    def export_to_string(self, hide_user_names=False, exchange_format=LP_format):
+    def export_to_string(self, hide_user_names=False, format_spec="lp"):
         # INTERNAL
         oss = StringIO()
-        self._export_to_stream(oss, hide_user_names, exchange_format)
+        self._export_to_stream(oss, hide_user_names, format_spec)
         return oss.getvalue()
 
     def export_parameters_as_prm(self, path=None, basename=None):
@@ -5965,14 +6058,18 @@ class Model(object):
 
 
     def prettyprint(self, out=None):
-        ModelPrinterFactory.new_pretty_printer().printModel(self, out=out)
+        from docplex.mp.ppretty import ModelPrettyPrinter
+        ppr = ModelPrettyPrinter()
+        ppr.printModel(self, out=out)
 
     pprint = prettyprint
 
     def pprint_as_string(self):
-        oss = StringIO()
-        ModelPrinterFactory.new_pretty_printer().printModel(self, out=oss)
-        return oss.getvalue()
+        from docplex.mp.ppretty import ModelPrettyPrinter
+        with StringIO() as oss:
+            ppr = ModelPrettyPrinter()
+            ppr.printModel(self, out=oss)
+            return oss.getvalue()
 
     def clone(self, new_name=None, **clone_kwargs):
         """ Makes a deep copy of the model, possibly with a new name.
@@ -6021,7 +6118,9 @@ class Model(object):
                 copied_var = copy_model._var(v.vartype, v.lb, v.ub, v.name)
                 var_ctn = v.container
                 if var_ctn:
-                    copied_var.container = ctn_map.get(var_ctn)
+                    copied_ctn = ctn_map.get(var_ctn)
+                    assert copied_ctn is not None
+                    copied_var.container = copied_ctn
                 memo[v] = copied_var
 
         for gv in generated_vars:
@@ -6102,12 +6201,10 @@ class Model(object):
         return copy_model
 
     def _sync_constraint_indices(self, cscope):
-        if self._checker.check_sync_indices():
-            self.__engine.check_constraint_indices(cscope.iter, cscope.cplex_scope)
+        self.__engine.check_constraint_indices(cscope.iter, cscope.cplex_scope)
 
     def _sync_var_indices(self):
-        if self._checker.check_sync_indices():
-            self.__engine.check_var_indices(self.iter_variables())
+        self.__engine.check_var_indices(self.iter_variables())
 
     def end(self):
         """ Terminates a model instance.
@@ -6559,7 +6656,7 @@ class Model(object):
             cplex_cb._model = self
         return cplex_cb
 
-    def resolve(self):
+    def _resolve_pwls(self):
         # INTERNAL
         self._objective_expr.resolve()
         no_pwl_scopes = [self._linct_scope, self._logical_scope, self._quadct_scope]

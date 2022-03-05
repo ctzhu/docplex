@@ -44,7 +44,7 @@ class ModelPrinter(object):
             if None is passed, uses standard output.
             else assume a stream is passed and try it
         """
-        mdl.resolve()
+        mdl._resolve_pwls()
         if out is None:
             # prints on standard output
             self.print_model_to_stream(sys.stdout, mdl)

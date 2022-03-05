@@ -6,27 +6,28 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module contains the different elements that represent a solution resulting
-from the solve of a model.
+This module contains the different elements representing the result to a solver request.
+The main classes are:
 
-This module implements the following object classes to represent solution elements:
+ * :class:`CpoRunResult`: root class for all results returned by the solver.
+   It contains general purpose information such as the model that has been solved, solver parameters, solver info and log.
+ * :class:`CpoSolveResult`: result of a solve request, including a solution to the model if any.
+ * :class:`CpoRefineConflictResult`: result of a refine conflict request.
 
+These classes are using the following classes to store utility information:
+
+ * :class:`CpoSolverInfos`: miscellaneous information coming from the solver.
+ * :class:`CpoProcessInfos`: miscellaneous information about the processing and solving of the model by the Python API.
+
+When a solution is found by the solver, it is represented by the following classes:
+
+ * :class:`CpoModelSolution`: aggregation of all individual model element solutions,
  * :class:`CpoIntVarSolution`: solution of an integer variable,
  * :class:`CpoIntervalVarSolution`: solution of an interval variable,
  * :class:`CpoSequenceVarSolution`: solution of a sequence variable,
  * :class:`CpoStateFunctionSolution`: solution of a state function, and
- * :class:`CpoModelSolution`: aggregation of all individual model element solutions,
 
-and the following ones to represent results:
-
- * :class:`CpoSolveResult`: result of a model solve, including a solution to the model (if any)
-   plus other technical information (solve details, log, etc)
- * :class:`CpoRefineConflictResult`: result of an invocation of the conflict refiner.
- * :class:`CpoSolverInfos`: miscellaneous information coming from the solver.
- * :class:`CpoProcessInfos`: miscellaneous information about the processing and solving of the model by the Python API.
-
-
-The solution objects (:class:`CpoModelSolution`, :class:`CpoIntVarSolution`, etc) can be used in multiple ways:
+These solution objects can be used in multiple ways:
 
  * To represent a *complete* (fully instantiated) solution, where each model has a unique fixed value, as returned
    by a successful model solve.
@@ -582,19 +583,26 @@ class CpoStateFunctionSolution(CpoVarSolution):
         
      
 class CpoModelSolution(object):
-    """ This class represents a solution to a model. It contains the solutions of model variables plus
-    the value of the objective(s), if any.
+    """ This class represents a solution to the problem represented by the model.
+    It contains the solutions for the model variables plus the value of the objective(s), if any.
 
-    Each variable solution is accessed with its name
-    and its value is either :class:`CpoIntVarSolution`, :class:`CpoIntervalVarSolution`,
+    Each variable solution can be accessed using its name, or the variable object of the model.
+    The solution is either :class:`CpoIntVarSolution`, :class:`CpoIntervalVarSolution`,
     :class:`CpoSequenceVarSolution` or :class:`CpoStateFunctionSolution` depending on the type of the variable.
 
-    The solution can be:
+    A variable solution can be accessed in two ways:
+
+     * using the method :meth:`CpoModelSolution.get_var_solution`, that returns an object representing
+       the solution to the variable, or None if the variable is not in the solution.
+     * using the standard Python expression `sol[<var>]` that does the same but raises a `KeyError` exception
+       if the variable is not in the solution.
+
+    Depending if the request to solver was a solve or a propagate, the solution can be:
       * *complete*, if each variable is assigned to a single value,
       * *partial* if not all variables are defined, or if some variables are defined with domains that are not
         restricted to a single value.
 
-    An instance of this class may be created explicitly by the programmer of the model to express a *starting point*
+    An instance of this class may also be created explicitly by the programmer of the model to express a *starting point*
     that can be passed to the model to optimize its solve
     (see :meth:`docplex.cp.model.CpoModel.set_starting_point` for details).
     """
@@ -900,7 +908,7 @@ class CpoModelSolution(object):
         # Add objectives
         ovals = jsol.get('objectives')
         if ovals:
-            self.objective_values = tuple([tuple(v) if isinstance(v, list) else _get_num_value(v) for v in ovals])
+            self.objective_values = tuple([_get_interval(v) for v in ovals])
 
         # Add objectives bounds
         bvals = jsol.get('bounds')
@@ -2157,6 +2165,20 @@ def _get_domain(val):
         return tuple(res)
     else:
         return _get_num_value(val)
+
+
+def _get_interval(val):
+    """ Convert a solution value given in JSON.
+
+    Args:
+        val: JSON value to convert
+    Returns:
+        Converted value
+    """
+    if isinstance(val, list):
+        lb, ub = val
+        return (lb, ub) if lb != ub else _get_num_value(lb)
+    return _get_num_value(val)
 
 
 def _get_num_value(val):

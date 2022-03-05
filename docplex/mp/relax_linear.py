@@ -94,7 +94,9 @@ class LinearRelaxer(object):
                 copied_var = relaxed_model._var(continuous, rx_lb, v.ub, v.name)
                 var_ctn = v.container
                 if var_ctn:
-                    copied_var.container = ctn_map.get(var_ctn)
+                    copied_ctn = ctn_map.get(var_ctn)
+                    assert copied_ctn is not None
+                    copied_var.container = copied_ctn
                 var_mapping[v] = copied_var
 
         # transfer all non-logical cts

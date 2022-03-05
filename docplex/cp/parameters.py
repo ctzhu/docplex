@@ -6,15 +6,15 @@
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
-This module handles the parameters that can be assigned to CP Optimizer to configure
-the solving of a model.
+This module handles the public parameters that can be assigned to CP Optimizer
+to configure the solving of a model.
 
 The class `CpoParameters` contains the list of modifiable parameters
 expressed as properties with getters and setters.
 For the parameters that require special values, those values are given as constants.
 
 Changing the value of a parameter can be done in multiple ways.
-For example, the `TimeLimit` can be set to 60s :
+For example, the `TimeLimit` can be set to 60s with:
 
    * `params.TimeLimit = 60`
    * `params.set_TimeLimit(60)`
@@ -38,6 +38,7 @@ Getting the list of all parameters that have been changed can be done by calling
 
 Note that the *PEP8* naming convention is not applied here, to keep parameter names as they
 are in the solver, so that they can be referenced in solver logs.
+
 
 Summary of parameters
 ---------------------
@@ -148,6 +149,14 @@ For all following attributes, possible values are 'Default', 'Low', 'Basic', Med
    The value is a non-negative integer, or None (default) that does not set any limit.
  * :attr:`~CpoParameters.ConflictRefinerOnVariables`: Specifies whether the conflict refiner should refine variables domains.
    The value is a symbol in ['On', 'Off']. Default value is 'Off'.
+
+
+Private parameters
+------------------
+
+A private parameter can only be set using the method :meth:`~CpoParameters.set_attribute`, giving its name as a string and its value.
+In this case, there is no local checking of the validity of the parameter or its value at modeling time.
+If there is any error, it is detected only at solve time.
 
 
 Detailed description

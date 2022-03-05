@@ -1,9 +1,28 @@
 Changelog
 ---------
 
-Changed in 2.18.200:
+Changed in 2.19.202:
 ````````````````````
-* Latest supported CPLEX Optimization Studio is now 20.1
+* In ``docplex.mp``:
+    * Exporting models to SAV.gz format is now supported.
+    
+* In ``docplex.cp``:
+    * Add a new method remove_expressions() to CpoModel that removes a list of expressions in one shot.
+    * Update documentation to describe how to set private solver parameters.
+    * Add functions to export and import context as flat file.
+    * Fix a bug on the string representation of calls to constant() modeling function.
+    * Add JSON filter in case of double identical value for objective.
+    * Add functions to export and import context as flat file.
+    * Fix a bug on the string representation of calls to constant() modeling function.
+    * Add JSON filter in case of double value for objective.
+
+    
+Changed in 2.18.200 (2020.11.#3):
+`````````````````````````````````
+
+* In ``docplex.mp``:
+    * Latest supported CPLEX Optimization Studio is now 20.1
+
 
 Changed in 2.17.196 (2020.11.#2):
 `````````````````````````````````

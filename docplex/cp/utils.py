@@ -424,6 +424,104 @@ class Context(dict):
         out.flush()
 
 
+    def export_flat(self, out=None):
+        """ Export this context in flat format
+
+        Each context attribute is written on a single line <path>=<value> with UTF-8 encoding.
+
+        Args:
+            out (Optional):  Target output stream or file name. If not given, default value is sys.stdout.
+        """
+        # Check file
+        if is_string(out):
+            with open_utf8(os.path.abspath(out), mode='w') as f:
+                self.export(f)
+                return
+        # Check default output
+        if out is None:
+            out = sys.stdout
+
+        # Build dictionary of all attributes by pathes
+        adict = {}
+        self._build_path_dict('', adict)
+
+        # Print values
+        for k in sorted(adict.keys()):
+            out.write(k)
+            out.write(" = ")
+            v = adict[k]
+            if is_string(v):
+                out.write(to_printable_string(v))
+            else:
+                out.write(str(v))
+            out.write('\n')
+
+
+    def export_flat_as_string(self):
+        """ Export this context in flat format as a string.
+
+        Each context attribute is written on a single line <path>=<value>
+
+        Args:
+            out (Optional):  Target output stream or file name. If not given, default value is sys.stdout.
+        """
+        out = StringIO()
+        self.export_flat(out)
+        res = out.getvalue()
+        out.close()
+        return res
+
+
+    def import_flat(self, inp=None):
+        """ Import a flat file in this context
+
+        Each context attribute is added in this context.
+        Each value is converted in the most appropriate type: string, integer, float, boolean or None.
+        Only atomic values are allowed, not lists or other Python complex objects.
+
+        Args:
+            inp:  Input stream or file
+        """
+        # Check file
+        if is_string(inp):
+            with open_utf8(os.path.abspath(inp), mode='r') as f:
+                self.import_flat(f)
+                return
+
+        # Read all lines
+        for line in inp.readlines():
+            # Check empty and comment lines
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Get attribute path
+            cx = line.find('=')
+            if cx < 0:
+                raise Exception("No equal sign found in line '{}'".format(line))
+            k = line[:cx].strip()
+            v = line[cx+1:].strip()
+            v = string_to_value(v)
+            self.set_by_path(k, v)
+
+
+    def _build_path_dict(self, path, result):
+        """ Build dictionary of all context values with pathes as keys
+
+        Args:
+            path:  Path of this context
+            result: Result dictionary to fill
+        """
+        # Build path prefix
+        if path:
+            path = path + "."
+        for k in sorted(self.keys()):
+            v = self[k]
+            if isinstance(v, Context):
+                v._build_path_dict(path + k, result)
+            else:
+                result[path + k] = v
+
+
 class IdAllocator(object):
     """ Allocator of identifiers.
 
@@ -1178,6 +1276,44 @@ def to_string(val):
     return str(val)
 
 
+_DEFAULT_STRING_VALUES = {"none": None, "true": True, "false": False}
+def string_to_value(s):
+    """ Convert a string in its most representative python value
+
+    If the string is encapsulated in double_quotes, the internal string is returned.
+    If string in lower case is "none", None is returned.
+    If string in lower case is "true" or "false", True or False is returned.
+    If string matches an integer, the integer is returned.
+    If the string matches a float, the float is returned
+    Otherwise, string is returned as it is
+
+    Args:
+        s: String to convert
+    Returns:
+        Value corresponding to the string
+    """
+    # Check first character
+    c = s[0]
+    ls = len(s)
+    if c == '"' and ls > 1 and s[-1] == '"':
+        return s[1:ls-1]
+    if c.isdigit() or (c == '-' and ls >= 2 and s[1].isdigit()):
+        # Try to convert as number
+        try:
+            # Check if possible float
+            if s.find('.') >= 0:
+                s = float(s)
+            else:
+                s = int(s)
+        except:
+            pass
+    else:
+        ns = s.lower()
+        if ns in _DEFAULT_STRING_VALUES:
+            return _DEFAULT_STRING_VALUES[ns]
+    return s
+
+
 def _get_vars(obj):
     """ Get the list variable names of an object.
     """
@@ -1402,7 +1538,7 @@ def list_module_public_functions(mod, excepted=()):
     """ Build the list of all public functions of a module.
 
     Args:
-        mod:  Module to parse
+        mod:       Module to parse
         excepted:  List of function names to not include. Default is none.
     Returns:
         List of public functions declared in this module
@@ -1704,22 +1840,40 @@ def is_symbol_char(c):
     return c in _SYMBOL_CHARS
 
 
-def to_printable_string(id):
-    """ Build a printable string from raw string (add escape sequences and quotes if necessary).
+def to_printable_id(s):
+    """ Build a CPO printable identifier from its raw string (add escape sequences and quotes if necessary).
 
     Args:
-        id: Identifier string
+        s: Identifier string
     Returns:
         Unicode CPO identifier string, including double quotes and escape sequences if needed if not only chars and integers
     """
     # Check empty string
-    if len(id) == 0:
+    if len(s) == 0:
         return u'""'
     # Check if string can be used as it is
-    if (all((c in _SYMBOL_CHARS) for c in id)) and not id[0] in _DIGIT_CHARS:
-        return make_unicode(id)
+    if (all((c in _SYMBOL_CHARS) for c in s)) and not s[0] in _DIGIT_CHARS:
+        return make_unicode(s)
     # Build result string
-    return u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in id) + u'"'
+    return u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in s) + u'"'
+
+
+def to_printable_string(s):
+    """ Build a printable string from raw string (add escape sequences and quotes if necessary).
+
+    Args:
+        str: String to convert
+    Returns:
+        Unicode string, including always double quotes and escape sequences if needed
+    """
+    # Check empty string
+    if len(s) == 0:
+        return u'""'
+    # Check if string can be used as it is
+    if (all((c in _SYMBOL_CHARS) for c in s)) and not s[0] in _DIGIT_CHARS:
+        return u'"' + make_unicode(s) + u'"'
+    # Build result string
+    return u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in s) + u'"'
 
 
 def to_internal_string(strg):

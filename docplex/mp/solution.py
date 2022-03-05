@@ -728,7 +728,7 @@ class SolveSolution(object):
         if verbose and unsat_cts:
             m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
             for u, uct in enumerate(unsat_cts, start=1):
-                m.warning("{0} - unsatisified constraint: {1!s}".format(u, uct))
+                m.warning("{0} - unsatisfied constraint: {1!s}".format(u, uct))
         return not (invalid_domain_vars or unsat_cts)
 
     is_feasible_solution = is_valid_solution

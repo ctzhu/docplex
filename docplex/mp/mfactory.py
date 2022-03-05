@@ -142,8 +142,10 @@ def compile_naming_function(keys, user_name, dimension=1, key_format=None,
 
 
 class _AbstractModelFactory(object):
-    def __init__(self, model):
+
+    def __init__(self, model, engine):
         self._model = model
+        self._engine = engine
         self._checker = model._checker
         ordered = model.keep_ordering
         self.term_dict_type = self._term_dict_type_from_ordering(model.keep_ordering)
@@ -152,6 +154,10 @@ class _AbstractModelFactory(object):
             # FastOrderedDict does not accept zip argument...
             from collections import OrderedDict
             self._var_dict_type = OrderedDict
+
+    def update_engine(self, engine):
+        # the model has already disposed the old engine, if any
+        self._engine = engine
 
     def var_dict_type(self, ordered):
         return self._var_dict_type if ordered else dict
@@ -180,11 +186,10 @@ class ModelFactory(_AbstractModelFactory):
         return default_bound if bound is None else float(bound)
 
     def __init__(self, model, engine):
-        _AbstractModelFactory.__init__(self, model)
+        _AbstractModelFactory.__init__(self, model, engine)
 
         self._var_container_counter = 0
         self.number_validation_fn = model._checker.get_number_validation_fn()
-        self._engine = engine
         self.stringifier = str_flatten_tuple
 
     @property
@@ -203,10 +208,6 @@ class ModelFactory(_AbstractModelFactory):
 
     def warning(self, msg, *args):
         self._model.warning(msg, args)
-
-    def update_engine(self, engine):
-        # the model has already disposed the old engine, if any
-        self._engine = engine
 
     def _make_new_var(self, vartype, lb, ub, varname, origin=None):
         self_model = self._model
@@ -274,14 +275,25 @@ class ModelFactory(_AbstractModelFactory):
             self._checker.typecheck_key_seq(used_keys)
         return used_name, used_keys
 
+    def _get_stringifier(self, dimension, keys):
+        if dimension > 1:
+            stringifier = str_flatten_tuple
+        elif len(keys) <= 100:
+            stringifier = str_flatten_tuple
+        else:
+            is_tuple = isinstance(keys[0], tuple)
+            stringifier = str_flatten_tuple if is_tuple else str
+        return stringifier
+
+
     def _expand_names(self, keys, user_name, dimension, key_format):
         if user_name is None or self._model.ignore_names:
             # no automatic names, ever
             return []
         else:
-            # default_naming_fn = self._model._create_automatic_varname
+            stringifier_ = self._get_stringifier(dimension, keys)
             actual_naming_fn = compile_naming_function(keys, user_name, dimension, key_format,
-                                                       stringifier=self.stringifier)
+                                                       stringifier=stringifier_)
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
@@ -357,23 +369,42 @@ class ModelFactory(_AbstractModelFactory):
     def _bad_bounds_fatal(self, bad_bound):
         self.fatal("unexpected variable bound: {0!s}, expecting: None|number|function|iterable", bad_bound)
 
+    @staticmethod
+    def safe_kth(array_or_empty, k, fallback=None):
+        if array_or_empty:
+            return array_or_empty[k]
+        else:
+            return fallback
+
     def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None):
         if not size:
             return []
         mdl = self._model
+
+        # -------------------------
         assert size == len(vartypes)
-        assert size == len(lbs)
-        assert size == len(ubs)
-        assert size == len(names)
+        assert not lbs or size == len(lbs)
+        assert not ubs or size == len(ubs)
+        assert not names or size == len(names)
+        # -------------------------
 
-        allvars = [Var(mdl, vartypes[k],
-                       names[k] if names[k] else None,
-                       lbs[k],
-                       ubs[k],
-                       _safe_lb=True,
-                       _safe_ub=True) for k in fast_range(size)]
+        if names:
+            allvars = [Var(mdl, vartypes[k],
+                           names[k],
+                           self.safe_kth(lbs, k, vartypes[k].default_lb),
+                           self.safe_kth(ubs, k, vartypes[k].default_ub),
+                           _safe_lb=True,
+                           _safe_ub=True) for k in fast_range(size)]
+        else:
+            allvars = [Var(mdl, vartypes[k],
+                           None,
+                           self.safe_kth(lbs, k),
+                           self.safe_kth(ubs, k),
+                           _safe_lb=True,
+                           _safe_ub=True) for k in fast_range(size)]
 
-        indices = self._engine.create_multitype_variables(size, vartypes, lbs, ubs, names)
+        cpxnames = names or []  # no None
+        indices = self._engine.create_multitype_variables(size, vartypes, lbs, ubs, cpxnames)
         mdl._register_block_vars(allvars, indices, names)
         return allvars
 
@@ -386,7 +417,9 @@ class ModelFactory(_AbstractModelFactory):
                      key_seq, vartype,
                      lb=None, ub=None,
                      name=str,
-                     dimension=1, key_format=None):
+                     dimension=1, key_format=None,
+                     _safe_bounds=False,
+                     _safe_names=False):
         number_of_vars = len(key_seq)
         if 0 == number_of_vars:
             return []
@@ -395,28 +428,38 @@ class ModelFactory(_AbstractModelFactory):
         default_lb = vartype.default_lb
         default_ub = vartype.default_ub
 
-        xlbs = self._expand_bounds(key_seq, lb, default_lb, number_of_vars, true_if_lb=True)
-        xubs = self._expand_bounds(key_seq, ub, default_ub, number_of_vars, true_if_lb=False)
+        if _safe_bounds:
+            assert not lb or len(lb) == number_of_vars
+            xlbs = lb or []
+            assert not ub or len(ub) == number_of_vars
+            xubs = ub or []
+        else:
+            xlbs = self._expand_bounds(key_seq, lb, default_lb, number_of_vars, true_if_lb=True)
+            xubs = self._expand_bounds(key_seq, ub, default_ub, number_of_vars, true_if_lb=False)
         # at this point both list are either [] or have size numberOfVars
 
-        all_names = self._expand_names(key_seq, name, dimension, key_format)
+        if _safe_names:
+            xnames = name or []
+        else:
+            xnames = self._expand_names(key_seq, name, dimension, key_format)
 
-        safe_lbs = not xlbs
-        safe_ubs = not xubs
-        if xlbs and xubs:
-            self._checker.check_vars_domain(xlbs, xubs, all_names)
+        safe_lbs = _safe_bounds or not xlbs
+        safe_ubs = _safe_bounds or not xubs
+        if xlbs and xubs and not _safe_bounds:
+            # no domain check from reader
+            self._checker.check_vars_domain(xlbs, xubs, xnames)
 
         mdl = self._model
         allvars = [Var(mdl, vartype,
-                       all_names[k] if all_names else None,
-                       xlbs[k] if xlbs else default_lb,
-                       xubs[k] if xubs else default_ub,
+                       self.safe_kth(xnames, k, None),
+                       self.safe_kth(xlbs, k, default_lb),
+                       self.safe_kth(xubs, k, default_ub),
                        _safe_lb=safe_lbs,
                        _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
 
         # query the engine for a list of indices.
-        indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, all_names)
-        mdl._register_block_vars(allvars, indices, all_names)
+        indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, xnames)
+        mdl._register_block_vars(allvars, indices, xnames)
         if var_container:
             for dv in allvars:
                 mdl.set_var_container(dv, var_container)
@@ -482,9 +525,6 @@ class ModelFactory(_AbstractModelFactory):
             if self_number_validation_fn:
                 k = self_number_validation_fn(cst)
         return ConstantExpr(self._model, k)
-
-    def _new_safe_constant_expr(self, cst):
-        return ConstantExpr(self._model, cst)
 
     use_constant_expr = True
 

@@ -108,7 +108,7 @@ def _group_distmip_make(pgroup):
 # generating code for group: Emphasis
 def _group_emphasis_params(pgroup):
     return dict(memory=BoolParameter(pgroup, "memory", "CPX_PARAM_MEMORYEMPHASIS", 1082, "reduced memory emphasis", default_value=0),
-                mip=IntParameter(pgroup, "mip", "CPX_PARAM_MIPEMPHASIS", 2058, "emphasis for MIP optimization", default_value=0, min_value=0.0, max_value=4.0),
+                mip=IntParameter(pgroup, "mip", "CPX_PARAM_MIPEMPHASIS", 2058, "emphasis for MIP optimization", default_value=0, min_value=0.0, max_value=5.0),
                 numerical=BoolParameter(pgroup, "numerical", "CPX_PARAM_NUMERICALEMPHASIS", 1083, "extreme numerical caution emphasis", default_value=0)
                 )
 
@@ -142,6 +142,7 @@ def _group_mip_cuts_params(pgroup):
                 localimplied=IntParameter(pgroup, "localimplied", "CPX_PARAM_LOCALIMPLBD", 2181, "type of local implied bound cut generation", default_value=0, min_value=-1.0, max_value=3.0),
                 mcfcut=IntParameter(pgroup, "mcfcut", "CPX_PARAM_MCFCUTS", 2134, "type of MCF cut generation", default_value=0, min_value=-1.0, max_value=2.0),
                 mircut=IntParameter(pgroup, "mircut", "CPX_PARAM_MIRCUTS", 2052, "type of mixed integer rounding cut generation", default_value=0, min_value=-1.0, max_value=2.0),
+                nodecuts=IntParameter(pgroup, "nodecuts", "CPX_PARAM_NODECUTS", 2157, "level of cut separation at nodes", default_value=0, min_value=-1.0, max_value=3.0),
                 pathcut=IntParameter(pgroup, "pathcut", "CPX_PARAM_FLOWPATHS", 2051, "type of flow path cut generation", default_value=0, min_value=-1.0, max_value=2.0),
                 rlt=IntParameter(pgroup, "rlt", "CPX_PARAM_RLTCUTS", 2196, "type of RLT cut generation (only applies to non-convex models solved to global optimality)", default_value=0, min_value=-1.0, max_value=3.0),
                 zerohalfcut=IntParameter(pgroup, "zerohalfcut", "CPX_PARAM_ZEROHALFCUTS", 2111, "type of zero-half cut generation", default_value=0, min_value=-1.0, max_value=2.0)
@@ -223,7 +224,7 @@ def _group_mip_strategy_params(pgroup):
                 order=BoolParameter(pgroup, "order", "CPX_PARAM_MIPORDIND", 2020, "indicator to use priority orders", default_value=1),
                 presolvenode=IntParameter(pgroup, "presolvenode", "CPX_PARAM_PRESLVND", 2037, "node presolve strategy", default_value=0, min_value=-1.0, max_value=3.0),
                 probe=IntParameter(pgroup, "probe", "CPX_PARAM_PROBE", 2042, "probing strategy", default_value=0, min_value=-1.0, max_value=3.0),
-                rinsheur=IntParameter(pgroup, "rinsheur", "CPX_PARAM_RINSHEUR", 2061, "frequency to apply RINS heuristic", default_value=0, min_value=-2.0, max_value=9223372036800000000),
+                rinsheur=IntParameter(pgroup, "rinsheur", "CPX_PARAM_RINSHEUR", 2061, "frequency to apply RINS heuristic", default_value=0, min_value=-1.0, max_value=9223372036800000000),
                 search=IntParameter(pgroup, "search", "CPX_PARAM_MIPSEARCH", 2109, "indicator for search method", default_value=0, min_value=0.0, max_value=2.0),
                 startalgorithm=IntParameter(pgroup, "startalgorithm", "CPX_PARAM_STARTALG", 2025, "algorithm to solve initial relaxation", default_value=0, min_value=0.0, max_value=6.0),
                 subalgorithm=IntParameter(pgroup, "subalgorithm", "CPX_PARAM_SUBALG", 2026, "algorithm to solve subproblems", default_value=0, min_value=0.0, max_value=5.0),
@@ -355,6 +356,8 @@ def _group_preprocessing_params(pgroup):
                 reformulations=IntParameter(pgroup, "reformulations", "CPX_PARAM_PREREFORM", 1167, "reformulations in presolve", default_value=3, min_value=0.0, max_value=3.0),
                 relax=IntParameter(pgroup, "relax", "CPX_PARAM_RELAXPREIND", 2034, "indicator for additional presolve of lp relaxation of mip", default_value=-1, min_value=-1.0, max_value=1.0),
                 repeatpresolve=IntParameter(pgroup, "repeatpresolve", "CPX_PARAM_REPEATPRESOLVE", 2064, "repeat mip presolve", default_value=-1, min_value=-1.0, max_value=3.0),
+                sos1reform=IntParameter(pgroup, "sos1reform", "CPX_PARAM_SOS1REFORM", 2230, "reformulation of SOS1 constraints", default_value=0, min_value=-1.0, max_value=1.0),
+                sos2reform=IntParameter(pgroup, "sos2reform", "CPX_PARAM_SOS2REFORM", 2231, "reformulation of SOS2 constraints", default_value=0, min_value=-1.0, max_value=1.0),
                 symmetry=IntParameter(pgroup, "symmetry", "CPX_PARAM_SYMMETRY", 2059, "indicator for symmetric reductions", default_value=-1, min_value=-1.0, max_value=5.0)
                 )
 
@@ -472,7 +475,7 @@ def _group_cpxparam_params(pgroup):
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 paramdisplay=BoolParameter(pgroup, "paramdisplay", "CPX_PARAM_PARAMDISPLAY", 1163, "whether to display changed parameters before optimization", default_value=1),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=202001241, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=202009243, min_value=0.0, max_value=2100000000),
                 record=BoolParameter(pgroup, "record", "CPX_PARAM_RECORD", 1162, "record calls to C API", default_value=0),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),

@@ -20,10 +20,6 @@ class VarType(object):
         self._ub = ub
         self._cpx_typecode = cplex_typecode
 
-    # def get_cplex_typecode(self):
-    #     # INTERNAL
-    #     return self._cpx_typecode
-
     @property
     def cplex_typecode(self):
         """ This property returns the CPLEX type code for this type.
@@ -92,9 +88,9 @@ class VarType(object):
     @classmethod
     def _is_within_bounds_and_tolerance(cls, candidate_value, lb, ub, tolerance):
         assert tolerance >= 0
-        if candidate_value <= lb - tolerance:
+        if candidate_value < lb - tolerance:
             res = False
-        elif candidate_value >= ub + tolerance:
+        elif candidate_value > ub + tolerance:
             res = False
         else:
             res = True
@@ -312,3 +308,7 @@ class SemiIntegerVarType(VarType):
 
     def __hash__(self):  # pragma: no cover
         return VarType._hash_vartype(self)
+
+
+
+

@@ -26,7 +26,7 @@ from docplex.mp.cloudutils import is_url_valid
 from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
 from docplex.mp.error_handler import DefaultErrorHandler, \
-    docplex_add_trivial_infeasible_ct
+    docplex_add_trivial_infeasible_ct_here
 from docplex.mp.format import parse_format
 from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.mfactory import ModelFactory
@@ -40,7 +40,7 @@ from docplex.mp.utils import DOcplexException, MultiObjective,\
     DOcplexLimitsExceeded
 from docplex.mp.utils import is_indexable, is_iterable, is_int, is_string, \
     make_output_path2, generate_constant, _AutomaticSymbolGenerator, _IndexScope, _to_list, \
-    compute_is_index, is_number, str_maxed, normalize_basename, izip2_filled
+    is_number, str_maxed, normalize_basename, izip2_filled
 from docplex.mp.utils import apply_thread_limitations
 from docplex.mp.vartype import VarType, BinaryVarType, IntegerVarType, \
     ContinuousVarType, SemiContinuousVarType, SemiIntegerVarType
@@ -98,16 +98,19 @@ class Model(object):
         log_output (optional): If ``True``, solver logs are output to
             stdout. If this is a stream, solver logs are output to that
             stream object.
+
         checker (optional): If ``off``, then checking is disabled everywhere. Turning off checking
             may improve performance but should be done only with extreme caution.
             Possible values for the `checker` keyword argument are:
 
-                - `default` (or `std`, or `on`): detects modeling errors, but doe snot check
-                  numerical values for infinities or NaNs. This is the default value
-                - `numerical`: checks modeling errors and also checks all number values for  infinities
-                  or NaNs. This option should be used when data are not trusted.
+                - `default` (or `std`, or `on`): detects modeling errors, but does not check
+                  numerical values for infinities or NaNs. This is the default value.
+                - `numeric`: checks that numerical arguments are valid numbers, neither NaN nor
+                  `math.infinity`. This option should be used when data are not trusted.
+                - `full`: performs all possible checks (This is the union of `std` and `numeric` checks).
                 - `off`: no typechecking is performed. This options must be used when the model has been
-                  thorougly tested and numerical data are trusted.
+                  thoroughly tested and numerical data are trusted.
+
         cts_by_name (optional): a flag which control whether the constraint name dictionary is enabled.
             Default is False.
     """
@@ -157,8 +160,11 @@ class Model(object):
         return self._semiinteger_vartype
 
     def _vartypes(self):
-        return [self._binary_vartype, self._integer_vartype, self._continuous_vartype,
-                self._semicontinuous_vartype, self._semiinteger_vartype]
+        return (self._binary_vartype, self._integer_vartype, self._continuous_vartype,
+                self._semicontinuous_vartype, self._semiinteger_vartype)
+
+    def iter_vartypes(self):
+        return iter(self._vartypes())
 
     def _parse_vartype(self, arg):
         if isinstance(arg, VarType):
@@ -166,7 +172,7 @@ class Model(object):
         else:
             self._checker.typecheck_string(arg, accept_empty=False, accept_none=False)
             argl = arg.lower()
-            for vt in iter(self._vartypes()):
+            for vt in iter(self.iter_vartypes()):
                 if argl == vt.short_name.lower() or argl == vt.cplex_typecode.lower():
                     return vt
             self.fatal("Cannot convert as a variable type: {0!r}", arg)
@@ -336,6 +342,18 @@ class Model(object):
     warn_trivial_infeasible = 1
     warn_trivial_none = 2
 
+    def _new_engine(self, solver_agent):
+        return self._make_new_engine_from_agent(solver_agent)
+
+    @classmethod
+    def _new_linear_factory(cls, mdl, engine):
+        return ModelFactory(mdl, engine)
+
+    @classmethod
+    def _new_quadratic_factory(scls, mdl, engine):
+        from docplex.mp.quadfact import QuadFactory
+        return QuadFactory(mdl, engine)
+
     def __init__(self, name=None, context=None, **kwargs):
         """Init a new Model.
 
@@ -362,15 +380,14 @@ class Model(object):
         self._semiinteger_vartype = SemiIntegerVarType()
 
         #
-        self._container_map = {}
+        self._container_map = None
+        self._all_containers = []
         self._origin_map = {}
-        self.__vars_by_name = {}
+        self._vars_by_name = {}
         self._cts_by_name = None
         self.__allpwlfuncs = []
         self._benders_annotations = None
         self._constraint_priority_dict = {}
-
-        self._allsos = []
 
         self._lazy_constraints = []
         self._user_cuts = []
@@ -437,7 +454,7 @@ class Model(object):
         self._quality_metrics = False
 
         # rond solution or not
-        self._round_solution = True
+        self._round_solution = False
         self._round_function = round_nearest_towards_infinity1
 
         # update from kwargs, before the actual inits.
@@ -463,21 +480,25 @@ class Model(object):
         self._pwl_scope = _IndexScope("piecewise constraint",
                                       cplex_scope=CplexScope.PWL_CT_SCOPE)
 
-        self._scopes = [self._var_scope, self._linct_scope, self._logical_scope, self._quadct_scope, self._pwl_scope]
+        self._sos_scope = _IndexScope("SOS", cplex_scope=CplexScope.SOS_SCOPE)
+
+
+        self._scopes = [self._var_scope, self._linct_scope, self._logical_scope, self._quadct_scope, self._pwl_scope, self._sos_scope]
 
         self._scope_dict = {sc.cplex_scope: sc for sc in self._scopes}
 
         # init engine
-        engine = self._make_new_engine_from_agent(self.solver_agent)
+        engine = self._new_engine(self.solver_agent)
         self.__engine = engine
 
-        self._lfactory = ModelFactory(self, engine)
-        from docplex.mp.quadfact import QuadFactory
-        self._qfactory = QuadFactory(self, engine)
-        self._quad_count = 0
-        # after parse kwargs
+        # after engines
+        self._lfactory = self._new_linear_factory(self, engine)
+        self._qfactory = self._new_quadratic_factory(self, engine)
+
+        # after parse kwargs, after factories
         self._aggregator = ModelAggregator(self._lfactory, self._qfactory)
 
+        self._quad_count = 0
         self._solution = None
         self._solve_details = None
         self._last_solve_status = self._unknown_status
@@ -491,7 +512,7 @@ class Model(object):
         if engineLogLevel is not None and engineLogLevel in {"FINE", "FINER", "FINEST"}:
             self.parameters.read.datacheck.set(2)
 
-        self.set_objective(sense=self._lfactory.default_objective_sense(),
+        self.set_objective(sense=self.default_objective_sense,
                            expr=self._new_default_objective_expr())
 
         model_hook_fn = self.context.model_build_hook
@@ -510,6 +531,11 @@ class Model(object):
         """
         return self._name
 
+    @property
+    def lfactory(self):
+        # INTERNAL
+        return self._lfactory
+
     @name.setter
     def name(self, name):
         self._check_name(name)
@@ -525,7 +551,7 @@ class Model(object):
         return self._provenance
 
     def _constraint_scopes(self):
-        return self._scopes[1:]
+        return [self._linct_scope, self._logical_scope, self._quadct_scope, self._pwl_scope]
 
     def get_ct_scope(self, cplex_ct_scope, error='raise'):
         ct_scope = self._scope_dict.get(cplex_ct_scope)
@@ -752,11 +778,12 @@ class Model(object):
 
     @property
     def round_solution(self):
-        """ This flag controls whether integer and discrete variable values are rounded in solutions, or not.
-            If not rounded, it may happen that solution value for a binary variable returns 0.99999.
-         The default is to round discrete values.
+        """
+        This flag controls whether integer and discrete variable values are rounded in solutions, or not.
+        If not rounded, it may happen that solution value for a binary variable returns 0.99999.
+        The default is not to round discrete values.
 
-         *New in version 2.15*
+        *New in version 2.15*
         """
         return self._round_solution
 
@@ -873,8 +900,8 @@ class Model(object):
 
         returns either a solutiion pool object, or None if the model solve fails.
 
-        This method accepts the same keyword arguments as :function:`Model.solve`.
-        See the documentation of :function:`Model.solve` for more details.
+        This method accepts the same keyword arguments as :meth:`Model.solve`.
+        See the documentation of :meth:`Model.solve` for more details.
 
         :return: an instance of :class:`docplex.mp.solution.SolutionPool`, or None.
 
@@ -1011,9 +1038,10 @@ class Model(object):
         self._clear_internal()
 
     def _clear_internal(self, terminate=False):
-        self._container_map = {}
+        self._container_map = None
+        self._all_containers = []
         self._origin_map = {}
-        self.__vars_by_name = {}
+        self._vars_by_name = {}
         self._cts_by_name = None
         self.__allpwlfuncs = []
         self._benders_annotations = None
@@ -1023,13 +1051,12 @@ class Model(object):
         self._solution = None
         self._mipstarts = []
         self._clear_scopes()
-        self._allsos = []
         self._pwl_counter = {}
         self._lazy_constraints = []
         self._user_cuts = []
         self._quad_count = 0
         if not terminate:
-            self.set_objective(sense=self._lfactory.default_objective_sense(),
+            self.set_objective(sense=self.default_objective_sense,
                                expr=self._new_default_objective_expr())
             self._set_engine(self._make_new_engine_from_agent(self.solver_agent, self.context))
         else:
@@ -1037,7 +1064,7 @@ class Model(object):
 
     def _clear_scopes(self):
         for a_scope in self._scopes:
-            a_scope.reset()
+            a_scope.clear()
 
     def set_checker(self, checker_key):
         # internal
@@ -1144,20 +1171,37 @@ class Model(object):
         print(" - objective: {0}".format(obj_s))
 
         # ------------------- problem type
-        cpx = self.get_cplex(do_raise=False)
-        if cpx:
-            cpx_probtype = cpx.get_problem_type()
-            print(" - problem type is: {0}".format(int_probtype_to_string(cpx_probtype)))
+        cpx_probtype = self._get_cplex_problem_type(fallback=None, do_raise=False)
+        if cpx_probtype:
+            print(" - problem type is: {0}".format(cpx_probtype))
 
 
-    def _get_cplex_problem_type(self, fallback="unknown"):
+    def _get_cplex_problem_type(self, fallback="unknown", do_raise=False):
         # INTERNAL
-        cpx = self.get_cplex(do_raise=False)
+        cpx = self.get_cplex(do_raise=do_raise)
+        return self._problem_type_from_cplex(cpx, fallback)
+
+    def _problem_type_from_cplex(self, cpx, fallback=None):
+        # INTERNAL: decode cplex type code.
         if cpx:
             cpx_probtype_code = cpx.get_problem_type()  # this is an int
             return int_probtype_to_string(cpx_probtype_code)
         else:
             return fallback
+
+    @property
+    def problem_type(self):
+        """ Returns a string describing the type of problem.
+
+        This method requyires that CPLEX is installed and
+        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+
+        Possible values: LP, MILP, QP, MIQP, QCP, MIQCP,
+
+            *New in version 2.20*
+        """
+        cpx = self._get_cplex(do_raise=True, msgfn=lambda: "Model.problem_type requites CPLEX")
+        return self._problem_type_from_cplex(cpx, fallback=None)
 
     def __notify_new_model_object(self, descr,
                                   mobj, mindex, mobj_name,
@@ -1171,7 +1215,7 @@ class Model(object):
         :param name_dir: The directory of objects by name (e.g. name -> constraint directory).
         :param idx_scope:  The index scope
         """
-        mobj.index = mindex
+        mobj._set_index(mindex)
 
         if name_dir is not None:
             mobj_name = mobj_name or mobj.get_name()
@@ -1190,12 +1234,12 @@ class Model(object):
             idx_scope.notify_obj_index(mobj, mindex)
 
     def _register_one_var(self, var, var_index, var_name):
-        self.__notify_new_model_object("variable", var, var_index, var_name, self.__vars_by_name, self._var_scope)
+        self.__notify_new_model_object("variable", var, var_index, var_name, self._vars_by_name, self._var_scope)
 
     # @profile
     def _register_block_vars(self, allvars, indices, allnames):
         if allnames:
-            varname_dict = self.__vars_by_name
+            varname_dict = self._vars_by_name
             for var, var_index, var_name in izip(allvars, indices, allnames):
                 var._index = var_index
                 if var_name:
@@ -1234,7 +1278,7 @@ class Model(object):
         # --
         if ct_name_map:
             for ct, ct_index in izip(cts, indices):
-                ct.index = ct_index
+                ct._set_index(ct_index)
                 ct_name = ct.get_name()
                 if ct_name:
                     ct_name_map[ct_name] = ct
@@ -1248,21 +1292,39 @@ class Model(object):
         self._register_one_constraint(eqct, eqctx, is_ctname_safe=True)
 
     # iterators
+    def _ensure_var_to_container_map(self):
+        # lazy build of var -> container mapping
+        ctn_map = self._container_map
+        if ctn_map is None:
+            ctn_map = {}
+            for ctn in self.iter_var_containers():
+                for dv in ctn.iter_variables():
+                    ctn_map[dv] = ctn
+            self._container_map = ctn_map
+        return ctn_map
+
     def iter_var_containers(self):
         # INTERNAL
-        setof_ctns = set(self._container_map.values())
-        sorted_ctns = sorted(setof_ctns, key=lambda ctn_: ctn_._index)
-        return iter(sorted_ctns)
+        return iter(self._all_containers)
 
     def get_var_container(self, dvar):
         # INTERNAL
-        return self._container_map.get(dvar)
+        ctn_map = self._ensure_var_to_container_map()
+        return ctn_map.get(dvar)
 
     def set_var_container(self, dvar, ctn):
-        # INTERNAL
-        assert ctn is not None
-        self._container_map[dvar] = ctn
+        pass
 
+    def _add_var_container(self, var_container):
+        # INTERNAL
+        if var_container is not None:
+            self._all_containers.append(var_container)
+            ctn_map = self._container_map
+            if ctn_map is not None:
+                # increment var container map, if any
+                assert isinstance(ctn_map, dict)
+                for dv in var_container.iter_variables():
+                    ctn_map[dv] = var_container
     @staticmethod
     def origin_key(obj):
         # use id()here to allow case where index is not valid
@@ -1360,7 +1422,7 @@ class Model(object):
     def _contains_discrete_artefacts(self):
         if hasattr(self._lfactory, "_cached_justifier_discrete_var"):
             return self._lfactory._cached_justifier_discrete_var is not None
-        elif self._allsos or self._pwl_counter:
+        elif self.number_of_sos or self._pwl_counter:
             return True
         for v in self.iter_variables():
             if v.cplex_typecode in 'IBNS':
@@ -1515,11 +1577,11 @@ class Model(object):
 
         :returns: A variable (instance of :class:`docplex.mp.linear.Var`) or None.
         """
-        return self.__vars_by_name.get(name, None)
+        return self._vars_by_name.get(name, None)
 
     def _get_non_ambiguous_varname(self, base_name):
         # INTERNAL
-        varname_map = self.__vars_by_name
+        varname_map = self._vars_by_name
         if varname_map is not None and base_name in varname_map:
             return '{0}#{1}'.format(base_name, self.number_of_variables)
         else:
@@ -1611,14 +1673,29 @@ class Model(object):
     def _set_var_type(self, dvar, new_vartype_):
         # INTERNAL
         new_vartype = self._parse_vartype(new_vartype_)
-        self._checker.typecheck_vartype(new_vartype)
         if new_vartype != dvar.vartype:
-            self.__engine.change_var_types([dvar], [new_vartype])
-            # change type in the Var object.
-            dvar._set_vartype_internal(new_vartype)
-            self._update_var_bounds_from_type(dvar, new_vartype)
-            self._clear_cached_discrete_var()
+            self._change_var_types_internal((dvar,), (new_vartype,))
         return dvar
+
+    def change_var_types(self, dvars, vartype_args):
+        parsefn = self._parse_vartype
+        checked_vars = list(self._checker.typecheck_var_seq(dvars, caller="Model.change_var_types"))
+        if is_iterable(vartype_args, accept_string=False):
+            new_vartypes = [parsefn(vt_arg) for vt_arg in vartype_args]
+        else:
+            new_vartype1 = parsefn(vartype_args)
+            new_vartypes = [new_vartype1] * len(checked_vars)
+        self._change_var_types_internal(checked_vars, new_vartypes)
+
+    def _change_var_types_internal(self, dvars, new_vartypes):
+        assert isinstance(dvars, (list, tuple))
+        # one batch call to engine
+        self.__engine.change_var_types(dvars, new_vartypes)
+        # update bounds, if necessary
+        for dv, nvt in zip(dvars, new_vartypes):
+            dv._set_vartype_internal(nvt)
+            self._update_var_bounds_from_type(dv, nvt)
+        self._clear_cached_discrete_var()
 
     def set_var_name(self, dvar, new_name):
         # INTERNAL: use var.name to set variable names
@@ -1631,6 +1708,107 @@ class Model(object):
         if new_name != linct.get_name():
             self.__engine.rename_linear_constraint(linct, new_name)
             linct._set_name(new_name)
+
+    #  ----   batch operations on variable bounds ----------------
+    def change_var_lower_bounds(self, dvars, lbs, check_bounds=True):
+        """ Changes lower bounds for a collection of variables in one call.
+
+
+        :param dvars: an iterable over decision variables (a list, or a comprehension)
+        :param lbs: accepts either an iterable over numbers, a single number,
+            in which case the new bound is applied to all variables,
+            or None. If passed None, the lower bound of each variable is reset to
+            its type's default.
+        :param check_bounds: an optional flag to enable or disable checking of
+            new lower bounds (default is True: check)
+
+        The logic for checking new lower bounds is as follows: new bounds are checked if and only if
+        `check` is True and the model checker is not 'off'.
+
+        Example:
+            >>> ivars = m.integer_var_list(3, lb=7)
+            >>> m.change_var_lower_bounds(ivars, [1,2,3]) # sets lower bounds to 1,2,3 resp.
+
+            *New in 2.20*
+
+        """
+        checker = self._checker
+        var_list = checker.typecheck_var_seq(dvars, vtype=None, caller='Model.change_variable_lower_bounds')
+        if is_iterable(lbs):
+            lbs_ = (float(lb_) for lb_ in checker.typecheck_num_seq(lbs))
+        elif lbs is None:
+            lbs_ = (dv.vartype.default_lb for dv in dvars)
+        else:
+            checker.typecheck_num(lbs, caller='Model.change_variable_lower_bounds')
+            lbs_ = generate_constant(float(lbs), count_max=None)
+
+        def checked_lb(dvar, candidate_lb):
+            return dvar.vartype.resolve_lb(candidate_lb, self)
+
+        def to_float2(dvar, candidate_lb):
+            return candidate_lb
+
+        if check_bounds and checker.check_new_variable_bound():
+            # check bounds if not forced disable AND if checker allows it.
+            bound_transformer = checked_lb
+        else:
+            bound_transformer = to_float2
+
+        var_lb_dict = {dv: bound_transformer(dv, lb)  for dv, lb in zip(var_list, lbs_)}
+
+        engine = self.get_engine()
+        engine.change_var_lbs(var_lb_dict)
+        # now update vars
+        for dv, lb2 in iteritems(var_lb_dict):
+            dv._lb = lb2
+
+    def change_var_upper_bounds(self, dvars, ubs, check_bounds=True):
+        """ Changes upper bounds for a collection of variables in one call.
+
+        :param dvars: an iterable over decision variables (a list, or a comprehension)
+        :param lbs: accepts either an iterable over numbers, a single number,
+            in which case the new bound is applied to all variables,
+            or None. If passed None, the upper bound of each variable is reset to
+            its type's default.
+        :param check_bounds: an optional flag to enable or disable checking of
+            new upper bounds (default is True: check)
+
+        The logic for checking new upper bounds is as follows: new bounds are checked if and only if
+        `check` is True and the model checker is not 'off'.
+
+        Example:
+            >>> ivars = m.integer_var_list(3, lb=7)
+            >>> m.change_var_upper_bounds(ivars, [101,102,103]) # sets upper bounds to 1,01,102,103 resp.
+
+            *New in 2.20*
+
+        """
+        checker = self._checker
+        var_list = checker.typecheck_var_seq(dvars, vtype=None, caller='Model.change_variable_upper_bounds')
+        if is_iterable(ubs):
+            ubs_ = (float(ub_) for ub_ in checker.typecheck_num_seq(ubs))
+        elif ubs is None:
+            ubs_ = (dv.vartype.default_ub for dv in dvars)
+        else:
+            checker.typecheck_num(ubs, caller='Model.change_variable_upper_bounds')
+            ubs_ = generate_constant(float(ubs), count_max=None)
+
+        def checked_ub(dvar, candidate_ub):
+            return dvar.vartype.resolve_ub(candidate_ub, self)
+        def to_float2(dvar, candidate_ub):
+            return candidate_ub
+
+        if check_bounds and checker.check_new_variable_bound():
+            # check bounds if not forced disable AND if checker allows it.
+            bound_transformer = checked_ub
+        else:
+            bound_transformer = to_float2
+        var_ub_dict = {dv: bound_transformer(dv, ub)  for dv, ub in zip(var_list, ubs_)}
+
+        self.get_engine().change_var_ubs(var_ub_dict)
+        # now update vars
+        for dv, ub2 in iteritems(var_ub_dict):
+            dv._ub = ub2
 
     def set_var_lb(self, var, candidate_lb):
         # INTERNAL: use var.lb to set lb
@@ -1833,10 +2011,6 @@ class Model(object):
         """
         return self._count_constraints_with_type(self._logical_scope, EquivalenceConstraint)
 
-    @property
-    def number_of_implicit_equivalences(self):
-        return sum(1 for lct in self.iter_equivalence_constraints() if lct.is_generated())
-
     def iter_quadratic_constraints(self):
         """
         Returns an iterator on the quadratic constraints of the model.
@@ -1844,7 +2018,6 @@ class Model(object):
         Returns:
             An iterator object.
         """
-        #return self.gen_constraints_with_type(QuadraticConstraint)
         return self._quadct_scope.iter_objects()
 
     @property
@@ -1857,9 +2030,7 @@ class Model(object):
         return self._quadct_scope.size > 0
 
     def iter_logical_constraints(self):
-        for ct in self.iter_constraints():
-            if ct.is_logical():
-                yield ct
+        return self._logical_scope.iter_objects()
 
     def var(self, vartype, lb=None, ub=None, name=None):
         """ Creates a decision variable and stores it in the model.
@@ -2446,18 +2617,20 @@ class Model(object):
         return self._var_multidict(self.semicontinuous_vartype, [keys1, keys2], lb, ub, name, key_format)
 
     def var_hypercube(self, vartype_spec, seq_of_keys, lb=None, ub=None, name=None, key_format=None):
-        """ Creates a dictionary of  decision variables, indexed by tuples
-            of arbitrary size.
+        """ 
+        Creates a dictionary of  decision variables, indexed by tuples
+        of arbitrary size.
 
-            Arguments are analogous to methods of the type xxx_var_matrix,
-            except a type argument has to be passed.
+        Arguments are analogous to methods of the type xxx_var_matrix,
+        except a type argument has to be passed.
 
         Args:
             vartype_spec: type specificsation: accepts either an instance of class
                 `docplex.mp.VarType`, or a string that can be translated into a vartype.
                 Possible strings are:
-                    cplex type codes, e.g. B,I,C,N,S or type short names
-                    (e.g.: binary, integer, continuous, semicontinuous, semiinteger)
+
+                    - cplex type codes, e.g. B,I,C,N,S or type short names
+                      (e.g.: binary, integer, continuous, semicontinuous, semiinteger)
 
             seq_of_keys: a sequence of sequence of keys. Typically of length >= 4,
                 as other dimensions are handled by the 'list', 'matrix' and 'cube'
@@ -2763,7 +2936,8 @@ class Model(object):
             :func:`logical_or`
             :func:`logical_not`
 
-        Example:
+        Example::
+
             # return logical XOR or two binary variables.
             def logxor(m, b1, b2):
                 return m.logical_and(m.logical_or(b1, b2), m.logical_not(m.logical_and(b1, b2)))
@@ -3087,13 +3261,13 @@ class Model(object):
                 self.info(trivial_msg, arg, ct_rank, ct_typename, '')
             else:
                 self.error(trivial_msg, arg, ct_rank, ct_typename, 'in')
-                docplex_add_trivial_infeasible_ct(ct=arg)
+                docplex_add_trivial_infeasible_ct_here()
         else:
             if is_feasible:
                 self.info(trivial_msg, '', ct_rank, ct_typename, '')
             else:
                 self.error(trivial_msg, '', ct_rank, ct_typename, 'in')
-                docplex_add_trivial_infeasible_ct(ct=None)
+                docplex_add_trivial_infeasible_ct_here()
 
     def _register_ct_name(self, ct, ctname, arg_checker):
         checker = arg_checker or self._checker
@@ -3219,7 +3393,7 @@ class Model(object):
         self._cts_by_name = None
         # clear constraint index scopes.
         for ctscope in self._constraint_scopes():
-            ctscope.reset()
+            ctscope.clear()
 
     def remove_constraints(self, cts=None):
         """
@@ -3927,7 +4101,7 @@ class Model(object):
         You can detect this state by calling :func:`has_objective` on the model.
 
         """
-        self.set_objective(self._lfactory.default_objective_sense(), self._new_default_objective_expr())
+        self.set_objective(self.default_objective_sense, self._new_default_objective_expr())
 
     def is_optimized(self):
         """ Checks whether the model has a non-constant objective expression.
@@ -4280,6 +4454,9 @@ class Model(object):
         # INTERNAL
         return self._lfactory.linear_expr(arg=None, constant=0, safe=True)
 
+    @property
+    def default_objective_sense(self):
+        return ObjectiveSense.Minimize
 
     def _can_solve(self):
         return self.has_cplex()
@@ -4430,69 +4607,6 @@ class Model(object):
         """
         local_solve_env = CplexLocalSolveEnv(self)
         params_to_use = local_solve_env.before_solve(context)
-
-        # auto_publish_details = is_auto_publishing_solve_details(context)
-        # auto_publish_solution = (auto_publishing_result_output_names(context) is not None)
-        # auto_publish_kpis_table = (auto_publishing_kpis_table_names(context) is not None)
-        #
-        # self.notify_start_solve()
-        #
-        # the_env = get_environment()
-        # if is_in_docplex_worker() and auto_publish_details:
-        #     # publish kpi automatically
-        #     env_kpi_hook = lambda kpd: the_env.update_solve_details(kpd)
-        #     self.kpi_recorder = _KpiRecorder(self,
-        #                                     clock=context.solver.kpi_reporting.filter_level,
-        #                                     publish_hook=env_kpi_hook)
-        #     self.add_progress_listener(self.kpi_recorder)
-        #
-        #
-        # # connect progress listeners (if any) if problem is mip
-        # self._connect_progress_listeners()
-        #
-        # # call notifyStart on progress listeners
-        # self._fire_start_solve_listeners()
-        #
-        # # The following block used to be published only if auto_publish_details.
-        # # It is now modified so that notify start is always performed,
-        # # then we update solve details only if they need to be published
-        # # [[[
-        # self_stats = self.get_statistics()
-        # kpis = make_new_kpis_dict(allkpis=self._allkpis,
-        #                           int_vars=self_stats.number_of_integer_variables,
-        #                           continuous_vars=self_stats.number_of_continuous_variables,
-        #                           linear_constraints=self_stats.number_of_linear_constraints,
-        #                           bin_vars=self_stats.number_of_binary_variables,
-        #                           quadratic_constraints=self_stats.number_of_quadratic_constraints,
-        #                           total_constraints=self_stats.number_of_constraints,
-        #                           total_variables=self_stats.number_of_variables)
-        # # implementation for https://github.ibm.com/IBMDecisionOptimization/dd-planning/issues/2491
-        # problem_type = self._get_cplex_problem_type()
-        # kpis['STAT.cplex.modelType'] = problem_type
-        # kpis['MODEL_DETAIL_OBJECTIVE_SENSE'] = self._objective_sense.verb
-        # # self_solve_hooks if for backward compatibility only. Should
-        # # really use env instead
-        # for h in self._solve_hooks:
-        #     h.notify_start_solve(self, kpis)  # pragma: no cover
-        # the_env.notify_start_solve(kpis)
-        # if auto_publish_details:
-        #     get_environment().update_solve_details(kpis)
-        # # ]]]
-        # # --- solve is protected in try/except block
-        # has_solution = False
-        # reported_obj = 0
-        # engine_status = self._unknown_status
-        #
-        #
-        # self_params = self.context._get_raw_cplex_parameters()
-        # parameters = apply_thread_limitations(context)
-        # if self_params and parameters is not self_params:
-        #     saved_params = {p: p.get() for p in self_params}
-        # else:
-        #     saved_params = {}
-        #
-        # new_solution = None
-        #
         self_engine = self.__engine
         new_solution = None
         try:
@@ -4523,56 +4637,6 @@ class Model(object):
         finally:
             self._set_solution(new_solution)
             local_solve_env.after_solve(context, new_solution, self_engine)
-            # solve_details = self_engine.get_solve_details()
-            # self._notify_solve_hit_limit(solve_details)
-            # self._solve_details = solve_details
-            # self._fire_end_solve_listeners(has_solution, reported_obj)
-            # self._disconnect_progress_listeners()
-            #
-            # # call hooks
-            # the_env = get_environment()
-            # the_env.notify_end_solve(engine_status)
-            # if auto_publish_details:
-            #     # Only kept for backward compatibility
-            #     for h in self._solve_hooks:
-            #         h.notify_end_solve(self, has_solution, engine_status, reported_obj,
-            #                            self._make_end_infodict())  # pragma: no cover
-            #         h.update_solve_details(solve_details.as_worker_dict())  # pragma: no cover
-            #     # actual right mean to do it
-            #     details = {}
-            #     details.update(solve_details.as_worker_dict())
-            #     if new_solution:
-            #         kpis = self.kpis_as_dict(new_solution, use_names=True)
-            #
-            #         def publish_name_fn(kn):
-            #             return 'KPI.%s' % kn
-            #
-            #         name_values = {publish_name_fn(kn): kv for kn, kv in iteritems(kpis)}
-            #         details.update(name_values)
-            #         details['PROGRESS_CURRENT_OBJECTIVE'] = new_solution.objective_value
-            #     the_env.update_solve_details(details)
-            #
-            # # save solution
-            # if new_solution:
-            #     if auto_publish_solution:
-            #         write_result_output(env=the_env,
-            #                             context=context,
-            #                             model=self,
-            #                             solution=new_solution)
-            #
-            #     # save kpi
-            #     if auto_publish_kpis_table:
-            #         write_kpis_table(env=the_env,
-            #                          context=context,
-            #                          model=self,
-            #                          solution=new_solution)
-            #
-            # # restore parameters in sync with model, if necessary
-            # if saved_params:
-            #     for p, v in six.iteritems(saved_params):
-            #         self_engine.set_parameter(p, v)
-
-
         return new_solution
 
     def get_solve_status(self):
@@ -4606,6 +4670,12 @@ class Model(object):
         """
         warnings.warn("Model.solve_status is deprecated with cloud solve, use Model.solve_details instead", DeprecationWarning)
         return self._last_solve_status
+
+    @property
+    def job_solve_status(self):
+        # INTERNAL WML
+        return self._last_solve_status
+
 
     def _new_docloud_engine(self, ctx):
         return self._engine_factory.new_docloud_engine(model=self,
@@ -4986,12 +5056,10 @@ class Model(object):
         """
         self._check_solved_as_mip(caller="Model.read_mip_starts", do_raise=True)
 
-        from docplex.mp.mst_xml_reader import read_mst_file
-        StaticTypeChecker.check_file(self, mst_path, "MST", expected_extensions=(".mst", ".xml"),
-                                     caller='Model.read_mip_starts')
+        from docplex.mp.sol_xml_reader import read_mst_file
 
         self.info("Reading mip starts from file: {0}".format(mst_path))
-        mip_starts = read_mst_file(mst_path, self)
+        mip_starts = read_mst_file(mst_path, self, caller='Model.read_mip_starts')
         if mip_starts is not None:
             if not mip_starts:
                 self.warning("Found no MIP starts in file: {0}", mst_path)
@@ -5701,12 +5769,11 @@ class Model(object):
         Args:
             print_zeros (Boolean): If False, only non-zero values are printed. Default is False.
             solution_header_fmt: a solution header string in format syntax, or None.
-                This format will be passed to  :function:`SolveSolution.display`.
+                This format will be passed to  :func:`docplex.mp.solution.SolveSolution.display`.
             var_value_fmt : A format string to format the variable name and value. Again, the default uses the automatically computed precision.
 
-        See Also:
-            :func: `docplex.mp.solution.SolveSolution.display`
-
+        See also:
+            :func:`docplex.mp.solution.SolveSolution.display`
         """
         if self._solution is None:
             return
@@ -6103,44 +6170,48 @@ class Model(object):
             ctn_map[ctn] = copied_ctn
 
         # clone variables
-        memo = {}
-        generated_vars = []
+        def make_memo():
+            memo = {}
+            generated_vars = []
 
-        # clone PWL functions and add them to var_mapping
-        for pwl_func in self.iter_pwl_functions():
-            copied_pwl_func = pwl_func.copy(copy_model, memo)
-            memo[pwl_func] = copied_pwl_func
-        # copy 'primary' variables
-        for v in self.iter_variables():
-            if v.is_generated():
-                generated_vars.append(v)
-            else:
-                copied_var = copy_model._var(v.vartype, v.lb, v.ub, v.name)
-                var_ctn = v.container
-                if var_ctn:
-                    copied_ctn = ctn_map.get(var_ctn)
-                    assert copied_ctn is not None
-                    copied_var.container = copied_ctn
-                memo[v] = copied_var
+            # clone PWL functions and add them to var_mapping
+            for pwl_func in self.iter_pwl_functions():
+                copied_pwl_func = pwl_func.copy(copy_model, memo)
+                memo[pwl_func] = copied_pwl_func
+            # copy 'primary' variables
+            for v in self.iter_variables():
+                if v.is_generated():
+                    generated_vars.append(v)
+                else:
+                    copied_var = copy_model._var(v.vartype, v.lb, v.ub, v.name)
+                    var_ctn = v.container
+                    if var_ctn:
+                        copied_ctn = ctn_map.get(var_ctn)
+                        assert copied_ctn is not None
+                        copied_var.container = copied_ctn
+                    memo[v] = copied_var
 
-        for gv in generated_vars:
-            gvoo = gv.origin
-            try:
-                gvo, gvx = gvoo
-            except TypeError:
-                gvo = gvoo
-                gvx = 0
-            assert gvo is not None
-            gvk = id(gvo)
-            cloned_origin = memo.get(gvk)
-            if cloned_origin is None:
-                cloned_origin = gvo.copy(copy_model, memo)
-                cloned_origin.resolve()
-                memo[gvk] = cloned_origin
-            cloned_gv = cloned_origin.get_artefact(gvx)
-            assert cloned_gv
+            for gv in generated_vars:
+                gvoo = gv.origin
+                try:
+                    gvo, gvx = gvoo
+                except TypeError:
+                    gvo = gvoo
+                    gvx = 0
+                assert gvo is not None
+                gvk = id(gvo)
+                cloned_origin = memo.get(gvk)
+                if cloned_origin is None:
+                    cloned_origin = gvo.copy(copy_model, memo)
+                    cloned_origin.resolve()
+                    memo[gvk] = cloned_origin
+                cloned_gv = cloned_origin.get_artefact(gvx)
+                assert cloned_gv
 
-            memo[gv] = cloned_gv
+                memo[gv] = cloned_gv
+            return memo
+
+        memo = make_memo()
 
         # copy constraints
         setof_removed_cts = set(removed_cts) if removed_cts else {}
@@ -6399,25 +6470,21 @@ class Model(object):
         # INTERNAL
         new_sos = self._lfactory.new_sos(dvars, sos_type=sos_type, weights=weights, name=name)
         sos_index = self.__engine.create_sos(new_sos)
-        self._register_sos(new_sos)
-        new_sos.index = sos_index
+        self._register_sos(new_sos, sos_index)
+        new_sos._set_index(sos_index)
         return new_sos
 
     def _create_engine_sos(self, new_sos):
         # internal
         sos_index = self.__engine.create_sos(new_sos)
-        self._register_sos(new_sos)
-        new_sos.index = sos_index
+        self._register_sos(new_sos, sos_index)
+        new_sos._set_index(sos_index)
 
-    def _register_sos(self, new_sos):
-        self._allsos.append(new_sos)
+    def _register_sos(self, new_sos, sos_index):
+        self._sos_scope.notify_obj_index(new_sos, sos_index)
 
     def _get_sos_by_index(self, sos_idx):
-        # INTERNAL
-        try:
-            return self._allsos[sos_idx]
-        except IndexError:
-            return None
+        return self._sos_scope.get_object_by_index(sos_idx)
 
     def iter_sos(self):
         ''' Iterates over all SOS sets in the model.
@@ -6425,19 +6492,19 @@ class Model(object):
         Returns:
             An iterator object.
         '''
-        return iter(self._allsos)
+        return self._sos_scope.iter_objects()
 
     @property
     def number_of_sos(self):
         ''' This property returns the total number of SOS sets in the model.
 
         '''
-        return len(self._allsos)
+        return self._sos_scope.size
 
     def clear_sos(self):
         ''' Clears all SOS sets in the model.
         '''
-        self._allsos = []
+        self._sos_scope.clear()
         self.__engine.clear_all_sos()
 
     def _generate_sos(self, sos_type):
@@ -6667,7 +6734,6 @@ class Model(object):
         pwls = [pw for pw in self._pwl_scope.iter_objects()]
         for pw in pwls:
             pw.resolve()
-
 
 
 

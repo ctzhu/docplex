@@ -99,7 +99,7 @@ class _FunctionalExpr(Expr, LinearOperand):
         # posts a constraint and marks it as generated.
         self._model._lfactory._post_constraint_block(cts)
         for c in cts:
-            c.origin =self
+            c.origin = self
         return cts
 
     def _get_resolved_f_var(self):

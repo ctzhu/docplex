@@ -681,7 +681,7 @@ class CpoSolver(object):
                 return self.last_result
             if self.context.log_exceptions:
                 traceback.print_exc()
-            raise CpoSolverException("Solver exception catched: {}".format(e))
+            raise CpoSolverException("Exception caught from CP solver: {}".format(e))
         self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")

@@ -1535,8 +1535,11 @@ class CpoModel(object):
     def clone(self):
         """ Create a copy of this model.
 
-        Result copy duplicates only the attributes of the model and the list of expressions.
-        It does not create a deep copy of the expressions.
+        Result copy duplicates only the top-level attributes of the model, the list of expressions, and the parameters.
+        It does not create a deep copy of the expressions, which means that a variable referenced by the expressions
+        of this model is physically the same in the copy.
+
+        To completely duplicate the model and all its elements, use the standard function copy.deepcopy(...).
         """
         res = copy.copy(self)
         res.expr_list = list(self.expr_list)

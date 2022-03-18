@@ -78,6 +78,7 @@ class CpoSolverLocal(CpoSolverAgent):
                  'available_commands',  # List of available commands
                  'timeout_kill',        # Indicates process have been killed by timeout
                  'out_lock',            # Lock to protect output stream
+                 'proxy_version',       # Version of the remote proxy
                 )
 
     def __init__(self, solver, params, context):
@@ -136,6 +137,7 @@ class CpoSolverLocal(CpoSolverAgent):
             raise CpoSolverException("Unexpected event {} received instead of version info event {}.".format(evt, EVT_VERSION_INFO))
         self.version_info = verinf = json.loads(data)
         self.available_commands = self.version_info['AvailableCommands']
+        self.proxy_version = self.version_info.get('ProxyVersion', 0)
         # Normalize information
         verinf['AgentModule'] = __name__
 
@@ -263,19 +265,19 @@ class CpoSolverLocal(CpoSolverAgent):
             self._write_message(CMD_REFINE_CONFLICT, bytearray([1]))
             # Wait JSON result
             jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
-            # Wait for CPO conflict
-            cposol = self._wait_event(EVT_CONFLICT_RESULT_CPO)
+            result = self._create_result_object(CpoRefineConflictResult, jsol)
+            if result.is_conflict():
+                # Wait for CPO conflict
+                cposol = self._wait_event(EVT_CONFLICT_RESULT_CPO)
+                result.cpo_conflict = cposol
         else:
             # Request refine conflict
             self._write_message(CMD_REFINE_CONFLICT)
             # Wait JSON result
             jsol = self._wait_json_result(EVT_CONFLICT_RESULT)
-            # No CPO conflict
-            cposol = None
+            result = self._create_result_object(CpoRefineConflictResult, jsol)
 
-        # Build result object
-        result = self._create_result_object(CpoRefineConflictResult, jsol)
-        result.cpo_conflict = cposol
+        # Return result object
         return result
 
 
@@ -410,6 +412,8 @@ class CpoSolverLocal(CpoSolverAgent):
         Raises:
             SolverException if an error occurs
         """
+        self.context.log(5, "Wait event: ", xevt)
+
         # Initialize first error string to enrich exception if any
         firsterror = None
 

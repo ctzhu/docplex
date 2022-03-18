@@ -13,7 +13,7 @@ from docplex.mp.compat23 import izip
 from docplex.mp.constr import AbstractConstraint, LinearConstraint,\
     LogicalConstraint, EquivalenceConstraint, IndicatorConstraint, QuadraticConstraint
 from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.linear import Expr
+from docplex.mp.operand import LinearOperand
 from docplex.mp.dvar import Var
 from docplex.mp.pwl import PwlFunction
 from docplex.mp.progress import ProgressListener
@@ -116,6 +116,9 @@ class DocplexNumericCheckerMixin(object):
 
 
 class DocplexTypeCheckerI(object):
+
+    def check_new_variable_bound(self):
+        raise NotImplementedError  # pragma: no cover
 
     def typecheck_iterable(self, arg):
         raise NotImplementedError  # pragma: no cover
@@ -263,6 +266,9 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     @property
     def name(self):
         return "std"
+
+    def check_new_variable_bound(self):
+        return True
 
     def typecheck_iterable(self, arg):
         # INTERNAL: checks for an iterable
@@ -498,12 +504,12 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
 
     @staticmethod
     def _is_operand(arg, accept_numbers=True):
-        return isinstance(arg, (Expr, Var)) or (accept_numbers and is_number(arg))
+        return isinstance(arg, LinearOperand) or (accept_numbers and is_number(arg))
 
     def typecheck_operand(self, arg, accept_numbers=True, caller=None):
         if not self._is_operand(arg, accept_numbers=accept_numbers):
             caller_str = "{0}: ".format(caller) if caller else ""
-            accept_str = "Expecting expr/var"
+            accept_str = "Expecting variable or linear expression"
             if accept_numbers:
                 accept_str += "/number"
             self.fatal("{0}{1}, got: {2!r}", caller_str, accept_str, arg)
@@ -565,6 +571,9 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
     @property
     def name(self):
         return "off"
+
+    def check_new_variable_bound(self):
+        return False
 
     def typecheck_iterable(self, arg):
         pass  # pragma: no cover
@@ -688,6 +697,9 @@ class NumericTypeChecker(DummyTypeChecker):
     @property
     def name(self):
         return "numeric"
+
+    def check_new_variable_bound(self):
+        return True
 
     def get_number_validation_fn(self):
         return DocplexNumericCheckerMixin.static_validate_num2

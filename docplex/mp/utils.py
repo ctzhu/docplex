@@ -853,7 +853,7 @@ class _IndexScope(object):
             # returns None if idx not in map
             return self._index_map.get(idx)
 
-    def reset(self):
+    def clear(self):
         self._index_map = {}
 
     def notify_obj_index(self, obj, index):
@@ -889,7 +889,7 @@ class _IndexScope(object):
             kept = [o for o in itervalues(idxmap) if o.index not in delset]
             new_map = {}
             for nx, obj in enumerate(kept):
-                obj.index = nx
+                obj._set_index(nx)
                 new_map[nx] = obj
             self._index_map = new_map
 

@@ -1,9 +1,8 @@
 from six import PY3
 from docplex.mp.constants import CplexScope
 
-from docplex.mp.basic import IndexableObject, ModelingObjectBase, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin
 from docplex.mp.operand import LinearOperand
-from docplex.mp.vartype import BinaryVarType, IntegerVarType, ContinuousVarType
 from docplex.mp.utils import is_number, is_quad_expr
 
 from docplex.mp.sttck import StaticTypeChecker
@@ -26,13 +25,16 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         self._vartype = vartype
 
         if _safe_lb:
+            #assert lb is not None
             self._lb = lb
         else:
             self._lb = vartype._compute_lb(lb, model)
         if _safe_ub:
+            #assert ub is not None
             self._ub = ub
         else:
             self._ub = vartype._compute_ub(ub, model)
+
 
     @property
     def cplex_scope(self):
@@ -84,7 +86,13 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         self.check_name(new_name)
         self.model.set_var_name(self, new_name)
 
-    name = property(ModelingObjectBase.get_name, set_name)
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, new_name):
+        self.set_name(new_name)
 
     @property
     def lb(self):
@@ -156,9 +164,6 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         """
         return self._vartype
 
-    def get_vartype(self):
-        return self._vartype
-
     def set_vartype(self, new_vartype):
         # INTERNAL
         self._model._set_var_type(self, new_vartype)
@@ -167,9 +172,9 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         # INTERNAL
         self._vartype = new_vartype
 
-    def has_type(self, vartype):
+    def _has_type(self, vartype_code):
         # internal
-        return type(self._vartype) == vartype
+        return self.cplex_typecode == vartype_code
 
     def is_binary(self):
         """ Checks if the variable is binary.
@@ -177,7 +182,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         Returns:
             Boolean: True if the variable is of type Binary.
         """
-        return self.has_type(BinaryVarType)
+        return self._has_type('B')
 
     def is_integer(self):
         """ Checks if the variable is integer.
@@ -185,7 +190,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         Returns:
             Boolean: True if the variable is of type Integer.
         """
-        return self.has_type(IntegerVarType)
+        return self._has_type('I')
 
     def is_continuous(self):
         """ Checks if the variable is continuous.
@@ -193,7 +198,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         Returns:
             Boolean: True if the variable is of type Continuous.
         """
-        return self.has_type(ContinuousVarType)
+        return self._has_type('C')
 
     def is_discrete(self):
         """  Checks if the variable is discrete.
@@ -251,8 +256,8 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         :return:
             a Python object, possibly None.
         """
-        ctn = self.container
-        return ctn.get_var_key(self) if ctn else None
+        container = self.container
+        return container.get_var_key(self) if container else None
 
     def __mul__(self, e):
         return self.times(e)
@@ -293,8 +298,8 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
             for xhs_s, xhs_p in _searched_patterns:
                 if xhs_s in line_:
                     return line_.find(xhs_s), xhs_p
-            else:
-                return -1, -1
+
+            return -1, -1
 
         if code_context:
             line = code_context[0]
@@ -312,26 +317,26 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
                     return ct_object, lr
         return None, -1
 
-    def _perform_arithmetic_to_self(self, self_arithmetic_method, e):
-        # INTERNAL
-        res = self_arithmetic_method(e)
-        ct, xhs_pos = self._extract_calling_ct_xhs()
-        if ct is not None:
-            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
-        return res
+    # def _perform_arithmetic_to_self(self, self_arithmetic_method, e):
+    #     # INTERNAL
+    #     res = self_arithmetic_method(e)
+    #     ct, xhs_pos = self._extract_calling_ct_xhs()
+    #     if ct is not None:
+    #         self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+    #     return res
 
     def add(self, e):
         res = self.plus(e)
         ct, xhs_pos = self._extract_calling_ct_xhs()
         if ct is not None:
-            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+            self.lfactory.set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
         return res
 
     def subtract(self, e):
         res = self.minus(e)
         ct, xhs_pos = self._extract_calling_ct_xhs()
         if ct is not None:
-            self.get_linear_factory().set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
+            self.lfactory.set_linear_constraint_expr_from_pos(ct, xhs_pos, res)
         return res
 
     def plus(self, e):
@@ -375,7 +380,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
 
     def __rsub__(self, e):
 
-        expr = self.get_linear_factory()._to_linear_operand(e, force_clone=True)  # makes a clone.
+        expr = self.lfactory._to_linear_operand(e, force_clone=True)  # makes a clone.
         return expr.subtract(self)
 
     def divide(self, e):
@@ -520,7 +525,8 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
     def lpt_name(self):
         # 'c1', 'b2', 'i3' ... first letter of cplex code + index
         cpx_typecode = self.cplex_typecode.lower()
-        return "%s%d" % (cpx_typecode, self.index1)
+        radix = 'x' if cpx_typecode == 'c' else cpx_typecode[0]
+        return "%s%d" % (radix, self.index1)
 
     @property
     def cplex_typecode(self):
@@ -650,16 +656,16 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
     def logical_and(self, other):
         self._check_binary_variable_for_logical_op(op_name="and")
         StaticTypeChecker.typecheck_logical_op(self, other, caller="Var.logical_and")
-        return self.get_linear_factory().new_logical_and_expr([self, other])
+        return self.lfactory.new_logical_and_expr([self, other])
 
     def logical_or(self, other):
         self._check_binary_variable_for_logical_op(op_name="or")
         StaticTypeChecker.typecheck_logical_op(self, other, caller="Var.logical_or")
-        return self.get_linear_factory().new_logical_or_expr([self, other])
+        return self.lfactory.new_logical_or_expr([self, other])
 
     def logical_not(self):
         self._check_binary_variable_for_logical_op(op_name="not")
-        return self.get_linear_factory().new_logical_not_expr(self)
+        return self.lfactory.new_logical_not_expr(self)
 
     def __and__(self, other):
         return self.logical_and(other)
@@ -668,3 +674,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         return self.logical_or(other)
 
     # no unary not in magic methods...
+
+
+def is_var(x):
+    return isinstance(x, Var)

@@ -155,7 +155,7 @@ def _group_mip_cuts_make(pgroup):
 # generating code for group: MIP_Limits
 def _group_mip_limits_params(pgroup):
     return dict(aggforcut=IntParameter(pgroup, "aggforcut", "CPX_PARAM_AGGCUTLIM", 2054, "constraint aggregation limit for cut generation", default_value=3, min_value=0.0, max_value=2100000000),
-                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1.0, max_value=8),
+                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1.0, max_value=12),
                 cutpasses=IntParameter(pgroup, "cutpasses", "CPX_PARAM_CUTPASS", 2056, "number of cutting plane passes", default_value=0, min_value=-1.0, max_value=9223372036800000000),
                 cutsfactor=NumParameter(pgroup, "cutsfactor", "CPX_PARAM_CUTSFACTOR", 2033, "rows multiplier factor to limit cuts", default_value=-1.0, min_value=-1.0, max_value=1e+75),
                 eachcutlimit=IntParameter(pgroup, "eachcutlimit", "CPX_PARAM_EACHCUTLIM", 2102, "limit on number of cuts for each type per pass", default_value=2100000000, min_value=0.0, max_value=2100000000),
@@ -477,7 +477,7 @@ def _group_cpxparam_params(pgroup):
                 parallel=IntParameter(pgroup, "parallel", "CPX_PARAM_PARALLELMODE", 1109, "parallel optimization mode", default_value=0, min_value=-1, max_value=2),
                 paramdisplay=BoolParameter(pgroup, "paramdisplay", "CPX_PARAM_PARAMDISPLAY", 1163, "whether to display changed parameters before optimization", default_value=1),
                 qpmethod=IntParameter(pgroup, "qpmethod", "CPX_PARAM_QPMETHOD", 1063, "method for quadratic optimization", default_value=0, min_value=0.0, max_value=6.0),
-                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201903125, min_value=0.0, max_value=2100000000),
+                randomseed=IntParameter(pgroup, "randomseed", "CPX_PARAM_RANDOMSEED", 1124, "seed to initialize the random number generator", default_value=201909284, min_value=0.0, max_value=2100000000),
                 record=BoolParameter(pgroup, "record", "CPX_PARAM_RECORD", 1162, "record calls to C API", default_value=0),
                 solutiontype=IntParameter(pgroup, "solutiontype", "CPX_PARAM_SOLUTIONTYPE", 1147, "solution information CPLEX will attempt to compute", default_value=0, min_value=0.0, max_value=2.0),
                 threads=IntParameter(pgroup, "threads", "CPX_PARAM_THREADS", 1067, "default parallel thread count", default_value=0, min_value=0.0, max_value=2100000000),
@@ -509,11 +509,5 @@ def make_root_params_121000():
     proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "12.10.0.0")
     # -- set synchronous params
     proot.read.datacheck._synchronous = True
-    # proot.mip.pool.absgap._synchronous = True
-    # proot.mip.pool.capacity._synchronous = True
-    # proot.mip.pool.relgap._synchronous = True
-    # proot.mip.pool.capacity._synchronous = True
-    # proot.mip.pool.replace._synchronous = True
-    # proot.mip.pool.intensity._synchronous = True
     return proot
 #  --- end of generated code ---

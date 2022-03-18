@@ -141,7 +141,7 @@ class CplexLocalSolveEnv(SolveEnv):
 
         # --- specific to local
         the_env = get_environment()
-        the_env.notify_end_solve(mdl.solve_status)
+        the_env.notify_end_solve(mdl.job_solve_status)
 
         if is_auto_publishing_solve_details(context):
             details = mdl.solve_details.as_worker_dict()

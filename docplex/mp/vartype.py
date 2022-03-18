@@ -4,6 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
+from docplex.mp.error_handler import docplex_fatal
 
 class VarType(object):
     """VarType()
@@ -19,6 +20,9 @@ class VarType(object):
         self._lb = lb
         self._ub = ub
         self._cpx_typecode = cplex_typecode
+
+    def is_semi_type(self):
+        return False
 
     @property
     def cplex_typecode(self):
@@ -244,6 +248,9 @@ class SemiContinuousVarType(VarType):
         VarType.__init__(self, short_name="semi-continuous", lb=1e-6, ub=plus_infinity, cplex_typecode='S')
         self._plus_infinity = plus_infinity
 
+    def is_semi_type(self):
+        return True
+
     def _compute_ub(self, candidate_ub, logger):
         return self._plus_infinity if candidate_ub >= self._plus_infinity else float(candidate_ub)
 
@@ -252,6 +259,11 @@ class SemiContinuousVarType(VarType):
             logger.fatal(
                 'semi-continuous variable expects strict positive lower bound, not: {0}'.format(candidate_lb))
         return candidate_lb
+
+    @property
+    def default_lb(self):
+        # there is NO default lb
+        docplex_fatal("Type {0} has no default lower bound".format(self.short_name))
 
     def is_discrete(self):
         """ Checks if this is a discrete type.
@@ -277,10 +289,17 @@ class SemiIntegerVarType(VarType):
             This class models the :index:`semi-integer` variable type and
             is not meant to be instantiated.
     """
-
     def __init__(self, plus_infinity=1e+20):
         VarType.__init__(self, short_name="semi-integer", lb=1e-6, ub=plus_infinity, cplex_typecode='N')
         self._plus_infinity = plus_infinity
+
+    def is_semi_type(self):
+        return True
+
+    @property
+    def default_lb(self):
+        # there is NO default lb
+        docplex_fatal("Type {0} has no default lower bound".format(self.short_name))
 
     def _compute_ub(self, candidate_ub, logger):
         return min(candidate_ub, self._plus_infinity)

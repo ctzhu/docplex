@@ -11,8 +11,9 @@ from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.utils import is_number
 from docplex.mp.xcounter import update_dict_from_item_value
 from docplex.mp.quad import QuadExpr, VarPair
+from docplex.mp.dvar import is_var
 from docplex.mp.operand import LinearOperand
-from docplex.mp.linear import Var, MonomialExpr, ZeroExpr, AbstractLinearExpr
+from docplex.mp.linear import MonomialExpr, ZeroExpr, AbstractLinearExpr
 from docplex.mp.constr import QuadraticConstraint
 
 
@@ -55,7 +56,7 @@ class QuadFactory(IQuadFactory):
 
     def new_var_product(self, var, other):
         # computes and returns the product var * other
-        if isinstance(other, Var):
+        if is_var(other):
             return self.new_quad(quads=(var, other, 1), safe=True)
         elif isinstance(other, MonomialExpr):
             mnm_dvar = other._dvar
@@ -86,7 +87,7 @@ class QuadFactory(IQuadFactory):
             return var_quad
 
     def new_linexpr_product(self, linexpr, other):
-        if isinstance(other, Var):
+        if is_var(other):
             return self.new_var_product(other, linexpr)
 
         elif isinstance(other, MonomialExpr):

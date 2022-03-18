@@ -14,6 +14,7 @@ from docplex.mp.compat23 import izip_longest
 
 import json
 
+from docplex.mp.solprinter import SolutionPrinter
 
 class SolutionJSONEncoder(json.JSONEncoder):
     # INTERNAL
@@ -143,34 +144,51 @@ class SolutionJSONEncoder(json.JSONEncoder):
         return n
 
 
-class SolutionJSONPrinter(object):
+class SolutionJSONPrinter(SolutionPrinter):
+
     json_extension = ".json"
 
-    @classmethod
-    def print_to_stream2(cls, out, solutions, indent=None, **kwargs):
-        # solutions can be either a plain solution or a sequence or an iterator
-        sol_to_print = list(solutions) if is_iterable(solutions) else [solutions]
-        # encode all solutions in dict ready for json output
+    def extension(self):
+        return self.json_extension
+
+    def print_one_solution(self, solution, out, **kwargs):
         encoder = SolutionJSONEncoder(**kwargs)
-        solutions_as_dict = [encoder.default(sol) for sol in sol_to_print]
-        # use an output stream adapter for py2/py3 and str/unicode compatibility
+        encoded_sol = encoder.default(solution)
         osa = OutputStreamAdapter(out)
-        if len(sol_to_print) == 1:  # if only one solution, use at root node
-            osa.write(json.dumps(solutions_as_dict[0], indent=indent))
-        else:  # for multiple solutions, we want a "CPLEXSolutions" root
-            osa.write(json.dumps({"CPLEXSolutions": solutions_as_dict}, indent=indent))
+        indent = kwargs.get('indent')
+        osa.write(json.dumps(encoded_sol, indent=indent))
 
-    @classmethod
-    def print_to_stream(cls, solutions, out, extension=json_extension, indent=None, **kwargs):
-        if out is None:
-            # prints on standard output
-            cls.print_to_stream2(sys.stdout, solutions, indent=indent, **kwargs)
-        elif isinstance(out, str):
-            # a string is interpreted as a path name
-            path = out if out.endswith(extension) else out + extension
-            with open(path, "w") as of:
-                cls.print_to_stream(solutions, of, indent=indent, **kwargs)
-                # print("* file: %s overwritten" % path)
-        else:
-            cls.print_to_stream2(out, solutions, indent=indent, **kwargs)
+    def print_many_solutions(self, solutions, out, **kwargs):
+        encoder = SolutionJSONEncoder(**kwargs)
+        encoded_sols = [encoder.default(s) for s in solutions]
+        osa = OutputStreamAdapter(out)
+        indent = kwargs.get('indent')
+        osa.write(json.dumps({"CPLEXSolutions": encoded_sols}, indent=indent))
 
+    # @classmethod
+    # def print_to_stream2(cls, out, solutions, indent=None, **kwargs):
+    #     # solutions can be either a plain solution or a sequence or an iterator
+    #     sol_to_print = list(solutions) if is_iterable(solutions) else [solutions]
+    #     # encode all solutions in dict ready for json output
+    #     encoder = SolutionJSONEncoder(**kwargs)
+    #     solutions_as_dict = [encoder.default(sol) for sol in sol_to_print]
+    #     # use an output stream adapter for py2/py3 and str/unicode compatibility
+    #     osa = OutputStreamAdapter(out)
+    #     if len(sol_to_print) == 1:  # if only one solution, use at root node
+    #         osa.write(json.dumps(solutions_as_dict[0], indent=indent))
+    #     else:  # for multiple solutions, we want a "CPLEXSolutions" root
+    #         osa.write(json.dumps({"CPLEXSolutions": solutions_as_dict}, indent=indent))
+    #
+    # @classmethod
+    # def print_to_stream(cls, solutions, out, extension=json_extension, indent=None, **kwargs):
+    #     if out is None:
+    #         # prints on standard output
+    #         cls.print_to_stream2(sys.stdout, solutions, indent=indent, **kwargs)
+    #     elif isinstance(out, str):
+    #         # a string is interpreted as a path name
+    #         path = out if out.endswith(extension) else out + extension
+    #         with open(path, "w") as of:
+    #             cls.print_to_stream(solutions, of, indent=indent, **kwargs)
+    #             # print("* file: %s overwritten" % path)
+    #     else:
+    #         cls.print_to_stream2(out, solutions, indent=indent, **kwargs)

@@ -185,8 +185,11 @@ class IndexableObject(ModelingObjectBase):
         raw = self._index
         return raw if raw == self._invalid_index else raw + 1
 
-    @index.setter
-    def index(self, idx):
+    # @index.setter
+    # def index(self, idx):
+    #     self._index = idx
+
+    def _set_index(self, idx):
         self._index = idx
 
     def has_valid_index(self):
@@ -254,9 +257,6 @@ class Expr(ModelingObjectBase, Operand):
 
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.name):
         raise NotImplementedError  # pragma: no cover
-
-    def is_model_ordered(self):
-        return self._model._keep_ordering
 
     def _num_to_stringio(self, oss, num, ndigits=None, print_sign=False, force_plus=False, use_space=False):
         k = num

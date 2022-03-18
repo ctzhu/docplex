@@ -23,11 +23,13 @@ from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import CplexScope, BasisStatus, WriteLevel
 from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_maxed, normalize_basename
 from docplex.mp.utils import make_output_path2
-from docplex.mp.linear import Var
+from docplex.mp.dvar import Var
 from docplex.mp.error_handler import docplex_fatal
+from docplex.mp.sttck import StaticTypeChecker
 
-from docplex.mp.solmst import SolutionMSTPrinter
+from docplex.mp.solmst  import SolutionMSTPrinter
 from docplex.mp.soljson import SolutionJSONPrinter
+from docplex.mp.solsol  import SolutionSolPrinter
 
 from collections import defaultdict
 
@@ -973,15 +975,14 @@ class SolveSolution(object):
             outs = sys.stdout
         self.export(outs, format='mst', **kwargs)
 
-    def _export_as_string(self, fmt, **kwargs):
-        oss = StringIO()
-        printer = self.get_printer(fmt)
-        printer.print_to_stream(self, oss, **kwargs)
-        return oss.getvalue()
+    def _export_as_string(self, format_spec, **kwargs):
+        # INTERNAL
+        printer = self._new_printer(format_spec)
+        return printer.print_to_string(self, **kwargs)
 
     def export_as_mst_string(self, write_level=WriteLevel.Auto, **kwargs):
         kwargs['write_level'] = WriteLevel.parse(write_level)
-        return self._export_as_string(fmt='mst', **kwargs)
+        return self._export_as_string(format_spec='mst', **kwargs)
 
     def export_as_mst(self, path=None, basename=None, write_level=WriteLevel.Auto, **kwargs):
         """ Exports a solution to a file in CPLEX mst format.
@@ -1020,32 +1021,68 @@ class SolveSolution(object):
 
             ``sol.export_as_mst(basename="my_%s_mipstart", path ="z:/home/")`` will write "z:/home/my_prob_mipstart.mst".
 
+        Note:
+            The complete description of MST format is found here:
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/MST.html
+
+
         See Also:
             :class:`docplex.mp.constants.WriteLevel`
         """
-        sol_basename = normalize_basename(self.problem_name, force_lowercase=True)
+        kwargs2 = kwargs.copy()
+        kwargs2['write_level'] = WriteLevel.parse(write_level)
+        return self._export(format_spec='mst', path=path, basename=basename, **kwargs2)
+
+    def export_as_sol(self, path=None, basename=None, **kwargs):
+        """ Exports a solution to a file in CPLEX SOL format.
+
+        SOL format is valid for all types of solutions, LP or MIP, but cannot be used for warm starts.
+
+        Arguments are identical to the method :func:`export_as_mst`
+
+        Note:
+        The complete description of SOL format is found here:
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/SOL.html
+
+        See Also:
+            :func:`docplex.mp.model.SolveSolution.export_as_mst`
+
+        """
+        return self._export(format_spec='sol', path=path, basename=basename, **kwargs)
+
+    def _export(self, format_spec, path=None, basename=None, **kwargs):
+        # INTERNAL
+        printer = self._new_printer(format_spec)
+        return self._static_export(exported=self,
+                                   basename=self.problem_name,
+                                   printer=printer,
+                                   path=path,
+                                   basename_fmt=basename,
+                                   **kwargs
+                                   )
+
+    @classmethod
+    def _static_export(cls, exported, basename, printer, path, basename_fmt, **kwargs):
+        sol_basename = normalize_basename(basename, force_lowercase=True)
         mst_path = make_output_path2(actual_name=sol_basename,
-                                     extension=SolutionMSTPrinter.mst_extension,
+                                     extension=printer.extension(),
                                      path=path,
-                                     basename_fmt=basename)
+                                     basename_fmt=basename_fmt)
         if mst_path:
-            kwargs2 = kwargs.copy()
-            kwargs2['write_level'] = WriteLevel.parse(write_level)
-            SolutionMSTPrinter.print_to_stream(self, mst_path, **kwargs2)
+            printer.print_to_stream(exported, mst_path, **kwargs)
             return mst_path
 
     @classmethod
-    def get_printer(cls, key):
-        # INTERNAL
+    def _new_printer(cls, format_spec):
         printers = {'json': SolutionJSONPrinter,
-                    'xml': SolutionMSTPrinter,
-                    'mst': SolutionMSTPrinter
+                    'xml' : SolutionMSTPrinter,
+                    'mst' : SolutionMSTPrinter,
+                    'sol' : SolutionSolPrinter
                     }
-
-        printer = printers.get(key.lower())
-        if not printer:
+        printer_type = printers.get(format_spec.lower())
+        if not printer_type:
             raise ValueError("format key must be one of {}".format(printers.keys()))
-        return printer
+        return printer_type()
 
     def export(self, file_or_filename, format="json", **kwargs):
         """ Export this solution.
@@ -1053,14 +1090,13 @@ class SolveSolution(object):
         Args:
             file_or_filename: If ``file_or_filename`` is a string, this argument contains the filename to
                 write to. If this is a file object, this argument contains the file object to write to.
-            format: Name of format to use. Possible values are:
+            format_spec: Name of format to use. Possible values are:
                 - "json"
                 - "mst": the MST cplex format for MIP starts
                 - "xml": same as MST
             kwargs: The kwargs passed to the actual exporter
         """
-
-        printer = self.get_printer(format)
+        printer = self._new_printer(format)
 
         if isinstance(file_or_filename, six.string_types):
             fp = open(file_or_filename, "w")
@@ -1081,13 +1117,15 @@ class SolveSolution(object):
 
         *New in version 2.10*
         """
-        return self._export_as_string(fmt='json', **kwargs)
+        return self._export_as_string(format_spec='json', **kwargs)
+
+    def export_as_sol_string(self, **kwargs):
+        return self._export_as_string(format_spec='sol', **kwargs)
 
     def check_as_mip_start(self, strong_check=False):
         """Checks that this solution is a valid MIP start.
 
         To be valid, it must have:
-
             * at least one discrete variable (integer or binary), and
             * the values for decision variables should be consistent with the type.
 
@@ -1116,17 +1154,32 @@ class SolveSolution(object):
                 var_value_dict[dvar] = dval
         return var_value_dict
 
-    def as_name_dict(self, keep_zeros=False):
-        # INTERNAL: return a dictionary of variable_name: variable_value
-        var_value_dict = {}
+    def as_name_dict(self, keep_zeros=False, error='ignore'):
+        # return a dictionary of variable_name: variable_value
+        def var_name_or_lp_name(dvar_):
+            return dvar_.name or dvar_.lp_name
+        return self._as_dict(var_name_or_lp_name, keep_zeros, error)
+
+    def as_index_dict(self, keep_zeros=False, error='ignore'):
+        # return a dictionary of var index: variable_value
+        # invalid indices are ignored
+        def var_valid_index(dvar_):
+            var_idx = dvar_.index
+            return var_idx if var_idx >= 0 else None
+        return self._as_dict(var_valid_index, keep_zeros, error)
+
+    def _as_dict(self, var_to_key_fn, keep_zeros=False, error='ignore'):
+        # INTERNAL
+        key_value_dict = {}
         for dvar, dval in self.iter_var_values():
-            dvar_name = dvar.get_name()
             if keep_zeros or dval:
-                if dvar_name:
-                    var_value_dict[dvar_name] = dval
-            else:
-                var_value_dict[dvar.lp_name] = dval
-        return var_value_dict
+                dvar_key = var_to_key_fn(dvar)
+                if dvar_key is not None:
+                    key_value_dict[dvar_key] = dval
+                elif error == 'raise':
+                    self.model.fatal("Invalid variable key in solution.as_dict, variable: {0}, transformer: {1}"
+                                     .format(dvar, var_to_key_fn.__name__))
+        return key_value_dict
 
     def kpi_value_by_name(self, name, match_case=False):
         ''' Returns the solution value of a KPI from its name.
@@ -1149,6 +1202,18 @@ class SolveSolution(object):
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
         return kpi._get_solution_value(self)
 
+    @classmethod
+    def from_file(cls, filename):
+        """ Builds solution(s) from a SOL file.
+            Assumes `filename` is in CPLEX SOL format,
+            reference: https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/SOL.html
+
+        Returns:
+            a list of solution objects, read from the file, or None, if an error occured.
+        """
+        from docplex.mp.sol_xml_reader import read_sol_file
+        sols = read_sol_file(filename)
+        return sols
 
 class SolutionPool(object):
     """SolutionPool()
@@ -1263,3 +1328,32 @@ class SolutionPool(object):
         variance = (obj_sum2 / nb_solutions) - (obj_mean ** 2)
         obj_sd = sqrt(variance)
         return nb_solutions, obj_mean, obj_sd, obj_min, obj_med, obj_max
+
+    def export_as_sol(self, path=None, basename=None, **kwargs):
+        """ Exports the solution pool as a SOL file.
+
+        Args:
+            basename: Controls the basename with which the solution is printed.
+                Accepts None, a plain string, or a string format.
+                If None, the model name is used.
+                If passed a plain string, the string is used in place of the model's name.
+                If passed a string format (either with %s or {0}), this format is used to format the
+                model name to produce the basename of the written file.
+            path: A path to write the file, expects a string path or None.
+                Can be a directory, in which case the basename
+                that was computed with the basename argument is appended to the directory to produce
+                the file.
+                If given a full path, the path is directly used to write the file, and
+                the basename argument is not used.
+                If passed None, the output directory will be ``tempfile.gettempdir()``.
+
+        :return:
+            The path to which the solutions from the pool are written, or None if an error occured.
+        """
+        printer = SolutionSolPrinter()
+        return SolveSolution._static_export(exported=self._solutions,
+                                            basename="pool",
+                                            printer=printer,
+                                            basename_fmt=basename,
+                                            path=path,
+                                            **kwargs)

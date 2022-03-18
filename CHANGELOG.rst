@@ -1,8 +1,30 @@
 Changelog
 ---------
 
-Changed in 2.19.202:
+Changed in 2.20.204:
 ````````````````````
+* In ``docplex.mp``:
+    * Add support for exporting solutions and solution pools to SOL format.
+    * Add fast methods for changing batches of variable bounds:
+        Model.change_var_lower_bounds, Model.change_var_upper_bounds
+    * Reset random seed value for cplex 12.10 , was different from COS release value.
+    * Improved performance of variable creation
+    * Removed a warning about accessing a deprecated "solve_status" in solve.
+    * docplex.mp.AdvModel now has checker enabled by default to avoid Python errors.
+       Is is up to the user to disable type-checking to get maximum performance.
+    * Fixed a bug about not printing updated variable bounds in MPS and SAV
+    * Changed the default rounding behavior: solurtion values are not rounded by default.
+
+* In ``docplex.cp``:
+    * Fix problems on step function operations.
+    * Add status in conflict refiner solution object.
+    * Fix a bug to not send and receive conflict in CPO format if no conflict.
+    * Enhance printing of model solution.
+
+
+Changed in 2.19.202 (2020.12):
+``````````````````````````````
+
 * In ``docplex.mp``:
     * Exporting models to SAV.gz format is now supported.
     

@@ -14,6 +14,7 @@ import xml.etree.ElementTree as xml_elt
 
 
 from docplex.mp.constants import EffortLevel
+from docplex.mp.sttck import StaticTypeChecker
 
 
 class MSTReader(object):
@@ -39,7 +40,7 @@ class MSTReader(object):
         return mdl.new_solution(name=mipstart_name)
 
     @classmethod
-    def read_one_solution(cls, xml_solution, mdl, mst_path):
+    def read_one_solution(cls, xml_solution, mdl, mst_path, read_effort=True):
         new_mipstart_sol = cls.new_empty_mipstart(mdl)
         nb_missed = 0
         effort_level = EffortLevel.Auto
@@ -53,11 +54,12 @@ class MSTReader(object):
                 if sol_name:
                     new_mipstart_sol.set_name(sol_name)
                 # effort level: 0,1,2,...
-                effort_s = child.attrib.get('MIPStartEffortLevel')
-                if effort_s is not None:
-                    # expect an integer attribute, then convert it to EffortLevel
-                    # default is Auto
-                    effort_level = EffortLevel.parse(cls.to_int(effort_s))
+                if read_effort:
+                    effort_s = child.attrib.get('MIPStartEffortLevel')
+                    if effort_s is not None:
+                        # expect an integer attribute, then convert it to EffortLevel
+                        # default is Auto
+                        effort_level = EffortLevel.parse(cls.to_int(effort_s))
 
             elif child.tag == "variables":
                 for v, var_elt in enumerate(child, start=1):
@@ -99,15 +101,17 @@ class MSTReader(object):
         if not new_mipstart_sol.number_of_var_values:
             mdl.warning("No variable read from MIP start file {0}", mst_path)
             return None
-        else:
+        elif read_effort:
             return new_mipstart_sol, effort_level
+        else:
+            return new_mipstart_sol
 
     @classmethod
-    def read_many_solutions(cls, xml_solutions, mdl, mst_path):
+    def read_many_solutions(cls, xml_solutions, mdl, mst_path, read_effort=True):
         mipstarts = []
         for child in xml_solutions:
             if child.tag == "CPLEXSolution":
-                mip_start = cls.read_one_solution(child, mdl, mst_path)
+                mip_start = cls.read_one_solution(child, mdl, mst_path, read_effort=read_effort)
                 if mip_start is not None:
                     # expecting a tuple (solution, effort:int)
                     mipstarts.append(mip_start)
@@ -117,20 +121,22 @@ class MSTReader(object):
         return mipstarts
 
     @classmethod
-    def read_root(cls, root, mdl, mst_path):
+    def read_root(cls, root, mdl, mst_path, read_effort=True):
         root_name = root.tag
         if root_name == cls.cplex_solution_tag:
-            mst1 = MSTReader.read_one_solution(root, mdl, mst_path)
+            mst1 = MSTReader.read_one_solution(root, mdl, mst_path, read_effort=read_effort)
             return None if mst1 is None else [mst1]
         elif root_name == cls.cplex_solutions_tag:
-            return MSTReader.read_many_solutions(root, mdl, mst_path)
+            return MSTReader.read_many_solutions(root, mdl, mst_path, read_effort=read_effort)
         else:
             mdl.fatal("Unexpected root element tag, expecting {0}|{1}, found: <{2}>"
                       , cls.cplex_solution_tag, cls.cplex_solutions_tag,
                       root_name)
 
 
-def read_mst_file(mst_path, mdl):
+def read_mst_file(mst_path, mdl, caller=None):
+    StaticTypeChecker.check_file(mdl, mst_path, "MST", expected_extensions=(".mst", ".xml"),
+                                 caller=caller)
     try:
         tree = xml_elt.parse(mst_path)
         root = tree.getroot()
@@ -139,4 +145,20 @@ def read_mst_file(mst_path, mdl):
         mdl.error("XML error: {0!s} in file {1} - read aborted", pex, mst_path)
         # None is for errors
         return None
+
+
+def read_sol_file(mst_path, mdl, caller=None):
+    StaticTypeChecker.check_file(mdl, mst_path, "MST", expected_extensions=(".sol", ".xml"),
+                                 caller=caller)
+    try:
+        tree = xml_elt.parse(mst_path)
+        root = tree.getroot()
+        return MSTReader.read_root(root, mdl, mst_path, read_effort=False)
+
+
+    except xml_elt.ParseError as pex:
+        mdl.error("XML error: {0!s} in file {1} - read aborted", pex, mst_path)
+        # None is for errors
+        return None
+
 

@@ -543,18 +543,21 @@ def _build_search_path (ctx):
     Args:
         ctx:  Context to get information from
     """
-    # Initialize with docplex install directory
+    path = []
+
+    # Add all system path
+    path.extend(get_system_path())
+
+    # Append docplex install directory
     python_home = os.path.dirname(os.path.abspath(sys.executable))
     if IS_WINDOWS:
-        path = [os.path.join(python_home, "Scripts")]
+        path.append(os.path.join(python_home, "Scripts"))
         appdata = os.environ.get('APPDATA')
         if appdata is not None:
             path.append(os.path.join(appdata, os.path.join('Python', 'Scripts')))
     else:
-        path = ["~/.local/bin", os.path.join(python_home, "bin")]
-
-    # Add all system path
-    path.extend(get_system_path())
+        path.append("~/.local/bin")
+        path.append(os.path.join(python_home, "bin"))
 
     # Add COS location if defined
     cdir = ctx.get_by_path('cos.location')
@@ -581,7 +584,7 @@ def _search_exec_file(file, ctx):
         file:  Executable file name
         ctx:   Context to get information from
     Returns:
-        Full path of the first executable file found, None if not found
+        Full path of the first executable file found, given file if not found
     """
     # Check null
     if not file:
@@ -590,20 +593,20 @@ def _search_exec_file(file, ctx):
     if is_exe_file(file):
         return file
     # Check if file contains a path
-    if os.path.basename(file) == file:
+    fname = os.path.basename(file)
+    if fname == file:
         # Build full search path
         path = _build_search_path(ctx)
     else:
         # Keep file path as single path
         path = [os.path.dirname(file)]
-        file = os.path.basename(file)
     # Check if file contains a pattern
-    if "*" in file:
+    if "*" in fname:
         # Check in the path
         for d in path:
             if not os.path.isdir(d):
                 continue
-            lf = [os.path.join(d, f) for f in os.listdir(d) if fnmatch.fnmatch(f, file)]
+            lf = [os.path.join(d, f) for f in os.listdir(d) if fnmatch.fnmatch(f, fname)]
             if lf:
                 # Take most recent executable file
                 lf = [f for f in lf if is_exe_file(f)]
@@ -615,11 +618,11 @@ def _search_exec_file(file, ctx):
         for d in path:
             if not os.path.isdir(d):
                 continue
-            nf = os.path.join(d, file)
+            nf = os.path.join(d, fname)
             if is_exe_file(nf):
                 return nf
 
-    return None
+    return file
 
 
 # Attribute values denoting a default value

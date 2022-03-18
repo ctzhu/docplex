@@ -54,10 +54,11 @@ class CplexAdapter(object):
         if cplex_module is None:
             location = coslocation if coslocation is not None else "default path"
             raise ImportError("Cannot import cplex from %s" % location)
+
         self.cplex_module = cplex_module
-        subinterfaces = cplex_module._internal._subinterfaces
-        cpx = self.cplex_module.Cplex()
         self.cplex_location = dirname(dirname(cplex_module.__file__))
+        cpx = self.cplex_module.Cplex()
+
         cpxv = cpx.get_version()
         if cpxv.startswith('12.7.0'):  # pragma: no cover
             del cpx
@@ -162,12 +163,12 @@ class CplexAdapter(object):
         nb_vars = self.getnumcols(cpxenv._e, cpxenv._lp)
         return self.getcolname(cpxenv._e, cpx._lp, 0, nb_vars-1)
 
-    def fast_get_var_names(self, cpx):
-        # ported from cplex_engine.py, but does not seem to be used anywhere ?
-        if self.post1210:
-            return self._fast_get_var_names12100(cpx)
-        else:
-            return self.fast_get_var_names1290(cpx)
+    # def fast_get_var_names(self, cpx):
+    #     # ported from cplex_engine.py, but does not seem to be used anywhere ?
+    #     if self.is_post1210:
+    #         return self._fast_get_var_names12100(cpx)
+    #     else:
+    #         return self.fast_get_var_names1290(cpx)
 
     def fast_get_rows(self, cpx):
         cpxenv = cpx._env._e

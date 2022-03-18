@@ -137,6 +137,11 @@ class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
     def lp_name(self):
         return self._name or "c%s" % (self.index + 1)
 
+    @property
+    def lpt_name(self):
+        radix = self.cplex_scope.prefix
+        return  "%s%d" % (radix, self.index + 1)
+
     def is_trivial(self):
         return False
 

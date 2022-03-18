@@ -13,7 +13,7 @@ from docplex.mp.operand import LinearOperand
 from docplex.mp.dvar import Var
 from docplex.mp.linear import MonomialExpr, LinearExpr, AbstractLinearExpr, ZeroExpr, ConstantExpr
 from docplex.mp.operand import Operand
-from docplex.mp.constants import ComparisonType, UpdateEvent, ObjectiveSense
+from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.constr import LinearConstraint, RangeConstraint, \
     IndicatorConstraint, PwlConstraint, EquivalenceConstraint, IfThenConstraint, NotEqualConstraint, QuadraticConstraint
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr, \
@@ -84,7 +84,7 @@ def fix_format_string(fmt, dimen=1, key_format='_%s'):
 def is_tuple_w_standard_str(z):
     if isinstance(z, tuple):
         zclass = z.__class__
-        return zclass is tuple or not ("__str__" in zclass.__dict__)
+        return zclass is tuple or "__str__" not in zclass.__dict__
     else:
         return False
 
@@ -209,10 +209,10 @@ class ModelFactory(_AbstractModelFactory):
     def warning(self, msg, *args):
         self._model.warning(msg, args)
 
-    def _make_new_var(self, vartype, lb, ub, varname, origin=None):
+    def _make_new_var(self, vartype, lb, ub, varname, origin=None, var_factory_fn=Var):
         self_model = self._model
         idx = self._engine.create_one_variable(vartype, lb, ub, varname)
-        var = Var(self_model, vartype, varname, lb, ub, _safe_lb=True, _safe_ub=True)
+        var = var_factory_fn(self_model, vartype, varname, lb, ub, _safe_lb=True, _safe_ub=True)
         self_model._register_one_var(var, idx, varname)
         var.origin = origin
         return var
@@ -288,7 +288,6 @@ class ModelFactory(_AbstractModelFactory):
 
     def _expand_names(self, keys, user_name, dimension, key_format):
         if user_name is None or self._model.ignore_names:
-            # no automatic names, ever
             return []
         else:
             stringifier_ = self._get_stringifier(dimension, keys)
@@ -327,17 +326,14 @@ class ModelFactory(_AbstractModelFactory):
 
         elif is_number(var_bound):
             self._checker.typecheck_num(var_bound, caller='in variable bound')
+            ignore_bound = False
             if true_if_lb:
-                if var_bound == default_bound:
-                    return []
-                else:
-                    return [float(var_bound)] * size
+                if default_bound is not None and var_bound == default_bound:
+                    ignore_bound = True
             else:
-                # ub
                 if var_bound >= default_bound:
-                    return []
-                else:
-                    return [float(var_bound)] * size
+                    ignore_bound = True
+            return [] if ignore_bound else [float(var_bound)] * size
 
         elif is_ordered_sequence(var_bound):
             nb_bounds = len(var_bound)
@@ -376,7 +372,9 @@ class ModelFactory(_AbstractModelFactory):
         else:
             return fallback
 
-    def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None):
+    def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None,
+                               var_factory_fn=Var):
+        # INTERNAL: called from model reader
         if not size:
             return []
         mdl = self._model
@@ -387,31 +385,40 @@ class ModelFactory(_AbstractModelFactory):
         assert not ubs or size == len(ubs)
         assert not names or size == len(names)
         # -------------------------
+        safe_kth_fn = self.safe_kth
+        if mdl.ignore_names:
+            names = []
+        if not lbs:
+            for v, vt in enumerate(vartypes):
+                if vt.is_semi_type():
+                    self.fatal("In position #{0}, you must provide an explicit lower bound for variable of type {1}"
+                               .format(v, vt.short_name))
 
-        if names:
-            allvars = [Var(mdl, vartypes[k],
-                           names[k],
-                           self.safe_kth(lbs, k, vartypes[k].default_lb),
-                           self.safe_kth(ubs, k, vartypes[k].default_ub),
-                           _safe_lb=True,
-                           _safe_ub=True) for k in fast_range(size)]
-        else:
-            allvars = [Var(mdl, vartypes[k],
-                           None,
-                           self.safe_kth(lbs, k),
-                           self.safe_kth(ubs, k),
-                           _safe_lb=True,
-                           _safe_ub=True) for k in fast_range(size)]
+        def safe_kth_functional(x_list, k, fallback_fn):
+            if x_list:
+                return x_list[k]
+            else:
+                return fallback_fn()
 
+        allvars = [var_factory_fn(mdl, vartypes[k],
+                                  safe_kth_fn(names, k, None),
+                                  safe_kth_functional(lbs, k, lambda: vartypes[k].default_lb),
+                                  safe_kth_functional(ubs, k, lambda: vartypes[k].default_ub),
+                                  _safe_lb=True,
+                                  _safe_ub=True) for k in fast_range(size)]
         cpxnames = names or []  # no None
-        indices = self._engine.create_multitype_variables(size, vartypes, lbs, ubs, cpxnames)
+        cpxlbs = lbs or []
+        cpxubs = ubs or []
+        indices = self._engine.create_multitype_variables(size, vartypes, cpxlbs, cpxubs, cpxnames)
         mdl._register_block_vars(allvars, indices, names)
         return allvars
 
     def var_list(self, keys, vartype, lb, ub, name=None, key_format=None):
         actual_name, fixed_keys = self.make_key_seq(keys, name)
         ctn = self._new_var_container(vartype, key_list=[fixed_keys], lb=lb, ub=ub, name=name)
-        return self.new_var_list(ctn, fixed_keys, vartype, lb, ub, actual_name, 1, key_format)
+        var_list = self.new_var_list(ctn, fixed_keys, vartype, lb, ub, actual_name, 1, key_format)
+        ctn._attach_var_list(var_list)
+        return var_list
 
     def new_var_list(self, var_container,
                      key_seq, vartype,
@@ -419,13 +426,15 @@ class ModelFactory(_AbstractModelFactory):
                      name=str,
                      dimension=1, key_format=None,
                      _safe_bounds=False,
-                     _safe_names=False):
+                     _safe_names=False,
+                     var_factory_fn=Var,
+                     _add_container=True):
         number_of_vars = len(key_seq)
         if 0 == number_of_vars:
             return []
 
         # compute defaults once
-        default_lb = vartype.default_lb
+        default_lb = None if vartype.is_semi_type() else vartype.default_lb
         default_ub = vartype.default_ub
 
         if _safe_bounds:
@@ -450,19 +459,23 @@ class ModelFactory(_AbstractModelFactory):
             self._checker.check_vars_domain(xlbs, xubs, xnames)
 
         mdl = self._model
-        allvars = [Var(mdl, vartype,
-                       self.safe_kth(xnames, k, None),
-                       self.safe_kth(xlbs, k, default_lb),
-                       self.safe_kth(xubs, k, default_ub),
-                       _safe_lb=safe_lbs,
-                       _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
+        allvars = [var_factory_fn(mdl,
+                                  vartype,
+                                  self.safe_kth(xnames, k, None),
+                                  self.safe_kth(xlbs, k, default_lb),
+                                  self.safe_kth(xubs, k, default_ub),
+                                  _safe_lb=safe_lbs,
+                                  _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
 
         # query the engine for a list of indices.
         indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, xnames)
         mdl._register_block_vars(allvars, indices, xnames)
-        if var_container:
-            for dv in allvars:
-                mdl.set_var_container(dv, var_container)
+        if _add_container:
+            # TRue if list is user-generated, False for dicts
+            mdl._add_var_container(var_container)
+        # if var_container:
+        #     for dv in allvars:
+        #         mdl.set_var_container(dv, var_container)
         return allvars
 
     def _make_var_dict(self, keys, var_list, ordered):
@@ -474,8 +487,11 @@ class ModelFactory(_AbstractModelFactory):
     def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
         actual_name, key_seq = self.make_key_seq(keys, name)
         ctn = self._new_var_container(vartype, key_list=[key_seq], lb=lb, ub=ub, name=name)
-        var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format)
-        return self._make_var_dict(key_seq, var_list, ordered)
+        var_list = self.new_var_list(ctn, key_seq, vartype, lb, ub, actual_name, 1, key_format, _add_container=False)
+        var_dict = self._make_var_dict(key_seq, var_list, ordered)
+        self._model._add_var_container(ctn)
+        ctn._attach_var_dict(var_dict)
+        return var_dict
 
     def new_var_multidict(self, seq_of_key_seqs, vartype, lb, ub, name, key_format=None, ordered=False):
         # ---
@@ -495,7 +511,9 @@ class ModelFactory(_AbstractModelFactory):
         ctn = self._new_var_container(vartype, key_list=fixed_keys, lb=lb, ub=ub, name=name)
         cube_vars = self.new_var_list(ctn, all_key_tuples, vartype, lb, ub, name, dimension, key_format)
 
-        return self._make_var_dict(keys=all_key_tuples, var_list=cube_vars, ordered=ordered)
+        multidict = self._make_var_dict(keys=all_key_tuples, var_list=cube_vars, ordered=ordered)
+        ctn._attach_var_dict(multidict)
+        return multidict
 
     def new_var_df(self, keys1, keys2, vartype, lb=None, ub=None, name=None):  # pragma: no cover
         try:
@@ -894,10 +912,6 @@ class ModelFactory(_AbstractModelFactory):
         self_model = self._model
         return PwlConstraint(self_model, pwl_expr, name)
 
-    @staticmethod
-    def default_objective_sense():
-        return ObjectiveSense.Minimize
-
     def new_kpi(self, kpi_arg, name_arg):
         # make a name
         if name_arg:
@@ -983,7 +997,7 @@ class ModelFactory(_AbstractModelFactory):
             names = generate_constant(None, None)
 
         ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in
-                      izip(lbs, exprs, ubs, names)]
+                  izip(lbs, exprs, ubs, names)]
         # else:
         #     ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
         self._post_constraint_block(ranges)
@@ -1003,7 +1017,6 @@ class ModelFactory(_AbstractModelFactory):
         ctn._index = old_varctn_counter
         ctn._index_offset = self._model.number_of_variables  # nb of variables before ctn
         self._var_container_counter = old_varctn_counter + 1
-
         return ctn
 
 
@@ -1017,6 +1030,8 @@ class _VariableContainer(object):
         self._ub = ub
         self._name = name
         self._name_str = None
+        self._var_collection = []
+        self._iter_vars = iter([])
 
     @property
     def index(self):
@@ -1130,3 +1145,17 @@ class _VariableContainer(object):
 
     def __str__(self):
         return self.to_string()
+
+    def _attach_var_list(self, var_list):
+        self._var_collection = var_list
+        self._iter_vars = iter(self._var_collection)
+
+    def _attach_var_dict(self, var_dict):
+        self._var_collection = var_dict
+        def iter_dict_values(dd):
+            from six import itervalues
+            return itervalues(dd)
+        self._iter_vars = iter_dict_values(var_dict)
+
+    def iter_variables(self):
+        return self._iter_vars

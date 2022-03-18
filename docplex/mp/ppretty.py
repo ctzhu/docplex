@@ -6,7 +6,7 @@
 
 # gendoc: ignore
 from docplex.mp.constants import ComparisonType
-from docplex.mp.linear import Var
+from docplex.mp.dvar import Var
 from docplex.mp.operand import LinearOperand
 from docplex.mp.mprinter import TextModelPrinter, _ExportWrapper
 

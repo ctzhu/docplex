@@ -151,6 +151,23 @@ STOP_CAUSE_UNKNOWN = "SearchStoppedByUnknownCause"
 ALL_STOP_CAUSES = (STOP_CAUSE_NOT_STOPPED, STOP_CAUSE_LIMIT, STOP_CAUSE_EXIT, STOP_CAUSE_ABORT, STOP_CAUSE_UNKNOWN)
 
 
+# Conflict refiner status: Unknown
+CONFLICT_STATUS_UNKNOWN = "Unknown"
+
+# Conflict refiner status: Terminated normally
+CONFLICT_STATUS_TERMINATED_NORMALLY = "TerminatedNormally"
+
+# Conflict refiner status: Terminated by limit
+CONFLICT_STATUS_TERMINATED_BY_LIMIT = "TerminatedByLimit"
+
+# Conflict refiner status: Terminated normally
+CONFLICT_STATUS_TERMINATED_BY_ABORT = "TerminatedByAbort"
+
+# List of all possible conflict refiner statuses
+ALL_CONFLICT_STATUSES = (CONFLICT_STATUS_UNKNOWN, CONFLICT_STATUS_TERMINATED_NORMALLY,
+                         CONFLICT_STATUS_TERMINATED_BY_LIMIT, CONFLICT_STATUS_TERMINATED_BY_ABORT)
+
+
 ###############################################################################
 ##  Public classes
 ###############################################################################
@@ -218,7 +235,7 @@ class CpoVarSolution(object):
 
     def __str__(self):
         """ String representing this object """
-        return "{}={}".format(self.expr.get_name(), self.get_value())
+        return "{}={}".format(self.get_name(), self.get_value())
 
 
     def __hash__(self):
@@ -1080,19 +1097,27 @@ class CpoModelSolution(object):
         gvals = self.get_objective_gaps()
         if gvals:
             out.write(u", gaps: {}".format(gvals))
-        out.write(u"\n")
-
-        # Print all variables in natural name order
-        lvars = [v for v in self.get_all_var_solutions() if v.get_name()]
-        lvars = sorted(lvars, key=functools.cmp_to_key(lambda v1, v2: compare_expressions(v1.expr, v2.expr)))
-        for v in lvars:
-            out.write(str(v))
-            out.write(u'\n')
+        if ovals or bvals or gvals:
+            out.write(u"\n")
 
         # Print all KPIs in declaration order
         kpis = self.get_kpis()
-        for k in kpis.keys():
-            out.write(u'{}: {}\n'.format(k, kpis[k]))
+        if kpis:
+            out.write(u"KPIs:\n")
+            for k in kpis.keys():
+                out.write(u'   {} = {}\n'.format(k, kpis[k]))
+
+        # Print all variables in natural name order
+        allvars = self.get_all_var_solutions()
+        if allvars:
+            out.write(u"Variables:\n")
+            lvars = [v for v in allvars if v.get_name()]
+            lvars = sorted(lvars, key=functools.cmp_to_key(lambda v1, v2: compare_expressions(v1.expr, v2.expr)))
+            for v in lvars:
+                out.write(u"   {} = {}\n".format(v.get_name(), v.get_value()))
+            nbanonym = len(allvars) - len(lvars)
+            if nbanonym > 0:
+                out.write(u"   + {} anonymous variable{}\n".format(nbanonym, ("s" if nbanonym > 1 else "")))
 
 
     def __str__(self):
@@ -1393,10 +1418,6 @@ class CpoSolveResult(CpoRunResult):
             True if this descriptor is a valid solution to the problem.
         """
         return self.is_a_solution
-        #return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_FAILED_NORMALLY)) \
-        #        or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
-        #return ((self.solve_status in (SOLVE_STATUS_FEASIBLE, SOLVE_STATUS_OPTIMAL)) and (self.fail_status != FAIL_STATUS_SEARCH_COMPLETED)) \
-        #        or ((self.solve_status == SOLVE_STATUS_UNKNOWN) and (self.fail_status == FAIL_STATUS_HAS_NOT_FAILED))
 
 
     def is_solution_optimal(self):
@@ -1749,12 +1770,22 @@ class CpoRefineConflictResult(CpoRunResult):
         #    model: Related model
         # """
         super(CpoRefineConflictResult, self).__init__(model)
+        self.conflict_status = CONFLICT_STATUS_UNKNOWN   # Conflict refiner status, with value in CONFLICT_STATUS_*
         self.member_constraints = []         # List of member constraints
         self.possible_constraints = []       # List of possible member constraints
         self.member_variables = []           # List of member variables
         self.possible_variables = []         # List of possible member variables
         self.solver_infos = CpoSolverInfos() # Solving information
         self.cpo_conflict = None             # Conflict in CPO format
+
+
+    def get_conflict_status(self):
+        """ Returns the status of the conflict refiner.
+
+        Returns:
+            Conflict refiner status, with value in CONFLICT_STATUS_*
+        """
+        return self.conflict_status
 
 
     def get_all_member_constraints(self):
@@ -1844,6 +1875,9 @@ class CpoRefineConflictResult(CpoRunResult):
         # Notify run result about JSON document
         self._set_json_doc(jsol)
 
+        # Get conflict status
+        self.conflict_status = jsol.get('ConflictRefinerStatus', CONFLICT_STATUS_UNKNOWN)
+
         # Get conflict data
         conflict = jsol.get('conflict')
         if conflict is None:
@@ -1900,7 +1934,7 @@ class CpoRefineConflictResult(CpoRunResult):
         if out is None:
             out = sys.stdout
 
-        out.write(u"Conflict refiner result:\n")
+        out.write(u"Conflict refiner result ({}):\n".format(self.get_conflict_status()))
         if not self.is_conflict():
             out.write(u"   No conflict\n")
             return

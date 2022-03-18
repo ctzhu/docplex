@@ -13,8 +13,8 @@ from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.compat23 import unitext
 from docplex.mp.basic import Expr, ModelingObjectBase, _SubscriptionMixin
 from docplex.mp.operand import LinearOperand
-from docplex.mp.utils import is_int, is_string, is_number, iter_emptyset, is_quad_expr
-from docplex.mp.dvar import Var
+from docplex.mp.utils import is_int, is_number, iter_emptyset, is_quad_expr
+from docplex.mp.dvar import is_var
 from docplex.mp.sttck import StaticTypeChecker
 
 
@@ -164,7 +164,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
                 return MonomialExpr(self._model, self._dvar, self._coef * e, safe=True)
         elif isinstance(e, LinearExpr):
             return e.times(self)
-        elif isinstance(e, Var):
+        elif is_var(e):
             return self.model._qfactory.new_var_product(e, self)
         elif isinstance(e, MonomialExpr):
             return self.model._qfactory.new_monomial_product(self, e)
@@ -290,7 +290,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
                 product = self
         elif isinstance(e, LinearExpr):
             product = e.times(self)
-        elif isinstance(e, Var):
+        elif is_var(e):
             product = self.model._qfactory.new_var_product(e, self)
         elif isinstance(e, MonomialExpr):
             product = self.model._qfactory.new_monomial_product(self, e)
@@ -372,7 +372,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def _get_terms_dict(self):
         # INTERNAL
-        return self.__terms
+        return self._terms
 
     def __typecheck_terms_dict(self, terms):  # pragma: no cover
         if not isinstance(terms, dict):
@@ -386,12 +386,12 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         if not is_safe:
             self.__typecheck_terms_dict(terms)
         if assume_normalized:
-            self.__terms = terms
+            self._terms = terms
         else:
-            self.__terms = self._model._lfactory.term_dict_type([(k, v) for k, v in iteritems(terms)])
+            self._terms = self._model._lfactory.term_dict_type(iteritems(terms))
         return self
 
-    __slots__ = ('_constant', '__terms', '_transient', '_subscribers')
+    __slots__ = ('_constant', '_terms', '_transient', '_subscribers')
 
     def __hash__(self):
         # py3 requires this function
@@ -407,7 +407,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         if isinstance(e, dict):
             if safe:
-                self.__terms = e
+                self._terms = e
             else:
                 self_terms = model._lfactory.term_dict_type()
                 for (v, k) in iteritems(e):
@@ -415,16 +415,16 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                     model._typecheck_num(k, 'LinearExpr')
                     if k != 0:
                         self_terms[v] = k
-                self.__terms = self_terms
+                self._terms = self_terms
             return
         else:
-            self.__terms = model._lfactory._new_term_dict()
+            self._terms = model._lfactory._new_term_dict()
 
         if e is None:
             pass
 
-        elif isinstance(e, Var):
-            self.__terms[e] = 1
+        elif is_var(e):
+            self._terms[e] = 1
 
         elif is_number(e):
             self._constant += e
@@ -436,11 +436,11 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif isinstance(e, LinearExpr):
             # note that transient is not kept.
             self._constant = e.get_constant()
-            self.__terms = self._new_terms_dict(model, e._get_terms_dict())  # make a copy
+            self._terms = self._new_terms_dict(model, e._get_terms_dict())  # make a copy
 
         elif isinstance(e, tuple):
             v, k = e
-            self.__terms[v] = k
+            self._terms[v] = k
 
         else:
             self.fatal("Cannot convert {0!r} to docplex.mp.LinearExpr, type is {1}", e, type(e))
@@ -482,7 +482,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             A copy of the expression on the same model.
         """
-        cloned_terms = self._new_terms_dict(self._model, self.__terms)  # faster than copy() on OrderedDict()
+        cloned_terms = self._new_terms_dict(self._model, self._terms)  # faster than copy() on OrderedDict()
         cloned = LinearExpr(model=self._model, e=cloned_terms, constant=self._constant, safe=True)
         return cloned
 
@@ -508,7 +508,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
         """
         self._constant = - self._constant
-        self_terms = self.__terms
+        self_terms = self._terms
         for v, k in iteritems(self_terms):
             self_terms[v] = -k
         self.notify_modified(event=UpdateEvent.LinExprGlobal)
@@ -520,7 +520,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         All variables and coefficients are removed and the constant term is set to zero.
         """
         self._constant = 0
-        self.__terms.clear()
+        self._terms.clear()
 
     def equals_constant(self, scalar):
         """ Checks if the expression equals a constant term.
@@ -542,18 +542,14 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             Boolean: True if the expression consists of only a constant term.
         """
-        return not self.__terms
+        return not self._terms
 
     def _has_nonzero_var_term(self):
-        for dv, k in self.iter_terms():
-            if k:
-                return True
-        else:
-            return False
+        return any(k for _, k in self.iter_terms())
 
     def as_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
-        if 0 == self.constant and 1 == len(self.__terms):
+        if 0 == self.constant and 1 == len(self._terms):
             for v, k in self.iter_terms():
                 if k == 1:
                     return v
@@ -569,7 +565,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def normalize(self):
         # modifies self
         doomed = [dv for dv, k in self.iter_terms() if not k]
-        lterms = self.__terms
+        lterms = self._terms
         for d in doomed:
             del lterms[d]
 
@@ -582,11 +578,11 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             return cloned
 
     def number_of_variables(self):
-        return len(self.__terms)
+        return len(self._terms)
 
     def unchecked_get_coef(self, dvar):
         # INTERNAL
-        return self.__terms.get(dvar, 0)
+        return self._terms.get(dvar, 0)
 
     def add_term(self, dvar, coeff):
         """
@@ -608,7 +604,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def _add_term(self, dvar, coef=1):
         # INTERNAL
-        self_terms = self.__terms
+        self_terms = self._terms
         self_terms[dvar] = self_terms.get(dvar, 0) + coef
 
     def set_coefficient(self, dvar, coeff):
@@ -619,7 +615,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     set_coef = set_coefficient
 
     def _set_coefficient_internal(self, dvar, coeff):
-        self_terms = self.__terms
+        self_terms = self._terms
         if coeff or dvar in self_terms:
             self_terms[dvar] = coeff
             return True
@@ -691,7 +687,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             Boolean: True if `dvar` is mentioned in the expression with a nonzero coefficient.
         """
-        return dvar in self.__terms
+        return dvar in self._terms
 
     def equals(self, other):
         """
@@ -728,8 +724,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             for dv, k in self.iter_terms():
                 if k != other.unchecked_get_coef(dv):
                     return False
-            else:
-                return True
+            return True
 
     # noinspection PyPep8
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.lp_name):
@@ -816,7 +811,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             The method :func:`plus` to compute a sum without modifying the self instance.
         """
         event = UpdateEvent.LinExprGlobal
-        if isinstance(e, Var):
+        if is_var(e):
             self._add_term(e, coef=1)
         elif isinstance(e, LinearExpr):
             self._add_expr(e)
@@ -846,14 +841,14 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             An iterator over the (variable, coefficient) pairs in the expression.
         """
-        return iteritems(self.__terms)
+        return iteritems(self._terms)
 
     def number_of_terms(self):
-        return len(self.__terms)
+        return len(self._terms)
 
     @property
     def size(self):
-        return len(self.__terms) + bool(self._constant)
+        return len(self._terms) + bool(self._constant)
 
     def subtract(self, e):
         """ Subtracts an expression from this expression.
@@ -870,7 +865,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             The method :func:`minus` to compute a difference without modifying the `self` instance.
         """
         event = UpdateEvent.LinExprCoef
-        if isinstance(e, Var):
+        if is_var(e):
             self._add_term(e, -1)
         elif is_number(e):
             self._constant -= e
@@ -881,7 +876,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             else:
                 # 1. decr constant
                 self.constant -= e.constant
-                # merge term dictionaries 
+                # merge term dictionaries
                 for v, k in e.iter_terms():
                     self._add_term(v, -k)
         elif isinstance(e, MonomialExpr):
@@ -906,7 +901,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             self._clear()
         elif factor != 1:
             self._constant *= factor
-            self_terms = self.__terms
+            self_terms = self._terms
             for v, k in iteritems(self_terms):
                 self_terms[v] = k * factor
 
@@ -1142,20 +1137,19 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         for v, k in self.iter_terms():
             if not v.is_discrete() or not is_int(k):
                 return False
-        else:
-            return True
+        return True
 
     def __repr__(self):
         return "docplex.mp.LinearExpr({0})".format(self.truncated_str())
 
     def _iter_sorted_terms(self):
         # internal
-        self_terms = self.__terms
+        self_terms = self._terms
         for dv in sorted(self_terms.keys(), key=lambda v: v._index):
             yield dv, self_terms[dv]
 
     def iter_sorted_terms(self):
-        if self.is_model_ordered():
+        if self._model.keep_ordering:
             return self.iter_terms()
         else:
             return self._iter_sorted_terms()
@@ -1184,7 +1178,7 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
     def clone(self):
         return self  # this is not cloned.
 
-    def copy(self, target_model, var_map):
+    def copy(self, target_model, var_mapping):
         return ZeroExpr(target_model)
 
     def to_linear_expr(self):
@@ -1281,8 +1275,8 @@ class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
         return "docplex.mp.ZeroExpr()"
 
     def equals(self, other):
-        return (isinstance(other, LinearOperand) and (
-                0 == other.get_constant() and (0 == other.number_of_terms()))) or \
+        return (isinstance(other, LinearOperand) and
+                (0 == other.get_constant() and (0 == other.number_of_terms()))) or \
                (is_number(other) and other == 0)
 
     def square(self):
@@ -1331,7 +1325,7 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
     def clone(self):
         return self.__class__(self._model, self._constant)
 
-    def copy(self, target_model, var_map):
+    def copy(self, target_model, var_mapping):
         return self.__class__(target_model, self._constant)
 
     def to_linear_expr(self):
@@ -1396,7 +1390,7 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
     def minus(self, e):
         return self + (-e)
 
-    def to_string(self, nb_digits=None, prod_symbol='', use_space=False):
+    def to_string(self, nb_digits=None, use_space=False):
         return '{0}'.format(self._constant)
 
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.name):

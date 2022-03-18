@@ -8,7 +8,8 @@ from six import iteritems as six_iteritems
 from docplex.mp.compat23 import unitext
 from docplex.mp.constants import UpdateEvent
 from docplex.mp.basic import _SubscriptionMixin
-from docplex.mp.linear import Expr, AbstractLinearExpr, Var, ZeroExpr
+from docplex.mp.linear import Expr, ZeroExpr
+from docplex.mp.operand import LinearOperand
 from docplex.mp.utils import *
 from docplex.mp.xcounter import update_dict_from_item_value
 from docplex.mp.sttck import StaticTypeChecker
@@ -217,7 +218,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return six_iteritems(self._quadterms)
 
     def iter_sorted_quads(self):
-        if self.is_model_ordered():
+        if self._model.keep_ordering:
             return six_iteritems(self._quadterms)
         else:
             return self._iter_sorted_quads()
@@ -717,7 +718,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     def _assign_scaled(self, other, factor):
         # INTERNAL
-        if isinstance(other, (AbstractLinearExpr, Var)):
+        if isinstance(other, LinearOperand):
             scaled = self._model._lfactory._to_linear_expr(other, force_clone=True)
             scaled *= factor
             self._linexpr = scaled

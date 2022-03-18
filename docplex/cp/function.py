@@ -24,6 +24,7 @@ from docplex.cp.catalog import Type_SegmentedFunction, Type_StepFunction
 from docplex.cp.expression import CpoExpr, INTERVAL_MIN, INTERVAL_MAX
 from docplex.cp.utils import *
 import bisect
+import copy
 
 
 class CpoFunction(CpoExpr):
@@ -85,37 +86,46 @@ class CpoFunction(CpoExpr):
             self._s = s
         assert len(self._s) == l, "Lists x and s must have the same length"
 
+
     def _get_expr_string(self):
         """ Get the string representing this expression, name excluded. """
         return "Function(...)"
+
 
     @property
     def v0(self):
         return self._v0
 
+
     @property
     def s0(self):
         return self._s0
+
 
     @property
     def x(self):
         return self._x
 
+
     @property
     def v(self):
         return self._v
+
 
     @property
     def s(self):
         return self._s
 
+
     @property
     def is_step_function(self):
         return self.type == Type_StepFunction
 
+
     @property
     def is_segmented_function(self):
         return self.type == Type_SegmentedFunction
+
 
     def get_value(self, t):
         """ Gets the value of the function.
@@ -143,21 +153,22 @@ class CpoFunction(CpoExpr):
         else:
             return self._v[i - 1] + (t - self._x[i - 1]) * self._s[i - 1]
 
+
     def copy(self, type=None):
         """ Creates and returns a copy of the function. """
-        xcopy = self._x[:]
-        vcopy = self._v[:]
-        scopy = self._s[:]
-        if type is None:
-            tp = self.type
-        else:
-            tp = type
-        return CpoFunction(tp, self._s0, self._v0, xcopy, vcopy, scopy)
+        res = copy.copy(self)
+        res._x = self._x[:]
+        res._v = self._v[:]
+        res._s = self._s[:]
+        if type is not None:
+            res.tp = type
+        return res
+
 
     def set_slope(self, x1, x2, v1, s):
         """ Sets the value of the invoking function over an interval.
 
-        Sets the value of the invoking function on interval `[x1,x2)` to be equal
+        Sets the value of the invoking function on interval `[x1,x2)`
         to equal to `f(x) = v1 + s * (x-x1)`.
 
         Args:
@@ -257,6 +268,7 @@ class CpoFunction(CpoExpr):
                     del self._s[i1 + 1:i2]
                     return
 
+
     def add_slope(self, x1, x2, v1, s):
         """ Adds a piecewise linear step on an interval.
 
@@ -341,6 +353,7 @@ class CpoFunction(CpoExpr):
                 self._s.insert(i2 + 1, scurr)
                 return
 
+
     def _add(self, other):
         ov0 = other._v0
         os0 = other._s0
@@ -350,6 +363,12 @@ class CpoFunction(CpoExpr):
             self._v0 += ov0
             for i in range(len(self._x)):
                 self._v[i] += ov0
+        elif not self._x:
+            # 'self' is a constant function of value _v0
+            self._x = other._x[:]
+            self._s = other._s[:]
+            self._v = [v + self._v0 for v in other._v]
+            self._v0 += ov0
         else:
             ox0 = other._x[0]
             if ox0 == self._x[0]:
@@ -373,11 +392,13 @@ class CpoFunction(CpoExpr):
             self.add_slope(other._x[ol - 1], INTERVAL_MAX, other._v[ol - 1], other._s[ol - 1])
         return self
 
+
     def _add_number(self, k):
         self._v0 += k
         for i in range(len(self._x)):
             self._v[i] += k
         return self
+
 
     def _mul(self, k):
         self._s0 *= k
@@ -387,12 +408,14 @@ class CpoFunction(CpoExpr):
             self._s[i] *= k
         return self
 
+
     def __iadd__(self, other):
         if isinstance(other, CpoFunction):
             assert (self.is_segmented_function or not other.is_segmented_function)
             return self._add(other)
         elif is_number(other) or is_bool(other):
             return self._add_number(other)
+
 
     def __isub__(self, other):
         if isinstance(other, CpoFunction):
@@ -401,6 +424,7 @@ class CpoFunction(CpoExpr):
             return self._add(tmp)
         elif is_number(other) or is_bool(other):
             return self._add_number(-other)
+
 
     def __add__(self, other):
         if isinstance(other, CpoFunction):
@@ -411,8 +435,10 @@ class CpoFunction(CpoExpr):
         elif is_number(other) or is_bool(other):
             return self.copy()._add_number(other)
 
+
     def __radd__(self, value):
         return self.__add__(value)
+
 
     def __sub__(self, other):
         if isinstance(other, CpoFunction):
@@ -423,17 +449,22 @@ class CpoFunction(CpoExpr):
         elif is_number(other) or is_bool(other):
             return self.copy()._add_number(-other)
 
+
     def __neg__(self):
         return self.copy()._mul(-1)
+
 
     def __imul__(self, value):
         return self._mul(value)
 
+
     def __mul__(self, value):
         return self.copy()._mul(value)
 
+
     def __rmul__(self, value):
         return self.__mul__(value)
+
 
     def set_value(self, x1, x2, v):
         """ Sets the value of the function over an interval.
@@ -442,11 +473,12 @@ class CpoFunction(CpoExpr):
         on the interval `[x1,x2)`.
 
         Args:
-            x1 (int): Start of the interval.
-            x2 (int): End of the interval.
+            x1 (int): Start of the interval (included).
+            x2 (int): End of the interval (excluded)
             v (int or float): Function value.
         """
         self.set_slope(x1, x2, v, 0)
+
 
     def add_value(self, x1, x2, v):
         """ Adds a constant to the value of the function over an interval.
@@ -460,6 +492,7 @@ class CpoFunction(CpoExpr):
             v (int or float): Added value.
         """
         self.add_slope(x1, x2, v, 0)
+
 
     def __pos__(self):
         return self

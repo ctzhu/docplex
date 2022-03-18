@@ -56,7 +56,7 @@ When exists, the corresponding operator are also overloaded to make easier the w
  * :meth:`floor`: Rounds a float expression down to the nearest integer.
  * :meth:`round`: Rounds a float expression to the nearest integer.
  * :meth:`trunc`: Truncated integer parts of a float expression.
- * :meth:`sgn`: Sign of a float expresion.
+ * :meth:`sgn`: Sign of a float expression.
 
 **Logical expressions**
 
@@ -92,10 +92,10 @@ Following functions allow to construct general purpose expressions:
  * :meth:`standard_deviation`: Standard deviation of the values of the variables in an array.
  * :meth:`slope_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and slopes.
  * :meth:`coordinate_piecewise_linear`: Evaluates piecewise-linear function given by set of breaking points and values.
+ * :meth:`all_diff`: Check if multiple expressions are all different.
 
 and constraints:
 
- * :meth:`all_diff`: Constrains multiple expressions to be all different.
  * :meth:`bool_abstraction`: Abstracts the values of one array as boolean values in another array.
  * :meth:`pack`: Maintains the load on a set of containers given objects sizes and assignments.
  * :meth:`abstraction`: Abstracts the values of one array as values in another array.
@@ -1133,18 +1133,22 @@ def false():
 
 
 def all_diff(arr, *args):
-    """ Returns a constraint stating that multiple expressions must be all different.
+    """ Returns a boolean expression stating that multiple expressions are all different.
+
+    Note: up to CP Optimizer version 20.10 (included), all_diff is a constraint, meaning it can only
+    be used at top-level of the model.
+    After version 20.10, all_diff can be used as a boolean expression.
 
     Args:
         arr: Array (list, tuple or iterable) of expressions, or first element of the list
         *args: Other expressions if first argument is a single expression
     Returns:
-        New constraint expression.
+        New boolean expression.
     """
     if args:
         arr = [arr]
         arr.extend(args)
-    return CpoFunctionCall(Oper_all_diff, Type_Constraint, (_convert_arg(arr, "arr", Type_IntExprArray),))
+    return CpoFunctionCall(Oper_all_diff, Type_BoolExpr, (_convert_arg(arr, "arr", Type_IntExprArray),))
 
 
 def abstraction(y, x, values, abstractValue):

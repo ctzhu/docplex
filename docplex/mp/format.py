@@ -175,7 +175,8 @@ _xtension2fmt_dict = {"lp": LP_format,
                       "mod": OPL_format,
                       "mps": MPS_format,
                       "sav": SAV_format,
-                      "sav.gz": SAVgz_format
+                      "sav.gz": SAVgz_format,
+                      "savgz": SAVgz_format
                       }
 
 

@@ -17,6 +17,8 @@ from docplex.mp.compat23 import izip
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.xcounter import update_dict_from_item_value
 
+from docplex.mp.utils import is_numpy_ndarray
+
 class AdvAggregator(ModelAggregator):
     def __init__(self, linear_factory, quad_factory):
         ModelAggregator.__init__(self, linear_factory, quad_factory)
@@ -47,10 +49,14 @@ class AdvAggregator(ModelAggregator):
     def scal_prod_triple(self, left_terms, right_terms, coefs):
         used_coefs = None
         checker = self._model._checker
+        single_coeff = False
+        single_left = False
+        single_right = False
 
         if is_iterable(coefs, accept_string=False):
             used_coefs = coefs
         elif is_number(coefs):
+            single_coeff = True
             if coefs:
                 used_coefs = generate_constant(coefs, count_max=None)
             else:
@@ -59,18 +65,26 @@ class AdvAggregator(ModelAggregator):
             self._model.fatal("scal_prod_triple expects iterable or number as coefficients, got: {0!r}", coefs)
 
         if is_iterable(left_terms):
-            used_left = checker.typecheck_var_seq(left_terms)
+            l_terms = list(left_terms)
+            for l, lterm in enumerate(l_terms):
+                checker.typecheck_operand(lterm, accept_numbers=False, caller="AdvModel.scal_prod_triple.left_terms")
+            used_left = l_terms
         else:
+            single_left = True
             checker.typecheck_var(left_terms)
             used_left = generate_constant(left_terms, count_max=None)
 
         if is_iterable(right_terms):
-            used_right = checker.typecheck_var_seq(right_terms)
+            l_right = list(right_terms)
+            for r, rterm in enumerate(l_right):
+                checker.typecheck_operand(rterm, accept_numbers=False, caller="AdvModel.scal_prod_triple.right_terms")
+            used_right = l_right
         else:
+            single_right = True
             checker.typecheck_var(right_terms)
             used_right = generate_constant(right_terms, count_max=None)
 
-        if used_coefs is not coefs and used_left is not left_terms and used_right is not right_terms:
+        if all((single_coeff, single_left, single_right)):
             # LOOK
             return left_terms * right_terms * coefs
 
@@ -186,7 +200,7 @@ class AdvModel(Model):
     This class is a specialized version of the :class:`docplex.mp.model.Model` class with useful non-standard modeling
     functions.
     """
-    _fast_settings = {'keep_ordering': False, 'checker': 'off', 'keep_all_exprs': False}
+    _fast_settings = {'keep_ordering': False, 'keep_all_exprs': False} #  'checker': 'off'}
 
     def __init__(self, name=None, context=None, **kwargs):
         for k, v in iteritems(self._fast_settings):

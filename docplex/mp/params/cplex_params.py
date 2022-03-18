@@ -16,7 +16,7 @@ from docplex.mp.params.parameter_hierarchy_20100 import make_root_params_20100
 
 
 def _make_default_parameters():
-    params = make_root_params_121000()
+    params = make_root_params_20100()
     print("-- no cplex version found, using default parameter version: {0}".format(params.cplex_version))
     return params
 

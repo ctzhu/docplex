@@ -50,7 +50,7 @@ class CplexTransformerBase(BaseEstimator, TransformerMixin):
         var_types = params.get("types", None)
         if is_pandas_dataframe(X):
             return self._transform_from_pandas(X, y, var_lbs, var_ubs, var_types, **params)
-        elif is_numpy_matrix(X):
+        elif is_numpy_ndarray(X):
             return self._transform_from_numpy(X, y, var_lbs, var_ubs, var_types, **params)
         elif is_scipy_sparse(X):
             return self._transform_from_sparse(X, y, var_lbs, var_ubs, var_types, **params)
@@ -178,7 +178,7 @@ class CplexTransformer(CplexTransformerBase):
     def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         # matrix is nrows x (ncols + 2)
         # last two columns are lbs, ubs in that order
-        assert is_numpy_matrix(X)
+        assert is_numpy_ndarray(X)
 
         colnames = params.pop("colnames", None)
         mshape = X.shape
@@ -187,7 +187,7 @@ class CplexTransformer(CplexTransformerBase):
         assert nc >= 2
         nb_vars = nc - 1
         X_cts = X[:, :-1]
-        rhs = X[:, -1].A1
+        rhs = X[:, -1] #.A1
         # to cast or not to cast?
         cast_to_float = (X.dtype == np.int64) or params.pop("cast-to_float", False)
         return self.build_matrix_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,colnames,
@@ -280,7 +280,7 @@ class CplexRangeTransformer(CplexTransformerBase):
     def _transform_from_numpy(self, X, y, var_lbs, var_ubs, var_types, **params):
         # matrix is nrows x (ncols + 2)
         # last two columns are lbs, ubs in that order
-        assert is_numpy_matrix(X)
+        assert is_numpy_ndarray(X)
 
         colnames = params.pop("colnames", None)
         mshape = X.shape

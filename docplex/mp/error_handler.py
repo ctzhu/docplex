@@ -247,7 +247,7 @@ def docplex_error_stop_here():
     pass
 
 
-def docplex_add_trivial_infeasible_ct(ct):
+def docplex_add_trivial_infeasible_ct_here():
     # INTERNAL: set breakpoint here to inspect ct
     pass
 

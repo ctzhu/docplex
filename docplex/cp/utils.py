@@ -25,12 +25,13 @@ import platform
 import copy
 import gzip
 import zipfile
+import traceback
 import importlib
 from collections import deque
 
 try:
     from collections.abc import Iterable  # Python >= 3.7
-except:
+except ImportError:
     from collections import Iterable      # Python < 3.7
 
 try:
@@ -39,12 +40,16 @@ except ImportError:
     from io import StringIO        # Python 3
 
 
-###############################################################################
-## Constants
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Constants
+#-----------------------------------------------------------------------------
+
+# Python main version number
+PYTHON_MAIN_VERSION = sys.version_info[0]
 
 # Python 2 indicator
-IS_PYTHON_2 = (sys.version_info[0] == 2)
+IS_PYTHON_2 = (PYTHON_MAIN_VERSION == 2)
+
 
 # Check if numpy is available
 try:
@@ -71,9 +76,9 @@ DEFAULT = "default"
 IS_WINDOWS = platform.system() == 'Windows'
 
 
-###############################################################################
-## Public classes
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Public classes
+#-----------------------------------------------------------------------------
 
 class CpoException(Exception):
     """ Exception thrown in case of CPO errors.
@@ -363,7 +368,8 @@ class Context(dict):
             prfx = self.log_prefix
             if prfx:
                 out.write(str(prfx))
-            out.write(''.join([str(m) for m in msg]) + "\n")
+            out.write(''.join([str(m) for m in msg]))
+            out.write("\n")
             out.flush()
 
 
@@ -435,7 +441,7 @@ class Context(dict):
         # Check file
         if is_string(out):
             with open_utf8(os.path.abspath(out), mode='w') as f:
-                self.export(f)
+                self.export_flat(f)
                 return
         # Check default output
         if out is None:
@@ -447,14 +453,14 @@ class Context(dict):
 
         # Print values
         for k in sorted(adict.keys()):
-            out.write(k)
-            out.write(" = ")
+            out.write(make_unicode(k))
+            out.write(u" = ")
             v = adict[k]
             if is_string(v):
                 out.write(to_printable_string(v))
             else:
-                out.write(str(v))
-            out.write('\n')
+                out.write(make_unicode(str(v)))
+            out.write(u'\n')
 
 
     def export_flat_as_string(self):
@@ -520,6 +526,28 @@ class Context(dict):
                 v._build_path_dict(path + k, result)
             else:
                 result[path + k] = v
+
+
+class PersistentContext(Context):
+    """ Persistent context stored in a file. """
+
+    def __init__(self, cfile):
+        """ Create a new persistent Context
+
+        If the given file exists, it is read in this context.
+
+        Args:
+            cfile: File where context is stored with its flat representation
+        """
+        super(PersistentContext, self).__init__()
+        vars(self)['storage_file'] = cfile
+        if os.path.isfile(cfile):
+            self.import_flat(cfile)
+
+    def save(self):
+        """ Save this context in the file.
+        """
+        self.export_flat(vars(self)['storage_file'])
 
 
 class IdAllocator(object):
@@ -645,7 +673,7 @@ class SafeIdAllocator(object):
 
 
 class KeyIdDict(object):
-    """ Dictionary using id of the key objects as key.
+    """ Dictionary using internally id of the key objects as dictionary key.
 
     This object allows to use any Python object as key (with no __hash__() function),
     and to map a value on the physical instance of the key.
@@ -654,7 +682,6 @@ class KeyIdDict(object):
                  )
 
     def __init__(self):
-        super(KeyIdDict, self).__init__()
         self.kdict = {}
 
     def set(self, key, value):
@@ -711,7 +738,6 @@ class ObjectCache(object):
                  )
 
     def __init__(self, maxsize):
-        super(ObjectCache, self).__init__()
         self.obj_dict = {}
         self.max_size = maxsize
         self.key_list = deque()
@@ -1120,9 +1146,9 @@ class ListDict(dict):
 
 
 
-###############################################################################
-## Public functions
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Public functions
+#-----------------------------------------------------------------------------
 
 def check_default(val, default):
     """ Check that an argument value is DEFAULT and returns the default value if so.
@@ -1312,6 +1338,34 @@ def string_to_value(s):
         if ns in _DEFAULT_STRING_VALUES:
             return _DEFAULT_STRING_VALUES[ns]
     return s
+
+def to_compact_SI(val):
+    """ Convert a long value in a string using suffix k, M or G to display only 3 digits.
+
+    Args:
+        val:  Integer value to convert
+    Returns:
+        String representing this value with 3 significant digits
+    """
+    if val < 1000:
+        return str(val)
+    if val < 10000:
+        return str(val // 1000) + "." + str((val % 1000) // 10) + "k"
+    if val < 100000:
+        return str(val // 1000) + "." + str((val % 1000) // 100) + "k"
+    if val < 1000000:
+        return str(val // 1000) + "k"
+    if val < 10000000:
+        return str(val // 1000000) + "." + str((val % 1000000) // 10000) + "M"
+    if val < 100000000:
+        return str(val // 1000000) + "." + str((val % 1000000) // 100000) + "M"
+    if val < 1000000000:
+        return str(val // 1000000) + "M"
+    if val < 10000000000:
+        return str(val // 1000000000) + "." + str((val % 1000000000) // 10000000) + "G"
+    if val < 100000000000:
+        return str(val // 1000000000) + "." + str((val % 1000000000) // 100000000) + "G"
+    return str(val // 1000000000) + "G"
 
 
 def _get_vars(obj):
@@ -1840,6 +1894,17 @@ def is_symbol_char(c):
     return c in _SYMBOL_CHARS
 
 
+def is_symbol(s):
+    """ Check whether a string can be used in a symbol.
+
+    Args:
+        s: String to check
+    Returns:
+        True if character string can be used as s symbol
+    """
+    return s and is_string(s) and (not s[0] in _DIGIT_CHARS) and all((c in _SYMBOL_CHARS) for c in s)
+
+
 def to_printable_id(s):
     """ Build a CPO printable identifier from its raw string (add escape sequences and quotes if necessary).
 
@@ -1852,7 +1917,7 @@ def to_printable_id(s):
     if len(s) == 0:
         return u'""'
     # Check if string can be used as it is
-    if (all((c in _SYMBOL_CHARS) for c in s)) and not s[0] in _DIGIT_CHARS:
+    if (not s[0] in _DIGIT_CHARS) and all((c in _SYMBOL_CHARS) for c in s):
         return make_unicode(s)
     # Build result string
     return u'"' + ''.join(_TO_SPECIAL_CHARS.get(c, c) for c in s) + u'"'
@@ -1931,7 +1996,7 @@ if IS_PYTHON_2:
         Returns:
             String in unicode
         """
-        return s if type(s) is unicode else unicode(s)
+        return unicode(s)
 else:
     def make_unicode(s):
         """ Convert a string in unicode.
@@ -2119,6 +2184,33 @@ def get_module_version(mname):
     except ImportError:
         return None
 
+
+def is_in_notebook():
+    """ Check whether program is currently running inside a IPython or Jupyter notebook.
+
+    Returns:
+        True if the program is running in a notebook, false otherwise.
+    """
+    rstk = traceback.extract_stack(limit=1)[0]
+    return rstk[0].startswith("<ipython")
+
+
+def write_checking_unicode_errors(out, data):
+    """ Write data on a stream, and by-pass UnicodeEncodeError if any.
+
+    Args:
+        out:  Output stream
+        data: Data to write
+    """
+    try:
+        out.write(data)
+    except UnicodeEncodeError:
+        # Determine proper encoding
+        encoding = out.encoding
+        if not encoding:
+            encoding = 'ascii'
+        # Rewrite data encoding it explicitly
+        out.write(data.encode(encoding, errors='backslashreplace'))
 
 #-----------------------------------------------------------------------------
 # Zip iterator functions to scan lists simultaneously

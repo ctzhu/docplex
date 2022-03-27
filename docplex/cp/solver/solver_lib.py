@@ -16,6 +16,7 @@ from docplex.cp.solution import *
 from docplex.cp.solution import CpoSolveResult
 from docplex.cp.utils import compare_natural
 from docplex.cp.solver.solver import CpoSolver, CpoSolverAgent, CpoSolverException
+from docplex.cp.blackbox import BLACKBOX_ARGUMENT_TYPES_ENCODING
 
 import ctypes
 from ctypes.util import find_library
@@ -23,11 +24,12 @@ import json
 import sys
 import time
 import os
+import traceback
 
 
-###############################################################################
-## Constants
-###############################################################################
+#-----------------------------------------------------------------------------
+# Constants
+#-----------------------------------------------------------------------------
 
 # Events received from library
 _EVENT_SOLVER_INFO     = 1  # Information on solver as JSON document
@@ -38,49 +40,51 @@ _EVENT_LOG_ERROR       = 5  # Log data on error stream
 _EVENT_SOLVER_ERROR    = 6  # Solver error. Details are in event associated string.
 _EVENT_CPO_CONFLICT    = 7  # Conflict in CPO format
 
-
 # Event notifier callback prototype
 _EVENT_NOTIF_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)
 
 # CPO callback prototype (event name, json data)
-_CPE_CALLBACK_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_char_p)
+_CPO_CALLBACK_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_char_p)
 
-# Function prototypes (return type, args_type)
+# Blackbox evaluation callback prototype (json call request, nb_result (out), result values (out))
+_BLACKBOX_EVAL_PROTOTYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_double), ctypes.c_int, ctypes.POINTER(ctypes.c_char))
+
+# Function prototypes (mandatory, return type, args_type)
 _LIB_FUNCTION_PROTYTYPES = \
 {
-    'createSession'        : (ctypes.c_void_p, (ctypes.c_void_p,)),
-    'deleteSession'        : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'setCpoModel'          : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p)),
-    'solve'                : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'startSearch'          : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'searchNext'           : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'endSearch'            : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'abortSearch'          : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'propagate'            : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'refineConflict'       : (ctypes.c_int,    (ctypes.c_void_p,)),
-    'refineConflictWithCpo': (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_bool)),
-    'runSeeds'             : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int,)),
-    'setExplainFailureTags': (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int))),
-    'setCpoCallback'       : (ctypes.c_int,    (ctypes.c_void_p, ctypes.c_void_p,)),
+    'createSession'        : (True,  ctypes.c_void_p, (ctypes.c_void_p,)),
+    'deleteSession'        : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'setCpoModel'          : (True,  ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p)),
+    'solve'                : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'startSearch'          : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'searchNext'           : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'endSearch'            : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'abortSearch'          : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'propagate'            : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'refineConflict'       : (True,  ctypes.c_int,    (ctypes.c_void_p,)),
+    'runSeeds'             : (True,  ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int,)),
+    'refineConflictWithCpo': (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_bool)),
+    'setExplainFailureTags': (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int))),
+    'setCpoCallback'       : (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_void_p,)),
+    'addBlackBoxFunction'  : (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, )),
 }
 
-# Optional lib functions
-_LIB_FUNCTION_OPTIONAL = set(['refineConflictWithCpo', 'setExplainFailureTags'])
 
-
-###############################################################################
-##  Public classes
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Public classes
+#-----------------------------------------------------------------------------
 
 class CpoSolverLib(CpoSolverAgent):
     """ Interface to a local solver through a shared library """
-    __slots__ = ('lib_handler',         # Lib handler
-                 'session',             # Solve session in the library
-                 'notify_event_proto',  # Prototype of the event callback
-                 'first_error_line',    # First line of error
-                 'callback_proto',      # Prototype of the CPO callback function
-                 'absent_funs',         # Set of optional lib functions that are not available
-                 'last_conflict_cpo',   # Last conflict in CPO format
+    __slots__ = ('lib_handler',          # Lib handler
+                 'session',              # Solve session in the library
+                 'notify_event_proto',   # Prototype of the event callback
+                 'first_log_error',      # First line of error
+                 'first_solver_error',   # First error (exception) thrown by solver
+                 'callback_proto',       # Prototype of the CPO callback function
+                 'blackbox_eval_proto',  # Prototype of the blackbox function evaluation function
+                 'absent_funs',          # Set of optional lib functions that are not available
+                 'last_conflict_cpo',    # Last conflict in CPO format
                  )
 
     def __init__(self, solver, params, context):
@@ -97,7 +101,8 @@ class CpoSolverLib(CpoSolverAgent):
         super(CpoSolverLib, self).__init__(solver, params, context)
 
         # Initialize attributes
-        self.first_error_line = None
+        self.first_log_error = None
+        self.first_solver_error = None
         self.lib_handler = None # (to not block end() in case of init failure)
         self.last_conflict_cpo = None
 
@@ -111,9 +116,8 @@ class CpoSolverLib(CpoSolverAgent):
         self.session = self.lib_handler.createSession(self.notify_event_proto)
         self.context.log(5, "Solve session: {}".format(self.session))
 
-        # Transfer infos in process info
-        for x in ('ProxyVersion', 'LibVersion', 'SourceDate', 'SolverVersion'):
-            self.process_infos[x] = self.version_info.get(x)
+        # Transfer all solver infos in process info
+        self.process_infos.update(self.version_info)
 
         # Check solver version if any
         sver = self.version_info.get('SolverVersion')
@@ -121,8 +125,9 @@ class CpoSolverLib(CpoSolverAgent):
         if sver and mver and compare_natural(mver, sver) > 0:
             raise CpoSolverException("Solver version {} is lower than model format version {}.".format(sver, mver))
 
-        # Initialize settings indicators
+        # Initialize other attributes
         self.callback_proto = None
+        self.blackbox_eval_proto = None
 
 
     def solve(self):
@@ -141,7 +146,7 @@ class CpoSolverLib(CpoSolverAgent):
             CpoException if error occurs
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         # Solve the model
         self._call_lib_function('solve', True)
@@ -154,7 +159,7 @@ class CpoSolverLib(CpoSolverAgent):
         """ Start a new search. Solutions are retrieved using method search_next().
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         self._call_lib_function('startSearch', False)
 
@@ -202,7 +207,7 @@ class CpoSolverLib(CpoSolverAgent):
             object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`.
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         # Check if cpo format required
         self.last_conflict_cpo = None
@@ -230,7 +235,7 @@ class CpoSolverLib(CpoSolverAgent):
             object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         # Call library function
         self._call_lib_function('propagate', True)
@@ -255,7 +260,7 @@ class CpoSolverLib(CpoSolverAgent):
             Run result, object of class :class:`~docplex.cp.solution.CpoRunResult`.
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         # Call library function
         self._call_lib_function('runSeeds', False, nbrun)
@@ -277,7 +282,7 @@ class CpoSolverLib(CpoSolverAgent):
             ltags:  List of tag ids to explain
         """
         # Initialize model if needed
-        self._init_model_in_solver()
+        self._init_solver()
 
         # Build list of tags
         if ltags is None:
@@ -300,6 +305,16 @@ class CpoSolverLib(CpoSolverAgent):
             super(CpoSolverLib, self).end()
 
 
+    def _init_solver(self):
+        """ Initialize solver
+        """
+        # Reset last errors
+        self.first_log_error = None
+        self.first_solver_error = None
+        # Initialize model if needed
+        self._init_model_in_solver()
+
+
     def _call_lib_function(self, dfname, json, *args):
         """ Call a library function
         Args:
@@ -314,7 +329,7 @@ class CpoSolverLib(CpoSolverAgent):
             self.context.log(5, "Call library function: '", dfname, "' with arguments:")
             if args:
                 for a in args:
-                    self.context.log(5, "   ", a)
+                    self.context.log(5, "   ", a, " (", type(a), ")")
             else:
                 self.context.log(5, "   None")
 
@@ -322,15 +337,23 @@ class CpoSolverLib(CpoSolverAgent):
         if json:
             self.last_json_result = None
 
-        # Call library function
-        try:
-            rc = getattr(self.lib_handler, dfname)(self.session, *args)
-        except:
+        # Get the library function
+        fun = getattr(self.lib_handler, dfname, None)
+        if fun is None:
             raise CpoNotSupportedException("The function '{}' is not found in the library. Try with a most recent version.".format(dfname))
+
+        # Call the library function
+        try:
+            rc = fun(self.session, *args)
+        except Exception as e:
+            if self.context.log_exceptions:
+                traceback.print_exc()
+            raise CpoSolverException("Error while calling function '{}': {}.".format(dfname, e))
         if rc != 0:
             errmsg = "Call to '{}' failure (rc={})".format(dfname, rc)
-            if self.first_error_line:
-               errmsg += ": {}".format(self.first_error_line)
+            errext = self.first_solver_error if self.first_solver_error else self.first_log_error
+            if errext:
+                errmsg += ": {}".format(errext)
             raise CpoSolverException(errmsg)
 
         # Check if JSON result is present
@@ -338,6 +361,7 @@ class CpoSolverLib(CpoSolverAgent):
             if self.last_json_result is None:
                raise CpoSolverException("No JSON result provided by function '{}'".format(dfname))
             self.context.log(5, "JSON result: ", self.last_json_result)
+
 
     def _notify_event(self, event, data):
         """ Callback called by the library to notify Python of an event (log, error, etc)
@@ -358,20 +382,23 @@ class CpoSolverLib(CpoSolverAgent):
             self.version_info = verinf = json.loads(data.decode('utf-8'))
             # Update information
             verinf['AgentModule'] = __name__
+            verinf['BlackboxEvalMutex'] = verinf.get('BlackboxEvalMutex', 0) > 0
             self.context.log(3, "Local solver info: '", verinf, "'")
 
         elif event == _EVENT_LOG_ERROR:
             ldata = data.decode('utf-8')
-            if self.first_error_line is None:
-                self.first_error_line = ldata.replace('\n', '')
+            if self.first_log_error is None:
+                self.first_log_error = ldata.replace('\n', '')
             out = self.log_output if self.log_output is not None else sys.stdout
             out.write("ERROR: {}\n".format(ldata))
             out.flush()
 
         elif event == _EVENT_SOLVER_ERROR:
             errmsg = data.decode('utf-8')
-            if self.first_error_line is not None:
-                errmsg += " (" + self.first_error_line + ")"
+            if self.first_log_error is not None:
+                errmsg += " (" + self.first_log_error + ")"
+            if self.first_log_error is None:
+                self.first_log_error = errmsg
             out = self.log_output if self.log_output is not None else sys.stdout
             out.write("SOLVER ERROR: {}\n".format(errmsg))
             out.flush()
@@ -381,7 +408,7 @@ class CpoSolverLib(CpoSolverAgent):
 
 
     def _cpo_callback(self, event, data):
-        """ Callback called by the library to notify Python of an event (log, error, etc)
+        """ Callback called by the library to notify Python of a CPO solver callback event
         Args:
             event:  Event name (string)
             data:   JSON data (string)
@@ -397,6 +424,53 @@ class CpoSolverLib(CpoSolverAgent):
         self.solver._notify_callback_event(event, res)
 
 
+    def _blackbox_eval_callback(self, jeval, nbres, result, szexcpt, excpt):
+        """ Callback called by the library to evaluate a blackbox function
+        Args:
+            jeval:   Evaluation context expressed as JSON data
+            nbres:   Pointer on number of results
+            result:  Pointer on results array
+            szexcpt: Max size of error string buffer
+            excpt:   Exception string buffer (length 500)
+        Returns:
+            Array of double values
+        """
+        # Decode JSON string
+        stime = time.time()
+        jeval = jeval.decode('utf-8', errors='ignore')
+        self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_DECODE_TIME, time.time() - stime)
+        self.context.log(5, "JSON blackbox evaluation request: ", jeval)
+
+        # Retrieve evaluation elements
+        bbf, args = self._get_blackbox_function_eval_context(jeval)
+
+        # Process blackbox function evaluation request
+        lck = bbf.eval_mutex
+        try:
+            if lck is not None:
+                with bbf.eval_mutex:
+                    res = bbf.eval(*args)
+            else:
+                res = bbf.eval(*args)
+            # Store result
+            if res:
+                nbres[0] = len(res)
+                for i, v in enumerate(res):
+                    result[i] = v
+        except Exception as e:
+            if self.context.log_exceptions:
+                traceback.print_exc()
+            # Build error message
+            orig = traceback.extract_tb(sys.exc_info()[2])[-1]
+            err = "({}, {}) {}: {}".format(orig[0], orig[1], type(e).__name__, e)
+            # Set it in response buffer
+            err = err.encode('utf8')
+            mlen = min(szexcpt - 1, len(err))
+            for i in range(mlen):
+                excpt[i] = err[i]
+            excpt[mlen] = 0
+
+
     def _get_lib_handler(self):
         """ Access the CPO library
         Returns:
@@ -407,6 +481,7 @@ class CpoSolverLib(CpoSolverAgent):
         # Access library
         libf = self.context.libfile
         if not libf:
+            _notify_libfile_not_found()
             raise CpoSolverException("CPO library file should be given in 'solver.lib.libfile' context attribute.")
 
         # Load library
@@ -415,12 +490,13 @@ class CpoSolverLib(CpoSolverAgent):
         # Define function prototypes
         self.absent_funs = set()
         for name, proto in _LIB_FUNCTION_PROTYTYPES.items():
+            mand, rtype, argtypes = proto
             try:
                 f = getattr(lib, name)
-                f.restype = proto[0]
-                f.argtypes = proto[1]
+                f.restype = rtype
+                f.argtypes = argtypes
             except:
-                if not name in _LIB_FUNCTION_OPTIONAL:
+                if mand:
                     raise CpoSolverException("Function '{}' not found in the library {}".format(name, lib))
                 else:
                     self.absent_funs.add(name)
@@ -440,15 +516,18 @@ class CpoSolverLib(CpoSolverAgent):
         if not os.path.isfile(libf):
             lf = find_library(libf)
             if lf is None:
+                _notify_libfile_not_found()
                 raise CpoSolverException("Can not find library '{}'".format(libf))
             libf = lf
         # Check library is executable
         if not is_exe_file(libf):
+            _notify_libfile_not_found()
             raise CpoSolverException("Library file '{}' is not executable".format(libf))
         # Load library
         try:
             return ctypes.CDLL(libf)
         except Exception as e:
+            _notify_libfile_not_found()
             raise CpoSolverException("Can not load library '{}': {}".format(libf, e))
 
 
@@ -471,10 +550,54 @@ class CpoSolverLib(CpoSolverAgent):
 
     def _add_callback_processing(self):
         """ Add the processing of solver callback.
-        This method must be extended by agent implementations to actually do the operation.
         """
         # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
-        self.callback_proto = _CPE_CALLBACK_PROTOTYPE(self._cpo_callback)
+        self.callback_proto = _CPO_CALLBACK_PROTOTYPE(self._cpo_callback)
         self._call_lib_function('setCpoCallback', False, self.callback_proto)
 
 
+    def _register_blackbox_function(self, name, bbf):
+        """ Register a blackbox function in the solver
+        This method must be extended by agent implementations to actually do the operation.
+
+        Args:
+            name: Name of the blackbox function in the model (may differ from the declared one)
+            bbf: Blackbox function descriptor, object of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
+        """
+        # Check lib version
+        ver = self.version_info.get('LibVersion', 0)
+        if ver < 7:
+            raise CpoSolverException("This version of the CPO library ({}) does not support blackbox functions.".format(ver))
+
+        # Encode list of argument types
+        atypes = [BLACKBOX_ARGUMENT_TYPES_ENCODING[t] for t in bbf.get_arg_types()]
+
+        # Set blackbox callback if not already done
+        if self.blackbox_eval_proto is None:
+            self.blackbox_eval_proto = _BLACKBOX_EVAL_PROTOTYPE(self._blackbox_eval_callback)
+
+        # Register blackbox function
+        name = name.encode('utf-8')
+        dimension = bbf.get_dimension()
+        nbargs = len(atypes)
+        self._call_lib_function('addBlackBoxFunction', False, name, dimension, nbargs, (ctypes.c_int * nbargs)(*atypes), self.blackbox_eval_proto)
+
+
+#-----------------------------------------------------------------------------
+#  Private functions
+#-----------------------------------------------------------------------------
+
+def _notify_libfile_not_found():
+    """ Print an error message if library file is not found """
+    out = sys.stdout
+    banner = "#" * 79
+    out.write(banner + '\n')
+    out.write("# Solver library file is not found !\n")
+    out.write("# Please check that:\n")
+    out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
+    out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
+    out.write("#  - your system path includes a reference to the directory where the library file 'lib_cpo_solver_*(.lib or .so)' is located,\n")
+    out.write("#  - the context attribute 'context.solver.lib.libfile' is properly set to 'lib_cpo_solver_*(.lib or .so)',\n")
+    out.write("#  - or that it is set to an absolute path to this file.\n")
+    out.write(banner + '\n')
+    out.flush()

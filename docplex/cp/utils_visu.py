@@ -29,7 +29,7 @@ except ImportError:
     LIBRARIES_PRESENT = False
 
 from docplex.cp.function import CpoFunction
-from docplex.cp.expression import CpoTransitionMatrix
+from docplex.cp.expression import *
 from docplex.cp.solution import *
 import docplex.cp.config as config
 
@@ -42,80 +42,63 @@ def is_visu_enabled():
     if not LIBRARIES_PRESENT:
         print("\nVisu is disabled because packages 'numpy' and/or 'matplotlib' are not available.")
         return False
-    if not config.context.visu_enabled:
-        print("\nVisu is logically disabled by configuration.")
-        return False
     return True
+
+
+#=============================================================================
+# Utility classes
+#=============================================================================
 
 
 # Timeline objects
 class _TLObject(object):
-    __slots__ = ('_tl',       # Timeline
-                 '_name',     # Name
-                 '_origin',   # Origin
-                 '_horizon',  # Horizon
-                 '_color',    # Color identifier
-                 )
+    __slots__ = ('timeline', # Timeline
+                 'name',     # Name
+                 'origin',   # Origin
+                 'horizon',  # Horizon
+                 'color',    # Color identifier
+                )
 
     def __init__(self, tl, name=None, origin=None, horizon=None, color=None):
         """ New timeline object
         """
         super(_TLObject, self).__init__()
-        self._tl = tl
-        self._origin = origin
-        self._horizon = horizon
-        self._color = color
-        self._name = name
-        self._tl.record(self)
-
-    @property
-    def timeline(self):
-        return self._tl
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def origin(self):
-        return self._origin
-
-    @property
-    def horizon(self):
-        return self._horizon
-
-    @property
-    def color(self):
-        return self._color
+        self.timeline = tl
+        self.origin = origin
+        self.horizon = horizon
+        self.color = color
+        self.name = name
+        self.timeline.record(self)
 
     @property
     def tl_origin(self):
-        return self._tl.origin
+        return self.timeline.origin
 
     @property
     def tl_horizon(self):
-        return self._tl.horizon
+        return self.timeline.horizon
 
     @property
     def tl_mincolor(self):
-        return self._tl.mincolor
+        return self.timeline.mincolor
 
     @property
     def tl_maxcolor(self):
-        return self._tl.maxcolor
+        return self.timeline.maxcolor
 
 
 # Internal classes
 
 class _Interval(_TLObject):
+    __slots__ = ()
     def __init__(self, tl, start, end, color=0, name=None):
         """ Create a new interval
         """
         super(_Interval, self).__init__(tl, name, start, end, color)
-        if _visu._naming is not None:
-            self._name = _visu._naming(name)
+        if _visu.naming is not None:
+            self.name = _visu.naming(name)
         else:
-            self._name = name
+            self.name = name
 
     @property
     def start(self):
@@ -127,102 +110,77 @@ class _Interval(_TLObject):
 
 
 class _Segment(_TLObject):
+    __slots__ = ('start',    # Segment start
+                 'end',      # Segment end
+                 'vstart',   # Value at start
+                 'vend',     # Value at end
+                )
     def __init__(self, tl, start, end, vstart, vend, name=None):
-        """ Create a new interval
+        """ Create a new segment
         """
         super(_Segment, self).__init__(tl, name=name)
-        if _visu._naming is not None:
-            self._name = _visu._naming(name)
+        if _visu.naming is not None:
+            self.name = _visu.naming(name)
         else:
-            self._name = name
-        self._start = start
-        self._end = end
-        self._vstart = vstart
-        self._vend = vend
-
-    @property
-    def start(self):
-        return self._start
-
-    @property
-    def end(self):
-        return self._end
-
-    @property
-    def vstart(self):
-        return self._vstart
-
-    @property
-    def vend(self):
-        return self._vend
+            self.name = name
+        self.start = start
+        self.end = end
+        self.vstart = vstart
+        self.vend = vend
 
 
 class _Sequence(_TLObject):
+    __slots__ = ('intervals',  # List of sequence intervals
+                 'segments',   # List of segments
+                 'position',   # Position
+                )
     def __init__(self, tl, name=None):
         """ Create a new empty sequence
         """
         super(_Sequence, self).__init__(tl, name)
-        self._intervals = []  # Intervals
-        self._segments = []  # Segments
-        self._position = -1
+        self.intervals = []
+        self.segments = []
+        self.position = -1
 
     def set_position(self, p):
-        self._position = p
+        self.position = p
 
     def get_position(self):
-        return self._position
+        return self.position
 
     def add_interval(self, itv):
-        self._intervals.append(itv)
+        self.intervals.append(itv)
 
     def add_segment(self, seg):
-        self._segments.append(seg)
-
-    @property
-    def intervals(self):
-        return self._intervals
-
-    @property
-    def segments(self):
-        return self._segments
+        self.segments.append(seg)
 
 
 class _Function(_TLObject):
+    __slots__ = ('segments',  # List of function segments
+                 'style',     # Style
+                )
     def __init__(self, tl, name=None, origin=None, horizon=None, style=None, color=None):
-        """ Create a new empty sequence
+        """ Create a new function
         """
         super(_Function, self).__init__(tl, name, origin, horizon, color)
-        self._segments = []  # Segments
-        self._style = style
+        self.segments = []  # Segments
+        self.style = style
         # Segments are 4-tuples (start, end, vstart, vend), with the exception at the extremities:
         # when start=-infty, and end<+infty, vstart is a slope before end
         # when end  = +infty and start>-infty, vend is a slope after start
 
-    @property
-    def segments(self):
-        return self._segments
-
-    @property
-    def style(self):
-        return self._style
-
     def add_segment(self, seg):
-        self._segments.append(seg)
+        self.segments.append(seg)
 
 
 class _Panel(_TLObject):
+    __slots__ = ('pauses',
+                )
     def __init__(self, tl, name=None, origin=None, horizon=None, pauses=None):
         """ Create a new panel
         """
         super(_Panel, self).__init__(tl, name, origin, horizon)
-        if pauses is None:
-            self._pauses = []
-        else:
-            self._pauses = pauses
-
-    @property
-    def pauses(self):
-        return self._pauses
+        self.pauses = [] if pauses is None else pauses
 
     def preshow(self):
         pass
@@ -231,11 +189,12 @@ class _Panel(_TLObject):
         return 1
 
     def add_pause(self, start, end):
-        self._pauses.append((start, end))
+        self.pauses.append((start, end))
 
     def display(self, axes):
         """ axes is an instance of Axes
         """
+        # TBD ??
 
     def show_pauses(self, axes, ymin, ymax):
         all_pauses = self.timeline.pauses + self.pauses
@@ -251,6 +210,8 @@ class _Panel(_TLObject):
 
 
 class _SequencePanel(_Panel):
+    __slots__ = ('sequences',  # List of sequences
+                )
     def __init__(self, tl, name=None, origin=None, horizon=None, pauses=None):
         """ Create a new empty sequence panel
         """
@@ -345,12 +306,16 @@ class _SequencePanel(_Panel):
 
 
 class _IntervalPanel(_Panel):
+    __slots__ = ('intervals',  # List of intervals
+                 'layered',    # Intervals augmented with layer index
+                 'nblayers',   # Number of layers
+                )
     def __init__(self, tl, name=None, origin=None, horizon=None, pauses=None):
         """ Create a new empty sequence
         """
         super(_IntervalPanel, self).__init__(tl, name, origin, horizon, pauses)
-        self.intervals = []  # Intervals
-        self.layered = []  # Intervals augmented with layer index
+        self.intervals = []
+        self.layered = []
         self.nblayers = -1
 
     def add_interval(self, itv):
@@ -402,31 +367,9 @@ class _IntervalPanel(_Panel):
                       verticalalignment='center')
 
 
-def _segment_value(seg, x):
-    """
-    Returns segment value at a particular x-value
-    """
-    start = seg.start
-    end = seg.end
-    vstart = seg.vstart
-    vend = seg.vend
-    assert start <= x <= end, "Illegal attempt to compute value outside of segment"
-    if start == INT_MIN and end < INT_MAX:
-        # initial segment
-        slope = vstart
-        return vend - (end - x) * slope
-    elif end == INT_MAX and start > INT_MIN:
-        # last segment
-        slope = vend
-        return vstart + (x - start) * slope
-    else:
-        if vstart == vend:
-            return vstart
-        else:
-            return vstart + (x - start) * (vend - vstart) / (end - start)
-
-
 class _FunctionPanel(_Panel):
+    __slots__ = ('functions',  # List of functions
+                )
     def __init__(self, tl, name=None, origin=None, horizon=None, pauses=None):
         """ Create a new empty sequence panel
         """
@@ -564,29 +507,36 @@ class _FunctionPanel(_Panel):
 
 
 class _Figure(object):
+    __slots__ = ('name',     # Name of the figure
+                 'seqcmap',  # Sequential colormap
+                 'quacmap',  # Qualitative colormap
+                )
     def __init__(self, name=None):
         super(_Figure, self).__init__()
         self.name = name
-        self.seqcmap = cm.BuPu  # Sequential colormap
-        self.quacmap = cm.Set2  # Qualitative colormap
+        self.seqcmap = cm.BuPu
+        self.quacmap = cm.Set2
 
     def show(self):
         assert False
 
 
 class _Matrix(_Figure):
+    __slots__ = ('size',    # Matrix size
+                 'values',  # Matrix values
+                )
     def __init__(self, title=None, matrix=None, tuples=None):
         super(_Matrix, self).__init__(title)
         if matrix is not None:
             assert isinstance(matrix[0], list), "Bad input format for matrix"
             assert len(matrix) == len(matrix[0]), "Input for matrix is not square"
-            self._size = len(matrix[0])
-            self._values = np.array(matrix, dtype=np.int)
+            self.size = len(matrix[0])
+            self.values = np.array(matrix, dtype=np.int)
         elif tuples is not None:
-            self._size = max(t[i] for t in tuples for i in range(2)) + 1
-            self._values = np.zeros((self._size, self._size), dtype=np.int)
+            self.size = max(t[i] for t in tuples for i in range(2)) + 1
+            self.values = np.zeros((self.size, self.size), dtype=np.int)
             for t in tuples:
-                self._values[t[0]][t[1]] = t[2]
+                self.values[t[0]][t[1]] = t[2]
 
     def flush(self):
         pass
@@ -599,16 +549,16 @@ class _Matrix(_Figure):
         ivmax = -1
         jvmax = -1
         # for vmin annotation we target the center of the matrix
-        ivmintarget = self._size * 0.5
-        jvmintarget = self._size * 0.5
+        ivmintarget = self.size * 0.5
+        jvmintarget = self.size * 0.5
         distmin = INT_MAX
         # for vmax annotation we target the center of the matrix
-        ivmaxtarget = self._size * 0.75
-        jvmaxtarget = self._size * 0.5
+        ivmaxtarget = self.size * 0.75
+        jvmaxtarget = self.size * 0.5
         distmax = INT_MAX
-        for i in range(0, self._size):
-            for j in range(0, self._size):
-                val = self._values[i][j]
+        for i in range(0, self.size):
+            for j in range(0, self.size):
+                val = self.values[i][j]
                 if val < INTERVAL_MAX:
                     if val <= vmin:
                         if val < vmin:
@@ -634,12 +584,12 @@ class _Matrix(_Figure):
                                 distmax = dmax
                                 ivmax = i
                                 jvmax = j
-        for i in range(0, self._size):
-            for j in range(0, self._size):
-                val = self._values[i][j]
+        for i in range(0, self.size):
+            for j in range(0, self.size):
+                val = self.values[i][j]
                 if vmax < val:
-                    self._values[i][j] = vmax * 1.5
-        h = np.array(self._values)  # added some commas and array creation code
+                    self.values[i][j] = vmax * 1.5
+        h = np.array(self.values)  # added some commas and array creation code
         fig = plt.figure(self.name)
         ax = fig.add_subplot(111)
         plt.imshow(h, interpolation="nearest", cmap=self.seqcmap)
@@ -650,8 +600,8 @@ class _Matrix(_Figure):
 class _TimeLine(_Figure):
     def __init__(self, name=None, origin=None, horizon=None):
         super(_TimeLine, self).__init__(name)
-        self._objects = []
-        self._pauses = []
+        self.objects = []
+        self.pauses = []
         self.next_panel_name = None
         self.next_panel_pauses = None
         self.active_sequencesp = None
@@ -665,69 +615,49 @@ class _TimeLine(_Figure):
         self.cpieces = 100
         self.timeStepSync = [1, 2, 5, 10]
         if origin is None:
-            self._origin = INT_MAX
+            self.origin = INT_MAX
         else:
-            self._origin = origin
+            self.origin = origin
         if horizon is None:
-            self._horizon = INT_MIN
+            self.horizon = INT_MIN
         else:
-            self._horizon = horizon
-        self._mincolor = INT_MAX
-        self._maxcolor = INT_MIN
+            self.horizon = horizon
+        self.mincolor = INT_MAX
+        self.maxcolor = INT_MIN
         self.timeStep = 1
         self.panels = []
 
     def record(self, obj):
         assert isinstance(obj, _TLObject)
-        self._objects.append(obj)
-
-    @property
-    def origin(self):
-        return self._origin
-
-    @property
-    def horizon(self):
-        return self._horizon
-
-    @property
-    def mincolor(self):
-        return self._mincolor
-
-    @property
-    def maxcolor(self):
-        return self._maxcolor
-
-    @property
-    def pauses(self):
-        return self._pauses
+        self.objects.append(obj)
 
     def get_color(self, c):
         if not is_int(c):
             return c
-        if c is None or self._maxcolor == self._mincolor:
+        if c is None or self.maxcolor == self.mincolor:
             return self.quacmap(0)
         else:
             if c < 0:
                 return 'black'
             else:
-                return self.quacmap(float(c - self._mincolor) / (self._maxcolor - self._mincolor))
+                return self.quacmap(float(c - self.mincolor) / (self.maxcolor - self.mincolor))
 
     def update_bounds(self):
-        for o in self._objects:
+        for o in self.objects:
             if o.origin is not None and o.origin > INTERVAL_MIN:
-                if o.origin < self._origin:
-                    self._origin = o.origin
+                if o.origin < self.origin:
+                    self.origin = o.origin
             if o.horizon is not None and o.horizon < INTERVAL_MAX:
-                if o.horizon > self._horizon:
-                    self._horizon = o.horizon
+                if o.horizon > self.horizon:
+                    self.horizon = o.horizon
             if o.color is not None and is_int(o.color):
-                if o.color < self._mincolor:
-                    self._mincolor = o.color
-                if o.color > self._maxcolor:
-                    self._maxcolor = o.color
-        assert self.origin < self._horizon and \
-               self._origin > INT_MIN and \
-               self._horizon < INT_MAX, \
+                if o.color < self.mincolor:
+                    self.mincolor = o.color
+                if o.color > self.maxcolor:
+                    self.maxcolor = o.color
+        assert self.origin < self.horizon and \
+               self.origin > INT_MIN and \
+               self.horizon < INT_MAX, \
             "Infinite timeline limits, please specify bounded origin and horizon."
 
     def panel(self, name=None):
@@ -846,7 +776,7 @@ class _TimeLine(_Figure):
         elif self.next_panel_pauses is not None:
             self.next_panel_pauses.append((start, end))
         else:
-            self._pauses.append((start, end))
+            self.pauses.append((start, end))
 
     def flush(self):
         self.panel()
@@ -887,40 +817,43 @@ class _TimeLine(_Figure):
 
 
 class _Visu(object):
+    __slots__ = ('active_figure', # Active figure
+                 'all_figures',   # List of all figures
+                 'naming',        # Naming function
+                )
     def __init__(self):
-        super(_Visu, self).__init__()
-        self._active_figure = None
-        self._all_figures = []
-        self._naming = None
+        self.active_figure = None
+        self.all_figures = []
+        self.naming = None
 
     def timeline(self, title=None, origin=None, horizon=None):
-        if self._active_figure is not None:
-            self._all_figures.append(self._active_figure)
-        self._active_figure = _TimeLine(title, origin, horizon)
+        if self.active_figure is not None:
+            self.all_figures.append(self.active_figure)
+        self.active_figure = _TimeLine(title, origin, horizon)
 
     def matrix(self, title=None, matrix=None, tuples=None):
-        if self._active_figure is not None:
-            self._active_figure.flush()
-            self._all_figures.append(self._active_figure)
-        self._active_figure = _Matrix(title, matrix, tuples)
+        if self.active_figure is not None:
+            self.active_figure.flush()
+            self.all_figures.append(self.active_figure)
+        self.active_figure = _Matrix(title, matrix, tuples)
 
     @property
     def has_active_timeline(self):
-        return (self._active_figure is not None) and isinstance(self._active_figure, _TimeLine)
+        return (self.active_figure is not None) and isinstance(self.active_figure, _TimeLine)
 
     @property
     def active_timeline(self):
         assert self.has_active_timeline, "No active timeline"
-        return self._active_figure
+        return self.active_figure
 
     @property
     def has_active_matrix(self):
-        return (self._active_figure is not None) and isinstance(self._active_figure, _Matrix)
+        return (self.active_figure is not None) and isinstance(self.active_figure, _Matrix)
 
     @property
     def active_matrix(self):
         assert self.has_active_matrix, "No active matrix"
-        return self._active_figure
+        return self.active_figure
 
     def panel(self, name=None):
         if not self.has_active_timeline:
@@ -962,27 +895,55 @@ class _Visu(object):
         Args:
             pngfile (optional):  Destination PNG file, None for screen
         """
+        # Check if visu is enabled
+        if not config.context.visu_enabled:
+            print("\nVisu is logically disabled by configuration.")
+            return
+
         if self.has_active_timeline:
             panel()
-        for f in self._all_figures:
+        for f in self.all_figures:
             f.show()
-        if self._active_figure is not None:
-            self._active_figure.show()
+        if self.active_figure is not None:
+            self.active_figure.show()
         if pngfile is None:
             plt.show()
         else:
             plt.savefig(pngfile)
-        self._active_figure = None
-        self._all_figures = []
+        self.active_figure = None
+        self.all_figures = []
 
 
 _visu = _Visu()
 
 
-##############################################################################
-# This section depends on CPO classes and defines the default display of some
-# classes like CpoSolution and CpoTransitionMatrix
-##############################################################################
+#=============================================================================
+# Private functions
+#=============================================================================
+
+
+def _segment_value(seg, x):
+    """  Returns segment value at a particular x-value
+    """
+    start = seg.start
+    end = seg.end
+    vstart = seg.vstart
+    vend = seg.vend
+    assert start <= x <= end, "Illegal attempt to compute value outside of segment"
+    if start == INT_MIN and end < INT_MAX:
+        # initial segment
+        slope = vstart
+        return vend - (end - x) * slope
+    elif end == INT_MAX and start > INT_MIN:
+        # last segment
+        slope = vend
+        return vstart + (x - start) * slope
+    else:
+        if vstart == vend:
+            return vstart
+        else:
+            return vstart + (x - start) * (vend - vstart) / (end - start)
+
 
 def _canonical_interval(*args):
     """
@@ -1252,9 +1213,9 @@ def _cpostatefunction_segments(f):
     return segs
 
 
-"""
-    Here starts the public part of CPOVisu module
-"""
+#=============================================================================
+# Public functions
+#=============================================================================
 
 
 def matrix(name=None, matrix=None, tuples=None, cpomatrix=None):
@@ -1577,7 +1538,7 @@ def naming(function=None):
         naming(lambda name: name[0:3])    # Trunk names to first 3 characters
 
     """
-    _visu._naming = function
+    _visu.naming = function
 
 
 def show(object=None, name=None, origin=None, horizon=None, pngfile=None):
@@ -1598,6 +1559,7 @@ def show(object=None, name=None, origin=None, horizon=None, pngfile=None):
     """
     # Check if visu enabled
     if not config.context.visu_enabled:
+        print("\nVisu is disabled by configuration.")
         return
 
     # Check if particular object has to be displayed
@@ -1623,3 +1585,120 @@ def show(object=None, name=None, origin=None, horizon=None, pngfile=None):
     # Display active figure(s)
     _visu.show(pngfile=pngfile)
 
+
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    MATPLOTLIB_IMPORTED = True
+except ImportError:
+    MATPLOTLIB_IMPORTED = False
+
+
+def display(solve_result, textsize =6):
+    if not MATPLOTLIB_IMPORTED:
+        print("\nFunction 'display' requires module 'matplotlib'")
+        return
+    if not solve_result.is_solution():
+        print("\nNo solution available")
+        return
+    if not config.context.visu_enabled:
+        print("\nVisu is disabled by configuration.")
+        return
+    sol   = solve_result.get_solution()
+    model = solve_result.get_model()
+    # All present interval variables in the solution
+    itvSol = [o for o in sol.get_all_var_solutions() if isinstance(o, CpoIntervalVarSolution) and o.is_present() and o.get_start()<o.get_end()]
+    if len(itvSol)==0:
+        print("No interval variable to display")
+        return
+    cmap = cm.Set2
+    plt.rc('font', size=textsize) # controls default text sizes
+
+    intervals = { s.get_expr() :
+                   { 'id'      : i,
+                     'var'     : s.get_expr(),
+                     'name'    : (0<textsize and s.get_expr().get_name()) or "",
+                     'start'   : s.get_start(),
+                     'end'     : s.get_end(),
+                     'needed'  : False,
+                     'lines'   : []     }   for i,s in enumerate(itvSol)  }
+    tmin, tmax = min([i['start'] for i in intervals.values()]), max([i['end'] for i in intervals.values()])
+
+    exprs = model.get_all_expressions()
+
+    # RULE 1: Intervals belonging to a no_overlap are needed
+    line = 0
+    namedlines = []
+    for e in exprs:
+        if isinstance(e[0], CpoFunctionCall) and (e[0].operation.python_name == 'no_overlap'):
+            arg = e[0].children[0] # Array of interval variables or sequence variable
+            seqname = None
+            if arg.is_kind_of(Type_SequenceVar):
+                if 0<textsize and arg.is_kind_of(Type_SequenceVar):
+                    seqname = arg.get_name()
+                vars = arg.get_interval_variables()
+            else:
+                vars = arg.children
+            used = False
+            if seqname == None:
+                seqname = ""
+            for i in vars:
+                if i in intervals:
+                    used = True
+                    intervals[i]['needed'] = True
+                    intervals[i]['lines'].append(line)
+            if used:
+                namedlines.append(seqname)
+                line = line+1
+
+    # RULE 2: Intervals that are master of alternatives and not needed are removed (not shown)
+    for e in exprs:
+        if isinstance(e[0], CpoFunctionCall) and (e[0].operation.python_name == 'alternative'):
+            master = e[0].children[0] # Master interval
+            slaves = e[0].children[1].children # Slave intervals
+            # If a slave interval has no name we display the name of the master if any
+            for s in slaves:
+                if s in intervals and s.get_name()==None:
+                    intervals[s]['name'] = master.get_name() or ""
+            if master in intervals and not intervals[master]['needed']:
+                intervals.pop(master)
+    n = len(intervals)
+
+    # Automatically generate lines for intervals not in no-overlap
+    newlines = 0
+    otherintervals = sorted([ i for i in intervals.values() if not i['needed']], key=lambda i: i['start'])
+    if len(otherintervals)!=0:
+        events = sorted([(i['start'], +1) for i in otherintervals] + [(i['end'], -1) for i in otherintervals])
+        l = 0
+        for e in events:
+            l += e[1]
+            if l > newlines:
+                newlines = l
+        smin = otherintervals[0]['start']
+        h = []
+        for lvl in range(newlines):
+            heapq.heappush(h, (smin, lvl))
+        for itv in otherintervals:
+            lvl = heapq.heappop(h)[1]
+            intervals[itv['var']]['lines'].append(line+lvl)
+            heapq.heappush(h, (itv['end'], lvl))
+
+    # Declaring a figure "gnt"
+    fig, gnt = plt.subplots()
+    fig.suptitle('Solution', fontsize=max(8,int(textsize*1.5)))
+    nlines = line+newlines
+    gnt.set_ylim(0, 10*(nlines+2))
+    gnt.set_xlim(tmin, tmax)
+    gnt.set_yticks([10*(line-l)+4 for l in range(line)])
+    gnt.set_yticklabels(namedlines)
+    gnt.grid(color='#AAAAAA')
+    gnt.set_axisbelow(True)
+
+    # Plot intervals
+    for c,i in enumerate(intervals.values()):
+        for l in i['lines']:
+            gnt.broken_barh([(i['start'], i['end']-i['start'])], (10*(nlines-l), 8), linewidth=0.5, edgecolor='black', facecolor=(cmap(float(c)/n)))
+            gnt.text(x=0.5*(i['start'] + i['end']), y=10*(nlines-l)+4, s=i['name'], ha='center',va='center',color='black')
+
+    plt.show()
+    return 0

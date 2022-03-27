@@ -10,7 +10,7 @@ from itertools import product, islice
 
 from docplex.mp.sosvarset import SOSVariableSet
 from docplex.mp.operand import LinearOperand
-from docplex.mp.dvar import Var
+from docplex.mp.dvar import Var, is_var
 from docplex.mp.linear import MonomialExpr, LinearExpr, AbstractLinearExpr, ZeroExpr, ConstantExpr
 from docplex.mp.operand import Operand
 from docplex.mp.constants import ComparisonType, UpdateEvent
@@ -254,14 +254,13 @@ class ModelFactory(_AbstractModelFactory):
         if is_iterable(keys):
             if is_pandas_dataframe(keys):
                 used_keys = keys.index.values
-            elif has_len(keys):
-                used_keys = keys
-            elif is_iterator(keys):
-                used_keys = list(keys)
             else:
-                # TODO: make a test for this case.
-                self.fatal("Cannot handle iterable var keys: {0!s} : no len() and not an iterator",
-                           keys)  # pragma: no cover
+                try:
+                    used_keys = list(keys)
+                except:
+                    # TODO: make a test for this case.
+                    self.fatal("Cannot handle iterable var keys: {0!s} : no len() and not an iterator",
+                               keys)  # pragma: no cover
 
         elif is_int(keys) and keys >= 0:
             # if name is str and we have a size, disable automatic names
@@ -275,13 +274,16 @@ class ModelFactory(_AbstractModelFactory):
             self._checker.typecheck_key_seq(used_keys)
         return used_name, used_keys
 
+    max_flatten_tuple_size = 100
+
     def _get_stringifier(self, dimension, keys):
         if dimension > 1:
             stringifier = str_flatten_tuple
-        elif len(keys) <= 100:
+        elif len(keys) <= self.max_flatten_tuple_size:
             stringifier = str_flatten_tuple
         else:
-            is_tuple = isinstance(keys[0], tuple)
+            first_key = next(iter(keys), None)
+            is_tuple = isinstance(first_key, tuple)
             stringifier = str_flatten_tuple if is_tuple else str
         return stringifier
 
@@ -296,7 +298,7 @@ class ModelFactory(_AbstractModelFactory):
             computed_names = [actual_naming_fn(key) for key in keys]
             return computed_names
 
-    def _check_bounds(self, nb_vars, bounds, default_bound, true_if_lb):
+    def _check_bound_seq(self, nb_vars, bounds, default_bound, true_if_lb):
         nb_bounds = len(bounds)
         bound_name = 'lb' if true_if_lb else 'ub'
         for b, b_value in enumerate(bounds):
@@ -341,20 +343,19 @@ class ModelFactory(_AbstractModelFactory):
                 # see how we can use defaults for those missing bounds
                 self.fatal("Variable bounds list is too small, expecting: %d, got: %d" % (size, nb_bounds))
             else:
-                return self._check_bounds(size, var_bound, default_bound, true_if_lb)
+                return self._check_bound_seq(size, var_bound, default_bound, true_if_lb)
 
         elif is_iterator(var_bound):
-            # unfold the iterator, as CPLEX needs a list
-            return list(var_bound)
+            return self._check_bound_seq(size, list(var_bound), default_bound, true_if_lb)
 
         elif isinstance(var_bound, dict):
             dict_bounds = [var_bound.get(k, default_bound) for k in keys]
-            return self._check_bounds(size, dict_bounds, default_bound, true_if_lb)
+            return self._check_bound_seq(size, dict_bounds, default_bound, true_if_lb)
         else:
             # try a function?
             try:
                 fn_bounds = [var_bound(k) for k in keys]
-                return self._check_bounds(size, fn_bounds, default_bound, true_if_lb)
+                return self._check_bound_seq(size, fn_bounds, default_bound, true_if_lb)
 
             except TypeError:
                 self._bad_bounds_fatal(var_bound)
@@ -561,7 +562,7 @@ class ModelFactory(_AbstractModelFactory):
         else:
             return self.new_zero_expr()
 
-    _operand_types = (AbstractLinearExpr, Var, ZeroExpr)
+
 
     @staticmethod
     def _is_operand(arg, accept_numbers=False):
@@ -584,6 +585,8 @@ class ModelFactory(_AbstractModelFactory):
             except DocplexQuadToLinearException as qe:
                 used_msg = msg.format(e) if msg else qe.message
                 raise DOcplexException(used_msg)
+
+    _operand_types = (AbstractLinearExpr, Var, ZeroExpr)
 
     def _to_linear_expr(self, e, linexpr_class=LinearExpr, force_clone=False):
         # TODO: replace by to_linear_operand
@@ -621,7 +624,7 @@ class ModelFactory(_AbstractModelFactory):
 
     def _new_binary_constraint(self, lhs, sense, rhs, name=None):
         # noinspection PyPep8
-        left_expr = self._to_linear_operand(lhs, msg="LinearConstraint. expects linear expressions, {0} was passed")
+        left_expr  = self._to_linear_operand(lhs, msg="LinearConstraint. expects linear expressions, {0} was passed")
         right_expr = self._to_linear_operand(rhs, msg="LinearConstraint. expects linear expressions, {0} was passed")
         self._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = LinearConstraint(self._model, left_expr, sense, right_expr, name)
@@ -673,10 +676,11 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_if_then_constraint(self, if_ct, then_ct, negate=False):
         def check_bvar_eq_10(lhs, rhs):
-            return isinstance(lhs, Var) and\
-                   lhs.is_binary() and\
-                   rhs.is_constant() and\
-                   (rhs.get_constant() == 0 or rhs.get_constant() == 1)
+            if is_var(lhs) and lhs.is_binary():
+                as_const = rhs.as_constant()
+                return as_const == 0 or as_const == 1
+            else:
+                return None
 
         # INTERNAL
         m = self._model
@@ -901,10 +905,8 @@ class ModelFactory(_AbstractModelFactory):
         pwl = PwlFunction(self_model, pwl_def=pwl_def, name=name)
         return pwl
 
-    def new_pwl_expr(self, pwl_func, e, usage_counter, y_var=None, add_counter_suffix=True, resolve=True):
+    def new_pwl_expr(self, pwl_func, e, y_var=None, resolve=True):
         return PwlExpr(self._model, pwl_func, e,
-                       usage_counter,
-                       add_counter_suffix=add_counter_suffix,
                        y_var=y_var,
                        resolve=resolve)
 
@@ -949,7 +951,7 @@ class ModelFactory(_AbstractModelFactory):
         posted_cts = []
         checker = self._checker
         filterfn = self._model._prepare_constraint
-        check_trivial = self._checker.check_trivial_constraints()
+        check_trivial = self._model._check_trivial_constraints()
         # look first
         ctseq = list(cts)
         if not ctseq:

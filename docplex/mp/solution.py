@@ -19,13 +19,13 @@ except ImportError:  # pragma: no cover
 
 from six import iteritems, iterkeys
 
-from docplex.mp.compat23 import StringIO, izip
+from docplex.mp.compat23 import StringIO
 from docplex.mp.constants import CplexScope, BasisStatus, WriteLevel
 from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_maxed, normalize_basename
-from docplex.mp.utils import make_output_path2
+from docplex.mp.utils import make_output_path2, _var_match_function
 from docplex.mp.dvar import Var
-from docplex.mp.error_handler import docplex_fatal
-from docplex.mp.sttck import StaticTypeChecker
+from docplex.mp.error_handler import docplex_fatal, handle_error
+
 
 from docplex.mp.solmst  import SolutionMSTPrinter
 from docplex.mp.soljson import SolutionJSONPrinter
@@ -188,9 +188,6 @@ class SolveSolution(object):
         '''
         return self._solved_by
 
-    def get_name(self):
-        return self._name
-
     def set_name(self, solution_name):
         self._checker.typecheck_string(solution_name, accept_empty=False, accept_none=True,
                                        caller='SolveSolution.set_name(): ')
@@ -240,7 +237,7 @@ class SolveSolution(object):
         """ Adds a new (variable, value) pair to this solution.
 
         Args:
-            var_key: A decision variable (:class:`docplex.mp.linear.Var`) or a variable name (string).
+            var_key: A decision variable (:class:`docplex.mp.dvar.Var`) or a variable name (string).
             value (number): The value of the variable in the solution.
         """
         self._typecheck_var_key_value(var_key, value, caller="Solution.add_var_value")
@@ -422,16 +419,16 @@ class SolveSolution(object):
         # attr list is a list of length N and obj_mapper maps indices to objs
         return {obj_mapper(idx): attr_val for idx, attr_val in enumerate(attr_list)}
 
-    def store_reduced_costs(self, rcs, mapper):
-        self._reduced_costs = self._resolve_attribute_index_map(rcs, mapper)
-
-    def store_dual_values(self, duals, mapper):
-        self._dual_values = self._resolve_attribute_index_map(duals, mapper)
-
-    def store_slack_values(self, slacks, mapper):
-        resolved_linear_slacks = self._resolve_attribute_index_map(slacks, mapper)
-        self._slack_values = defaultdict(dict)
-        self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
+    # def store_reduced_costs(self, rcs, mapper):
+    #     self._reduced_costs = self._resolve_attribute_index_map(rcs, mapper)
+    #
+    # def store_dual_values(self, duals, mapper):
+    #     self._dual_values = self._resolve_attribute_index_map(duals, mapper)
+    #
+    # def store_slack_values(self, slacks, mapper):
+    #     resolved_linear_slacks = self._resolve_attribute_index_map(slacks, mapper)
+    #     self._slack_values = defaultdict(dict)
+    #     self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
 
     def store_attribute_lists(self, mdl, slacks):
         def linct_mapper(idx):
@@ -467,7 +464,7 @@ class SolveSolution(object):
         :func:`__contains_` method has been redefined for this purpose.
 
         Args:
-            dvar (:class:`docplex.mp.linear.Var`): The variable to check.
+            dvar (:class:`docplex.mp.dvar.Var`): The variable to check.
 
         Returns:
             Boolean: True if the variable is mentioned in the solution.
@@ -486,7 +483,7 @@ class SolveSolution(object):
         because the :func:`__getitem__` method has been overloaded.
 
         Args:
-            arg: A decision variable (:class:`docplex.mp.linear.Var`),
+            arg: A decision variable (:class:`docplex.mp.dvar.Var`),
                  a variable name (a string), or an expression.
 
         Returns:
@@ -502,7 +499,7 @@ class SolveSolution(object):
             return self._get_var_value(arg)
         else:
             try:
-                v = arg._get_solution_value(self)
+                v = arg._raw_solution_value(self)
                 return v
             except AttributeError:
                 self._model.fatal("Expecting variable, variable name or expression, {0!r} was passed", arg)
@@ -654,46 +651,39 @@ class SolveSolution(object):
                 unsats.append(ct)
         return unsats
 
-    def _var_match_function(self, mdl, match="auto"):
-        if mdl is self._model:
-            def find_matching_var(dvar_): return dvar_
-        elif match == "index" or match == "auto" and mdl.statistics == self._model.statistics:
-            def find_matching_var(dvar_):
-                return mdl.get_var_by_index(dvar_.index)
-        else:
-            def find_matching_var(dvar1):
-                return mdl.get_var_by_name(dvar1.name)
-        return find_matching_var
-
     def number_of_var_diffs(self, other_sol, precision=1e-6, match="auto"):
-        var_match_fn = self._var_match_function(other_sol.model, match)
+        target_model = other_sol.model
+        var_match_fn = _var_match_function(self.model, target_model, match)
         nb_diffs = 0
         for dv, dvv in self.iter_var_values():
-            other_dv = var_match_fn(dv)
+            other_dv = var_match_fn(dv, target_model)
             if other_dv:
                 other_dvv = other_sol[other_dv]
                 if abs(dvv - other_dvv) >= precision:
                     nb_diffs += 1
         return nb_diffs
 
-    def restore(self, mdl, abs_tolerance=1e-6, rel_tolerance=1e-4, restore_all=False, match="auto"):
+    def restore(self, target_model, abs_tolerance=1e-6, rel_tolerance=1e-4, restore_all=False, match="auto"):
         # restores the solution in its model, adding ranges.
-        find_matching_var = self._var_match_function(mdl, match)
-        lfactory = mdl._lfactory
+        find_matching_var = _var_match_function(self.model, target_model, match)
+        lfactory = target_model._lfactory
         restore_ranges = []
         for dvar, val in self.iter_var_values():
             if not dvar.is_generated() or restore_all:
-                dvar2 = find_matching_var(dvar)
+                dvar2 = find_matching_var(dvar, target_model)
                 if dvar2 is not None:
                     rel_prec = abs(val) * rel_tolerance
                     used_prec = max(abs_tolerance, rel_prec)
                     rlb = max(dvar2.lb, val - used_prec)
                     rub = min(dvar2.ub, val + used_prec)
+                    if rlb >= rub + 1e-6:
+                        target_model.fatal("restore solution fails on empty domain, var: {)}, lb={1} > ub={2}",
+                                           dvar2, rlb, rub)
                     restore_ranges.append(lfactory.new_range_constraint(rlb, dvar2, rub))
                 else:
                     print("could not find matching var for {0}".format(dvar))
-        mdl.info("restored {0} variable values using range constraints".format(len(restore_ranges)))
-        return mdl.add(restore_ranges)
+        target_model.info("restored {0} variable values using range constraints".format(len(restore_ranges)))
+        return target_model.add(restore_ranges)
 
     def find_invalid_domain_variables(self, m, tolerance=1e-6):
         invalid_domain_vars = []
@@ -722,22 +712,30 @@ class SolveSolution(object):
         invalid_domain_vars = self.find_invalid_domain_variables(m, tolerance)
         if verbose and invalid_domain_vars:
             m.warning("invalid domain vars: {0}".format(len(invalid_domain_vars)))
-            for v, ivd in enumerate(invalid_domain_vars, start=1):
-                dvv = self.get_var_value(ivd)
-                m.warning("{0} - invalid value {1} for variable {2!s}".format(v, dvv, ivd))
+            for v, invd_var in enumerate(invalid_domain_vars, start=1):
+                dvv = self.get_var_value(invd_var)
+                m.warning("{0} - invalid value {1} for variable {2}({5}), [{3}, {4}]".format(v, dvv, invd_var.lp_name, invd_var.lb, invd_var.ub, invd_var.cplex_typecode))
 
         unsat_cts = self.find_unsatisfied_constraints(m, tolerance)
         if verbose and unsat_cts:
             m.info("unsatisfied constraints[{0}]".format(len(unsat_cts)))
             for u, uct in enumerate(unsat_cts, start=1):
-                m.warning("{0} - unsatisfied constraint: {1!s}".format(u, uct))
+                if uct.is_logical():
+                    # TODO: compute a measure of violation on logical cts
+                    s_violated = ''
+                else:
+                    uctv = uct._compute_violation(self, tolerance)
+                    s_violated = f', violated: {uctv:0.3g}'
+                s_uct = uct.to_readable_string()
+                ctx = uct.index+1
+                m.warning("{0} - unsatisfied constraint ct{1}: {2}{3}".format(u, ctx, s_uct, s_violated))
         return not (invalid_domain_vars or unsat_cts)
 
     is_feasible_solution = is_valid_solution
 
-    def equals(self, other, check_models=False, obj_precision=1e-3, var_precision=1e-6):
+    def equals(self, other, check_models=False, obj_precision=1e-3, var_precision=1e-6, assume_equal_indices=True):
         from itertools import dropwhile
-        if check_models and (self.model != other.model):
+        if check_models and (self.model is not other.model):
             return False
 
         if is_iterable(self.objective_value) and is_iterable(other.objective_value):
@@ -760,11 +758,12 @@ class SolveSolution(object):
                                                                                   other.iter_var_values())]
         # noinspection PyArgumentList
         res = True
-        for this_triple, other_triple in izip(this_triplets, other_triplets):
+        for this_triple, other_triple in zip(this_triplets, other_triplets):
             this_index, this_name, this_val = this_triple
             other_index, other_name, other_val = other_triple
-            if other_index != this_index or this_name != other_name or \
-                    abs(this_val - other_val) >= var_precision:
+            if (assume_equal_indices and (other_index != this_index)) \
+                    or this_name != other_name \
+                    or abs(this_val - other_val) >= var_precision:
                 res = False
                 break
         return res
@@ -815,16 +814,11 @@ class SolveSolution(object):
         # first get cplex_scope, then fetch the slack: two indirections
         return [all_slacks[ct.cplex_scope].get(ct, 0) for ct in cts]
 
-    def slack_value(self, ct, handle_error='raise'):
+    def slack_value(self, ct, error='raise'):
         all_slacks = self._slack_values
         slack = 0
         if all_slacks is None:
-            if handle_error == 'raise':
-                self.model.fatal("Solution contains no slack data")
-            elif handle_error == 'ignore':
-                pass
-            else:
-                raise ValueError("handle_error expects 'raise|ignore|None, {0} was passed".format(handle_error))
+            handle_error(logger=self.model, error=error, msg="Solution contains no slack data")
         else:
             slack = all_slacks[ct.cplex_scope].get(ct, 0)
         return slack
@@ -858,8 +852,7 @@ class SolveSolution(object):
             print(header_fmt.format(problem_name))
         if self._problem_objective_expr is not None and objective_fmt and self.has_objective():
             obj_prec = self.model.objective_expr.float_precision
-            obj_name = self._problem_objective_name()
-            print(objective_fmt.format(obj_name, self._objective, prec=obj_prec))
+            print(objective_fmt.format('objective', self._objective, prec=obj_prec))
         if iter_vars is None:
             iter_vars = self.iter_variables()
         print_counter = 0
@@ -868,15 +861,15 @@ class SolveSolution(object):
                 var_value = self._get_var_value(dvar)
                 if print_zeros or var_value:
                     print_counter += 1
-                    varname = dvar.to_string()
-                    if type(value_fmt) != type(varname):
-                        # infamous mix of str and unicode. Should happen only
-                        # in py2. Let's convert things
-                        if isinstance(value_fmt, str):
-                            # noinspection PyUnresolvedReferences
-                            value_fmt = value_fmt.decode('utf-8')
-                        else:
-                            value_fmt = value_fmt.encode('utf-8')
+                    varname = dvar.lp_name
+                    # if type(value_fmt) != type(varname):
+                    #     # infamous mix of str and unicode. Should happen only
+                    #     # in py2. Let's convert things
+                    #     if isinstance(value_fmt, str):
+                    #         # noinspection PyUnresolvedReferences
+                    #         value_fmt = value_fmt.decode('utf-8')
+                    #     else:
+                    #         value_fmt = value_fmt.encode('utf-8')
                     output = value_fmt.format(varname=varname,
                                               value=var_value,
                                               prec=dvar.float_precision,
@@ -900,19 +893,18 @@ class SolveSolution(object):
         # returns the string used for displaying the objective
         # if the problem has an objective with a name, use it
         # else return the default (typically "objective"
-        self_objective_expr = self._problem_objective_expr
-        if self_objective_expr is not None and self_objective_expr.has_name():
-            return self_objective_expr.name
-        else:
-            return default_obj_name
+        # self_objective_expr = self._problem_objective_expr
+        # if self_objective_expr is not None and self_objective_expr.has_name():
+        #     return self_objective_expr.name
+        # else:
+        return default_obj_name
 
     def to_stringio(self, oss, print_zeros=True):
         problem_name = self.problem_name
         if problem_name:
             oss.write("solution for: %s\n" % problem_name)
         if self._problem_objective_expr is not None and self.has_objective():
-            obj_name = self._problem_objective_name()
-            oss.write("%s: %g\n" % (obj_name, self._objective))
+            oss.write("objective: %g\n" % self._objective)
 
         value_fmt = "{var:s}={value:.{prec}f}"
         for dvar, val in self.iter_var_values():
@@ -1072,6 +1064,7 @@ class SolveSolution(object):
             printer.print_to_stream(exported, mst_path, **kwargs)
             return mst_path
 
+    # noinspection PyPep8
     @classmethod
     def _new_printer(cls, format_spec):
         printers = {'json': SolutionJSONPrinter,
@@ -1090,11 +1083,11 @@ class SolveSolution(object):
         Args:
             file_or_filename: If ``file_or_filename`` is a string, this argument contains the filename to
                 write to. If this is a file object, this argument contains the file object to write to.
-            format_spec: Name of format to use. Possible values are:
+            format: A string, the name of format to use. Possible values are:
                 - "json"
                 - "mst": the MST cplex format for MIP starts
                 - "xml": same as MST
-            kwargs: The kwargs passed to the actual exporter
+            kwargs: additional kwargs passed to the actual exporter
         """
         printer = self._new_printer(format)
 
@@ -1176,9 +1169,10 @@ class SolveSolution(object):
                 dvar_key = var_to_key_fn(dvar)
                 if dvar_key is not None:
                     key_value_dict[dvar_key] = dval
-                elif error == 'raise':
-                    self.model.fatal("Invalid variable key in solution.as_dict, variable: {0}, transformer: {1}"
+                else:
+                    msg = ("Invalid variable key in solution.as_dict, variable: {0}, transformer: {1}"
                                      .format(dvar, var_to_key_fn.__name__))
+                    handle_error(logger=self.model, error=error, msg=msg)
         return key_value_dict
 
     def kpi_value_by_name(self, name, match_case=False):
@@ -1200,20 +1194,21 @@ class SolveSolution(object):
             :func: `docplex.mp.model.kpi_by_name`
         '''
         kpi = self.model.kpi_by_name(name, try_match=True, match_case=match_case)
-        return kpi._get_solution_value(self)
+        return kpi._raw_solution_value(self)
 
     @classmethod
-    def from_file(cls, filename):
+    def from_file(cls, filename, mdl):
         """ Builds solution(s) from a SOL file.
             Assumes `filename` is in CPLEX SOL format,
-            reference: https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/SOL.html
+            reference: https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/SOL.html
 
         Returns:
             a list of solution objects, read from the file, or None, if an error occured.
         """
         from docplex.mp.sol_xml_reader import read_sol_file
-        sols = read_sol_file(filename)
+        sols = read_sol_file(filename, mdl)
         return sols
+
 
 class SolutionPool(object):
     """SolutionPool()

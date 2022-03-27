@@ -166,7 +166,7 @@ class _FunctionalExpr(Expr, LinearOperand):
     def __str__(self):
         return self.to_string()
 
-    def to_string(self, **kwargs):
+    def to_string(self, nb_digits=None, use_space=None):
         raise NotImplementedError  # pragma: no cover
 
     # -- arithmetic operators
@@ -238,8 +238,9 @@ class UnaryFunctionalExpr(_FunctionalExpr):
     def is_discrete(self):
         return self._argument_expr.is_discrete()
 
-    def to_string(self):
-        return "{0:s}({1!s})".format(self.function_symbol, self._argument_expr)
+    def to_string(self, nb_digits=None, use_space=False):
+        s_arg = self._argument_expr.to_string(nb_digits, use_space)
+        return "{0:s}({1!s})".format(self.function_symbol, s_arg)
 
     def copy(self, target_model, memo):
         copy_key = id(self)
@@ -294,12 +295,12 @@ class AbsExpr(UnaryFunctionalExpr):
             assert 2 <= pos <= 3
             return self._artefact_vars[pos - 2]
 
-    def _get_solution_value(self, s=None):
-        raw = abs(self._argument_expr._get_solution_value(s))
-        return self._round_if_discrete(raw)
+    def _raw_solution_value(self, s=None):
+        raw = abs(self._argument_expr._raw_solution_value(s))
+        return raw
 
     def __repr__(self):
-        return "docplex.mp.AbsExpr({0:s})".format(self._argument_expr.truncated_str())
+        return "docplex.mp.AbsExpr({0:s})".format(self._argument_expr.repr_str())
 
 
 # noinspection PyAbstractClass
@@ -323,9 +324,9 @@ class _SequenceExpr(_FunctionalExpr):
         return all(map(lambda ex: ex.is_discrete(), self._exprs))
 
     def _get_args_string(self, sep=","):
-        return sep.join(e.truncated_str() for e in self._exprs)
+        return sep.join(e.repr_str() for e in self._exprs)
 
-    def to_string(self):
+    def to_string(self, nb_digits=None, use_space=False):
         # generic: format expression arguments with holophraste
         str_args = self._get_args_string()
         return "{0}({1!s})".format(self.function_symbol, str_args)
@@ -348,13 +349,13 @@ class _SequenceExpr(_FunctionalExpr):
     def contains_var(self, dvar):
         return dvar is self._f_var
 
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         fvar = self._f_var
         if self._is_resolved() and (not s or fvar in s):
-            raw = fvar._get_solution_value(s)
+            raw = fvar._raw_solution_value(s)
         else:
             raw = self.compute_solution_value(s)
-        return self._round_if_discrete(raw_value=raw)
+        return raw
 
     def compute_solution_value(self, s):
         raise NotImplementedError  # pragma: no cover
@@ -435,7 +436,7 @@ class MinimumExpr(_SequenceExpr):
                 self._new_generated_indicator(binary_var=z, linear_ct=(self_min_var >= x))
 
     def compute_solution_value(self, s):
-        return min(expr._get_solution_value(s) for expr in self._exprs)
+        return min(expr._raw_solution_value(s) for expr in self._exprs)
 
     def get_artefact(self, pos):
         return self.get_logical_seq_artefact(self.z_vars, pos)
@@ -482,7 +483,7 @@ class MaximumExpr(_SequenceExpr):
                 self._new_generated_indicator(binary_var=z, linear_ct=(self_max_var <= x))
 
     def compute_solution_value(self, s):
-        return max(expr._get_solution_value(s) for expr in self._exprs)
+        return max(expr._raw_solution_value(s) for expr in self._exprs)
 
     def get_artefact(self, pos):
         return self.get_logical_seq_artefact(self.z_vars, pos)
@@ -510,7 +511,7 @@ class LogicalNotExpr(UnaryFunctionalExpr):
         assert self._logical_op_arg is not None
         self._actual_arg_s = str(argument_expr)
 
-    def to_string(self):
+    def to_string(self, nb_digits=None, use_space=False):
         return "{0:s}({1!s})".format(self.function_symbol, self._actual_arg_s)
 
     def clone(self):
@@ -527,12 +528,12 @@ class LogicalNotExpr(UnaryFunctionalExpr):
         # store
         self.not_ct = ct1
 
-    def _get_solution_value(self, s=None):
-        arg_val = self._argument_expr._get_solution_value(s)
+    def _raw_solution_value(self, s=None):
+        arg_val = self._argument_expr._raw_solution_value(s)
         return 0 if arg_val else 1
 
     def __repr__(self):
-        return "docplex.mp.NotExpr({0:s})".format(self._argument_expr.truncated_str())
+        return "docplex.mp.NotExpr({0:s})".format(self._argument_expr.repr_str())
 
 
 class _LogicalSequenceExpr(_SequenceExpr):
@@ -582,7 +583,7 @@ class LogicalAndExpr(_LogicalSequenceExpr):
     def compute_solution_value(self, s):
         # return 1/0 not True/False
         threshold = 1 - self.precision
-        return 1 if all(ex._get_solution_value(s) >= threshold for ex in self._exprs) else 0
+        return 1 if all(ex._raw_solution_value(s) >= threshold for ex in self._exprs) else 0
 
     def _resolve(self):
         self_and_var = self._f_var
@@ -610,7 +611,7 @@ class LogicalOrExpr(_LogicalSequenceExpr):
     def compute_solution_value(self, s):
         # return 1/0 not True/False
         threshold = 1 - self.precision
-        return 1 if any(ex._get_solution_value(s) >= threshold for ex in self._exprs) else 0
+        return 1 if any(ex._raw_solution_value(s) >= threshold for ex in self._exprs) else 0
 
     def _resolve(self):
         self_or_var = self._f_var
@@ -628,33 +629,24 @@ class PwlExpr(UnaryFunctionalExpr):
 
     def __init__(self, model,
                  pwl_func, argument_expr,
-                 usage_counter,
                  y_var=None,
-                 add_counter_suffix=True,
                  resolve=True):
         UnaryFunctionalExpr.__init__(self, model, argument_expr)
         self._pwl_func = pwl_func
-        self._usage_counter = usage_counter
         self._f_var = y_var
-        if pwl_func.name:
-            # ?
-            if add_counter_suffix:
-                self.name = '{0}_{1!s}'.format(self._pwl_func.name, self._usage_counter)
-            else:
-                self.name = self._pwl_func.name
         if resolve:
             self._ensure_resolved()
 
     def _get_function_symbol(self):
         # this method determines the name of the generated variable
         # as usual it starts with "_" to mark this is a generated variable.
-        pwl_name = self._pwl_func.get_name()
+        pwl_name = self._pwl_func.name
         # TODO: what if pwl_name is not LP-compliant??
         return "pwl" if not pwl_name else "pwl_%s#" % pwl_name
 
-    def _get_solution_value(self, s=None):
-        raw = self._f_var._get_solution_value(s)
-        return self._round_if_discrete(raw)
+    def _raw_solution_value(self, s=None):
+        raw = self._f_var._raw_solution_value(s)
+        return raw
 
     def iter_variables(self):
         for v in self._argument_expr.iter_variables():
@@ -663,20 +655,16 @@ class PwlExpr(UnaryFunctionalExpr):
 
     def _resolve(self):
         mdl = self._model
-        pwl_constraint = mdl._lfactory.new_pwl_constraint(self, self.get_name())
+        pwl_constraint = mdl._lfactory.new_pwl_constraint(self, self.name)
         mdl._add_pwl_constraint_internal(pwl_constraint)
 
     @property
     def pwl_func(self):
         return self._pwl_func
 
-    @property
-    def usage_counter(self):
-        return self._usage_counter
-
     def __repr__(self):
         return "docplex.mp.PwlExpr({0:s}, {1:s})".format(self._get_function_symbol(),
-                                                         self._argument_expr.truncated_str())
+                                                         self._argument_expr.repr_str())
 
     def copy(self, target_model, memo):
         copy_key = id(self)
@@ -684,7 +672,7 @@ class PwlExpr(UnaryFunctionalExpr):
         if cloned_expr is None:
             copied_pwl_func = memo[self.pwl_func]
             copied_x_var = memo[self._x_var]
-            cloned_expr = PwlExpr(target_model, copied_pwl_func, copied_x_var, self.usage_counter)
+            cloned_expr = PwlExpr(target_model, copied_pwl_func, copied_x_var)
             copied_pwl_expr_f_var = memo.get(self._f_var)
             if copied_pwl_expr_f_var:
                 cloned_expr._f_var = copied_pwl_expr_f_var

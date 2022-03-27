@@ -18,9 +18,7 @@ from itertools import chain, repeat
 from six import PY2 as SIX_PY2
 from six import itervalues, iteritems
 
-
-from docplex.mp.compat23 import Queue, izip
-
+from docplex.mp.compat23 import Queue
 
 __int_types = {int}
 __float_types = {float}
@@ -28,24 +26,26 @@ __numpy_ndslot_type = None
 __numpy_matrix_type = None
 __pandas_series_type = None
 __pandas_dataframe_type = None
-__spark_dataframe_type = None
 
-try:
-    # noinspection PyUnresolvedReferences
-    type(long)  # @UndefinedVariable
-    # long is indeed a type we are in Python2,
-    __int_types.add(long)  # @UndefinedVariable
-except NameError:  # pragma: no cover
-    # long is not a type, do nothing
-    pass  # pragma: no cover
+# try:
+#     # noinspection PyUnresolvedReferences
+#     type(long)  # @UndefinedVariable
+#     # long is indeed a type we are in Python2,
+#     __int_types.add(long)  # @UndefinedVariable
+# except NameError:  # pragma: no cover
+#     # long is not a type, do nothing
+#     pass  # pragma: no cover
 
 try:
     import numpy
 
+    npv = numpy.__version__
+
     _numpy_is_available = True
 
     __int_types.add(numpy.bool_)
-    __int_types.add(numpy.bool)
+    if npv < '1.20':
+        __int_types.add(numpy.bool)
 
     __int_types.add(numpy.int_)
     __int_types.add(numpy.intc)
@@ -80,23 +80,9 @@ try:
 
     __pandas_series_type = Series
     __pandas_dataframe_type = DataFrame
-except ImportError:
+except ImportError:  # pragma: no cover
     __pandas_series_type = None
     __pandas_dataframe_type = None
-
-# 'findspark' must be executed if running in Windows environment, before importing Spark
-try:
-    import findspark  # @UnresolvedImport
-    findspark.init()
-except (ImportError, IndexError, ValueError):
-    pass
-
-try:
-    import pyspark
-
-    __spark_dataframe_type = pyspark.sql.dataframe.DataFrame
-except ImportError:
-    __spark_dataframe_type = None
 
 __int_types = frozenset(__int_types)
 
@@ -156,7 +142,8 @@ if _numpy_is_available:
             return retval
         except AttributeError:  # if s is not a numpy type, s.dtype triggers this
             return False
-else:
+
+else:  # pragma: no cover
     def numpy_is_numeric(t):
         return False
 
@@ -174,16 +161,6 @@ def is_number(s):
     return type_of_s in __all_python_num_types or numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)
 
 
-# def is_number2(s):
-#     if isinstance(s, __all_num_types_tuple):
-#         return True
-#     elif _numpy_is_available:
-#         type_of_s = type(s)
-#         if (numpy_is_numeric(type_of_s) or _is_numpy_ndslot(s)):
-#             return True
-#     else:
-#         return False
-
 def is_pandas_series(s):
     return __pandas_series_type is not None and type(s) is __pandas_series_type
 
@@ -200,18 +177,15 @@ def is_numpy_matrix(s):
     return __numpy_matrix_type and type(s) is __numpy_matrix_type
 
 
-def is_spark_dataframe(s):
-    return __spark_dataframe_type and isinstance(s, __spark_dataframe_type)
-
-
 string_types = {str}
-if SIX_PY2:
-    string_types.add(unicode)  # @UndefinedVariable
+# if SIX_PY2:
+#     string_types.add(unicode)  # @UndefinedVariable
 string_types = frozenset(string_types)
 
 
 def is_string(e):
     return type(e) in string_types
+
 
 def has_len(e):
     try:
@@ -251,7 +225,7 @@ def is_function(e):
     import platform
     if platform.python_version() >= '3.7':
         from collections.abc import Callable
-    else:
+    else:  # pragma: no cover
         from collections import Callable  # @UnresolvedImport
     return isinstance(e, Callable)
 
@@ -271,17 +245,28 @@ def _to_list(arg):
 
 
 def _build_ordered_sequence_types():
-    if __pandas_series_type and __numpy_ndslot_type:
-        return (list, tuple, __pandas_series_type, __numpy_ndslot_type)
-    elif __pandas_series_type:
-        return (list, tuple, __pandas_series_type)
-    elif __numpy_ndslot_type:
-        return (list, tuple, __numpy_ndslot_type)
-    else:
-        return (list, tuple)
+    os_types = [list, tuple, range]
+
+    if __pandas_series_type:
+        os_types.append(__pandas_series_type)
+    if __numpy_ndslot_type:
+        os_types.append(__numpy_ndslot_type)
+    return tuple(os_types)
+
 
 def is_ordered_sequence1(arg, type_tuple=_build_ordered_sequence_types()):
     return isinstance(arg, type_tuple)
+
+
+def ordered_sequence_to_list(s, caller):
+    if is_pandas_series(s):
+        return s.tolist()
+    elif is_ordered_sequence(s):
+        return s
+    else:
+        raise DOcplexException('{0} requires ordered sequences: lists, numpy array or Series, got: {1}', caller,
+                               type(s))
+
 
 # def is_ordered_sequence2(arg):
 #     if isinstance(arg, (dict, str)):
@@ -347,6 +332,7 @@ class DocplexLinearRelaxationError(DOcplexException):
         msg = "Modeling object: {0!s} cannot be relaxed".format(obj)
         DOcplexException.__init__(self, msg)
 
+
 def normalize_basename(s, force_lowercase=True, maxlen=255):
     """Replaces some characters from s with a translation table:
     
@@ -387,8 +373,9 @@ def normalize_basename(s, force_lowercase=True, maxlen=255):
 
     if len(n) > maxlen - 8:
         h = format(hash(n) & 0xffffffff, "08x")
-        n = n[:maxlen-8] + "_"+ h
+        n = n[:maxlen - 8] + "_" + h
     return n
+
 
 def fix_whitespace(s, fix='_'):
     # replaces whitespaces by a character, default is '_'
@@ -412,6 +399,7 @@ def make_output_path2(actual_name, extension, basename_fmt, path=None):
 
 
 def make_path(error_handler, basename, extension, output_dir=None, name_transformer=None):
+    # used for docloud
     if output_dir is None:
         output_dir = tempfile.gettempdir()
     elif not os.path.exists(output_dir):
@@ -438,10 +426,6 @@ def generate_constant(the_constant, count_max):
 def iter_emptyset():
     return iter([])
 
-def iter_one(obj):
-    yield obj
-
-
 
 def resolve_pattern(pattern, args):
     """
@@ -463,7 +447,7 @@ def resolve_pattern(pattern, args):
         return pattern
 
 
-def str_maxed(arg, maxlen):
+def str_maxed(arg, maxlen, ellipsis_str=".."):
     """ Returns a (possibly) truncated string representation of arg
 
     If maxlen is positive (or null), returns str(arg) up to maxlen chars.
@@ -476,16 +460,7 @@ def str_maxed(arg, maxlen):
     if maxlen <= 0 or len(s) <= maxlen:
         return s
     else:
-        return "%s.." % s[:maxlen]
-
-
-try:
-    import scipy.sparse as sp
-except ImportError:
-    sp = None
-
-def is_scipy_sparse(m):
-    return sp and sp.issparse(m)
+        return "%s%s" % (s[:maxlen], ellipsis_str)
 
 
 def compute_is_index(seq, obj):
@@ -790,6 +765,7 @@ class _AutomaticSymbolGenerator(_SymbolGenerator):
         while True:
             yield self.new_symbol()
 
+
 class _IndexScope(object):
     # INTERNAL: full scope of indices.
 
@@ -804,8 +780,8 @@ class _IndexScope(object):
     def __getitem__(self, item):
         return self._index_map[item]
 
-    def count_filtered(self, filter):
-        return sum(1 for obj in self.iter_objects() if filter(obj))
+    def count_filtered(self, pred):
+        return sum(1 for obj in self.iter_objects() if pred(obj))
 
     @property
     def last(self):
@@ -813,7 +789,7 @@ class _IndexScope(object):
         if not size:
             raise ValueError("empty scope")
         else:
-            return self._index_map[size-1]
+            return self._index_map[size - 1]
 
     def iter_objects(self):
         if SIX_PY2:
@@ -822,9 +798,9 @@ class _IndexScope(object):
         else:
             return iter(self._index_map.values())
 
-    def generate_objects_filtered(self, filter):
+    def generate_objects_filtered(self, pred):
         for obj in self.iter_objects():
-            if filter(obj):
+            if pred(obj):
                 yield obj
 
     def generate_objects_with_type(self, obj_type):
@@ -864,7 +840,7 @@ class _IndexScope(object):
         if indices:
             idxmap = self._index_map
             if idxmap is not None:
-                for obj, idx in izip(objs, indices):
+                for obj, idx in zip(objs, indices):
                     idxmap[idx] = obj
 
     # def update_indices(self):
@@ -954,8 +930,8 @@ def compute_overwrite_nb_threads(parameters, solver_context):
 
 def is_almost_equal(x1, x2, reltol, abstol=0):
     # returns true if x2 equals x1 w.r.t a miax of an absolute tolerance and a relative tolerance
-    prec = max(abstol, reltol* abs(x1))
-    return abs(x2-x1) <= prec
+    prec = max(abstol, reltol * abs(x1))
+    return abs(x2 - x1) <= prec
 
 
 class OutputStreamAdapter:
@@ -980,6 +956,7 @@ class OutputStreamAdapter:
             output_s = s.encode(self.encoding)
         self.stream.write(output_s)
 
+
 def izip2_filled(it1, it2, **kwds):
     # izip_longest('ABCD', 'xy', fillvalue='-') --> Ax By C- D-
     fillvalue = kwds.get('fillvalue')
@@ -996,7 +973,7 @@ def izip2_filled(it1, it2, **kwds):
     try:
         while iterators:
             tpl = tuple(map(next, iterators))
-            #print(tpl)
+            # print(tpl)
             yield tpl
     except _ZipExhausted:
         pass
@@ -1121,3 +1098,42 @@ def is_quad_expr(obj):
         return obj.is_quad_expr()
     except AttributeError:
         return False
+
+
+def _var_match_function(source_model, target_model, match="auto", error='ignore'):
+    # returns a maping function from source vars
+    # to target model vars.
+    if match == "auto":
+        # if same stats, go for index:
+        if source_model.statistics == target_model.statistics:
+            match = 'index'
+        else:
+            match = 'name'
+    assert match != 'auto'
+    find_matching_var = None
+    if target_model is source_model:
+        def find_matching_var(dvar_, _):
+            return dvar_
+    elif match == "index":
+        def find_matching_var(dvar_, target_model_):
+            dvar = target_model_.get_var_by_index(dvar_.index)
+            return dvar
+    elif match == "name":
+        def find_matching_var(dvar1, target_model_):
+            key_name = dvar1.name
+            if key_name is None:
+                raise DOcplexException("Cannot find name matching variable for anonymous var, index: {0}")
+
+            dvar = target_model_.get_var_by_name(dvar1.name)
+            return dvar
+    else:
+        if callable(match):
+            # TODO: check signature of callable, expecting two args
+            def find_matching_var(dvar_, target_model_):
+                return match(dvar_, target_model_)
+        else:
+            source_model.fatal(
+                "Cannot interpret this as a variable match: {0!r} expecting auto|index|name or f(Var, Model)->Var",
+                match)
+
+    return find_matching_var

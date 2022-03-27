@@ -14,7 +14,6 @@ from docplex.mp.constr import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.sdetails import SolveDetails
 
-from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
 from docplex.util import as_df
 from docplex.mp.publish import PublishResultAsDf
 
@@ -268,7 +267,7 @@ class Relaxer(PublishResultAsDf, object):
 
     def __init__(self, prioritizer='all', verbose=False, precision=default_precision,
                  override=False, **kwargs):
-        self.output_table_customizer = kwargs.get('output_processing') # wml tables, internal
+        self.output_table_customizer = kwargs.get('output_processing')  # wml tables, internal
         self.output_table_property_name = 'relaxations_output'
         self.default_output_table_name = 'relaxations.csv'
         self.output_table_using_df = True  # if pandas is available of course
@@ -418,7 +417,8 @@ class Relaxer(PublishResultAsDf, object):
             return None
         if nb_mandatories:
             assert mandatory_justifier is not None
-            mdl.warning('{0} constraint(s) will not be relaxed (e.g.: {1!s})', nb_mandatories, mandatory_justifier)
+            s_justifier = mandatory_justifier.to_readable_string()
+            mdl.warning('{0} constraint(s) will not be relaxed (e.g.: {1})', nb_mandatories, s_justifier)
 
         temp_relax_verbose = kwargs.pop('verbose', False)
         if temp_relax_verbose != self._verbose:
@@ -445,19 +445,19 @@ class Relaxer(PublishResultAsDf, object):
         # take into account local argument overrides
         relax_context = mdl.prepare_actual_context(**kwargs)
 
-        forced_docloud = context_must_use_docloud(relax_context, **kwargs)
-        have_credentials = context_has_docloud_credentials(relax_context)
+        # forced_docloud = context_must_use_docloud(relax_context, **kwargs)
+        # have_credentials = context_has_docloud_credentials(relax_context)
         transient_engine = False
         relax_engine = mdl.get_engine()
 
-        if forced_docloud:  # pragma: no cover
-            if have_credentials:
-                # create new docloud engine on the fly
-                relax_engine = mdl._new_docloud_engine(relax_context)
-                transient_engine = True
-            else:
-                mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
-                          relax_context.solver.docloud)
+        # if forced_docloud:  # pragma: no cover
+        #     if have_credentials:
+        #         # create new docloud engine on the fly
+        #         relax_engine = mdl._new_docloud_engine(relax_context)
+        #         transient_engine = True
+        #     else:
+        #         mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
+        #                   relax_context.solver.docloud)
 
         if temp_relax_verbose:
             print("-- starting relaxation. mode: {0!s}, precision={1}".format(used_relax_mode.name, self._precision))
@@ -485,7 +485,7 @@ class Relaxer(PublishResultAsDf, object):
                     relax_group = _TRelaxableGroup(pref, cts)
 
                     # relaxing new batch of cts:
-                    if not is_cumulative:  #  pragma: no cover
+                    if not is_cumulative:  # pragma: no cover
                         # if not cumulative reset the groupset
                         all_groups = [relax_group]
                         all_relaxable_cts = cts
@@ -497,8 +497,8 @@ class Relaxer(PublishResultAsDf, object):
                     # a group is itself a sequence of two components
                     # - a preference factor
                     # - a sequence of constraints
-                    for l in self._listeners:
-                        l.notify_start_relaxation(prio, all_relaxable_cts)
+                    for ls in self._listeners:
+                        ls.notify_start_relaxation(prio, all_relaxable_cts)
 
                     # ----
                     # call the engine.
@@ -526,15 +526,15 @@ class Relaxer(PublishResultAsDf, object):
                                 "Relaxation of model `{0}` found one relaxed solution, but no relaxed constraints - check".format(
                                     mdl.name))
 
-                        for l in self._listeners:
-                            l.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
+                        for ls in self._listeners:
+                            ls.notify_successful_relaxation(prio, all_relaxable_cts, relax_obj, self._relaxations)
                         # now get out
                         break
                     else:
                         # TODO: maybe issue a warning that relaxation has failed?
                         # relaxation has failed, notify the listeners
-                        for l in self._listeners:
-                            l.notify_failed_relaxation(prio, all_relaxable_cts)
+                        for ls in self._listeners:
+                            ls.notify_failed_relaxation(prio, all_relaxable_cts)
 
             mdl.notify_solve_relaxed(relaxed_sol, relax_engine.get_solve_details())
 

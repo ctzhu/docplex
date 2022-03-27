@@ -191,3 +191,16 @@ class CplexLocalSolveEnv(SolveEnv):
                 self_engine.set_parameter(p, v)
                 # clear saved
                 self._saved_params = {}
+
+        kpi_rec_attr_name = 'kpi_recorder'
+        try:
+            kpi_rec = getattr(mdl, kpi_rec_attr_name, None)
+            if kpi_rec:
+                delattr(mdl, kpi_rec_attr_name)
+                mdl.remove_progress_listener(kpi_rec)
+
+        except (AttributeError, ValueError):
+            pass
+
+        mdl._clear_qprogress_listeners()
+

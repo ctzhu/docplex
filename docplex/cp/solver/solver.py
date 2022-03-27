@@ -16,7 +16,7 @@ It implements the following object classes:
    the solving functions.
 
 The :class:`CpoSolver` identifies and creates the required :class:`CpoSolverAgent` depending on the configuration
-parameter *context.solver.agent' that contains the name of the agent to be used. This name is used to
+parameter *context.solver.agent* that contains the name of the agent to be used. This name is used to
 access the configuration context *context.solver.<agent>* that contains the details about this agent.
 
 For example, the default configuration refers to *local* as default solver agent, to solve model using local process
@@ -29,26 +29,26 @@ This means that at least following configuration elements must be set:
 
 The different methods that can be called on a CpoSolver object are:
 
- * :meth:`solve` simply solve the model and returns a solve result, if any.
+ * :meth:`~CpoSolver.solve` simply solve the model and returns a solve result, if any.
    For convenience reason, this method is also directly available on the CpoModel object (:meth:`docplex.cp.model.CpoModel.solve`).
- * :meth:`search_next` and :meth:`end_search` allows to iterate on different solutions of the model.
- * :meth:`refine_conflict` calls the conflict refiner that identifies a minimal conflict for the infeasibility of
+ * :meth:`~CpoSolver.search_next` and :meth:`~CpoSolver.end_search` allows to iterate on different solutions of the model.
+ * :meth:`~CpoSolver.refine_conflict` calls the conflict refiner that identifies a minimal conflict for the infeasibility of
    the model.
- * :meth:`propagate` calls the propagation that communicates the domain reduction of a decision variable to
+ * :meth:`~CpoSolver.propagate` calls the propagation that communicates the domain reduction of a decision variable to
    all of the constraints that are stated over this variable.
 
 Except :meth:`solve`, these functions are only available with a local solver with release greater or equal to 12.7.0.0
 When a method is not available, an exception *CpoNotSupportedException* is raised.
 
-If the methods :meth:`search_next` and :meth:`end_search` are available in the underlying solver agent,
-the :class:`CpoSolver` object acts as an iterator. All solutions are retrieved using a loop like:
+If the methods :meth:`~CpoSolver.search_next` and :meth:`~CpoSolver.end_search` are available in the underlying
+solver agent, the :class:`CpoSolver` object acts as an iterator. All solutions are retrieved using a loop like:
 ::
 
    solver = CpoSolver(mdl)
    for sol in solver:
        sol.write()
 
-A such solution iteration can be interrupted at any time by calling end_search() that returns
+A such solution iteration can be interrupted at any time by calling :meth:`~CpoSolver.end_search` that returns
 a fail solution including the last solve status.
 
 
@@ -57,10 +57,14 @@ Detailed description
 """
 
 import docplex.cp.config as config
+import docplex.cp.utils as utils
 from docplex.cp.cpo.cpo_compiler import CpoCompiler
 from docplex.cp.solution import *
+import docplex.cp.solution as solution
 from docplex.cp.solver.solver_listener import CpoSolverListener
+import docplex.cp.solver.solver_listener as listener
 from docplex.cp.solver.cpo_callback import CpoCallback
+from docplex.cp.blackbox import *
 
 import time, importlib, inspect
 import threading
@@ -113,15 +117,15 @@ class CpoSolverAgent(object):
                  'context',          # Solve context
                  'last_json_result', # String of the last received JSON result
                  'rename_map',       # Map of renamed variables. Key is new name, value is original name
-                 'version_info',     # Solver version information (dict). None if unknown.
+                 'version_info',     # Solver version information (dict)
                  'process_infos',    # Processing information
                  'log_output',       # Log output stream
                  'log_print',        # Print log indicator
                  'log_data',         # Log data buffer (list of strings)
                  'log_enabled',      # Global log enabled indicator
                  'expr_map',         # Map of expressions to rebuild result
+                 'blackbox_map',     # Set of blackbox functions used in the model
                  'model_init',       # Indicates whether model has been initialized in the solver
-                 'callback_added',   # Indicates that the callback has been added
                 )
 
     def __init__(self, solver, params, context):
@@ -141,10 +145,10 @@ class CpoSolverAgent(object):
         self.context = context
         self.last_json_result = None
         self.rename_map = None
-        self.version_info = None
+        self.version_info = {}
         self.process_infos = CpoProcessInfos()
         self.model_init = False
-        self.callback_added = False
+        self.blackbox_map = None
 
         # Initialize log
         self.log_output = context.get_log_output()
@@ -293,6 +297,7 @@ class CpoSolverAgent(object):
         """
         self._raise_not_supported()
 
+
     def end(self):
         """ End solver agent and release all resources.
         """
@@ -315,6 +320,7 @@ class CpoSolverAgent(object):
         cplr = CpoCompiler(self.model, params=self.params, context=ctx.get_root())
         cpostr = cplr.get_as_string()
         self.expr_map = cplr.get_expr_map()
+        self.blackbox_map = cplr.get_blackbox_map()
         self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
         self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
 
@@ -365,26 +371,55 @@ class CpoSolverAgent(object):
         pass
 
 
+    def _register_blackbox_function(self, name, bbf):
+        """ Register a blackbox function in the solver
+        This method must be extended by agent implementations to actually do the operation.
+
+        Args:
+            name: Name of the blackbox function in the model (may differ from the declared one)
+            bbf: Blackbox function descriptor, object of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
+        """
+        pass
+
+
     def _init_model_in_solver(self):
         """ Send the model to the solver if not already done. """
-        if not self.model_init:
-            # Send model to solver
-            stime = time.time()
-            self._send_model_to_solver(self._get_cpo_model_string())
-            self.process_infos.incr(CpoProcessInfos.MODEL_SUBMIT_TIME, time.time() - stime)
-            self.context.log(3, "Model sent to solver.")
-            self.model_init = True
+        if self.model_init:
+            return
+
+        # Get solver version for checking
+        sver = self.version_info.get('SolverVersion', "1")
 
         # Add callback if needed.
-        if not self.callback_added and self.solver.callbacks:
+        if self.solver.callbacks:
             # Check solver version
-            sver = self.version_info.get('SolverVersion', "1")
-            if compare_natural(sver, "12.10") >= 0:
-                self._add_callback_processing()
-                self.callback_added = True
-                self.context.log(3, "CPO callback created.")
-            else:
+            if compare_natural(sver, "12.10") < 0:
                 raise CpoSolverException("This version of the CPO solver ({}) does not support solver callbacks.".format(sver))
+            self._add_callback_processing()
+            self.context.log(3, "CPO callback created.")
+
+        # Get model string (to force identification of blackbox functions)
+        mstr = self._get_cpo_model_string()
+
+        # Register blackbox functions if any
+        bbfs = self.blackbox_map
+        if bbfs:
+            # Check solver version
+            # if compare_natural(sver, "20.10") <= 0:
+            #     raise CpoSolverException("This version of the CPO solver ({}) does not support blackbox functions.".format(sver))
+            for name, bbf in bbfs.items():
+                # Check that bbf has an implementation
+                if not bbf.has_implementation():
+                    raise CpoSolverException("Blackbox function '{}' has no implementation".format(name))
+                self._register_blackbox_function(name, bbf)
+            self.context.log(3, "Blackbox function(s) registered.")
+
+        # Send model to solver
+        stime = time.time()
+        self._send_model_to_solver(mstr)
+        self.process_infos.incr(CpoProcessInfos.MODEL_SUBMIT_TIME, time.time() - stime)
+        self.context.log(3, "Model sent to solver.")
+        self.model_init = True
 
 
     def _add_log_data(self, data):
@@ -395,7 +430,7 @@ class CpoSolverAgent(object):
         self.solver._notify_new_log(data)
         if self.log_enabled:
             if self.log_print:
-                self.log_output.write(data)
+                write_checking_unicode_errors(self.log_output, data)
                 self.log_output.flush()
             if self.log_data is not None:
                 self.log_data.append(data)
@@ -425,12 +460,11 @@ class CpoSolverAgent(object):
         """ Create a new result object and fill it with necessary data
         Args:
             rclass:            Result object class
-            jsol (optional):   JSON solution string
+            jsol (optional):   JSON solution string, not decoded
         Returns:
             New result object preinitialized
         """
         res = rclass(self.model)
-        res.process_infos.update(self.process_infos)
 
         # Process JSON solution
         #self.context.log(3, "JSON data:\n", jsol)
@@ -441,7 +475,7 @@ class CpoSolverAgent(object):
             # Parse JSON
             stime = time.time()
             jsol = parse_json_string(jsol)
-            res.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
+            self.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
             # Build result structure
             res._add_json_solution(jsol, self.expr_map)
 
@@ -449,7 +483,98 @@ class CpoSolverAgent(object):
         if self.log_data is not None:
             res._set_solver_log(''.join(self.log_data))
             self.log_data = []
+        res.process_infos.update(self.process_infos)
         return res
+
+
+    def _get_blackbox_function_eval_context(self, jdata):
+        """ Get the evaluation context of a blackbox function
+
+        Args:
+            jdata: JSON data containing function evaluation context
+        Returns:
+            tuple (blackbox function descriptor, evaluation arguments)
+        """
+        #print("Enter in _evaluate_blackbox_function: {}".format(jdata))
+
+        # Parse JSON data
+        stime = time.time()
+        fcall = parse_json_string(jdata)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
+
+        # Retrieve blackbox descriptor from its name
+        name = fcall.get('name')
+        bbf = self.expr_map.get(name)
+        #bbf = self.model._get_blackbox_function(name)
+        if bbf is None:
+            raise CpoException("Try to evaluate a blackbox function {} that does not exists".format(name))
+        if not isinstance(bbf, CpoBlackboxFunction):
+            raise CpoException("Expression named '{}' is not a blackbox function".format(name))
+
+        # Build arguments values
+        params = fcall.get('parameters', ())
+        ptypes = bbf.get_arg_types()
+        if len(ptypes) != len(params):
+           raise CpoException("Blackbox function call to '{}' contains a wrong number of parameters.".format(name))
+        argvalues = [self._build_arg_value(t, v) for t, v in zip(ptypes, params)]
+
+        return bbf, argvalues
+
+
+    def _build_arg_value(self, tp, vl):
+        """ Build blackbox function call argument value
+        Args:
+            tp: Parameter type
+            vl: Parameter JSON value
+        Returns:
+            Parameter value to be passed to evaluation
+        """
+        n = vl.get('name')
+        t = vl.get('type')
+        v = vl.get('value')
+
+        if tp in (Type_Int, Type_IntVar, Type_IntExpr,):
+            return solution._get_num_value(v)
+
+        if tp in (Type_Float, Type_FloatExpr,):
+            return float(v)
+
+        if tp is Type_IntervalVar:
+            return CpoIntervalVarSolution._create_from_json(None, v)
+
+        if tp is Type_IntArray:
+            return [solution._get_num_value(e) for e in v]
+
+        if tp in (Type_IntVarArray, Type_IntExprArray,):
+            return [solution._get_num_value(e.get('value')) for e in v]
+
+        if tp is Type_FloatArray:
+            return v
+
+        if tp is Type_FloatExprArray:
+            return [float(e.get('value')) for e in v]
+
+        if tp is Type_IntervalVarArray:
+            return [CpoIntervalVarSolution._create_from_json(None, e.get('value')) for e in v]
+
+        if tp is Type_SequenceVar:
+            # Retrieve original variable
+            sv = self.expr_map.get(n)
+            assert sv is not None, "Sequence variable '{}' not found in the model".format(n)
+            vars = sv.get_interval_variables()
+            return [vars[i] for i in v]
+
+        if tp is Type_SequenceVarArray:
+            res = []
+            for jsv in v:
+                svn = jsv.get('name')
+                sv = self.expr_map.get(svn)
+                assert sv is not None, "Sequence variable '{}' not found in the model".format(svn)
+                vars = sv.get_interval_variables()
+                res.append([vars[i] for i in jsv.get('value')])
+            return res
+
+        raise CpoException("INTERNAL ERROR: Unknown blackbox argument type {}".format(tp))
 
 
     def _raise_not_supported(self):
@@ -565,6 +690,22 @@ class CpoSolver(object):
         self.end()
 
 
+    def set_solve_with_search_next(self, swsn):
+        """ Set the flag indicating to solve with a search_next sequence instead of a single solve.
+
+        If this indicator is set, a call to method :meth:`~CpoSolver.solve` will automatically call method
+        :meth:`~CpoSolver.solve_with_search_next` instead,
+        allowing listeners to be warned about all intermediate solutions.
+
+        The same behavior is also obtained if the configuration attribute context.solver.solve_with_search_next
+        is set to True.
+
+        Args:
+            swsn:  Solve wist start-next indicator
+        """
+        self.context.solver.solve_with_search_next = swsn
+
+
     def get_model(self):
         """ Returns the model solved by this solver.
 
@@ -583,6 +724,15 @@ class CpoSolver(object):
         return None if self.model is None else self.model.get_format_version()
 
 
+    def get_solver_version(self):
+        """ Returns, if available, the version of the underlying solver.
+
+        Returns:
+            Solver version, None if not defined.
+        """
+        return self.agent.version_info.get("SolverVersion")
+
+
     def solve(self):
         """ Solve the model
 
@@ -594,9 +744,10 @@ class CpoSolver(object):
         The function returns an object of the class CpoSolveResult (see docplex.cp.solution) that contains the solution
         if exists, plus different information on the solving process.
 
-        If the context parameter *solve_with_start_next* (or config parameter *context.solver.solve_with_start_next*)
-        is set to True, the call to solve() is replaced by loop start/next which returns the last solution found.
-        If a solver listener has been added to the solver, it is warned of all intermediate solutions.
+        If the context parameter *solve_with_search_next* (or config parameter *context.solver.solve_with_search_next*)
+        is set to True, the call to solve() is replaced by loop of search_next() calls which returns the last
+        solution found.
+        Difference is that, if a solver listener has been added to the solver, it is warned of all intermediate solutions.
 
         Returns:
             Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
@@ -604,12 +755,11 @@ class CpoSolver(object):
             CpoException: (or derived) if error.
         """
         # Check solve with start/next
-        if self.context.solver.solve_with_start_next:
-            return self._solve_with_start_next()
+        if self.context.solver.solve_with_search_next:
+            return self.solve_with_search_next()
 
         # Notify listeners
-        for lstnr in self.listeners:
-            lstnr.start_solve(self)
+        self._notify_listeners_start_operation(listener.OPERATION_SOLVE)
 
         # Solve model
         stime = time.time()
@@ -637,18 +787,60 @@ class CpoSolver(object):
 
         # Notify listeners
         for lstnr in self.listeners:
-            lstnr.result_found(self, msol)
-        for lstnr in self.listeners:
-            lstnr.end_solve(self)
+            lstnr.new_result(self, msol)
+        self._notify_listeners_end_operation(listener.OPERATION_SOLVE)
 
         # Return solution
         return msol
         
      
+    def solve_with_search_next(self):
+        """ Solve the model using a start/next loop instead of standard solve.
+
+        Return:
+            Last solve result
+        """
+        # Loop on all solutions
+        last_sol = None
+        while True:
+            # Search for next solution
+            msol = self.search_next()
+            if msol.get_solve_status() == SOLVE_STATUS_JOB_ABORTED:
+                return last_sol if last_sol is not None else self.last_result
+
+            # Check successful search
+            if msol:
+                last_sol = msol
+                if msol.is_solution_optimal():
+                    break
+            else:
+                break
+
+        # Process end of search
+        # print("msol: {}, is_sol: {}, isoptimal: {}".format(msol,  msol.is_solution(), msol.is_solution_optimal()))
+        # print("last_sol: {}".format(last_sol))
+        if last_sol is None:
+            last_sol = msol
+        else:
+            # Update last solution with last solver infos
+            last_sol.solver_infos = msol.solver_infos
+        self.end_search()
+        return last_sol
+
+
     def search_next(self):
         """ Get the next available solution.
 
-        This function is available only with local CPO solver with release number greater or equal to 12.7.0.
+        This method returns an object of class :class:`~docplex.cp.solution.CpoSolveResult` whose method
+        :meth:`~docplex.cp.solution.CpoSolveResult.is_solution` returns True if a new solution is found.
+        This method returns False if there is no solution, or if the solution is the same than the previous
+        one but the solve status has moved from Feasible to Optimal.
+        In this last case, the optimality of the last solution can be checked using the following code:
+        ::
+
+            optimal = slvr.get_last_result().is_solution_optimal()
+
+        This function is available with local CPO solver for release number greater or equal to 12.7.0.
 
         Returns:
             Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
@@ -660,8 +852,7 @@ class CpoSolver(object):
             # Notify listeners about start of search
             self.agent.start_search()
             self._set_status(STATUS_SEARCH_WAITING)
-            for lstnr in self.listeners:
-                lstnr.start_solve(self)
+            self._notify_listeners_start_operation(listener.OPERATION_SOLVE)
 
         # Check if status is aborted in the mean time (may be caused by listener)
         if self._check_status_aborted():
@@ -695,7 +886,7 @@ class CpoSolver(object):
 
         # Notify listeners
         for lstnr in self.listeners:
-            lstnr.result_found(self, msol)
+            lstnr.new_result(self, msol)
 
         # Return solution
         return msol
@@ -718,8 +909,7 @@ class CpoSolver(object):
         msol = self.agent.end_search()
         self._set_status(STATUS_IDLE)
         self.last_result = msol
-        for lstnr in self.listeners:
-            lstnr.end_solve(self)
+        self._notify_listeners_end_operation(listener.OPERATION_SOLVE)
         return msol
 
 
@@ -759,8 +949,7 @@ class CpoSolver(object):
         # Start refine conflict
         self._check_status(STATUS_IDLE)
         self._set_status(STATUS_REFINING_CONFLICT)
-        for lstnr in self.listeners:
-            lstnr.start_refine_conflict(self)
+        self._notify_listeners_start_operation(listener.OPERATION_REFINE_CONFLICT)
 
         # Ensure cpo model is generated with all constraints named
         namecstrs = self.context.model.name_all_constraints
@@ -776,12 +965,11 @@ class CpoSolver(object):
 
         # Call listeners with conflict result
         for lstnr in self.listeners:
-            lstnr.conflict_found(self, msol)
+            lstnr.new_result(self, msol)
 
         # End refine conflict
         self._set_status(STATUS_IDLE)
-        for lstnr in self.listeners:
-            lstnr.end_refine_conflict(self)
+        self._notify_listeners_end_operation(listener.OPERATION_REFINE_CONFLICT)
 
         return msol
 
@@ -809,8 +997,10 @@ class CpoSolver(object):
         """
         self._check_status(STATUS_IDLE)
         self._set_status(STATUS_PROPAGATING)
+        self._notify_listeners_start_operation(listener.OPERATION_PROPAGATE)
         psol = self.agent.propagate()
         self._set_status(STATUS_IDLE)
+        self._notify_listeners_end_operation(listener.OPERATION_PROPAGATE)
         return psol
 
 
@@ -835,8 +1025,10 @@ class CpoSolver(object):
         """
         self._check_status(STATUS_IDLE)
         self._set_status(STATUS_RUNNING_SEEDS)
+        self._notify_listeners_start_operation(listener.OPERATION_RUN_SEEDS)
         rsol = self.agent.run_seeds(nbrun)
         self._set_status(STATUS_IDLE)
+        self._notify_listeners_end_operation(listener.OPERATION_RUN_SEEDS)
         return rsol
 
 
@@ -887,7 +1079,7 @@ class CpoSolver(object):
 
 
     def get_last_solution(self):
-        """ Get the last result returned by this solver
+        """ Get the last result returned by this solver.
 
         DEPRECATED. Use get_last_result instead.
 
@@ -898,7 +1090,10 @@ class CpoSolver(object):
 
 
     def get_last_result(self):
-        """ Get the last result returned by this solver
+        """ Get the last result returned by this solver.
+
+        Calling this method can be useful to determine, for example, if the last solution returned
+        by a sequence of start_search() and search_next(), or by a solution iterator, is optimal.
 
         Returns:
             Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
@@ -1062,40 +1257,6 @@ class CpoSolver(object):
             cback.invoke(self, event, data)
 
 
-    def _solve_with_start_next(self):
-        """ Solve the model using a start/next loop instead of standard solve.
-
-        Return:
-            Last solve result
-        """
-        # Loop on all solutions
-        last_sol = None
-        while True:
-            # Search for next solution
-            msol = self.search_next()
-            if msol.get_solve_status() == SOLVE_STATUS_JOB_ABORTED:
-                return last_sol if last_sol is not None else self.last_result
-
-            # Check successful search
-            if msol:
-                last_sol = msol
-                if msol.is_solution_optimal():
-                    break
-            else:
-                break
-
-        # Process end of search
-        # print("msol: {}, is_sol: {}, isoptimal: {}".format(msol,  msol.is_solution(), msol.is_solution_optimal()))
-        # print("last_sol: {}".format(last_sol))
-        if last_sol is None:
-            last_sol = msol
-        else:
-            # Update last solution with last solver infos
-            last_sol.solver_infos = msol.solver_infos
-        self.end_search()
-        return last_sol
-
-
     def _check_status(self, ests):
         """ Throws an exception if solver status is not the expected one
 
@@ -1106,6 +1267,26 @@ class CpoSolver(object):
         """
         if self.status != ests:
            raise CpoException("Unexpected solver status. Should be '{}' instead of '{}'".format(ests, self.status))
+
+
+    def _notify_listeners_start_operation(self, op):
+        """ Call all listeners with operation start
+
+        Args:
+            op:  Operation that is started
+        """
+        for lstnr in self.listeners:
+            lstnr.start_operation(self, op)
+
+
+    def _notify_listeners_end_operation(self, op):
+        """ Call all listeners with operation end
+
+        Args:
+            op:  Operation that is ended
+        """
+        for lstnr in self.listeners:
+            lstnr.end_operation(self, op)
 
 
     def _check_status_aborted(self):
@@ -1120,7 +1301,7 @@ class CpoSolver(object):
         self._set_status(STATUS_RELEASED)
         self.last_result = self._create_solution_aborted()
         for lstnr in self.listeners:
-            lstnr.result_found(self, self.last_result)
+            lstnr.new_result(self, self.last_result)
         for lstnr in self.listeners:
             lstnr.end_solve(self)
         return True
@@ -1225,9 +1406,12 @@ def get_version_info():
     """ If the solver agent defined in the configuration enables this function,
     this method returns solver version information.
 
-    This method creates a CP solver to retrieve this information, and end it immediately.
-    It returns a dictionary with various information, as in the following example:
+    This method creates a CP solver using the default configuration parameters.
+    It then retrieves this information, and close the solver.
+    The returned value is a dictionary with various information, as in the
+    following example:
     ::
+
     {
        "ProxyVersion" : 5,
        "SourceDate" : "Sep 12 2017",
@@ -1239,15 +1423,17 @@ def get_version_info():
     }
 
     Returns:
-        Solver information dictionary, or None if not available.
+        Solver information dictionary, or empty dictionary if not available.
     """
     from docplex.cp.model import CpoModel
     try:
         with CpoSolver(CpoModel()) as slvr:
             return slvr.agent.version_info
     except:
+        if config.context.log_exceptions:
+            traceback.print_exc()
         pass
-    return None
+    return {}
 
 
 def get_solver_version():
@@ -1305,6 +1491,7 @@ def _get_solver_agent_class(aname, sctx):
 
     # Return
     return sclass
+
 
 def _replace_names_in_json_dict(jdict, renmap):
     """ Replace keys that has been renamed in a JSON result directory

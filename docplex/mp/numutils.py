@@ -7,6 +7,7 @@
 # gendoc: ignore
 
 import math
+from docplex.mp.sttck import StaticTypeChecker as sttck
 
 
 def round_nearest_halfway_from_zero(x, infinity=1e+20):
@@ -113,3 +114,45 @@ class _NumPrinter(object):
                     return self._double_format % num
             except AttributeError:
                 return '%d' % num
+
+def compute_tolerance(abstol, reltol , baseline):
+    return max(abstol, reltol * abs(baseline))
+
+
+def resolve_abs_rel_tolerances(logger, abstols, reltols, size, accept_none=True,
+                               default_abstol=1e-6,
+                               default_reltol=1e-4,
+                               caller=None):
+    """ Resolve candidate tolerances.
+
+    Takes as asrguments either a list of numbers, a number or None. When a list is passed, it is
+    assumed to be of length size.
+
+    :param logger:
+    :param abstols:
+    :param reltols:
+    :param size: the desired length of the two returtned lists.
+    :param accept_none: a flag indicating whether the resolve procedure accepts None. If True,
+        returns a list of length 'size' using the default values.
+    :param default_abstol: the default absolute tolerance (1e-6)
+    :param default_reltol: the default relative tolerance (1e-4)
+    :param caller: A string indicating the name of the caller method for error messages, or None.
+
+
+    :return: a tuple of two lists of length `size` with valid tolerances.
+    """
+    assert default_abstol >= 0, "Absolute tolerance must be positive"
+    assert default_reltol >= 0, "Relative tolerance must be positive"
+    assert default_reltol < 1, "Relative tolerance cannot be greater than 100%"
+    assert size >= 1
+
+    if abstols is not None:
+        abstols_ = sttck.typecheck_optional_num_seq(logger, abstols, expected_size=size, accept_none=accept_none, caller=caller)
+    else:
+        abstols_ = [default_abstol] * size
+    if reltols is not None:
+        reltols_ = sttck.typecheck_optional_num_seq(logger, reltols, expected_size=size, accept_none=accept_none, caller=caller)
+    else:
+        reltols_ = [default_reltol] * size
+
+    return abstols_, reltols_

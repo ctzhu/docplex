@@ -25,7 +25,7 @@ To be able to process multiple solutions, the model should be solved:
 
  * using the solution iterator given by method :meth:`docplex.cp.model.CpoModel.start_search`,
  * or using the method :meth:`docplex.cp.model.CpoModel.solve`
-   but setting the parameter *context.solver.solve_with_start_next* to True.
+   but setting the parameter *context.solver.solve_with_search_next* to True.
 
 *New in version 2.8.*
 
@@ -33,18 +33,44 @@ Detailed description
 --------------------
 """
 
+from docplex.cp.solution import CpoSolveResult, CpoRefineConflictResult
+
+# List of possible operations
+OPERATION_SOLVE           = 'Solve'
+OPERATION_PROPAGATE       = 'Propagate'
+OPERATION_REFINE_CONFLICT = 'RefineConflict'
+OPERATION_RUN_SEEDS       = 'RunSeeds'
+
 
 ###############################################################################
 ## Listener class
 ###############################################################################
 
 class CpoSolverListener(object):
-    """ Solve listener allows to be warned about different solving steps.
+    """ Solve listener to be warned about different solving steps.
 
     This class is an 'abstract' class that must be extended by actual listener implementation.
-    All method of this class are empty.
+    It implements methods that are called to be warned about noticeable solving steps.
 
-    *New in version 2.8.*
+    These methods are all taking the source solver as first argument. There are:
+
+     * :meth:`solver_created` signals the solver has just been created,
+     * :meth:`start_operation` signals the start of a solve operation,
+     * :meth:`end_operation` signals the end of a solve operation,
+     * :meth:`new_result` notifies about a new result,
+     * :meth:`new_log_data` notifies about a new piece of log data.
+
+    For a more specialized notification, the following methods are also implemented (here empty),
+    called by the default implementation of the methods listed above (except *solver_created*).
+    This means that, if the methods above are overwritten, the following methods may never be called,
+    except if the new implementation calls for super().
+
+     * :meth:`start_solve` signals that a solve operation is started,
+     * :meth:`end_solve` signals that a solve operation is ended,
+     * :meth:`result_found` notifies a new solve result,
+     * :meth:`start_refine_conflict` signals that a refine_conflict operation is started,
+     * :meth:`end_refine_conflict` signals that a refine_conflict operation is ended,
+     * :meth:`conflict_found` notifies about the result of a refine_conflict.
     """
 
     def solver_created(self, solver):
@@ -52,6 +78,63 @@ class CpoSolverListener(object):
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+        """
+        pass
+
+
+    def start_operation(self, solver, op):
+        """ Notify that an operation is started.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            op:     Operation that is started, in constants OPERATION_*
+        """
+        # For compatibility reasons, default implementation calls legacy functions
+        if op is OPERATION_SOLVE:
+            self.start_solve(solver)
+        elif op is OPERATION_REFINE_CONFLICT:
+            self.start_refine_conflict(solver)
+
+
+    def end_operation(self, solver, op):
+        """ Notify that an operation is terminated.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            op:     Operation that is terminated, in constants OPERATION_*
+        """
+        # For compatibility reasons, default implementation calls legacy functions
+        if op is OPERATION_SOLVE:
+            self.end_solve(solver)
+        elif op is OPERATION_REFINE_CONFLICT:
+            self.end_refine_conflict(solver)
+
+
+    def new_result(self, solver, result):
+        """ Signal that a new result has been found.
+
+        Depending on the operation in progress, result object may be:
+
+         * an object of class :class:`~docplex.cp.solution.CpoSolveResult` if operation is a solve,
+         * an object of class :class:`~docplex.cp.solution.CpoRefineConflictResult` if the operation is a refine_conflict.
+
+        Args:
+            solver:  Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            result:  New result that has been found
+        """
+        # For compatibility reasons, default implementation calls legacy functions
+        if isinstance(result, CpoSolveResult):
+            self.result_found(solver, result)
+        elif isinstance(result, CpoRefineConflictResult):
+            self.conflict_found(solver, result)
+
+
+    def new_log_data(self, solver, data):
+        """ Signal a new piece of log data.
+
+        Args:
+            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            data:   New log data as a string
         """
         pass
 
@@ -75,7 +158,7 @@ class CpoSolverListener(object):
 
 
     def result_found(self, solver, sres):
-        """ Signal that a result has been found.
+        """ Signal that a solve result has been found.
 
         This method is called every time a result is provided by the solver. The result, in particular the last one,
         may not contain any solution. This should be checked calling method sres.is_solution().
@@ -109,23 +192,15 @@ class CpoSolverListener(object):
 
 
     def conflict_found(self, solver, cflct):
-        """ Signal that a conflict has been found.
+        """ Signal that a conflict result has been found.
 
         This method is called when a conflict result is found by the solver when method refine_conflict() is called.
+
+        Note that the conflict result may contain no conflict.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
             cflct:  Conflict descriptor, object of class :class:`~docplex.cp.solution.CpoRefineConflictResult`
-        """
-        pass
-
-
-    def new_log_data(self, solver, data):
-        """ Signal a new piece of log data.
-
-        Args:
-            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
-            data:   New log data as a string
         """
         pass
 
@@ -207,8 +282,8 @@ class AutoStopListener(CpoSolverListener):
             min_sols: Minimun number of solutions to be found before stopping the solve
             max_sols: Maximum number of solutions after which solve is stopped
             qsc_time: Quiesce time limit. Max time, in seconds, after which solver is stopped if no new solution is found.
-            qsc_sols: Quiesce time limit expressed as a number of solutions. Quiesce time limit is computed as this
-                      value multiplied by the average time between solutions.
+            qsc_sols: Quiesce time limit expressed as a number of solutions.
+                      Actual quiesce time limit is computed as this value multiplied by the average time between solutions.
         """
         # Initialize next abort time
         self.min_sols = min_sols
@@ -580,9 +655,8 @@ else:
             self.parse_log = parse_log
 
         def solver_created(self, solver):
-            # Force solve with start/next
-            solver.context.solver.solve_with_start_next = True
-
+            # Force solve with search_next
+            solver.set_solve_with_search_next(True)
 
         def start_solve(self, solver):
             """ Notify that the solve is started. """

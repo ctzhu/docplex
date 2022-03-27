@@ -20,19 +20,23 @@ class KPI(object):
     is raised by `compute`.
 
     """
-
-    def __init__(self):
-        pass
+    def __init__(self, name=None):
+        self._name = name
 
     def get_name(self):
-        """
-        Returns:
-            string: The published name of the KPI, a non-empty, unique string.
-        """
-        raise NotImplementedError  # pragma: no cover
+        return self._name
 
     def set_name(self, new_name):
-        pass  # pragma: no cover
+        self._check_name(new_name)
+        self._name = new_name
+
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, new_name):
+        self.set_name(new_name)
 
     def get_model(self):
         """
@@ -115,17 +119,20 @@ class DecisionKPI(KPI):
 
     """
     def __init__(self, kpi_op, name=None):
-        KPI.__init__(self)
+        expr = None
         if is_number(kpi_op):
-            self._expr = self.get_model().linear_expr(arg=kpi_op)
-            self._name = name
-        elif not isinstance(kpi_op, Operand):
-            self.get_model().fatal('cannot interpret this as kpi: {0!r}', kpi_op)
+            expr = self.get_model().linear_expr(arg=kpi_op)
+            name = name
+        elif isinstance(kpi_op, Operand):
+            expr = kpi_op
+            expr.notify_used(self)  # kpi is a subscriber
+            if hasattr(kpi_op, 'name'):
+                name = name or getattr(kpi_op, 'name')
+
         else:
-            self._expr = kpi_op
-            self._expr.notify_used(self)  # kpi is a subscriber
-            self._name = name or kpi_op.name
-        self._check_name(self._name)
+            self.get_model().fatal('cannot interpret this as kpi: {0!r}, expecting number or operand', kpi_op)
+        super().__init__(name)
+        self._expr = expr
 
     def notify_expr_modified(self, expr, event):
         # do nothing
@@ -133,15 +140,6 @@ class DecisionKPI(KPI):
 
     def notify_removed(self):
         self._expr.notify_unsubscribed(self)
-
-    def get_name(self):
-        return self._name
-
-    def set_name(self, new_name):
-        self._check_name(new_name)
-        self._name = new_name
-
-    name = property(get_name, set_name)
 
     def get_model(self):
         return self._expr.model
@@ -165,7 +163,7 @@ class DecisionKPI(KPI):
             :class:`docplex.mp.solution.SolveSolution`
         """
         es = self._ensure_solution(s, do_raise=True)
-        return self._expr._get_solution_value(es)
+        return self._expr._raw_solution_value(es)
 
     def is_decision_expression(self):
         return True
@@ -183,7 +181,7 @@ class DecisionKPI(KPI):
         return DecisionKPI(kpi_op=expr_copy, name=self.name)
 
     def clone(self):
-        return DecisionKPI(self._expr, self._name)
+        return DecisionKPI(self._expr, self.name)
 
     def __repr__(self):
         return "{0}(name={1},expr={2!s})".format(self.__class__.__name__, self.name, str_maxed(self._expr, maxlen=64))
@@ -194,19 +192,9 @@ class FunctionalKPI(KPI):
     # Functional KPIs do not require a successful solve.
 
     def __init__(self, fn, model, name):
-        KPI.__init__(self)
-        self._name = name
+        KPI.__init__(self, name)
         self._function = fn
         self._model = model
-        self._check_name(self._name)
-
-    def get_name(self):
-        return self._name
-
-    def set_name(self, new_name):
-        self._name = new_name
-
-    name = property(get_name, set_name)
 
     def get_model(self):
         return self._model
@@ -219,10 +207,10 @@ class FunctionalKPI(KPI):
         return False
 
     def copy(self, new_model, var_map):
-        return FunctionalKPI(fn=self._function, model=new_model, name=self._name)
+        return FunctionalKPI(fn=self._function, model=new_model, name=self.name)
 
     def clone(self):
-        return FunctionalKPI(fn=self._function, model=self._model, name=self._name)
+        return FunctionalKPI(fn=self._function, model=self._model, name=self.name)
 
     def to_expr(self):
         docplex_fatal("This KPI cannot be used as an expression: {0!r}".format(self))

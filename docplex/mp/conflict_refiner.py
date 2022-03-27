@@ -8,12 +8,8 @@ from collections import namedtuple, defaultdict
 
 from docplex.mp.utils import is_string
 from docplex.mp.constants import ComparisonType, VarBoundType
-from docplex.mp.context import check_credentials
-from docplex.mp.cloudutils import context_must_use_docloud
-
 from docplex.mp.utils import str_maxed
 from docplex.mp.publish import PublishResultAsDf
-
 
 
 TConflictConstraint = namedtuple("_TConflictConstraint", ["name", "element", "status"])
@@ -133,7 +129,7 @@ class ConflictRefinerResult(object):
             else:
                 ct = elt
                 label = ct.__class__.__name__
-            print("  - status: {1}, {0}: {2!s}".format(label, st.name, str_maxed(ct, maxlen=40)))
+            print("  - status: {1}, {0}: {2!s}".format(label, st.name, ct.to_readable_string()))
 
     def display_stats(self):
         """ Displays statistics on conflicts.
@@ -158,7 +154,6 @@ class ConflictRefinerResult(object):
 
     def as_output_table(self, use_df=True):
         return to_output_table(self, use_df)
-
 
     def print_information(self):
         """ Similar as `display_stats`
@@ -407,31 +402,10 @@ class ConflictRefiner(PublishResultAsDf, object):
 
         try:
             mdl.set_log_output(context.solver.log_output)
-
-            forced_docloud = context_must_use_docloud(context, **kwargs)
-
-            results = None
-
-            have_credentials = False
-            if context.solver.docloud:
-                have_credentials, error_message = check_credentials(context.solver.docloud)
-                if error_message is not None:
-                    warnings.warn(error_message, stacklevel=2)
-            if forced_docloud:
-                if have_credentials:
-                    results = self._refine_conflict_cloud(mdl, context, preferences, groups)
-                else:
-                    mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}", context.solver.docloud)
-            # from now on docloud_context is None
-            elif mdl.environment.has_cplex:
-                # if CPLEX is installed go for it
+            if mdl.environment.has_cplex:
                 results = self._refine_conflict_local(mdl, context, preferences, groups)
-            elif have_credentials:
-                # no context passed as argument, no Cplex installed, try model's own context
-                results = self._refine_conflict_cloud(mdl, context, preferences, groups)
             else:
-                # no way to solve.. really
-                return mdl.fatal("CPLEX DLL not found: please provide DOcplexcloud credentials")
+                return mdl.fatal("CPLEX runtime not found: cannot run conflict refiner")
 
             # write conflicts table.write_output_table() handles everything related to
             # whether the table should be published etc...

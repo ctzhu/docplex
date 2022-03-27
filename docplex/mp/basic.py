@@ -10,8 +10,122 @@ from io import StringIO
 from enum import Enum
 
 from docplex.mp.operand import Operand
-from docplex.mp.utils import is_number, is_string, str_maxed
+from docplex.mp.utils import is_number, is_string
 from docplex.mp.sttck import StaticTypeChecker
+
+
+# noinspection PyUnusedLocal,PyPropertyAccess
+
+class _ModelMixin(object):
+    # a base mixin class to hold the `model` abstract property
+    # used by all sub mixins
+
+    __slots__ = ()
+
+    @property
+    def model(self):
+        raise NotImplementedError  # pragma: no cover
+
+
+class _SubscriptionMixin(object):
+    __slots__ = ()
+
+    # INTERNAL:
+    # This class is absolutely not meant to be directly instantiated
+    # but used as a mixin
+
+    @classmethod
+    def _new_empty_subscribers(cls):
+        return []
+
+    def notify_used(self, user):
+        # INTERNAL
+        self._subscribers.append(user)
+
+    notify_subscribed = notify_used
+
+    def notify_unsubscribed(self, subscriber):
+        # 1 find index
+        for s, sc in enumerate(self._subscribers):
+            if sc is subscriber:
+                del self._subscribers[s]
+                break
+
+    def clear_subscribers(self):
+        self._subscribers = []
+
+    def is_in_use(self):
+        return bool(self._subscribers)
+
+    @property
+    def nb_subscribers(self):
+        return len(self._subscribers)
+
+    def is_shared(self):
+        return self.nb_subscribers >= 2
+
+    def is_used_by(self, obj):
+        # lists are not optimal here, but we favor insertion: append is faster than set.add
+        return any(obj is sc for sc in self.iter_subscribers())
+
+    def notify_modified(self, event):
+        for s in self._subscribers:
+            s.notify_expr_modified(self, event)
+
+    def iter_subscribers(self):
+        return iter(self._subscribers)
+
+    def notify_replaced(self, new_expr):
+        for s in self._subscribers:
+            s.notify_expr_replaced(self, new_expr)
+
+    def grab_subscribers(self, other):
+        # grab subscribers from another expression
+        # typically when an expression is replaced by another.
+        for s in other.iter_subscribers():
+            self._subscribers.append(s)
+        # delete all subscriptions on old
+        other.clear_subscribers()
+
+
+class _BendersAnnotatedMixin(_ModelMixin):
+    # a maxin class to group all benders-related code.
+    __slots__ = ()
+
+    def set_benders_annotation(self, group):
+        self.model.set_benders_annotation(self, group)
+
+    def get_benders_annotation(self):
+        return self.model.get_benders_annotation(self)
+
+
+class _ValuableMixin(_ModelMixin):
+    # a mixin class to group code related to solution evaluation.
+    # common to expressions and variables.
+
+    __slots__ = ()
+
+    def _round_if_discrete(self, raw_value):
+        return self.model._round_element_value_if_necessary(self, raw_value)
+
+    def _raw_solution_value(self, s=None):
+        # INTERNAL: compute raw solution value, no rounding, no checking
+        raise NotImplementedError  # pragma: no cover
+
+    @property
+    def solution_value(self):
+        self.model._check_has_solution()
+        raw = self._raw_solution_value()
+        return self._round_if_discrete(raw)
+
+    @property
+    def raw_solution_value(self):
+        self.model._check_has_solution()
+        return self._raw_solution_value()
+
+    # tiny names
+    sv = solution_value
+    rsv = raw_solution_value
 
 
 class ModelingObjectBase(object):
@@ -88,6 +202,15 @@ class ModelingObjectBase(object):
         """
         return self._model
 
+    def is_in_model(self, mdl):
+        """
+        Returns True if this object belongs yo the `mdl model.
+
+        Args:
+            mdl: an instance of :class:`docplex.mp.model.Model`.
+        """
+        return self.model is mdl
+
     def get_linear_factory(self):
         return self._model._lfactory
 
@@ -118,8 +241,12 @@ class ModelingObjectBase(object):
     def error_handler(self):
         return self._model.error_handler
 
-    def truncated_str(self):
-        return str_maxed(self, maxlen=self._model._max_repr_len)
+    def repr_str(self):
+        # INTERNAL
+        try:
+            return self.to_string(use_space=False)
+        except (TypeError, AttributeError):
+            return str(self)
 
     def zero_expr(self):
         # INTERNAL
@@ -129,7 +256,7 @@ class ModelingObjectBase(object):
         self.fatal("Unsupported operation: {0!s} {1:s} {2!s}", lhs, op, rhs)
 
     def __unicode__(self):
-        return self.to_string()
+        return self.to_string(use_space=self._model.str_use_space)
 
     def __str__(self):
         if sys.version_info[0] == 2:
@@ -177,6 +304,10 @@ class IndexableObject(ModelingObjectBase):
         return id(self)
 
     @property
+    def model(self):
+        return  self._model
+
+    @property
     def index(self):
         return self._index
 
@@ -212,8 +343,23 @@ class IndexableObject(ModelingObjectBase):
     def container(self, ctn):
         self._model.set_var_container(self, ctn)
 
+    def get_scope(self):
+        scope = None
+        try:
+            cpx_scope = self.cplex_scope
+            return self.model._get_obj_scope(cpx_scope, error='ignore')
+        except AttributeError:
+            pass
+            pass
+        return scope
 
-class Expr(ModelingObjectBase, Operand):
+    @property
+    def scope(self):
+        return self.get_scope()
+
+
+
+class Expr(ModelingObjectBase, Operand, _ValuableMixin):
     """Expr()
 
     Parent class for all expression classes.
@@ -241,7 +387,7 @@ class Expr(ModelingObjectBase, Operand):
     def contains_var(self, dvar):
         """ Checks whether a variable is present in the expression.
 
-        :param: dvar (:class:`docplex.mp.linear.Var`): A decision variable.
+        :param: dvar (:class:`docplex.mp.dvar.Var`): A decision variable.
 
         Returns:
             Boolean: True if the variable is present in the expression, else False.
@@ -254,6 +400,9 @@ class Expr(ModelingObjectBase, Operand):
             nb_digits = self.model.float_precision
         self.to_stringio(oss, nb_digits=nb_digits, use_space=use_space)
         return oss.getvalue()
+
+    def to_readable_string(self):
+        return self.to_string(use_space=True)[:self.model.readable_str_len]
 
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.name):
         raise NotImplementedError  # pragma: no cover
@@ -297,7 +446,7 @@ class Expr(ModelingObjectBase, Operand):
         return False
 
     def get_linear_part(self):
-        return self # should be not implemented...
+        return self  # should be not implemented...
 
     def is_zero(self):
         return False
@@ -307,18 +456,6 @@ class Expr(ModelingObjectBase, Operand):
     @property
     def float_precision(self):
         return 0 if self.is_discrete() else self.model.float_precision
-
-    def _round_if_discrete(self, raw_value):
-        return self.model._round_element_value_if_necessary(self, raw_value)
-
-    def _get_solution_value(self, s=None):
-        # INTERNAL: compute solution value.
-        raise NotImplementedError  # pragma: no cover
-
-    @property
-    def solution_value(self):
-        self._check_model_has_solution()
-        return self._get_solution_value()
 
     def __pow__(self, power):
         # INTERNAL
@@ -344,6 +481,8 @@ class Expr(ModelingObjectBase, Operand):
         """ The strict < operator is not supported
         """
         self.model.unsupported_relational_operator_error(self, "<", e)
+
+
 
 
 # --- Priority class used for relaxation
@@ -372,6 +511,7 @@ class Priority(Enum):
     @property
     def cplex_preference(self):
         return self._get_geometric_preference_factor(base=10.0)
+
 
     def _get_geometric_preference_factor(self, base):
         # INTERNAL: returns a CPLEX preference factor as a power of "base"
@@ -477,74 +617,3 @@ class UserPriority(object):
         return 'UserPriority({0}{1})'.format(sname, self._preference)
 
 
-# noinspection PyUnusedLocal,PyPropertyAccess
-
-class _SubscriptionMixin(object):
-    __slots__ = ()
-
-    # INTERNAL:
-    # This class is absolutely not meant to be directly instantiated
-    # but used as a mixin
-
-    @classmethod
-    def _new_empty_subscribers(cls):
-        return []
-
-    def notify_used(self, user):
-        # INTERNAL
-        self._subscribers.append(user)
-
-    notify_subscribed = notify_used
-
-    def notify_unsubscribed(self, subscriber):
-        # 1 find index
-        for s, sc in enumerate(self._subscribers):
-            if sc is subscriber:
-                del self._subscribers[s]
-                break
-
-    def clear_subscribers(self):
-        self._subscribers = []
-
-    def is_in_use(self):
-        return bool(self._subscribers)
-
-    @property
-    def nb_subscribers(self):
-        return len(self._subscribers)
-
-    def is_shared(self):
-        return self.nb_subscribers >= 2
-
-    def is_used_by(self, obj):
-        # lists are not optimal here, but we favor insertion: append is faster than set.add
-        return any(obj is sc for sc in self.iter_subscribers())
-
-    def notify_modified(self, event):
-        for s in self._subscribers:
-            s.notify_expr_modified(self, event)
-
-    def iter_subscribers(self):
-        return iter(self._subscribers)
-
-    def notify_replaced(self, new_expr):
-        for s in self._subscribers:
-            s.notify_expr_replaced(self, new_expr)
-
-    def grab_subscribers(self, other):
-        # grab subscribers from another expression
-        # typically when an expression is replaced by another.
-        for s in other.iter_subscribers():
-            self._subscribers.append(s)
-        # delete all subscriptions on old
-        other.clear_subscribers()
-
-
-class _BendersAnnotatedMixin(object):
-    __slots__ = ()
-
-    def set_benders_annotation(self, group):
-        self._model.set_benders_annotation(self, group)
-
-    def get_benders_annotation(self):
-        return self._model.get_benders_annotation(self)

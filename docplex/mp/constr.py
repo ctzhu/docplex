@@ -9,7 +9,7 @@ from docplex.mp.basic import IndexableObject, ModelingObjectBase, Priority, _Ben
 from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
-from docplex.mp.utils import DocplexLinearRelaxationError
+from docplex.mp.utils import DocplexLinearRelaxationError, str_maxed
 
 
 class _ExtraConstraintUsage(object):
@@ -48,6 +48,7 @@ class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
 
     def __init__(self, model, name=None):
         IndexableObject.__init__(self, model, name)
+
 
     @property
     def priority(self):
@@ -140,7 +141,7 @@ class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
     @property
     def lpt_name(self):
         radix = self.cplex_scope.prefix
-        return  "%s%d" % (radix, self.index + 1)
+        return "%s%d" % (radix, self.index + 1)
 
     def is_trivial(self):
         return False
@@ -197,9 +198,17 @@ class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
         raise NotImplementedError  # pragma: no cover
 
     def lock_discrete(self):
+        # INTERNAL
         # lock sub expressions
         for expr in self.iter_exprs():
             expr.lock_discrete()
+
+    def to_readable_string(self):
+        return str(self)
+
+    def _compute_violation(self, solution, tolerance):
+        # fallback
+        return 0
 
 
 # noinspection PyAbstractClass
@@ -235,6 +244,7 @@ class BinaryConstraint(AbstractConstraint):
         """
         return self._ctsense
 
+    @property
     def cplex_code(self):
         return self._ctsense._cplex_code
 
@@ -257,7 +267,7 @@ class BinaryConstraint(AbstractConstraint):
     def get_var_coef(self, dvar):
         return self._left_expr.unchecked_get_coef(dvar) - self._right_expr.unchecked_get_coef(dvar)
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         """ Returns a string representation of the constraint.
 
         The operators in this representation are the usual operators <=, ==, and >=.
@@ -269,18 +279,20 @@ class BinaryConstraint(AbstractConstraint):
             A string.
 
         """
-        left_string = self._left_expr.to_string()
-        right_string = self._right_expr.to_string()
+        mdl_str_len_max = self.model.str_max_len
+        return self._to_string(use_space, mdl_str_len_max)
+
+    def to_readable_string(self):
+        return self._to_string(use_space=True, str_len_max=self.model.readable_str_len)
+
+    def _to_string(self, use_space, str_len_max):
+        left_string  = self._left_expr.to_string(use_space=use_space)
+        right_string = self._right_expr.to_string(use_space=use_space)
         self_name = self.name
-        if self_name:
-            return u"%s: %s %s %s" % (self_name,
-                                      left_string,
-                                      self._ctsense.operator_symbol,
-                                      right_string)
-        else:
-            return u"%s %s %s" % (left_string,
-                                  self._ctsense.operator_symbol,
-                                  right_string)
+        s_lhs = str_maxed(left_string, str_len_max)
+        s_rhs = str_maxed(right_string, str_len_max)
+        s_name = "%s: " % self_name if self_name else ""
+        return u"%s%s %s %s" % (s_name, s_lhs, self._ctsense.operator_symbol, s_rhs)
 
     def cplex_num_rhs(self):
         # INTERNAL
@@ -292,8 +304,8 @@ class BinaryConstraint(AbstractConstraint):
         classname = self.__class__.__name__
         user_name = self.safe_name
         typename = self._ctsense.short_name
-        sleft = self._left_expr.truncated_str()
-        sright = self._right_expr.truncated_str()
+        sleft = self._left_expr.repr_str()
+        sright = self._right_expr.repr_str()
         return "docplex.mp.{0}[{1}]({2!s},{3},{4!s})". \
             format(classname, user_name, sleft, typename, sright)
 
@@ -402,9 +414,23 @@ class BinaryConstraint(AbstractConstraint):
             self.fatal('Unexpected expression position: {0!r}, expecting 0 or 1', pos)
 
     def is_satisfied(self, solution, tolerance=1e-6):
-        left_value = self._left_expr._get_solution_value(solution)
-        right_value = self._right_expr._get_solution_value(solution)
-        return ComparisonType.almost_compare(left_value, self._ctsense, right_value, eps=tolerance)
+        violation = self._compute_violation(solution, tolerance)
+        return violation == 0
+
+    def _compute_violation(self, solution, tolerance, _eps_zero=1e-10):
+        left_value = self._left_expr._raw_solution_value(solution)
+        right_value = self._right_expr._raw_solution_value(solution)
+        net_value = left_value - right_value
+        ctsense = self._ctsense
+        violation = 0
+        if ctsense == ComparisonType.EQ:
+            violation = max(0, abs(net_value) - tolerance)
+        elif ctsense == ComparisonType.LE:
+            violation = max(0, net_value - tolerance)
+        elif ctsense == ComparisonType.GE:
+            violation = max(0, - (net_value + tolerance))
+
+        return violation if violation >= _eps_zero else 0
 
     def resolve(self):
         self._left_expr.resolve()
@@ -435,8 +461,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
             self._model.set_linear_constraint_name(self, new_name)
         else:
             self._set_name(new_name)
-
-    name = property(ModelingObjectBase.get_name, set_name)
 
     def notify_used_in_logical_ct(self, lct):
         self._add_usage(_ConstraintLogicalUsage(lct))
@@ -601,7 +625,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
         # new expr takes al subscribers from old expr
         new_expr.grab_subscribers(old_expr)
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         """ Returns a string representation of the constraint.
 
         The operators in this representation are the usual operators <=, ==, and >=.
@@ -613,7 +637,7 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
             A string.
 
         """
-        return BinaryConstraint.to_string(self)
+        return BinaryConstraint.to_string(self, use_space=use_space)
 
     def compute_infeasibility(self, slack):  # pragma: no cover
         ctsense = self._ctsense
@@ -948,6 +972,7 @@ class RangeConstraint(AbstractConstraint):
         return True
 
     # noinspection PyMethodMayBeStatic
+    @property
     def cplex_code(self):
         return 'R'
 
@@ -979,7 +1004,7 @@ class RangeConstraint(AbstractConstraint):
         return self._expr.unchecked_get_coef(dvar)
 
     def is_satisfied(self, solution, tolerance=1e-6):
-        expr_value = self._expr._get_solution_value(solution)
+        expr_value = self._expr._raw_solution_value(solution)
         return self._lb - tolerance <= expr_value <= self._ub + tolerance
 
     @property
@@ -1122,9 +1147,15 @@ class RangeConstraint(AbstractConstraint):
         copied_range = RangeConstraint(target_model, copied_expr, self.lb, self.ub, copy_name)
         return copied_range
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         np = self.model._num_printer
-        return "{0} <= {1!s} <= {2}".format(np.to_string(self._lb), self._expr, np.to_string(self._ub))
+        s_expr = self._expr.to_string(use_space=use_space)
+        return "{0} <= {1!s} <= {2}".format(np.to_string(self._lb), s_expr, np.to_string(self._ub))
+
+    def to_readable_string(self):
+        np = self.model._num_printer
+        s_expr = self._expr.to_string(use_space=True)[:self.model.readable_str_len]
+        return "{0} <= {1!s} <= {2}".format(np.to_string(self._lb), s_expr, np.to_string(self._ub))
 
     def __str__(self):
         """ Returns a string representation of the range constraint.
@@ -1136,7 +1167,7 @@ class RangeConstraint(AbstractConstraint):
         Returns:
             A string.
         """
-        return self.to_string()
+        return self.to_string(use_space=self.model.str_use_space)
 
     def __repr__(self):
         printable_name = self.safe_name
@@ -1170,9 +1201,11 @@ class NotEqualConstraint(LinearConstraint):
         LinearConstraint.__init__(self, model, aux_eq_ct_status, ComparisonType.EQ, zero, name)
         self.lock_discrete()
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         eqct = self._negated_ct
-        return "{0} != {1}".format(eqct._left_expr, eqct._right_expr)
+        s_lhs = eqct._left_expr.to_string(use_space=use_space)
+        s_rhs = eqct._right_expr.to_string(use_space=use_space)
+        return "{0} != {1}".format(s_lhs, s_rhs)
 
     def set_sense(self, new_sense):
         self.fatal("cannot modify sense of a not_equal constraint: {0!s}", self)
@@ -1187,7 +1220,7 @@ class NotEqualConstraint(LinearConstraint):
         Returns:
             A string.
         """
-        return self.to_string()
+        return self.to_string(use_space=self.model.str_use_space)
 
     def __repr__(self):
         return "docplex.mp.NotEquals({0}, {1})". \
@@ -1248,6 +1281,10 @@ class LogicalConstraint(AbstractConstraint):
         return self._linear_ct
 
     @property
+    def lct(self):
+        return self.linear_constraint
+
+    @property
     def benders_annotation(self):
         """
         This property is used to get or set the Benders annotation of a constraint.
@@ -1296,13 +1333,15 @@ class LogicalConstraint(AbstractConstraint):
             return self._linear_ct.get_var_coef(dvar)
 
     def __str__(self):
-        return self.to_string()
+        return self.to_string(use_space=self.model.str_use_space)
 
     def __repr__(self):
         printable_name = self.safe_name
         clazzname = self.__class__.__name__
+        s_lc = self._linear_ct.to_string(use_space=False).replace(' ', '')
+
         return "docplex.mp.constr.{0:s}[{1}]({2!s},{3!s},true={4})" \
-            .format(clazzname, printable_name, self._binary_var, self._linear_ct, self._active_value)
+            .format(clazzname, printable_name, self._binary_var, s_lc, self._active_value)
 
     def notify_expr_modified(self, expr, event):
         # INTERNAL
@@ -1315,7 +1354,7 @@ class LogicalConstraint(AbstractConstraint):
     def _symbol(self):
         return '<->' if self.is_equivalence() else '->'
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         """
         Displays the equivalence constraint in a (shortened) LP style:
         z <-> x+y+z == 2
@@ -1323,7 +1362,11 @@ class LogicalConstraint(AbstractConstraint):
         Returns:
             A string.
         """
-        eqname = self.get_name()
+      
+        return self._to_string(use_space, self.model.str_max_len)
+
+    def _to_string(self, use_space, max_str_len):
+        eqname = self.name
         name_part = '{0}: '.format(eqname) if eqname else ''
         eq_var = self._binary_var
         if eq_var.is_generated():
@@ -1332,7 +1375,11 @@ class LogicalConstraint(AbstractConstraint):
             varname = str(eq_var)
         s_active_value = '' if self._active_value else '=0'
         s_symbol = self._symbol()
-        return "{0}{1}{2} {4} [{3!s}]".format(name_part, varname, s_active_value, self.linear_constraint, s_symbol)
+        s_lc = self.linear_constraint._to_string(use_space, max_str_len)
+        return "{0}{1}{2} {4} [{3}]".format(name_part, varname, s_active_value, s_lc, s_symbol)
+
+    def to_readable_string(self):
+        return self._to_string(use_space=True, max_str_len=self.model.readable_str_len)
 
 
 class IndicatorConstraint(LogicalConstraint):
@@ -1424,14 +1471,16 @@ class EquivalenceConstraint(LogicalConstraint):
         return True
 
     def is_satisfied(self, solution, tolerance=1e-6):
-        is_ct_satisfied = self._linear_ct.is_satisfied(solution, tolerance)
         bvar = self._binary_var
-        if bvar.is_generated() and not bvar in solution:
+        if bvar.is_generated() and bvar not in solution:
             # bvar is not mentioned, ok
             return True
+
+        is_ct_satisfied = self._linear_ct.is_satisfied(solution, tolerance)
         binary_value = solution.get_value(bvar)
         expected_value = self._active_value if is_ct_satisfied else 1 - self._active_value
-        return ComparisonType.almost_equal(binary_value, expected_value, tolerance)
+        ok =  ComparisonType.almost_equal(binary_value, expected_value, tolerance)
+        return ok
 
 
 class IfThenConstraint(IndicatorConstraint):
@@ -1445,8 +1494,8 @@ class IfThenConstraint(IndicatorConstraint):
         IndicatorConstraint.__init__(self, model, binary_var=if_ct_status_var,
                                      linear_ct=then_ct, active_value=true_value, name=None)
 
-    def to_string(self):
-        return "{0!s} -> {1!s}".format(self._if_ct, self.linear_constraint)
+    def to_string(self, use_space=False):
+        return "{0!s} -> {1}".format(self._if_ct, self.linear_constraint.to_string(use_space=use_space))
 
 
 class QuadraticConstraint(BinaryConstraint):
@@ -1637,7 +1686,7 @@ class PwlConstraint(AbstractConstraint):
         self._pwl_expr.resolve()
 
     def is_satisfied(self, solution, tolerance):
-        expr_value = self._input_var._get_solution_value(solution)
+        expr_value = self._input_var._raw_solution_value(solution)
         y_value = solution._get_var_value(self._y)
         computed_f_expr_value = self.pwl_func.evaluate(expr_value)
         return ComparisonType.almost_equal(y_value, computed_f_expr_value, tolerance)
@@ -1661,10 +1710,6 @@ class PwlConstraint(AbstractConstraint):
         if self._y is None:
             self._y = self._pwl_expr._get_allocated_f_var()
         return self._y
-
-    @property
-    def usage_counter(self):
-        return self._pwl_expr.usage_counter
 
     def _get_index_scope(self):
         return self._model._pwl_scope
@@ -1703,10 +1748,11 @@ class PwlConstraint(AbstractConstraint):
     def relaxed_copy(self, relaxed_model, var_map):
         raise DocplexLinearRelaxationError(self, cause='pwl')
 
-    def to_string(self):
+    def to_string(self, use_space=False):
         pwlf = self.pwl_func
         pwlf_s = pwlf.name or 'pwl?'
-        return "{0} == {1!s}({2!s})".format(self.y, pwlf_s, self.expr)
+        s_expr = self.expr.to_string(use_space=use_space)
+        return "{0} == {1!s}({2!s})".format(self.y, pwlf_s, s_expr)
 
     def __str__(self):
         """ Returns a string representation of the piecewise linear constraint.
@@ -1719,9 +1765,8 @@ class PwlConstraint(AbstractConstraint):
         Returns:
             A string.
         """
-        return self.to_string()
+        return self.to_string(use_space=self.model.str_use_space)
 
     def __repr__(self):
-        printable_name = self.safe_name
-        return "docplex.mp.PwlConstraint[{0}]({1},{2!s},{3})". \
-            format(printable_name, self.y, self.pwl_func, self.expr)
+        return "docplex.mp.PwlConstraint({0},{1!s},{2})". \
+            format(self.y, self.pwl_func, self.expr)

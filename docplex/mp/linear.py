@@ -15,6 +15,10 @@ from docplex.mp.basic import Expr, ModelingObjectBase, _SubscriptionMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.utils import is_int, is_number, iter_emptyset, is_quad_expr
 from docplex.mp.dvar import is_var
+# ----------------------------
+# kept for compatibility
+from docplex.mp.dvar import Var
+# ------------------
 from docplex.mp.sttck import StaticTypeChecker
 
 
@@ -63,13 +67,15 @@ class AbstractLinearExpr(LinearOperand, Expr):
     def relaxed_copy(self, relaxed_model, var_map):
         return self.copy(relaxed_model, var_map)
 
+    def set_coefficients(self, var_coef_seq):
+        for dv, k in var_coef_seq:
+            self.set_coefficient(dv, k)
 
 class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     # INTERNAL
 
-    def _get_solution_value(self, s=None):
-        raw = self.coef * self._dvar._get_solution_value(s)
-        return self._round_if_discrete(raw)
+    def _raw_solution_value(self, s=None):
+        return self.coef * self._dvar._raw_solution_value(s)
 
     # INTERNAL class
     __slots__ = ('_dvar', '_coef', '_subscribers')
@@ -216,7 +222,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         self.model.cannot_be_used_as_denominator_error(self, e)  # pragma: no cover
 
     def __rdiv__(self, e):
-        self.model.cannot_be_used_as_denominator_error(self, e)
+        self.model.cannot_be_used_as_denominator_error(self, e)  # pragma: no cover
 
     # changing a coef
     def set_coefficient(self, dvar, coef):
@@ -307,7 +313,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     mul = multiply
 
     def __idiv__(self, other):
-        return self.divide(other)
+        return self.divide(other)  # pragma: no cover
 
     def __itruediv__(self, other):  # pragma: no cover
         # for py3
@@ -363,9 +369,9 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _new_terms_dict(model, *args, **kwargs):
         return model._lfactory.term_dict_type(*args, **kwargs)
 
-    @staticmethod
-    def _new_empty_terms_dict(model):
-        return model._lfactory.term_dict_type()
+    # @staticmethod
+    # def _new_empty_terms_dict(model):
+    #     return model._lfactory.term_dict_type()
 
     def to_linear_expr(self):
         return self
@@ -544,9 +550,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         return not self._terms
 
-    def _has_nonzero_var_term(self):
-        return any(k for _, k in self.iter_terms())
-
     def as_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
         if 0 == self.constant and 1 == len(self._terms):
@@ -668,10 +671,6 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def get_constant(self):
         return self._constant
 
-    def set_constant(self, new_constant):
-        self._model._checker._typecheck_num(new_constant)
-        self._set_constant(new_constant)
-
     def _set_constant(self, new_constant):
         if new_constant != self._constant:
             self.check_discrete_lock_frozen(new_constant)
@@ -780,7 +779,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def _add_expr(self, other_expr):
         # INTERNAL
-        self._constant += other_expr._constant
+        self._constant += other_expr.get_constant()
         # merge term dictionaries
         for v, k in other_expr.iter_terms():
             # use unchecked version
@@ -813,12 +812,10 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         event = UpdateEvent.LinExprGlobal
         if is_var(e):
             self._add_term(e, coef=1)
-        elif isinstance(e, LinearExpr):
+        elif isinstance(e, LinearOperand):
             self._add_expr(e)
-        elif isinstance(e, MonomialExpr):
-            self._add_term(e._dvar, e._coef)
-        elif isinstance(e, ZeroExpr):
-            event = None
+            if isinstance(e, ZeroExpr):
+                event = None
         elif is_number(e):
             validfn = self._model._checker.get_number_validation_fn()
             valid_e = validfn(e) if validfn else e
@@ -937,13 +934,16 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                     for lv, lk in e.iter_terms():
                         self.set_coefficient(dvar=lv, coeff=lk * self_constant)
                     self._constant *= e.get_constant()
+                else:
+                    self._scale(factor=0)
+
             else:
                 # yields a quadratic
                 mul_res = self.model._qfactory.new_linexpr_product(self, e)
                 event = UpdateEvent.LinExprPromotedToQuad
 
-        elif isinstance(e, ZeroExpr):
-            self._scale(factor=0)
+        # elif isinstance(e, ZeroExpr):
+        #     self._scale(factor=0)
 
         elif is_quad_expr(e):
             if not e.number_of_quadratic_terms:
@@ -1088,7 +1088,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self.quotient(e)
 
     def __idiv__(self, other):
-        return self.divide(other)
+        return self.divide(other)  # pragma: no cover
 
     def __itruediv__(self, other):
         # this is for Python 3.z
@@ -1108,16 +1108,15 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
             DOCplexException
                 if the model has not been solved.
         """
-        self._check_model_has_solution()
-        return self._get_solution_value()
+        return super().solution_value
 
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         # INTERNAL: no checks
         val = self._constant
         sol = s or self._model.solution
         for var, koef in self.iter_terms():
             val += koef * sol._get_var_value(var)
-        return self._round_if_discrete(val)
+        return val
 
     def is_discrete(self):
         """ Checks if the expression contains only discrete variables and coefficients.
@@ -1140,7 +1139,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         return True
 
     def __repr__(self):
-        return "docplex.mp.LinearExpr({0})".format(self.truncated_str())
+        return "docplex.mp.LinearExpr({0})".format(self.repr_str())
 
     def _iter_sorted_terms(self):
         # internal
@@ -1159,7 +1158,7 @@ LinearConstraintType = ComparisonType
 
 
 class ZeroExpr(_SubscriptionMixin, AbstractLinearExpr):
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         return 0
 
     def is_zero(self):
@@ -1316,7 +1315,7 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _make_new_constant(self, new_value):
         return ConstantExpr(self._model, new_value)
 
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         return self._constant
 
     def is_zero(self):
@@ -1352,6 +1351,9 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
     def contains_var(self, dvar):
         return False
 
+    def set_coefficients(self, var_coef_seq):
+        pass
+
     @property
     def constant(self):
         return self._constant
@@ -1384,7 +1386,10 @@ class ConstantExpr(_SubscriptionMixin, AbstractLinearExpr):
         return self._apply_op(operator.add, e)
 
     def times(self, e):
-        return e * self._constant
+        if is_number(e):
+            return self.__class__(self._model, e * self._constant)
+        else:
+            return e * self._constant
 
     # noinspection PyMethodMayBeStatic
     def minus(self, e):

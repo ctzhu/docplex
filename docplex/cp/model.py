@@ -67,6 +67,7 @@ from docplex.cp.modeler import *
 from docplex.cp.solution import *
 from docplex.cp.expression import *
 from docplex.cp.function import *
+from docplex.cp.blackbox import CpoBlackboxFunction
 from docplex.cp.solver.solver_listener import CpoSolverListener
 from docplex.cp.solver.cpo_callback import CpoCallback
 
@@ -112,37 +113,77 @@ class CpoModelStatistics(object):
             model: (Optional) Source model
             json:  (Optional) Json representation of this object
         """
+        # Initialize all values
+        self.nb_root_exprs      = 0  # Total number of expressions at root level (constraints and variables if any)
+        self.nb_constraints     = 0  # Number of constraints expressions
+        self.nb_integer_vars    = 0  # Number of integer variables
+        self.nb_interval_vars   = 0  # Number of interval variables
+        self.nb_sequence_vars   = 0  # Number of sequence variables
+        self.nb_state_functions = 0  # Number of state functions
+        self.nb_float_vars      = 0  # Number of float variables
+        self.nb_expr_nodes      = 0  # Number of expression nodes
+        self.operation_usage    = {} # Map of operation usage count.
+                                     # Key is the CPO name of the operation, value is the number of times it is used.
+
+        # Check if json is given
         if json is not None:
             self.nb_root_exprs = json.get('nb_root_exprs', 0)
-            self.nb_integer_var = json.get('nb_integer_var', 0)
-            self.nb_interval_var = json.get('nb_interval_var', 0)
+            self.nb_integer_vars = json.get('nb_integer_var', 0)
+            self.nb_interval_vars = json.get('nb_interval_var', 0)
             self.nb_expr_nodes = json.get('nb_expr_nodes', 0)
             self.operation_usage = json.get('operation_usage')
-        else:
-            if model is None:
-                self.nb_root_exprs = 0
-            else:
-                self.nb_root_exprs = len(model.expr_list) + (0 if model.objective is None else 1)
-            self.nb_integer_var   = 0     # Number of integer variables
-            self.nb_interval_var  = 0     # Number of interval variables
-            self.nb_expr_nodes    = 0     # Number of expression nodes
-            self.operation_usage  = {}    # Map of operation usage count.
-                                          # Key is the CPO name of the operation, value is the number of times it is used.
+            return
 
-    def _add_expression(self, expr):
-        """ Update statistics with an expression node.
+        # Parse the model
+        if model is None:
+            return
+
+        # Initialize stack of expressions to parse, separating variables
+        self.nb_root_exprs = len(model.expr_list)
+        doneset = set()  # Set of ids of expressions already processed
+        estack = []
+        for e, l in model.expr_list:
+            if isinstance(e, CpoVariable):
+                doneset.add(id(e))
+                self.nb_expr_nodes += 1
+                self._add_variable(e)
+            else:
+                estack.append(e)
+        self.nb_constraints = len(estack)
+
+        # Loop while expression stack is not empty
+        while estack:
+            e = estack.pop()
+            eid = id(e)
+            if not eid in doneset:
+                doneset.add(eid)
+                self.nb_expr_nodes += 1
+                if isinstance(e, CpoVariable):
+                    self._add_variable(e)
+                elif isinstance(e, CpoFunctionCall):
+                    opname = e.operation.cpo_name
+                    self.operation_usage[opname] = self.operation_usage.get(opname, 0) + 1
+                # Stack children expressions
+                estack.extend(e.children)
+
+
+    def _add_variable(self, v):
+        """ Update statistics with a variable.
 
         Args:
-            expr:  Expression
+            v:  Variable to add
         """
-        self.nb_expr_nodes += 1
-        if isinstance(expr, CpoIntVar):
-            self.nb_integer_var += 1
-        elif isinstance(expr, CpoIntervalVar):
-            self.nb_interval_var += 1
-        elif isinstance(expr, CpoFunctionCall):
-            opname = expr.operation.cpo_name
-            self.operation_usage[opname] = self.operation_usage.get(opname, 0) + 1
+        if isinstance(v, CpoIntVar):
+            self.nb_integer_vars += 1
+        elif isinstance(v, CpoIntervalVar):
+            self.nb_interval_vars += 1
+        elif isinstance(v, CpoSequenceVar):
+            self.nb_sequence_vars += 1
+        elif isinstance(v, CpoStateFunction):
+            self.nb_state_functions += 1
+        elif isinstance(v, CpoFloatVar):
+            self.nb_float_vars += 1
+
 
     def add(self, other):
         """ Add other model statistics to this one
@@ -150,12 +191,50 @@ class CpoModelStatistics(object):
         Args:
             other:  Other model statistics, object of class CpoModelStatistics
         """
-        self.nb_root_exprs   += other.nb_root_exprs
-        self.nb_integer_var  += other.nb_integer_var
-        self.nb_interval_var += other.nb_interval_var
-        self.nb_expr_nodes   += other.nb_expr_nodes
+        self.nb_root_exprs      += other.nb_root_exprs
+        self.nb_integer_vars    += other.nb_integer_vars
+        self.nb_interval_vars   += other.nb_interval_vars
+        self.nb_sequence_vars   += other.nb_sequence_vars
+        self.nb_state_functions += other.nb_state_functions
+        self.nb_float_vars      += other.nb_float_vars
+        self.nb_expr_nodes      += other.nb_expr_nodes
         for k, v in other.operation_usage.items():
             self.operation_usage[k] = self.operation_usage.get(k, 0) + other.operation_usage.get(k, 0)
+
+
+    def get_number_of_variables(self):
+        """ Return the total number of variables.
+
+        The total number of variables includes:
+
+         * integer variables
+         * interval variables
+         * sequence variables
+         * state functions
+         * float variables
+
+        Returns:
+            Total number of variables
+        """
+        return self.nb_integer_vars + self.nb_interval_vars + self.nb_sequence_vars + self.nb_state_functions + self.nb_float_vars
+
+
+    def get_number_of_expressions(self):
+        """ Return the total number of root expressions.
+
+        Returns:
+            Number of model root expressions.
+        """
+        return self.nb_root_exprs
+
+
+    def get_number_of_constraints(self):
+        """ Return the number of constraints.
+
+        Returns:
+            Number of constraints.
+        """
+        return self.nb_constraints
 
 
     def write(self, out=None, prefix=""):
@@ -175,9 +254,13 @@ class CpoModelStatistics(object):
             out = sys.stdout
 
         # Write normal attributes
-        out.write("{}number of integer variables:  {}\n".format(prefix, self.nb_integer_var))
-        out.write("{}number of interval variables: {}\n".format(prefix, self.nb_interval_var))
-        out.write("{}number of expressions:        {}\n".format(prefix, self.nb_root_exprs))
+        out.write("{}number of integer variables:  {}\n".format(prefix, self.nb_integer_vars))
+        out.write("{}number of interval variables: {}\n".format(prefix, self.nb_interval_vars))
+        out.write("{}number of sequence variables: {}\n".format(prefix, self.nb_sequence_vars))
+        out.write("{}number of state functions:    {}\n".format(prefix, self.nb_state_functions))
+        out.write("{}number of float variables:    {}\n".format(prefix, self.nb_float_vars))
+        out.write("{}number of constraints:        {}\n".format(prefix, self.nb_constraints))
+        out.write("{}number of root expressions:   {}\n".format(prefix, self.nb_root_exprs))
         out.write("{}number of expression nodes:   {}\n".format(prefix, self.nb_expr_nodes))
         out.write("{}operations:                   ".format(prefix))
         if self.operation_usage:
@@ -192,26 +275,28 @@ class CpoModelStatistics(object):
     def to_json(self):
         """ Build a json object from this statistics
 
+        Note: Not all attributes are present, was just for DOcloud usage.
+
         Returns:
             JSON object
         """
         # Build json object for stats
         return {
             'nb_root_exprs':   self.nb_root_exprs,
-            'nb_integer_var':  self.nb_integer_var,
-            'nb_interval_var': self.nb_interval_var,
+            'nb_integer_var':  self.nb_integer_vars,
+            'nb_interval_var': self.nb_interval_vars,
             'nb_expr_nodes':   self.nb_expr_nodes,
             'operation_usage': self.operation_usage
         }
 
     def __str__(self):
-        """ Build a string representing this object
+        """ Build a short string representing this object
 
         Returns:
             String representing this object
         """
-        return "IntegerVars: {}, IntervalVars: {}, Exprs: {}, Nodes: {}, Ops: {}"\
-            .format(self.nb_integer_var, self.nb_interval_var, self.nb_root_exprs, self.nb_expr_nodes, len(self.operation_usage))
+        return "IntegerVars: {}, IntervalVars: {}, Constraints: {}, Exprs: {}, Nodes: {}, Ops: {}"\
+            .format(self.nb_integer_vars, self.nb_interval_vars, self.nb_constraints, self.nb_root_exprs, self.nb_expr_nodes, len(self.operation_usage))
 
     def __eq__(self, other):
         """ Overwrite equality comparison
@@ -249,6 +334,7 @@ class CpoModel(object):
         self.kpis             = OrderedDict() # Dictionary of KPIs. Key is publish name, value is (expr, loc)
         self.listeners        = []            # Solver listeners
         self.callbacks        = []            # Solver callbacks
+        self.blackbox_funs    = {}            # Dictionary of blackbox functions
 
         # Set version of the CPO format (None = not given)
         self.format_version   = version
@@ -273,6 +359,9 @@ class CpoModel(object):
         # Duplicate model expressions constructor functions to make them callable from the model
         _set_all_modeling_functions(self)
 
+        # Set expressions cache if changed in the meantime
+        expression._CACHE_ACTIVE = config.context.model.cache.active
+
 
     def __enter__(self):
         # Implemented for compatibility with cplex
@@ -284,8 +373,8 @@ class CpoModel(object):
         return False  # No exception handling
 
 
-    def add(self, expr):
-        """ Adds an expression to the model.
+    def add(self, *expr):
+        """ Adds one or several expressions to the model.
 
         This method adds one or more CPO expression to the model.
         A CPO expression is an object of class :class:`~docplex.cp.expression.CpoExpr` or derived, obtained by:
@@ -306,7 +395,7 @@ class CpoModel(object):
         The order of the expressions that are added to the model is preserved when it is submitted for solving.
 
         Args:
-            expr: CPO expression (constraint, boolean, objective, etc) to add to the model,
+            expr: CPO expressions (constraint, boolean, objective, etc) to add to the model,
                   or iterable of expressions to add to the model.
         Raises:
             CpoException in case of error.
@@ -314,19 +403,21 @@ class CpoModel(object):
         # Determine calling location
         loc = self._get_calling_location() if self.source_loc else None
 
-        # Check simple expression
-        if isinstance(expr, CpoExpr) or is_bool(expr):
-            self._add_with_loc(expr, loc)
-        else:
-            # Argument may be an iterable of expressions
-            if is_string(expr):
-                raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
-            # Try as iterable
-            try:
-                for x in expr:
-                    self._add_with_loc(x, loc)
-            except:
-                raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
+        # Add all expressions
+        for xp in expr:
+            # Check simple expression
+            if isinstance(xp, CpoExpr) or is_bool(xp):
+                self._add_with_loc(xp, loc)
+            else:
+                # Argument may be an iterable of expressions
+                if is_string(xp):
+                    raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
+                # Try as iterable
+                try:
+                    for x in xp:
+                        self._add_with_loc(x, loc)
+                except:
+                    raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
 
 
     def add_constraint(self, expr):
@@ -740,6 +831,44 @@ class CpoModel(object):
         return [xl for xl in self.kpis.values() if isinstance(xl[0], CpoExpr)]
 
 
+    def _add_blackbox_function(self, bbf):
+        """ Add a new blackbox function to this model.
+
+        Args:
+            bbf:  Blackbox function descriptor, object of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
+        """
+        assert isinstance(bbf, CpoBlackboxFunction), "Blackbox function descriptor should be an object of class CpoBlackboxFunction"
+        name = bbf.get_name()
+        assert name, "Blackbox must have a name when added to a model"
+        ebf = self.blackbox_funs.get(name)
+        if ebf is bbf:
+            return
+        assert ebf is None, "Name '{}' is already used for another blackbox function.".format(name)
+
+        # Store descriptor
+        self.blackbox_funs[name] = bbf
+
+
+    def _get_blackbox_functions(self):
+        """ Gets the list of all blackbox functions registered in this model.
+
+        Returns:
+            List of all blackbox functions occuring in this model, objects of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
+        """
+        return list(self.blackbox_funs.values())
+
+
+    def _get_blackbox_function(self, name):
+        """ Gets a particular blackbox function from its name.
+
+        Args:
+            name: Name of the blackbox function to search for
+        Returns:
+            Blackbox function descriptor, None if not found
+        """
+        return self.blackbox_funs.get(name)
+
+
     def get_all_expressions(self):
         """ Gets the list of all model expressions
 
@@ -969,22 +1098,7 @@ class CpoModel(object):
         Returns:
             Model statistics, object of class class :class:`CpoModelStatistics`.
         """
-        # Initialize stack of expressions to parse
-        estack = [x for x, l in self.expr_list]
-        result = CpoModelStatistics(self)
-        doneset = set()  # Set of ids of expressions already processed
-
-        # Loop while expression stack is not empty
-        while estack:
-            e = estack.pop()
-            eid = id(e)
-            if not eid in doneset:
-                doneset.add(eid)
-                result._add_expression(e)
-                # Stack children expressions
-                estack.extend(e.children)
-
-        return result
+        return CpoModelStatistics(self)
 
 
     def print_information(self, out=None):
@@ -1379,6 +1493,13 @@ class CpoModel(object):
     def export_model(self, out=None, **kwargs):
         """ Exports/prints the model in the standard CPO file format.
 
+        Except for the argument *out*, all other arguments are the same than those available in the solve() method., but
+        However, only thoss that impact the CPO file format are useful, in particular, the solving parameters.
+        For example:
+        ::
+
+           mdl.export_model(Workers=1, TimeLimit=100)
+
         Note that calling this method disables automatically all the settings that are set in the default configuration
         to change the format of the model:
 
@@ -1444,6 +1565,18 @@ class CpoModel(object):
 
         else:
             raise CpoException("Unknown '{}' file format. Only .cpo, .fzn and .lp are supported.".format(ext))
+
+
+    def import_model_string(self, cpostr, **kwargs):
+        """ Import in this model a model contained in a string in CPO format.
+
+        Args:
+            cpostr:    Model in CPO format given as a string.
+            **kwargs: (Optional) context changes
+        """
+        import docplex.cp.cpo.cpo_parser as cpo_parser
+        prs = cpo_parser.CpoParser(self, **kwargs)
+        prs.parse_string(cpostr)
 
 
     def export_as_cpo(self, out=None, **kwargs):

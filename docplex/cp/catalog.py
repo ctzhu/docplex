@@ -8,77 +8,367 @@
 This module contains the Python descriptors of the different CPO types and operations.
 """
 
-from docplex.cp.catalog_elements import *
+#-----------------------------------------------------------------------------
+# Public classes
+#-----------------------------------------------------------------------------
 
-# ----------------------------------------------------------------------------
+class CpoType(object):
+    """ CPO type (flavor) descriptor """
+    __slots__ = ('name',               # Name of the type
+                 'public_name',        # Public name of the type
+                 'is_variable',        # Indicate a type corresponding to a variable
+                 'is_constant',        # Indicates that type denotes a constant (possibly array)
+                 'is_constant_atom',   # Indicates that type denotes an atomic constant
+                 'is_array',           # Indicates that type describes an array
+                 'is_array_of_expr',   # Indicates that type describes an array of expressions (not constants)
+                 'is_toplevel',        # Indicates that type describes an expression that can be used as top level expression
+                 'higher_types',       # List of higher types in the hierarchy
+                 'element_type',       # Type of array element (for arrays)
+                 'parent_array_type',  # Type corresponding to an array of this type
+                 'base_type',          # Base type to be used for signature matching
+                 'id',                 # Unique type id (index) used to fasten type links
+                 'kind_of_types',      # Set of types that are kind of this one
+                 'common_types'        # Dictionary of types that are common with this and others.yield
+                                       # Key is type name, value is common type with this one.
+                )
+
+    def __init__(self, name, isvar=False, iscst=False, istop=False, isatm=False, htyps=(), eltyp=None, bastyp=None, public=None):
+        """ Create a new type definition
+
+        Args:
+            name:   Name of the type
+            isvar:  Indicates whether this type denotes a variable
+            iscst:  Indicate whether this type denotes a constant
+            istop:  Indicate whether this type is a top-level expression
+            isatm:  Indicate whether this type denotes an atomic constant
+            htyps:  List of types higher in the hierarchy
+            eltyp:  Array element type, None (default) if not array
+            bastyp: Base type to be used for signature matching
+            public: Public name of the type
+        """
+        super(CpoType, self).__init__()
+        self.name              = name
+        self.is_variable       = isvar
+        self.is_constant       = iscst
+        self.is_constant_atom  = isatm
+        self.is_toplevel       = istop
+        self.higher_types = (self,) + htyps
+        self.element_type = eltyp
+        self.public_name = public
+        if bastyp is None:
+            self.base_type = self
+        else:
+            self.base_type = bastyp
+            self.is_variable = bastyp.is_variable
+            self.is_constant = bastyp.is_constant
+            self.is_constant_atom = bastyp.is_constant_atom
+        # Process array case
+        if eltyp is not None:
+            eltyp.parent_array_type = self
+            self.is_constant  = eltyp.is_constant
+        self.is_array = eltyp is not None
+        self.is_array_of_expr = self.is_array and not self.is_constant
+        self.parent_array_type = None
+
+    def get_name(self):
+        """ Get the name of the type
+
+        Returns:
+            Name of the type
+        """
+        return self.name
+
+    def get_public_name(self):
+        """ Get the public name of the type
+
+        Returns:
+            Public name of the type
+        """
+        return self.name if self.public_name is None else self.public_name
+
+    def is_kind_of(self, tp):
+        """ Check if this type is a kind of another type, i.e. other type is in is hierarchy
+
+        Args:
+            tp: Other type to check
+        Returns:
+            True if this type is a kind of tp
+        """
+        return self.kind_of_types[tp.id]
+
+    def get_common_type(self, tp):
+        """ Get first common type between this and the parameter.
+
+        Args:
+            tp: Other type
+        Returns:
+            The first common type between this and the parameter, None if none
+        """
+        return self.common_types[tp.id]
+
+    def _compute_common_type(self, tp):
+        """ Compute the first common type between this and the parameter.
+
+        Args:
+            tp: Other type
+        Returns:
+            The first common type between this and the parameter, None if none
+        """
+        # Check if given type is derived
+        if tp.base_type is not tp:
+            tp = tp.base_type
+        # Check if this type is derived
+        if self.base_type is not self:
+            return self.base_type._compute_common_type(tp)
+        # Check direct comparison
+        if (self is tp) or tp.is_kind_of(self):
+            return self
+        elif self.is_kind_of(tp):
+            return tp
+        # Search common types in ancestors
+        for ct in self.higher_types:
+            if ct in tp.higher_types:
+                return ct
+        return None
+
+    def _force_common_type(self, tp, ct):
+        """ Force a common type in an already list of common types.
+
+        Args:
+            tp: Other type
+            ct: Common type
+        """
+        ctypes = list(self.common_types)
+        ctypes[tp.id] = ct
+        self.common_types = tuple(ctypes)
+
+    def __str__(self):
+        """ Convert this object into a string """
+        return self.name
+
+    def __eq__(self, other):
+        """ Check equality of this object with another """
+        return (self is other) or \
+               (isinstance(other, self.__class__) and (self.name == other.name))
+
+    def __ne__(self, other):
+        """ Check inequality of this object with another """
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        """ Return object hash-code """
+        return id(self)
+
+
+class CpoParam(object):
+    """ Descriptor of an operation parameter """
+    __slots__ = ('type',          # Parameter CPO type
+                 'default_value'  # Parameter default value, None if none
+                )
+
+    def __init__(self, ptyp, dval=None):
+        """ Create a new parameter
+
+        Args:
+            ptyp: Parameter type
+            dval: Default value
+        """
+        super(CpoParam, self).__init__()
+        self.type = ptyp
+        self.default_value = dval
+
+    def __str__(self):
+        if self.default_value is None:
+            return self.type.name
+        else:
+            return self.type.name + "=" + str(self.default_value)
+
+    def __eq__(self, other):
+        """ Check equality of this object with another """
+        return (self is other) or \
+               (isinstance(other, self.__class__) and (self.type == other.type) and (self.default_value == other.defval))
+
+    def __ne__(self, other):
+        """ Check inequality of this object with another """
+        return not self.__eq__(other)
+
+
+# Marker to signal any type and number of arguments
+TYPE_ANY = CpoType("Any")
+ANY_ARGUMENTS = (CpoParam(TYPE_ANY),)
+
+class CpoSignature(object):
+    """ Descriptor of a signature of a CPO operation """
+    __slots__ = ('return_type',  # Return type
+                 'parameters',   # List of parameter descriptors
+                 'operation'     # Parent operation
+                 )
+
+    def __init__(self, rtyp, ptyps):
+        """ Create a new signature
+
+        Args:
+            rtyp:  Returned type
+            ptyps: Array of parameter types
+        """
+        super(CpoSignature, self).__init__()
+        self.return_type = rtyp
+
+        # Build list of parameters
+        if ptyps is ANY_ARGUMENTS:
+            self.parameters = ANY_ARGUMENTS
+        else:
+            lpt = []
+            for pt in ptyps:
+                if isinstance(pt, CpoParam):
+                    lpt.append(pt)
+                else:
+                    lpt.append(CpoParam(pt))
+            self.parameters = tuple(lpt)
+
+    def __str__(self):
+        return str(self.return_type) + "[" + ", ".join(map(str, self.parameters)) + "]"
+
+    def __eq__(self, other):
+        """ Check equality of this object with another """
+        if self is other:
+            return True
+        return isinstance(other, self.__class__) and (self.return_type == other.rtype) \
+               and (self.operation == other.operation) and (self.parameters == other.params)
+
+    def __ne__(self, other):
+        """ Check inequality of this object with another """
+        return not self.__eq__(other)
+
+
+class CpoOperation(object):
+    """ CPO operation descriptor """
+    __slots__ = ('cpo_name',     # Operation CPO name
+                 'python_name',  # Operation python name
+                 'keyword',      # Operation keyword (operation symbol)
+                 'priority',     # Operator priority, -1 for function call
+                 'signatures'    # List of possible operation signatures
+                 )
+
+    def __init__(self, cpname, pyname, kwrd, prio, signs):
+        """ Create a new operation
+
+        Args:
+            cpname:  Operation CPO name
+            pyname:  Operation python name
+            kwrd:    Keyword, None for same as cpo name
+            prio:    Priority
+            signs:   Array of possible signatures
+        """
+        super(CpoOperation, self).__init__()
+
+        # Store attributes
+        self.cpo_name = cpname
+        self.python_name = pyname
+        self.priority = prio
+        if kwrd:
+            self.keyword = kwrd
+        else:
+            self.keyword = cpname
+        self.signatures = signs
+
+        # Set pointer back on operation on each signature
+        for s in signs:
+            s.operation = self
+
+    def get_cpo_name(self):
+        """ Get the CPO name of the operation
+
+        Returns:
+            CPO Name of the operation
+        """
+        return self.cpo_name
+
+    def __str__(self):
+        return str(self.cpo_name) + "(" + ", ".join(map(str, self.signatures)) + ")"
+
+    def __eq__(self, other):
+        """ Check equality of this object with another """
+        return (self is other) or \
+               (isinstance(other, self.__class__) and (self.cpo_name == other.cpo_name))
+
+    def __ne__(self, other):
+        """ Check inequality of this object with another """
+        return not self.__eq__(other)
+
+
+#-----------------------------------------------------------------------------
 # Descriptors of CPO types
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 
-Type_FloatExpr             = CpoType("FloatExpr")
-Type_FloatVar              = CpoType("FloatVar", isvar=True, htyps=(Type_FloatExpr,))
-Type_Float                 = CpoType("Float", iscst=True, isatm=True, htyps=(Type_FloatExpr,))
-Type_FloatExprArray        = CpoType("FloatExprArray", eltyp=Type_FloatExpr)
-Type_FloatArray            = CpoType("FloatArray", htyps=(Type_FloatExprArray,), eltyp=Type_Float)
-Type_FloatVarArray         = CpoType("FloatVarArray", htyps=(Type_FloatExprArray,), eltyp=Type_FloatVar)
+Type_FloatExpr             = CpoType("FloatExpr", public="float expression")
+Type_FloatVar              = CpoType("FloatVar", public="float variable", isvar=True, htyps=(Type_FloatExpr,))
+Type_Float                 = CpoType("Float", public="float constant", iscst=True, isatm=True, htyps=(Type_FloatExpr,))
+Type_FloatExprArray        = CpoType("FloatExprArray", public="array of float expressions", eltyp=Type_FloatExpr)
+Type_FloatArray            = CpoType("FloatArray", public="array of float constants", htyps=(Type_FloatExprArray,), eltyp=Type_Float)
+Type_FloatVarArray         = CpoType("FloatVarArray", public="array of float variables", htyps=(Type_FloatExprArray,), eltyp=Type_FloatVar)
 
-Type_IntExpr               = CpoType("IntExpr", htyps=(Type_FloatExpr,))
-Type_IntVar                = CpoType("IntVar", isvar=True, htyps=(Type_IntExpr, Type_FloatExpr,))
-Type_Int                   = CpoType("Int", iscst=True, isatm=True, htyps=(Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,))
-Type_TimeInt               = CpoType("TimeInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
-Type_PositiveInt           = CpoType("PositiveInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
-Type_IntExprArray          = CpoType("IntExprArray", htyps=(Type_FloatExprArray,), eltyp=Type_IntExpr)
-Type_IntArray              = CpoType("IntArray", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
-Type_IntVarArray           = CpoType("IntVarArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_IntVar)
+Type_IntExpr               = CpoType("IntExpr", public="integer expression", htyps=(Type_FloatExpr,))
+Type_IntVar                = CpoType("IntVar", public="integer variable", isvar=True, htyps=(Type_IntExpr, Type_FloatExpr,))
+Type_Int                   = CpoType("Int", public="integer constant", iscst=True, isatm=True, htyps=(Type_IntExpr, Type_Float, Type_FloatExpr,))
+Type_TimeInt               = CpoType("TimeInt", public="integer representing a time", htyps=(Type_Int, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+Type_PositiveInt           = CpoType("PositiveInt", public="positive integer constant", htyps=(Type_Int, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+Type_IntExprArray          = CpoType("IntExprArray", public="array of integer expressions", htyps=(Type_FloatExprArray,), eltyp=Type_IntExpr)
+Type_IntArray              = CpoType("IntArray", public="array of integer constants", htyps=(Type_IntExprArray, Type_FloatArray, Type_FloatExprArray,), eltyp=Type_Int)
+Type_IntVarArray           = CpoType("IntVarArray", public="array of integer variables", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_IntVar)
 
-Type_Constraint            = CpoType("Constraint", istop=True)
+Type_Constraint            = CpoType("Constraint", public="constraint", istop=True)
 
-Type_BoolExpr              = CpoType("BoolExpr", istop=True, htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_Bool                  = CpoType("Bool", istop=True, iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_BoolVar               = CpoType("BoolVar", isvar=True, htyps=(Type_IntVar, Type_Bool, Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
-Type_BoolInt               = CpoType("BoolInt", htyps=(Type_Int, Type_IntVar, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
-Type_BoolExprArray         = CpoType("BoolExprArray", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
-Type_BoolArray             = CpoType("BoolArray", htyps=(Type_IntArray, Type_FloatArray, Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_Bool)
-Type_BoolVarArray          = CpoType("BoolVarArray", htyps=(Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolVar)
+Type_BoolExpr              = CpoType("BoolExpr", public="boolean expression", istop=True, htyps=(Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_Bool                  = CpoType("Bool", public="boolean constant", istop=True, iscst=True, isatm=True, htyps=(Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_BoolVar               = CpoType("BoolVar", public="boolean variable", isvar=True, htyps=(Type_IntVar, Type_Bool, Type_Int, Type_Float, Type_BoolExpr, Type_IntExpr, Type_FloatExpr, Type_Constraint,))
+Type_BoolInt               = CpoType("BoolInt", public="boolean integer", htyps=(Type_Int, Type_IntExpr, Type_Float, Type_FloatExpr,), bastyp=Type_Int)
+Type_BoolExprArray         = CpoType("BoolExprArray", public="array of boolean expressions", htyps=(Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolExpr)
+Type_BoolArray             = CpoType("BoolArray", public="array of boolean constants", htyps=(Type_IntArray, Type_FloatArray, Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_Bool)
+Type_BoolVarArray          = CpoType("BoolVarArray", public="array of boolean variables", htyps=(Type_BoolExprArray, Type_IntExprArray, Type_FloatExprArray,), eltyp=Type_BoolVar)
 
-Type_IntervalVar           = CpoType("IntervalVar", isvar=True)
-Type_IntervalVarArray      = CpoType("IntervalVarArray", eltyp=Type_IntervalVar)
+Type_IntervalVar           = CpoType("IntervalVar", public="interval variable", isvar=True)
+Type_IntervalVarArray      = CpoType("IntervalVarArray", public="array of interval variables", eltyp=Type_IntervalVar)
 
-Type_SequenceVar           = CpoType("SequenceVar", isvar=True)
-Type_SequenceVarArray      = CpoType("SequenceVarArray", eltyp=Type_SequenceVar)
+Type_SequenceVar           = CpoType("SequenceVar", public="sequence variable", isvar=True)
+Type_SequenceVarArray      = CpoType("SequenceVarArray", public="array of sequence variables", eltyp=Type_SequenceVar)
 
-Type_CumulExpr             = CpoType("CumulExpr")
-Type_CumulExprArray        = CpoType("CumulExprArray", eltyp=Type_CumulExpr)
-Type_CumulAtom             = CpoType("CumulAtom", htyps=(Type_CumulExpr,))
-Type_CumulAtomArray        = CpoType("CumulAtomArray", htyps=(Type_CumulExprArray,), eltyp=Type_CumulAtom)
-Type_CumulFunction         = CpoType("CumulFunction", htyps=(Type_CumulExpr,))
+Type_CumulExpr             = CpoType("CumulExpr", public="cumul expression")
+Type_CumulExprArray        = CpoType("CumulExprArray", public="array of cumul expressions", eltyp=Type_CumulExpr)
+Type_CumulAtom             = CpoType("CumulAtom", public="cumul atom", htyps=(Type_CumulExpr,))
+Type_CumulAtomArray        = CpoType("CumulAtomArray", public="array of cumul atoms", htyps=(Type_CumulExprArray,), eltyp=Type_CumulAtom)
+Type_CumulFunction         = CpoType("CumulFunction", public="cumul function", htyps=(Type_CumulExpr,))
 
-Type_StateFunction         = CpoType("StateFunction", isvar=True)
-Type_SegmentedFunction     = CpoType("SegmentedFunction", iscst=True)
-Type_StepFunction          = CpoType("StepFunction", iscst=True)
-Type_TransitionMatrix      = CpoType("TransitionMatrix", iscst=True)
-Type_IntervalArray         = CpoType("IntervalArray")
-Type_Objective             = CpoType("Objective", istop=True)
-Type_TupleSet              = CpoType("TupleSet", iscst=True)
+Type_StateFunction         = CpoType("StateFunction", public="state function", isvar=True)
+Type_SegmentedFunction     = CpoType("SegmentedFunction", public="segmented function", iscst=True)
+Type_StepFunction          = CpoType("StepFunction", public="step function", iscst=True)
+Type_TransitionMatrix      = CpoType("TransitionMatrix", public="transition matrix", iscst=True)
+Type_IntervalArray         = CpoType("IntervalArray", public="array of intervals")
+Type_Objective             = CpoType("Objective", public="objective function", istop=True)
+Type_TupleSet              = CpoType("TupleSet", public="tuple set", iscst=True)
 
-Type_IntValueEval          = CpoType("IntValueEval")
-Type_IntValueChooser       = CpoType("IntValueChooser")
-Type_IntValueSelector      = CpoType("IntValueSelector", htyps=(Type_IntValueChooser,))
-Type_IntValueSelectorArray = CpoType("IntValueSelectorArray", htyps=(Type_IntValueChooser,), eltyp=Type_IntValueSelector)
-Type_IntVarEval            = CpoType("IntVarEval")
-Type_IntVarChooser         = CpoType("IntVarChooser")
-Type_IntVarSelector        = CpoType("IntVarSelector", htyps=(Type_IntVarChooser,))
-Type_IntVarSelectorArray   = CpoType("IntVarSelectorArray", htyps=(Type_IntVarChooser,), eltyp=Type_IntVarSelector)
-Type_SearchPhase           = CpoType("SearchPhase")
+Type_IntValueEval          = CpoType("IntValueEval", public="evaluator of integer value")
+Type_IntValueChooser       = CpoType("IntValueChooser", public="chooser of integer value")
+Type_IntValueSelector      = CpoType("IntValueSelector", public="selector of integer value", htyps=(Type_IntValueChooser,))
+Type_IntValueSelectorArray = CpoType("IntValueSelectorArray", public="array of integer value selectors", htyps=(Type_IntValueChooser,), eltyp=Type_IntValueSelector)
+Type_IntVarEval            = CpoType("IntVarEval", public="evaluator of integer variable")
+Type_IntVarChooser         = CpoType("IntVarChooser", public="chooser of integer variable")
+Type_IntVarSelector        = CpoType("IntVarSelector", public="selector of integer variable", htyps=(Type_IntVarChooser,))
+Type_IntVarSelectorArray   = CpoType("IntVarSelectorArray", public="array of integer variable selectors", htyps=(Type_IntVarChooser,), eltyp=Type_IntVarSelector)
+Type_SearchPhase           = CpoType("SearchPhase", public="search phase")
+Type_Blackbox            = CpoType("Blackbox")
 
+# Special types
 Type_Any                   = TYPE_ANY             # Fake type
 Type_Unknown               = CpoType("Unknown")   # Fake type
 Type_Python                = CpoType("Python")
 Type_Identifier            = CpoType("Identifier", isvar=True)
+Type_IntInterval           = CpoType("IntInterval", public="interval of integer constants", htyps=(Type_Int,))
 
 
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 # Descriptors of private CPO operations
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 
 Oper__added                      = CpoOperation("_added", "_added", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExpr, )),
                                                                                 CpoSignature(Type_Constraint, (Type_BoolExpr, )),) )
@@ -153,9 +443,9 @@ Oper__var_lower_obj_variation    = CpoOperation("_varLowerObjVariation", "_var_l
 Oper__var_upper_obj_variation    = CpoOperation("_varUpperObjVariation", "_var_upper_obj_variation", None, -1, ( CpoSignature(Type_IntVarEval, ()),) )
 
 
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 # Descriptors of public CPO operations
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 
 Oper_abs                         = CpoOperation("abs", "abs", None, -1, ( CpoSignature(Type_IntExpr, (Type_IntExpr,)),
                                                                           CpoSignature(Type_FloatExpr, (Type_FloatExpr,))) )
@@ -427,10 +717,44 @@ Oper_var_index_eval              = CpoOperation("varIndexEval", "var_index_eval"
 Oper_var_local_impact            = CpoOperation("varLocalImpact", "var_local_impact", None, -1, ( CpoSignature(Type_IntVarEval, (CpoParam(Type_Int, dval=-1),)),) )
 Oper_var_success_rate            = CpoOperation("varSuccessRate", "var_success_rate", None, -1, ( CpoSignature(Type_IntVarEval, ()),) )
 
+Oper_eval                        = CpoOperation("eval", "eval", None, -1, ( CpoSignature(Type_FloatExpr, (Type_Blackbox, Type_Int)),) )
 
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
+# Private methods
+#-----------------------------------------------------------------------------
+
+def _compute_all_type_links(ltypes):
+    """ Compute all links between the different data types.
+
+    Args:
+        ltypes: List of all types
+    """
+    # Allocate id to each each type
+    nbtypes = len(ltypes)
+    for i, tp in enumerate(ltypes):
+        tp.id = i
+
+    # Compute kind of for each type
+    for tp1 in ltypes:
+        tp1.kind_of_types = tuple(map(lambda tp2: (tp2.base_type in tp1.higher_types), ltypes))
+
+    # Compute common type
+    for tp1 in ltypes:
+        ctypes = [None] * nbtypes
+        for tp2 in ltypes:
+            ct = tp1._compute_common_type(tp2)
+            if ct is not None:
+                ctypes[tp2.id] = ct
+        tp1.common_types = tuple(ctypes)
+
+    # Special case for intervals and arrays
+    Type_IntInterval._force_common_type(Type_IntArray, Type_IntArray)
+    Type_IntArray._force_common_type(Type_IntInterval, Type_IntArray)
+
+
+#-----------------------------------------------------------------------------
 # Build working structures
-# ----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 
 import sys
 _module = sys.modules[__name__]
@@ -449,8 +773,14 @@ for t in [getattr(_module, x) for x in _attrs if x.startswith("Type_")]:
 ALL_TYPES = tuple(ALL_TYPES)
 
 # Compute all dependency links between types
-compute_all_type_links(ALL_TYPES)
+_compute_all_type_links(ALL_TYPES)
+
+# Build a dictionary of types per name
+ALL_TYPES_PER_NAME = {t.get_name(): t for t in ALL_TYPES}
 
 # Build list of all operations
 ALL_OPERATIONS = tuple(getattr(_module, x) for x in _attrs if x.startswith("Oper_"))
+
+# Build a dictionary of operations per CPO name
+ALL_OPERATIONS_PER_NAME = {o.get_cpo_name(): o for o in ALL_OPERATIONS}
 

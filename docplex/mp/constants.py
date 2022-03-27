@@ -302,10 +302,6 @@ class ObjectiveSense(Enum):
         return self is ObjectiveSense.Maximize
 
     @property
-    def cplex_coef(self):
-        return 1 if self.is_minimize() else -1
-
-    @property
     def verb(self):
         """ Returns a string describing the objective (in lowercase)
 
@@ -317,10 +313,13 @@ class ObjectiveSense(Enum):
 
     @property
     def short_name(self):
-        """ Returns a short (three letters) string describing the objective: min or max
-
+        """ Returns a short ('min' or 'max') string describing the objective.
         """
         return self.verb[:3]
+
+    @property
+    def cplex_coef(self):
+        return 1 if self.is_minimize() else -1
 
     @classmethod
     def from_cplex(cls, cpx_sense):
@@ -332,7 +331,19 @@ class ObjectiveSense(Enum):
             raise ValueError("expecting +1 or -1, {0} was passed".format(cpx_sense))
 
     @staticmethod
-    def parse(arg, logger=None, default_sense=None):
+    def parse(arg, logger=None):
+        """ Converts an argument to an objective sense.
+
+        Accepts either
+        - an objective sense (returns itself)
+        - a string (in  long or short format),
+        - an integer (in CPLEX convention, 1 is for minimize, -1 for maximize).
+
+        :param arg: the argument to convert to a sense
+        :param logger:
+
+        :return: An instance of enumerated `ObjectiveSense` class.
+        """
         if isinstance(arg, ObjectiveSense):
             return arg
 
@@ -342,28 +353,22 @@ class ObjectiveSense(Enum):
                 return ObjectiveSense.Minimize
             elif lower_text in {"maximize", "max"}:
                 return ObjectiveSense.Maximize
-            elif default_sense:
-                logger.error(
-                    "Text is not recognized as objective sense: {0}, expecting \"min\" or \"max\" - using default {1:s}",
-                    (arg, default_sense))
-                return default_sense
             elif logger:
-                logger.fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max", (arg,))
+                logger.fatal("Not an objective sense: '{0}', expecting 'min|max'", arg)
             else:
-                docplex_fatal("Text is not recognized as objective sense: {0}, expecting ""min"" or ""max".format(arg))
+                docplex_fatal("Not an objective sense: '{0}', expecting 'min|max'".format(arg))
         elif is_int(arg):
             if arg == 1:
                 return ObjectiveSense.Minimize
             elif -1 == arg:
                 return ObjectiveSense.Maximize
             else:
-                logger.fatal("cannot convert: <{}> to objective sense", (arg,))
-        elif arg is None:
-            return default_sense
-        elif logger:
-            logger.fatal("cannot convert: <{}> to objective sense", (arg,))
+                logger.fatal("Not an objective sense: <{}>", (arg,))
+
+        if logger:
+            logger.fatal("Not an objective sense: <{}>", (arg,))
         else:
-            docplex_fatal("cannot convert: <{}> to objective sense".format(arg))
+            docplex_fatal("Not an objective sense: <{}>".format(arg))
 
 
 # noinspection PyPep8
@@ -379,10 +384,13 @@ class CplexScope(Enum):
     # INTERNAL
     VAR_SCOPE = 0, 'x', 'variables'
     LINEAR_CT_SCOPE = 1, 'c', 'linear constraints'
-    IND_CT_SCOPE = 2, 'ic', 'indicators'
+    IND_CT_SCOPE = 2, 'ic', 'indicator constraints'
     QUAD_CT_SCOPE = 3, 'qc', 'quadratic constraints'
     PWL_CT_SCOPE = 4, 'pwl', 'piecewise constraints'
     SOS_SCOPE = 5, 'sos', 'SOS'
+
+    def is_constraint_scope(self):
+        return self._value_ in frozenset([1, 2, 3, 4])
 
 
 class QualityMetric(Enum):
@@ -512,7 +520,7 @@ class BasisStatus(Enum):
     See Also:
         The list of possible values for basis status can be found in the CPLEX documentation:
 
-        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getbase.html
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getbase.html
 
     """
 
@@ -598,7 +606,7 @@ class EffortLevel(Enum):
     See Also:
         The list of possible values for effort level status can be found in the CPLEX documentation:
 
-https://www.ibm.com/support/knowledgecenter/SSSA5P_12.10.0/ilog.odms.cplex.help/refcppcplex/html/enumerations/IloCplex_MIPStartEffort.html
+https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/refcppcplex/html/enumerations/IloCplex_MIPStartEffort.html
 
 
     """

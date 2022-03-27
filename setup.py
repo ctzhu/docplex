@@ -21,7 +21,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.20'
+    readme = 'DOcplex 2.21'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -52,7 +52,7 @@ if os.path.isdir(os.path.join("docplex", "worker")):
 setup(
     name='docplex',
     packages=packages,
-    version = '2.20.204',  # replaced at build time
+    version = '2.21.207',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',
@@ -77,11 +77,11 @@ setup(
                    "Topic :: Other/Nonlisted Topic",
                    "License :: OSI Approved :: Apache Software License",
                    "Programming Language :: Python",
-                   "Programming Language :: Python :: 2.7",
                    "Programming Language :: Python :: 3.6",
-                   "Programming Language :: Python :: 3.7"
+                   "Programming Language :: Python :: 3.7",
+                   "Programming Language :: Python :: 3.8"
                    ],
 )
 
-print("** The documentation can be found here: https://github.com/IBMDecisionOptimization/docplex-doc")
+print("** The documentation can be found here: http://ibmdecisionoptimization.github.io/docplex-doc/")
 print("** The examples can be found here: https://github.com/IBMDecisionOptimization/docplex-examples")

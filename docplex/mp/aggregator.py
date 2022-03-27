@@ -31,7 +31,7 @@ class ModelAggregator(object):
         self._generate_transients = True
 
     @property
-    def counter_type(self):
+    def _term_dict_type(self):
         return self._linear_factory.term_dict_type
 
     def new_zero_expr(self):
@@ -74,7 +74,7 @@ class ModelAggregator(object):
         # INTERNAL
         checker = self._checker
         total_num = 0
-        lcc = self.counter_type()
+        lcc = self._term_dict_type()
         qcc = None
 
         number_validation_fn = checker.get_number_validation_fn()
@@ -94,7 +94,7 @@ class ModelAggregator(object):
 
             elif isinstance(item, QuadExpr):
                 if qcc is None:
-                    qcc = self.counter_type()
+                    qcc = self._term_dict_type()
                 for qv, qk in item.iter_quads():
                     update_dict_from_item_value(qcc, qv, qk * safe_coef)
                 qlin = item.get_linear_part()
@@ -133,7 +133,7 @@ class ModelAggregator(object):
     def _scal_prod_f_gen(self, dvars, coef_fn, var_key_iter):
         # var_map is a dictionary of variables.
         # coef_fn is a function accepting dictionary keys
-        lcc_type = self.counter_type
+        lcc_type = self._term_dict_type
         lcc = lcc_type()
         number_validation_fn = self._checker.get_number_validation_fn()
         if number_validation_fn:
@@ -153,7 +153,7 @@ class ModelAggregator(object):
     def _scal_prod_f_alldifferent(self, dvars, coef_fn, var_key_iter):
         # var_map is a dictionary of variables.
         # coef_fn is a function accepting dictionary keys
-        lcc_type = self.counter_type
+        lcc_type = self._term_dict_type
         lcc = lcc_type()
         lcc_setitem = lcc_type.__setitem__
         number_validation_fn = self._checker.get_number_validation_fn()
@@ -170,6 +170,29 @@ class ModelAggregator(object):
                     lcc_setitem(lcc, dvar, fcoeff)
 
         return self._to_expr(qcc=None, lcc=lcc)
+
+    def _scal_prod_vars_all_different(self, terms, coefs):
+        checker = self._checker
+        if not is_iterable(coefs, accept_string=False):
+            checker.typecheck_num(coefs)
+            if not coefs:
+                return self.new_zero_expr()
+            else:
+                sum_of_vars =  self._sum_vars_all_different(terms)
+                return sum_of_vars * coefs
+        else:
+            # coefs is iterable
+            lcc_type = self._term_dict_type
+            def identity(x):    return x
+
+            number_validation_fn = checker.get_number_validation_fn() or identity
+            lcc = lcc_type()
+            lcc_setitem = lcc_type.__setitem__
+            for dvar, coef in izip(terms, coefs):
+                safe_coef = number_validation_fn(coef)
+                if safe_coef:
+                    lcc_setitem(lcc, dvar, safe_coef)
+            return self._to_expr(qcc=None, lcc=lcc)
 
     def sum(self, sum_args):
         if is_iterator(sum_args):
@@ -192,7 +215,7 @@ class ModelAggregator(object):
 
     def _sum_with_iter(self, args):
         sum_of_nums = 0
-        lcc = self.counter_type()
+        lcc = self._term_dict_type()
         checker = self._checker
         qcc = None
         number_validation_fn = checker.get_number_validation_fn()
@@ -209,7 +232,7 @@ class ModelAggregator(object):
                 for lv, lk in item.linear_part.iter_terms():
                     update_dict_from_item_value(lcc, lv, lk)
                 if qcc is None:
-                    qcc = self.counter_type()
+                    qcc = self._term_dict_type()
                 for qvp, qk in item.iter_quads():
                     update_dict_from_item_value(qcc, qvp, qk)
                 sum_of_nums += item.get_constant()
@@ -281,6 +304,12 @@ class ModelAggregator(object):
             return self._sum_vars(sum_args)
         else:
             return self._sum_with_iter(args=sum_args)
+
+    def _sumsq_vars(self, dvars):
+        qcc = self._quad_factory.term_dict_type()
+        for v in dvars:
+            update_dict_from_item_value(qcc, VarPair(v), 1)
+        return self._to_expr(qcc=qcc)
 
     def _sumsq(self, args):
         accumulated_ct = 0
@@ -402,3 +431,10 @@ class ModelAggregator(object):
         exprs = self._sparse_make_exprs(sp_coef_mat, svars, nb_exprs=len(lbs))
         rgs = [lfactory.new_range_constraint(lbs[r], exprs[r], ubs[r], check_feasible=False) for r in range_ranges]
         return rgs
+
+    def _vector_compare(self, left_exprs, right_exprs, sense):
+        lfactory = self._linear_factory
+        assert len(left_exprs) == len(right_exprs)
+        ct_factory_fn = lfactory._new_binary_constraint
+        cts = [ct_factory_fn(left, sense, right) for left, right in izip(left_exprs, right_exprs)]
+        return cts

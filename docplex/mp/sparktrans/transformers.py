@@ -4,6 +4,8 @@
 # (c) Copyright IBM Corp. 2018
 # --------------------------------------------------------------------------
 
+# gendoc: ignore
+
 try:
     from pyspark import keyword_only  ## < 2.0 -> pyspark.ml.util.keyword_only
     from pyspark.ml import Transformer
@@ -21,7 +23,9 @@ except ImportError:
 from docplex.mp.constants import ObjectiveSense
 from docplex.mp.sktrans.modeler import make_modeler
 from docplex.mp.utils import *
-from docplex.mp.sparktrans.spark_utils import make_solution
+from docplex.mp.sparktrans.spark_utils import make_solution, is_spark_dataframe
+
+
 
 
 def convert_to_list_or_value(value):

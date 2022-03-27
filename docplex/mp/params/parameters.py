@@ -606,9 +606,17 @@ class IntParameter(Parameter):
     def __init__(self, group, short_name, cpx_name, param_key, description, default_value, min_value=None,
                  max_value=None, sync=False):
         Parameter.__init__(self, group, short_name, cpx_name, param_key, description, default_value)
-        self._min_value = min_value
-        self._max_value = max_value
+        self._min_value = int(min_value)
+        self._max_value = int(max_value)
         self._synchronous = sync
+
+    @property
+    def min_value(self):
+        return self._min_value
+
+    @property
+    def max_value(self):
+        return self._max_value
 
     @property
     def type_name(self):
@@ -652,6 +660,14 @@ class NumParameter(Parameter):
 
     def _get_max_value(self):
         return self._max_value  # pragma: no cover
+
+    @property
+    def min_value(self):
+        return self._min_value
+
+    @property
+    def max_value(self):
+        return self._max_value
 
     def accept_value(self, new_value):
         fvalue = float(new_value)

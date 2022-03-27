@@ -6,6 +6,7 @@
 
 # gendoc: ignore
 
+
 from docplex.mp.utils import iter_emptyset
 from docplex.mp.constants import ComparisonType
 
@@ -18,6 +19,9 @@ class Operand(object):
 
     def is_constant(self):
         return False
+
+    def as_constant(self):
+        return self.get_constant() if self.is_constant() else None
 
     # --- basic subscription api
     def notify_used(self, user):
@@ -104,10 +108,6 @@ class LinearOperand(Operand):
     def iter_quads(self):
         return iter_emptyset()
 
-    def is_constant(self):
-        # redefine this for subclasses.
-        return False  # pragma: no cover
-
     def is_quad_expr(self):
         return False
 
@@ -131,7 +131,7 @@ class LinearOperand(Operand):
     def __contains__(self, dvar):
         """Overloads operator `in` for an expression and a variable.
 
-        :param: dvar (:class:`docplex.mp.linear.Var`): A decision variable.
+        :param: dvar (:class:`docplex.mp.dvar.Var`): A decision variable.
 
         Returns:
             Boolean: True if the variable is present in the expression, else False.

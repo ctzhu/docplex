@@ -1,8 +1,30 @@
 Changelog
 ---------
 
-Changed in 2.20.204:
+Changed in 2.21.207:
 ````````````````````
+* In ``docplex.mp``:
+    * Add support for importing solution from a different model, provided variables
+        can be matched between both models (Model.import_solution)
+    * Added contextual function to temporarily modify aspects of the model:
+        `model_parameters` to change parameters in a block, `model_objective` to set a temporary objective in a block.
+    * Naming expressions is now deprecated, use a temporary variable if needed.
+    * Display of expressions in constraints is customizable: use a space separator (or not),
+        set a maximum length for very long expression.
+    * Fixed documentation references to class Var, moved from linear to dvar
+    * Fixed a bug in LP export for multi-objective models with no priorities passed
+
+* In ``docplex.cp``:
+    * Replace context attribute solve_with_start_next by solve_with_search_next, keeping ascending compatibility.
+    * Support solver parameter ModelAnonymizer to generate random names for all model elements (except KPIs) in the CPO file format.
+    * Optimize generation of CPO expressions from Python expressions
+    * Interval variable solutions tuples are now named tuples.
+    * Method CpoModel.add() now accepts multiple expressions (or lists of expressions) to add to the model.
+
+    
+Changed in 2.20.204 (2021.02):
+``````````````````````````````
+
 * In ``docplex.mp``:
     * Add support for exporting solutions and solution pools to SOL format.
     * Add fast methods for changing batches of variable bounds:
@@ -13,13 +35,18 @@ Changed in 2.20.204:
     * docplex.mp.AdvModel now has checker enabled by default to avoid Python errors.
        Is is up to the user to disable type-checking to get maximum performance.
     * Fixed a bug about not printing updated variable bounds in MPS and SAV
-    * Changed the default rounding behavior: solurtion values are not rounded by default.
+    * Changed the default rounding behavior: solution values are not rounded by default.
 
 * In ``docplex.cp``:
     * Fix problems on step function operations.
     * Add status in conflict refiner solution object.
     * Fix a bug to not send and receive conflict in CPO format if no conflict.
     * Enhance printing of model solution.
+     
+    * The method search_next(), returns only new solutions of the model.
+      In particular, no new solution is returned if solve status just change from Feasible to Optimal.
+    * Rework completely model statistics (CpoModelStatistics)
+    * Add a parameter add_cpo to the write method of CpoRefineConflictResult
 
 
 Changed in 2.19.202 (2020.12):

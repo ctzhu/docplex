@@ -12,45 +12,41 @@ import sys
 import warnings
 import six
 from six import itervalues, iteritems
+from itertools import chain
 
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import SOSType, CplexScope, ObjectiveSense, BasisStatus, EffortLevel,\
-    int_probtype_to_string
+    int_probtype_to_string, ComparisonType
 from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstraint, \
     IndicatorConstraint, QuadraticConstraint, PwlConstraint, EquivalenceConstraint
-from docplex.mp.context import Context, has_credentials, OverridenOutputContext
-from docplex.mp.cloudutils import is_url_valid
+from docplex.mp.context import Context, OverridenOutputContext
 
-# from docplex.mp.docloud_engine import DOcloudEngine
 from docplex.mp.engine_factory import EngineFactory
 from docplex.mp.environment import Environment
 from docplex.mp.error_handler import DefaultErrorHandler, \
-    docplex_add_trivial_infeasible_ct_here
+    docplex_add_trivial_infeasible_ct_here, handle_error
 from docplex.mp.format import parse_format
 from docplex.mp.lp_printer import LPModelPrinter
 from docplex.mp.mfactory import ModelFactory
 from docplex.mp.model_stats import ModelStatistics
-from docplex.mp.numutils import round_nearest_towards_infinity1, _NumPrinter
+from docplex.mp.numutils import round_nearest_towards_infinity1, _NumPrinter, compute_tolerance
 
 from docplex.mp.pwl import PwlFunction
-from docplex.mp.tck import get_typechecker
+from docplex.mp.tck import get_typechecker, warn_trivial_feasible, warn_trivial_infeasible, warn_trivial_none
 from docplex.mp.sttck import StaticTypeChecker
 from docplex.mp.utils import DOcplexException, MultiObjective,\
-    DOcplexLimitsExceeded
+    DOcplexLimitsExceeded, _var_match_function
 from docplex.mp.utils import is_indexable, is_iterable, is_int, is_string, \
     make_output_path2, generate_constant, _AutomaticSymbolGenerator, _IndexScope, _to_list, \
-    is_number, str_maxed, normalize_basename, izip2_filled
+    is_number, str_maxed, normalize_basename, izip2_filled, ordered_sequence_to_list
 from docplex.mp.utils import apply_thread_limitations
 from docplex.mp.vartype import VarType, BinaryVarType, IntegerVarType, \
     ContinuousVarType, SemiContinuousVarType, SemiIntegerVarType
 from docplex.util.environment import get_environment
 
-from docplex.mp.cloudutils import context_must_use_docloud, context_has_docloud_credentials
 
-
-
-from docplex.mp.solve_env import CplexLocalSolveEnv, DocloudSolveEnv
+from docplex.mp.solve_env import CplexLocalSolveEnv
 
 
 # noinspection PyProtectedMember
@@ -285,16 +281,18 @@ class Model(object):
                 self.float_precision = arg_val
             elif arg_name in frozenset({'keep_ordering', 'ordering'}):
                 self._keep_ordering = bool(arg_val)
+            elif arg_name == "round_solution":
+                self._round_solution = bool(arg_val)
             elif arg_name in frozenset({"info_level", "output_level"}):
                 self.output_level = arg_val
             elif arg_name in {"agent", "solver_agent"}:
                 self.context.solver.agent = arg_val
             elif arg_name == "log_output":
                 self.context.solver.log_output = arg_val
-            elif arg_name == "warn_trivial":
-                self._trivial_cts_message_level = arg_val
-            elif arg_name == "max_repr_len":
-                self._max_repr_len = int(arg_val)
+            elif arg_name == "max_str_len":
+                self._max_str_len = int(arg_val)
+            elif arg_name == "use_space_str":
+                self._use_space_str = bool(arg_val)
             elif arg_name == "keep_all_exprs":
                 self._keep_all_exprs = bool(arg_val)
             elif arg_name == 'checker':
@@ -324,11 +322,12 @@ class Model(object):
     def _get_kwargs(self):
         kwargs_map = {'float_precision': self.float_precision,
                       'keep_ordering': self.keep_ordering,
+                      "round_solution": self._round_solution,
                       'output_level': self.output_level,
                       'solver_agent': self.solver_agent,
                       'log_output': self.log_output,
-                      'warn_trivial': self._trivial_cts_message_level,
-                      'max_repr_len': self._max_repr_len,
+                      'max_str_len': self._max_str_len,
+                      'use_space_str': self.str_use_space,
                       'keep_all_exprs': self._keep_all_exprs,
                       'checker': self._checker_key,
                       'full_obj': self._print_full_obj,
@@ -338,9 +337,7 @@ class Model(object):
                       }
         return kwargs_map
 
-    warn_trivial_feasible = 0
-    warn_trivial_infeasible = 1
-    warn_trivial_none = 2
+
 
     def _new_engine(self, solver_agent):
         return self._make_new_engine_from_agent(solver_agent)
@@ -350,7 +347,7 @@ class Model(object):
         return ModelFactory(mdl, engine)
 
     @classmethod
-    def _new_quadratic_factory(scls, mdl, engine):
+    def _new_quadratic_factory(cls, mdl, engine):
         from docplex.mp.quadfact import QuadFactory
         return QuadFactory(mdl, engine)
 
@@ -392,12 +389,11 @@ class Model(object):
         self._lazy_constraints = []
         self._user_cuts = []
 
-        self._pwl_counter = {}
-
         # -- kpis --
         self._allkpis = []
 
         self._progress_listeners = []
+        self._qprogress_listeners = []
         self._mipstarts = []
 
         # by default, ignore_names is off
@@ -432,11 +428,12 @@ class Model(object):
                 "Model construction with DOcloudContext is deprecated, use initializer with docplex.mp.context.Context instead.",
                 DeprecationWarning, stacklevel=2)
 
-        # maximum length for expression in repr strings...
-        self._max_repr_len = 1e+10
+        # maximum length for expression in str strings
+        self._max_str_len = 1e+10
+        self._readable_str_len = 48
 
-        # control whether to warn about trivial constraints
-        self._trivial_cts_message_level = self.warn_trivial_infeasible
+        # use spaces in expressions
+        self._use_space_str = False
 
         # internal
         self._keep_all_exprs = True  # use False to get fast clone...with the risk of side effects...
@@ -482,10 +479,13 @@ class Model(object):
 
         self._sos_scope = _IndexScope("SOS", cplex_scope=CplexScope.SOS_SCOPE)
 
-
-        self._scopes = [self._var_scope, self._linct_scope, self._logical_scope, self._quadct_scope, self._pwl_scope, self._sos_scope]
-
-        self._scope_dict = {sc.cplex_scope: sc for sc in self._scopes}
+        self._scope_dict = {CplexScope.VAR_SCOPE: self._var_scope,
+                            CplexScope.LINEAR_CT_SCOPE: self._linct_scope,
+                            CplexScope.IND_CT_SCOPE: self._logical_scope,
+                            CplexScope.QUAD_CT_SCOPE: self._quadct_scope,
+                            CplexScope.PWL_CT_SCOPE: self._pwl_scope,
+                            CplexScope.SOS_SCOPE: self._sos_scope
+                            }
 
         # init engine
         engine = self._new_engine(self.solver_agent)
@@ -531,6 +531,15 @@ class Model(object):
         """
         return self._name
 
+    def __repr__(self):
+        return self.to_string()
+
+    def to_string(self):
+        return "docplex.mp.Model['{0}']".format(self.name)
+
+    def __str__(self):
+        return self.to_string()
+
     @property
     def lfactory(self):
         # INTERNAL
@@ -550,15 +559,22 @@ class Model(object):
     def provenance(self):
         return self._provenance
 
-    def _constraint_scopes(self):
-        return [self._linct_scope, self._logical_scope, self._quadct_scope, self._pwl_scope]
-
-    def get_ct_scope(self, cplex_ct_scope, error='raise'):
-        ct_scope = self._scope_dict.get(cplex_ct_scope)
+    def _get_obj_scope(self, cplex_scope, error='warn'):
+        # INTERNAL
+        ct_scope = self._scope_dict.get(cplex_scope)
         if not ct_scope and error == 'raise':
-            raise ValueError("Unexpected scope code: {0}".format(cplex_ct_scope))
+            raise ValueError("Unexpected scope code: {0}".format(cplex_scope))
         return ct_scope
 
+    def _iter_scopes(self):
+        # INTERNAL
+        for _, scope in iteritems(self._scope_dict):
+            yield scope
+
+    def _iter_constraint_scopes(self):
+        for cpxsc, scope in iteritems(self._scope_dict):
+            if cpxsc.is_constraint_scope():
+                yield scope
 
     def _sync_params(self, params):
         # INTERNAL: execute only once
@@ -599,6 +615,9 @@ class Model(object):
         :param do_raise: An optional flag: if True, raise an exception when no Cplex instance
             is available, otherwise return None.
 
+        See Also:
+            the 'cplex' property calls :func:`get_cplex()` with do_raise=True.
+
         :return: an instance of Cplex, or None.
         """
         return self._get_cplex(do_raise=do_raise)
@@ -615,7 +634,7 @@ class Model(object):
             if msgfn:
                 raise_msg = msgfn()
             else:
-                raise_msg = "CPLEX library not found - No instance of Cplex is available."
+                raise_msg = "CPLEX runtime not found - No instance of Cplex is available."
             self.fatal(raise_msg)
         else:
             return None
@@ -637,7 +656,7 @@ class Model(object):
 
     def _read_cplex_file(self, name, path, extension, cpx_read_fn):
         # INTERNAL
-        cpx = self._get_cplex(do_raise=True, msgfn=lambda: "CPLEX library not found, cannot read CPLEX {0} file: {1}".format(name, path))
+        cpx = self._get_cplex(do_raise=True, msgfn=lambda: "CPLEX runtime not found, cannot read CPLEX {0} file: {1}".format(name, path))
         StaticTypeChecker.check_file(self, name=name, path=path, expected_extensions=(extension,))
         cpx_read_fn(cpx, path)
 
@@ -649,7 +668,7 @@ class Model(object):
     def read_basis_file(self, bas_path):
         """ Read a CPLEX basis status file.
 
-        This method requires that the CPLEX library is installed.
+        This method requires the CPLEX runtime.
 
         :param bas_path: the path of a basis file (extension is '.bas')
 
@@ -663,7 +682,7 @@ class Model(object):
     def read_priority_order_file(self, ord_path):
         """ Read a CPLEX priority order file.
 
-        This method requires that the CPLEX library is installed.
+        This method requires the CPLEX runtime.
 
         :param ord_path: the path of a priority order file (extension is '.ord')
 
@@ -673,27 +692,68 @@ class Model(object):
                               extension='.ord',
                               cpx_read_fn=lambda cpx_, path_: cpx_.order.read(path_))
 
-    def export_priority_order_file(self, ord_path):
-        """ Exports priority order fi a CPLEX priority order file.
+    def export_priority_order_file(self, path=None, basename=None):
+        """ Exports a CPLEX priority order file.
 
-        This method requires that the CPLEX library is installed.
+        This method requires the CPLEX runtime.
 
-        :param ord_path: the path of a priority order file (extension is '.ord')
+        Args:
+            basename: Controls the basename with which the file is printed.
+                Accepts None, a plain string, or a string format.
+                If None, the model's name is used.
+                If passed a plain string, the string is used in place of the model's name.
+
+            path: A path to write the file, expects a string path or None.
+                Can be a directory, in which case the basename
+                that was computed with the basename argument, is appended to the directory to produce
+                the file.
+                If given a full path, the path is directly used to write the file, and
+                the basename argument is not used.
+                If passed None, the output directory will be ``tempfile.gettempdir()``.
+
+        Returns:
+            The full path of the written file, if successful,, else None.
 
         *New in version 2.10*
         """
-        self._read_cplex_file(name='priority order', path=ord_path,
+        return self._write_cplex_file(name='priority order', path=path, basename=basename,
                               extension='.ord',
-                              cpx_read_fn=lambda cpx_, path_: cpx_.order.read(path_))
+                              cpx_write_fn=lambda cpx_, path_: cpx_.order.write(path_))
 
-    # adjust the maximum length of repr.. strings
     @property
-    def max_repr_len(self):
-        return self._max_repr_len
+    def str_max_len(self):
+        return self._max_str_len
 
-    @max_repr_len.setter
-    def max_repr_len(self, max_repr):
-        self._max_repr_len = max_repr
+    @property
+    def readable_str_len(self):
+        return self._readable_str_len
+
+    @str_max_len.setter
+    def str_max_len(self, max_str):
+        assert max_str >= 1
+        self._max_str_len = max_str
+
+    @property
+    def str_use_space(self):
+        """ This boolean property controls the use of space separators when displaying the str()
+            representation of expressions (especially in constraints).
+            With `str_use_space=False` a constraint is printed as : `2x+3y+5z <= 7`
+
+            With `str_use_space=True` the same constraint is printed as : `2 x + 3 y + 5 z <= 7`
+
+        The default is False, that is print a compact representation.
+
+        :return: True if space separator is used for string representations of expressions.
+        """
+        return self._use_space_str
+
+    @str_use_space.setter
+    def str_use_space(self, use_space):
+        self._use_space_str = bool(use_space)
+
+    @property
+    def str_space(self):
+        return ' ' if self._use_space_str else ''
 
     @property
     def keep_ordering(self):
@@ -895,6 +955,48 @@ class Model(object):
         return self._lfactory.new_solution(var_value_dict=var_value_dict,
                                            objective_value=objective_value, name=name, **kwargs)
 
+
+    def import_solution(self, source_solution, match="auto", error="raise"):
+        """ Imports a solution from another model.
+
+        There must a a way to map variables from the solution model to the target model,
+        either by name, index or some other custom manner.
+        The simplest case is where the other model is a clone of the target model.
+        In that case, an index-based mapping is used.
+
+        :param source_solution: the imported solution, built on some othe rmodel,
+            different from target model.
+        :param match: described the mapping used for variables, accepts either a string for
+            predefined mappings: "index" for index mapping, "name" for name mapping, or "auto" for
+            automatic. Also accepts a function taking two arguments: the source variable, and the target model,
+            returning th eimage of the source variable in the target model.
+        :param error: A string describing how errors are handled. Accepts "raise", "warn", or "ignore"
+
+        :return: A solution object, instance of :class:`SolveSolution`, built on the target model,
+        from values and variables mapped from the source model to the target model.
+
+
+        *New in version 2.21*
+        """
+        target_model = self
+        find_matching_var = _var_match_function(source_model=source_solution.model,
+                                                target_model=target_model, match=match)
+        source_var_values = {}
+        source_keep_zeros = source_solution._keep_zeros
+        for dv, dvv in source_solution.iter_var_values():
+            target_var = find_matching_var(dv, target_model)
+            if target_var is None:
+                msg = "Cannot find matching variable in target model for {0!r}".format(dv)
+                handle_error(target_model, error, msg)
+            elif dvv or source_keep_zeros:
+                source_var_values[target_var] = dvv
+        source_obj = source_solution.objective_value
+        source_solved_by = source_solution.solved_by
+
+        newsol = target_model.new_solution(source_var_values, source_obj, keep_zeros=source_keep_zeros)
+        newsol._solved_by = source_solved_by
+        return newsol
+
     def populate_solution_pool(self, **kwargs):
         """ Populates and return a solution pool.
 
@@ -1051,7 +1153,6 @@ class Model(object):
         self._solution = None
         self._mipstarts = []
         self._clear_scopes()
-        self._pwl_counter = {}
         self._lazy_constraints = []
         self._user_cuts = []
         self._quad_count = 0
@@ -1063,7 +1164,7 @@ class Model(object):
             self._terminate_engine()
 
     def _clear_scopes(self):
-        for a_scope in self._scopes:
+        for a_scope in self._iter_scopes():
             a_scope.clear()
 
     def set_checker(self, checker_key):
@@ -1122,7 +1223,6 @@ class Model(object):
     @property
     def solves_with(self):
         return self.__engine.name
-
 
     def get_engine(self):
         # INTERNAL for testing
@@ -1194,7 +1294,7 @@ class Model(object):
         """ Returns a string describing the type of problem.
 
         This method requyires that CPLEX is installed and
-        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+        available in PYTHONPATH. If the CPLEX runtime cannot be found, an exception is raised.
 
         Possible values: LP, MILP, QP, MIQP, QCP, MIQCP,
 
@@ -1218,7 +1318,7 @@ class Model(object):
         mobj._set_index(mindex)
 
         if name_dir is not None:
-            mobj_name = mobj_name or mobj.get_name()
+            mobj_name = mobj_name or mobj.name
             if mobj_name:
                 # in some cases, names are checked before register
                 if not is_name_safe:
@@ -1269,7 +1369,7 @@ class Model(object):
     def _ensure_cts_name_dir(self):
         # INTERNAL: make sure the constraint name dir is present.
         if self._cts_by_name is None:
-            self._cts_by_name = {ct.get_name(): ct for ct in self.iter_constraints() if ct.has_user_name()}
+            self._cts_by_name = {ct.name: ct for ct in self.iter_constraints() if ct.has_user_name()}
         return self._cts_by_name
 
     def _register_block_cts(self, scope, cts, indices):
@@ -1279,7 +1379,7 @@ class Model(object):
         if ct_name_map:
             for ct, ct_index in izip(cts, indices):
                 ct._set_index(ct_index)
-                ct_name = ct.get_name()
+                ct_name = ct.name
                 if ct_name:
                     ct_name_map[ct_name] = ct
         else:
@@ -1422,7 +1522,7 @@ class Model(object):
     def _contains_discrete_artefacts(self):
         if hasattr(self._lfactory, "_cached_justifier_discrete_var"):
             return self._lfactory._cached_justifier_discrete_var is not None
-        elif self.number_of_sos or self._pwl_counter:
+        elif self.number_of_sos or self._has_piecewise():
             return True
         for v in self.iter_variables():
             if v.cplex_typecode in 'IBNS':
@@ -1436,7 +1536,7 @@ class Model(object):
             lfactory._cached_justifier_discrete_var = None
 
     def _has_piecewise(self):
-        return len(self._pwl_counter) > 0
+        return self._pwl_scope.size > 0
 
     def _solved_as_mip(self):
         # INTERNAL: is the model solved as mip (incl. engine status)
@@ -1449,13 +1549,16 @@ class Model(object):
         else:
             return not self._contains_discrete_artefacts()
 
-
     def is_quadratic(self):
         # returns true if model is quadratic, that is
         # either has atleast one quadratic constraint, or has a quadrtic objective.
-        if self.has_quadratic_constraint():
-            return True
-        elif self.has_multi_objective():
+        return self._is_qc() or self._is_qp()
+
+    def _is_qc(self):
+        return self._quadct_scope.size > 0
+
+    def _is_qp(self):
+        if self.has_multi_objective():
             return any(ex.is_quad_expr() for ex in self.iter_multi_objective_exprs())
         else:
             return self._objective_expr.is_quad_expr()
@@ -1471,7 +1574,7 @@ class Model(object):
         nbscvs = vartype_count[SemiContinuousVarType]
         nbsivs = vartype_count[SemiIntegerVarType]
 
-        linct_count = Counter(ct.sense.cplex_code for ct in self.iter_binary_constraints())
+        linct_count = Counter(ct.cplex_code for ct in self.iter_binary_constraints())
         nb_le_cts = linct_count['L']
         nb_eq_cts = linct_count['E']
         nb_ge_cts = linct_count['G']
@@ -1575,7 +1678,7 @@ class Model(object):
         Args:
             name (str): The name of the variable being searched for.
 
-        :returns: A variable (instance of :class:`docplex.mp.linear.Var`) or None.
+        :returns: A variable (instance of :class:`docplex.mp.dvar.Var`) or None.
         """
         return self._vars_by_name.get(name, None)
 
@@ -1705,7 +1808,7 @@ class Model(object):
 
     def set_linear_constraint_name(self, linct, new_name):
         # INTERNAL: use lct.name to set a linear constraint's name
-        if new_name != linct.get_name():
+        if new_name != linct.name:
             self.__engine.rename_linear_constraint(linct, new_name)
             linct._set_name(new_name)
 
@@ -1766,7 +1869,7 @@ class Model(object):
         """ Changes upper bounds for a collection of variables in one call.
 
         :param dvars: an iterable over decision variables (a list, or a comprehension)
-        :param lbs: accepts either an iterable over numbers, a single number,
+        :param ubs: accepts either an iterable over numbers, a single number,
             in which case the new bound is applied to all variables,
             or None. If passed None, the upper bound of each variable is reset to
             its type's default.
@@ -1892,8 +1995,23 @@ class Model(object):
     def get_logical_constraint_by_index(self, idx):
         return self._logical_scope.get_object_by_index(idx, self._checker)
 
+    def get_pwl_constraint_by_index(self, idx):
+        return self._pwl_scope.get_object_by_index(idx, self._checker)
+
     def get_quadratic_constraint_by_index(self, idx):
-        # INTERNAL
+        """ Searches for a quadratic constraint from an index.
+
+        Returns the quadratic constraint with `idx` as index, or None.
+        This function will not raise an exception if no constraint with this index is found.
+
+        Note: remember that linear constraints, logical constraints, and quadratic constraints
+        each have separate index spaces. Therefore, a model can contain both a linear constraint
+        and a quadratic constrait  having index 0
+
+        :param idx: a valid index (greater than 0).
+
+        :return: A quadratic constraint, or None.
+        """
         return self._quadct_scope.get_object_by_index(idx, self._checker)
 
     @property
@@ -1902,7 +2020,7 @@ class Model(object):
 
         The number includes linear constraints, range constraints, and indicator constraints.
         """
-        return sum(scope.size for scope in self._constraint_scopes())
+        return sum(scope.size for scope in self._iter_constraint_scopes())
 
     @property
     def number_of_user_constraints(self):
@@ -1919,13 +2037,12 @@ class Model(object):
         Returns:
           An iterator object over all constraints in the model.
         """
-        for sc in self._constraint_scopes():
+        for sc in self._iter_constraint_scopes():
             for obj in sc.iter_objects():
                 yield obj
 
     def _count_constraints_with_type(self, scope, cttype):
-        return scope.count_filtered(filter=lambda ct: isinstance(ct, cttype))
-
+        return scope.count_filtered(pred=lambda ct: isinstance(ct, cttype))
 
     @property
     def number_of_range_constraints(self):
@@ -2049,7 +2166,7 @@ class Model(object):
             name: An optional string to name the variable.
 
         :returns: The newly created decision variable.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :rtype: :class:`docplex.mp.dvar.Var`
 
         Note:
             The model holds local instances of BinaryVarType, IntegerVarType, ContinuousVarType which
@@ -2082,7 +2199,7 @@ class Model(object):
             name (string): An optional name for the variable.
 
         :returns: A decision variable with type :class:`docplex.mp.vartype.ContinuousVarType`.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :rtype: :class:`docplex.mp.dvar.Var`
         """
         return self._var(self.continuous_vartype, lb, ub, name)
 
@@ -2094,8 +2211,8 @@ class Model(object):
             ub: The upper bound of the variable, or None, to use the default. The default is model infinity.
             name: An optional name for the variable.
 
-        :returns: An instance of the :class:`docplex.mp.linear.Var` class with type `IntegerVarType`.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :returns: An instance of the :class:`docplex.mp.dvar.Var` class with type `IntegerVarType`.
+        :rtype: :class:`docplex.mp.dvar.Var`
         """
         return self._var(self.integer_vartype, lb, ub, name)
 
@@ -2106,7 +2223,7 @@ class Model(object):
             name (string): An optional name for the variable.
 
         :returns: A decision variable with type :class:`docplex.mp.vartype.BinaryVarType`.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :rtype: :class:`docplex.mp.dvar.Var`
         """
         return self._var(self.binary_vartype, name=name)
 
@@ -2119,7 +2236,7 @@ class Model(object):
             name (string): An optional name for the variable.
 
         :returns: A decision variable with type :class:`docplex.mp.vartype.SemiContinuousVarType`.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :rtype: :class:`docplex.mp.dvar.Var`
         """
         self._checker.typecheck_num(lb)  # lb cannot be None
         return self._var(self.semicontinuous_vartype, lb, ub, name)
@@ -2133,7 +2250,7 @@ class Model(object):
             name (string): An optional name for the variable.
 
         :returns: A decision variable with type :class:`docplex.mp.vartype.SemiIntegerVarType`.
-        :rtype: :class:`docplex.mp.linear.Var`
+        :rtype: :class:`docplex.mp.dvar.Var`
         """
         self._checker.typecheck_num(lb)  # lb cannot be None
         return self._var(self.semiinteger_vartype, lb, ub, name)
@@ -2169,7 +2286,7 @@ class Model(object):
             If you want each key string to be surrounded by {}, use a special key_format: "_{%s}",
             the %s denotes where the key string will be formatted and appended to `name`.
 
-        :returns: A list of :class:`docplex.mp.linear.Var` objects with type :class:`doc.mp.vartype.BinaryVarType`.
+        :returns: A list of :class:`docplex.mp.dvar.Var` objects with type :class:`doc.mp.vartype.BinaryVarType`.
 
         Example:
             `mdl.binary_var_list(3, "z")` returns a list of size 3
@@ -2248,7 +2365,7 @@ class Model(object):
             When `keys` is either an empty list or the integer 0, an empty list is returned.
 
 
-        :returns: A list of :class:`docplex.mp.linear.Var` objects with type :class:`docplex.mp.vartype.ContinuousVarType`.
+        :returns: A list of :class:`docplex.mp.dvar.Var` objects with type :class:`docplex.mp.vartype.ContinuousVarType`.
 
         See Also:
             :attr:`infinity`
@@ -2295,7 +2412,7 @@ class Model(object):
             When `keys` is either an empty list or the integer 0, an empty list is returned.
 
 
-        :returns: A list of :class:`docplex.mp.linear.Var` objects with type :class:`docplex.mp.vartype.SemiContinuousVarType`.
+        :returns: A list of :class:`docplex.mp.dvar.Var` objects with type :class:`docplex.mp.vartype.SemiContinuousVarType`.
 
         See Also:
             :attr:`infinity`
@@ -2342,7 +2459,7 @@ class Model(object):
             When `keys` is either an empty list or the integer 0, an empty list is returned.
 
 
-        :returns: A list of :class:`docplex.mp.linear.Var` objects with type :class:`docplex.mp.vartype.SemiIntegerVarType`.
+        :returns: A list of :class:`docplex.mp.dvar.Var` objects with type :class:`docplex.mp.vartype.SemiIntegerVarType`.
 
         See Also:
             :attr:`infinity`
@@ -2393,11 +2510,11 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns: A dictionary of :class:`docplex.mp.linear.Var` objects (with type `ContinuousVarType`) indexed by
+        :returns: A dictionary of :class:`docplex.mp.dvar.Var` objects (with type `ContinuousVarType`) indexed by
                   the objects in `keys`.
 
         See Also:
-            :class:`docplex.mp.linear.Var`,
+            :class:`docplex.mp.dvar.Var`,
             :attr:`infinity`
         """
         return self._var_dict(keys, self.continuous_vartype, lb=lb, ub=ub, name=name, key_format=key_format)
@@ -2446,7 +2563,7 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns:  A dictionary of :class:`docplex.mp.linear.Var` objects (with type `IntegerVarType`) indexed by the
+        :returns:  A dictionary of :class:`docplex.mp.dvar.Var` objects (with type `IntegerVarType`) indexed by the
                    objects in `keys`.
 
         See Also:
@@ -2479,7 +2596,7 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns: A dictionary of :class:`docplex.mp.linear.Var` objects with type
+        :returns: A dictionary of :class:`docplex.mp.dvar.Var` objects with type
                   :class:`docplex.mp.vartype.BinaryVarType` indexed by the objects in `keys`.
         """
         return self._var_dict(keys, self.binary_vartype, lb=lb, ub=ub, name=name, key_format=key_format)
@@ -2527,7 +2644,7 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns:  A dictionary of :class:`docplex.mp.linear.Var` objects (with type `SemiIntegerVarType`) indexed by the
+        :returns:  A dictionary of :class:`docplex.mp.dvar.Var` objects (with type `SemiIntegerVarType`) indexed by the
                    objects in `keys`.
 
         See Also:
@@ -2593,7 +2710,7 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns:  A dictionary of :class:`docplex.mp.linear.Var` objects (with type `SemiIntegerVarType`) indexed by the
+        :returns:  A dictionary of :class:`docplex.mp.dvar.Var` objects (with type `SemiIntegerVarType`) indexed by the
                    objects in `keys`.
 
         See Also:
@@ -2699,7 +2816,7 @@ class Model(object):
                         The default is "_%s". For example if name is "x" and each key object is represented by a string
                         like "k1", "k2", ... then variables will be named "x_k1", "x_k2",...
 
-        :returns: A dictionary of :class:`docplex.mp.linear.Var` objects with type
+        :returns: A dictionary of :class:`docplex.mp.dvar.Var` objects with type
                   :class:`docplex.mp.vartype.BinaryVarType` indexed by
                   all couples `(k1, k2)` with `k1` in `keys1` and `k2` in `keys2`.
         """
@@ -2757,7 +2874,7 @@ class Model(object):
         Same as :func:`binary_var_matrix`, except that variables are indexed by triplets of
         the form `(k1, k2, k3)` with `k1` in `keys1`, `k2` in `keys2`, `k3` in `keys3`.
 
-        :returns: A dictionary of :class:`docplex.mp.linear.Var` objects (with type :class:`docplex.mp.vartype.BinaryVarType`) indexed by
+        :returns: A dictionary of :class:`docplex.mp.dvar.Var` objects (with type :class:`docplex.mp.vartype.BinaryVarType`) indexed by
             triplets.
 
         """
@@ -2769,24 +2886,25 @@ class Model(object):
         Args:
             arg: an optional argument to convert to a linear expression. Detailt is None,
                 in which case, an empty expression is returned.
-            name: An optional string to name the expression.
 
         :returns: An instance of :class:`docplex.mp.linear.LinearExpr`.
         '''
         self._checker.typecheck_string(arg=name, accept_none=True)
         self._checker.typecheck_num(arg=constant, caller='Model.linear_expr()')
+        if name:
+            warnings.warn("Naming expressions is deprecated, use a variable if necessary")
         return self._lfactory.linear_expr(arg=arg, constant=constant, name=name)
 
     def quad_expr(self, name=None):
         ''' Returns a new empty quadratic expression.
 
-        Args:
-            name: An optional string to name the expression.
-
-        :returns: An instance of :class:`docplex.mp.quad.QuadExpr`.
+        :returns: An empty instance of :class:`docplex.mp.quad.QuadExpr`.
         '''
+        if name:
+            if self.is_docplex_debug():
+                raise RuntimeError
+            warnings.warn("Naming expressions is deprecated, use a variable if necessary")
         return self._qfactory.new_quad(name=name)
-
 
     def abs(self, e):
         """ Builds an expression equal to the absolute value of its argument.
@@ -3057,6 +3175,13 @@ class Model(object):
 
     scal_prod_f = dotf
 
+
+    def scal_prod_vars_all_different(self, terms, coefs):
+        self._checker.check_ordered_sequence(arg=terms,
+                                             caller='Model.scal_prod() requires a list of expressions/variables')
+        var_seq = self._checker.typecheck_var_seq_all_different(terms)
+        return self._aggregator._scal_prod_vars_all_different(var_seq, coefs)
+
     def sum(self, args):
         """ Creates a linear expression summing over an iterable over expressions or variables.
 
@@ -3235,10 +3360,10 @@ class Model(object):
             self.fatal("Expecting binary constraint, indicator or range, got: {0!s}", ct)  # pragma: no cover
 
     def _notify_trivial_constraint(self, ct, ctname, is_feasible):
-        self_trivial_warn_level = self._trivial_cts_message_level
-        if is_feasible and self_trivial_warn_level > self.warn_trivial_feasible:
+        self_trivial_warn_level = self._checker.check_trivial_constraints()
+        if is_feasible and self_trivial_warn_level > warn_trivial_feasible:
             return
-        elif self_trivial_warn_level > self.warn_trivial_infeasible:
+        elif self_trivial_warn_level > warn_trivial_infeasible:
             return
         # ---
         # hereafter we are sure to warn
@@ -3305,13 +3430,23 @@ class Model(object):
                     self._notify_trivial_constraint(ct, ctname, is_feasible=False)
 
         # check for already posted cts.
-        if ct._index >= 0:
-            self.warning("constraint has already been posted: {0!s}, index is: {1}", ct, ct.index)  # pragma: no cover
-            return False  # pragma: no cover
+        if not self._check_new_ct_index(ct):
+            return False
         # --- name management ---
         self._register_ct_name(ct, ctname, checker)
         # ---
         return True
+
+    def _check_new_ct_index(self, ct):
+        ok = True
+        if ct._index >= 0:
+            self.warning("constraint has already been posted: {0!s}, index is: {1}", ct, ct.index)  # pragma: no cover
+            ok = False
+        return ok
+
+    def _check_trivial_constraints(self):
+        check_trivial = self._checker.check_trivial_constraints()
+        return check_trivial  < warn_trivial_none
 
     def _add_constraint_internal(self, ct, ctname=None):
         used_ct_name = None if self._ignore_names else ctname
@@ -3319,7 +3454,7 @@ class Model(object):
             ct1 = self._lfactory.logical_expr_to_constraint(ct, ctname)
             return self._post_constraint(ct1)
 
-        check_trivial = self._checker.check_trivial_constraints()
+        check_trivial = self._check_trivial_constraints()
         if self._prepare_constraint(ct, used_ct_name, check_for_trivial_ct=check_trivial):
             self._post_constraint(ct)
             return ct
@@ -3342,33 +3477,35 @@ class Model(object):
         self._remove_constraints_internal(cts_to_remove=(ct,))
 
 
-    def _resolve_ct(self, ct_arg, silent=False, context=None):
+    def _resolve_ct(self, ct_arg, silent=False, check_index=True, caller=None):
         verbose = not silent
-        if context:
-            printed_context = context + ": "
+        if caller:
+            s_caller = caller + ": "
         else:
-            printed_context = ""
+            s_caller = ""
+
+        ct = None
         if isinstance(ct_arg, AbstractConstraint):
-            return ct_arg
+            ct = ct_arg
         elif is_string(ct_arg):
             ct = self.get_constraint_by_name(ct_arg)
             if ct is None and verbose:
-                self.error("{0}no constraint with name: \"{1}\" - ignored", printed_context, ct_arg)
-            return ct
+                self.error("{0}no constraint with name: \"{1}\" - ignored", s_caller, ct_arg)
+
         elif is_int(ct_arg):
             if ct_arg >= 0:
                 ct_index = ct_arg
                 ct = self.get_constraint_by_index(ct_index)
                 if ct is None and verbose:
-                    self.error("{0}no constraint with index: \"{1}\" - ignored", printed_context, ct_arg)
-                return ct
+                    self.error("{0}no constraint with index: \"{1}\" - ignored", s_caller, ct_arg)
             else:
-                self.error("{0}not a valid index: \"{1}\" - ignored", printed_context, ct_arg)
-                return None
-
+                self.error("{0}not a valid index: \"{1}\" - ignored", s_caller, ct_arg)
         else:
             if verbose:
-                self.error("{0}unexpected argument {1!s}, expecting string or constraint", printed_context, ct_arg)
+                self.error("{0}unexpected argument {1!s}, expecting string or constraint", s_caller, ct_arg)
+        if ct is not None and ct.has_valid_index() or not check_index:
+            return ct
+        else:
             return None
 
     def remove_constraint(self, ct_arg):
@@ -3379,7 +3516,7 @@ class Model(object):
                 If passed a string, looks for a constraint with that name.
 
         """
-        ct = self._resolve_ct(ct_arg, silent=False, context="remove_constraint")
+        ct = self._resolve_ct(ct_arg, silent=False, caller="remove_constraint")
         if ct is not None:
             self._checker.typecheck_in_model(self, ct, caller="constraint")
             self._remove_constraints_internal(cts_to_remove=(ct,))
@@ -3392,29 +3529,42 @@ class Model(object):
         # clear containers
         self._cts_by_name = None
         # clear constraint index scopes.
-        for ctscope in self._constraint_scopes():
+        for ctscope in self._iter_constraint_scopes():
             ctscope.clear()
 
-    def remove_constraints(self, cts=None):
+    def remove_constraints(self, cts=None, error='warn'):
         """
         This method removes a batch of constraints from the model.
 
         :param cts: an iterable of constraints (linear, range, quadratic, indicators)
         """
         if cts is not None:
-            lcts = self._checker.typecheck_constraint_seq(cts)
+            # resolve constraints
+            if not is_iterable(cts):
+                self.fatal("Model.remove_constraints expects an iterable with constraints or strings")
+            lcts = []
+
+            for cta in cts:
+                ct = self._resolve_ct(cta, silent=True, caller='Model.remove_constraints')
+                if ct is not None:
+                    lcts.append(ct)
+                elif error == 'raise':
+                    self.fatal("Model.remove_constraints: cannot resolve this as a constraint: {0}", repr(cta))
+                elif error == 'warn':
+                    self.warning("Model.remove_constraints: cannot resolve this as a constraint: {0}", repr(cta))
+
             self._remove_constraints_internal(lcts)
 
     def _remove_constraints_internal(self, cts_to_remove):
-        removed_cts = [c for c in cts_to_remove if c.has_valid_index()]
-        if removed_cts:
-            self.__engine.remove_constraints(removed_cts)
+        if cts_to_remove:
+            assert all(ct_.has_valid_index() for ct_ in cts_to_remove)
+            self.__engine.remove_constraints(cts_to_remove)
             # INTERNAL
             self_cts_by_name = self._cts_by_name
 
             if self_cts_by_name:
-                for d in removed_cts:
-                    dname = d.get_name()
+                for d in cts_to_remove:
+                    dname = d.name
                     if dname:
                         try:
                             del self_cts_by_name[dname]
@@ -3425,20 +3575,20 @@ class Model(object):
             removed_ids = set()
             from collections import defaultdict
             idxs_by_scope = defaultdict(set)
-            for d in removed_cts:
+            for d in cts_to_remove:
                 removed_ids.add(id(d))
                 idxs_by_scope[d.cplex_scope].add(d.index)
                 actual_touched_scopes.add(d._get_index_scope())
 
             for sc, delset in iteritems(idxs_by_scope):
-                scope = self.get_ct_scope(sc)
+                scope = self._get_obj_scope(sc)
                 scope.notify_delete_set(delset)
 
-            for d in removed_cts:
+            for d in cts_to_remove:
                 d.notify_deleted()
 
         if self.is_docplex_debug():
-            for sc in self._constraint_scopes():
+            for sc in self._iter_constraint_scopes():
                 sc.check_indices()
 
     def remove(self, removed):
@@ -3880,6 +4030,25 @@ class Model(object):
         else:
             return self._lfactory._new_constraint_block1(cts)
 
+
+    def vector_compare(self, lhss, rhss, sense):
+        l_lhs = ordered_sequence_to_list(lhss, caller='Model.vector.compare')
+        l_rhs = ordered_sequence_to_list(rhss, caller='Model.vector.compare')
+        if len(l_lhs) != len(l_rhs):
+            self.fatal('Model.vector_compare() requires two lists with same length, left size: {0}, right size: {1}'.
+                       format(len(l_lhs), len(l_rhs)))
+        ctsense = ComparisonType.parse(sense)
+        return self._aggregator._vector_compare(l_lhs, l_rhs, ctsense)
+
+    def vector_compare_le(self, lhss, rhss):
+        return self.vector_compare(lhss, rhss, 'le')
+
+    def vector_compare_ge(self, lhss, rhss):
+        return self.vector_compare(lhss, rhss, 'ge')
+
+    def vector_compare_eq(self, lhss, rhss):
+        return self.vector_compare(lhss, rhss, 'eq')
+
     def _new_xconstraint(self, lhs, rhs, comparaison_type):
         isquad = False
         if self._quad_count:
@@ -3939,7 +4108,7 @@ class Model(object):
         """ Sets an expression as the expression to be minimized.
 
         The argument is converted to a linear expression. Accepted types are variables (instances of
-        :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        :class:`docplex.mp.dvar.Var` class), linear expressions (instances of
         :class:`docplex.mp.linear.LinearExpr`), or numbers.
 
         :param expr: A linear expression or a variable.
@@ -3951,7 +4120,7 @@ class Model(object):
         Sets an expression as the expression to be maximized.
 
         The argument is converted to a linear expression. Accepted types are variables (instances of
-        :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        :class:`docplex.mp.dvar.Var` class), linear expressions (instances of
         :class:`docplex.mp.linear.LinearExpr`), or numbers.
 
         :param expr: A linear expression or a variable.
@@ -4008,7 +4177,7 @@ class Model(object):
         exprs must be an ordered sequence of objective functions, that are minimized.
 
         The argument is converted to a list of linear expressions. Accepted types for the list elements are variables
-        (instances of :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        (instances of :class:`docplex.mp.dvar.Var` class), linear expressions (instances of
         :class:`docplex.mp.linear.LinearExpr`), or numbers.
 
         Warning:
@@ -4032,7 +4201,7 @@ class Model(object):
         exprs defines an ordered sequence of objective functions that are maximized.
 
         The argument is converted to a list of linear expressions. Accepted types for the list elements are variables
-        (instances of :class:`docplex.mp.linear.Var` class), linear expressions (instances of
+        (instances of :class:`docplex.mp.dvar.Var` class), linear expressions (instances of
         :class:`docplex.mp.linear.LinearExpr`), or numbers.
 
         Warning:
@@ -4215,7 +4384,13 @@ class Model(object):
     def _set_multi_objective_exprs(self, exprs, priorities=None, weights=None,
                                   abstols=None, reltols=None, names=None, caller=None):
         exprs_ = self._compile_multiobj_expr_list(exprs, accept_empty=False, caller=caller)
-        self._set_multi_objective_internal(exprs_, priorities=priorities, weights=weights,
+        if priorities:
+            # check an array of len(exprs)
+            priorities_ =  priorities
+        else:
+            priorities_ = [1] * len(exprs_)
+
+        self._set_multi_objective_internal(exprs_, priorities=priorities_, weights=weights,
                                            abstols=abstols, reltols=reltols, names=names, clear_objective=True,
                                            caller=caller)
 
@@ -4481,7 +4656,7 @@ class Model(object):
         # update the context with provided kwargs
         for argname, argval in six.iteritems(kwargs):
             # skip context argname if any
-            if argname == "url" and (not is_url_valid(argval)) and context.solver.docloud.url:
+            if argname == "url":
                 pass
             elif argname == 'clean_before_solve':
                 pass
@@ -4519,7 +4694,7 @@ class Model(object):
                 parameter.
             clean_before_solve (optional): a boolean (default is False).
                 Solve normally picks up where the previous solve left, but if this flag is set to ``True``,
-                a fresh solve is started, with no memory of the previous solutions.
+                a fresh solve is started, forgetting all about previous solves..
 
         Returns:
             A :class:`docplex.mp.solution.SolveSolution` object if the solve operation managed to create
@@ -4553,36 +4728,18 @@ class Model(object):
         # log stuff
         a_stream = context.solver.log_output_as_stream
         with OverridenOutputContext(self, a_stream):
-        #try:
-            forced_docloud = context_must_use_docloud(context, **kwargs)
-            have_credentials = context_has_docloud_credentials(context, do_warn=True)
-
-            if forced_docloud:
-                if have_credentials:
-                    return self._solve_cloud(context, lex_mipstart=lex_mipstart)
-                else:
-                    self.fatal("DOcplexcloud context has no valid credentials: {0!s}",
-                               context.solver.docloud)
-
-            # from now on docloud_context is None
-            elif self.environment.has_cplex:
+            if self.environment.has_cplex:
                 # take arg clean flag or this model's
                 used_clean_before_solve = kwargs.get('clean_before_solve', self.clean_before_solve)
                 return self._solve_local(context, used_clean_before_solve, lex_timelimits, lex_mipgaps)
-            elif have_credentials:
-                # no context passed as argument, no Cplex installed, try model's own context
-                return self._solve_cloud(context, lex_mipstart=lex_mipstart)
             else:
-                # no way to solve.. really
                 return self.fatal("Cannot solve model: no CPLEX runtime found.")
 
-
     def _connect_progress_listeners(self):
-        self.__engine.connect_progress_listeners(self._progress_listeners, self)
+        self.__engine.connect_progress_listeners(self, self._progress_listeners, self._qprogress_listeners)
 
     def _disconnect_progress_listeners(self):
-        for pl in self._progress_listeners:
-            pl._disconnect()
+        map (lambda xl: xl._disconnect(), chain(self._progress_listeners, self._qprogress_listeners))
 
     def _notify_solve_hit_limit(self, solve_details):
         # INTERNAL
@@ -4592,10 +4749,7 @@ class Model(object):
     def _solve_local(self, context, clean_before_solve=None, lex_timelimits=None, lex_mipgaps=None):
         """ Starts a solve operation on the local machine.
 
-        Note:
-        This method will never try to solve on DOcplexcloud, regardless of whether the model
-        has an attached DOcplexcloud context.
-        If CPLEX is not available, an error is raised.
+        Note: If CPLEX is not available, an error is raised.
 
         Args:
             context: a (possibly new) context whose parameters override those of the modle
@@ -4619,18 +4773,18 @@ class Model(object):
                                              clean_before_solve=clean_before_solve,
                                              lex_timelimits=lex_timelimits,
                                              lex_mipgaps=lex_mipgaps)
-            self._set_solution(new_solution)
+            #self._set_solution(new_solution)
 
             # store solve status as returned by the engine.
             engine_status = self_engine.get_solve_status()
             self._last_solve_status = engine_status
 
         except DOcplexException as docpx_e:  # pragma: no cover
-            self._set_solution(None)
+            new_solution = None
             raise docpx_e
 
         except Exception as e:
-            self._set_solution(None)
+            new_solution = None
             print("----------------- Python exception: {}".format(str(e)))
             raise e
 
@@ -4677,26 +4831,29 @@ class Model(object):
         return self._last_solve_status
 
 
-    def _new_docloud_engine(self, ctx):
-        return self._engine_factory.new_docloud_engine(model=self,
-                                                       docloud_context=ctx.solver.docloud,
-                                                       log_output=ctx.solver.log_output_as_stream)
-
-    def _solve_cloud(self, context, **kwargs):
+    def _solve_cloud_internal(self, context, **kwargs):
+        from docplex.mp.solve_env import DocloudSolveEnv
         warnings.warn("Model solving on Docplexcloud is deprecated", DeprecationWarning)
+
+        def _new_docloud_engine(mdl, ctx):
+            return mdl._engine_factory.new_docloud_engine(model=mdl,
+                                                           docloud_context=ctx.solver.docloud,
+                                                           log_output=ctx.solver.log_output_as_stream)
+
         lex_mipstart = kwargs.get('lex_mipstart')
 
         cloud_solve_env = DocloudSolveEnv(self)
         parameters_to_use = cloud_solve_env.before_solve(context)
 
         # see if we can reuse the local docloud engine if any?
-        docloud_engine = self._new_docloud_engine(context)
+        docloud_engine = _new_docloud_engine(self, context)
         new_solution = docloud_engine.solve(self, parameters=parameters_to_use, lex_mipstart=lex_mipstart)
         self._set_solution(new_solution)
         cloud_solve_env.after_solve(context, new_solution, docloud_engine)
         return new_solution
 
-    def solve_cloud(self, context=None):
+    def _solve_cloud(self, context=None):
+        from docplex.mp.context import has_credentials
         # Starts execution of the model on the cloud.
         #
         # This method accepts a context (an instance of Context) to be used when
@@ -4716,11 +4873,11 @@ class Model(object):
                 if self.__engine.name == 'docloud':
                     return self.solve()
                 else:
-                    return self._solve_cloud(self.context)
+                    return self._solve_cloud_internal(self.context)
             else:
                 self.fatal("context is None: cannot solve on the cloud")
         elif has_credentials(context.solver.docloud):
-            return self._solve_cloud(context)
+            return self._solve_cloud_internal(context)
         else:
             self.fatal("DOcplexcloud context has no valid credentials: {0!s}", context.solver.docloud)
 
@@ -4765,12 +4922,7 @@ class Model(object):
             self.notify_solve_failed()
 
     def _resolve_sense(self, sense_arg):
-        """
-        INTERNAL
-        :param sense_arg:
-        :return:
-        """
-        return ObjectiveSense.parse(sense_arg, self.logger, default_sense=None)  # raise if invalid
+        return ObjectiveSense.parse(sense_arg, self.logger)  # raise if invalid
 
     def solve_with_goals(self, goals,
                          senses='min',
@@ -4878,7 +5030,7 @@ class Model(object):
 
                 if pass_count > 1:
                     prev_goal, prev_obj, prev_sense = prev_step
-                    tolerance = max(abstol, reltol * abs(prev_obj))
+                    tolerance = compute_tolerance(abstol, reltol, prev_obj)
                     if prev_sense.is_minimize():
                         pass_ct = m._post_constraint(prev_goal <= prev_obj + tolerance)
                     else:
@@ -5034,6 +5186,16 @@ class Model(object):
 
     def clear_mip_starts(self):
         """  Clears all MIP starts associated with the model.
+
+        Note: this clears only MIP starts provided by the user via the `Model.add_mip_start` method.
+        This does not remove interbal solutions found by previous solves. To run a fresh solve,
+        \and forget all about previous solves, use the `clean_before_solve=True` keyword argument for
+        :func:`solv()`
+
+        See Also:
+            :func:`add_mip_start`
+            :func:`solve`
+
         """
         self._mipstarts = []
 
@@ -5228,7 +5390,7 @@ class Model(object):
         """ Exports a model in CPLEX SAV format.
 
         Exporting to SAV format requires that CPLEX is installed and
-        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+        available in PYTHONPATH. If the CPLEX runtime cannot be found, an exception is raised.
 
         Args:
             basename: Controls the basename with which the model is printed.
@@ -5262,7 +5424,7 @@ class Model(object):
         """ Exports a model in MPS format.
 
         Exporting to MPS format requires that CPLEX is installed and
-        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+        available in PYTHONPATH. If the CPLEX runtime cannot be found, an exception is raised.
 
         Args:
             basename: Controls the basename with which the model is printed.
@@ -5294,7 +5456,7 @@ class Model(object):
         """ Exports a model in compressed SAV format.
 
         Exporting to SAV compressed format requires that CPLEX is installed and
-        available in PYTHONPATH. If the CPLEX DLL cannot be found, an exception is raised.
+        available in PYTHONPATH. If the CPLEX runtime cannot be found, an exception is raised.
 
         Arguments 'path' and 'basename' have similar usage as for :func:`export_as_lp`.
 
@@ -5692,9 +5854,13 @@ class Model(object):
                                         path=path,
                                         basename_fmt=basename)
         if export_path:
-            msg = "CPLEX library is required for {0} export - file {1} not written".format(name, export_path)
+            msg = "CPLEX runtime is required for {0} export - file {1} not written".format(name, export_path)
             cpx = self._get_cplex(do_raise=True, msgfn=lambda: msg)
-            cpx_write_fn(cpx, export_path)
+            try:
+                cpx_write_fn(cpx, export_path)
+            except Exception as ex:
+                print(f"An error occured: '{str(ex)}' -- write aborted")
+                return None
             return export_path
 
     def _check_basis(self):
@@ -5809,7 +5975,8 @@ class Model(object):
                                                                                 self._objective_value(), prec=used_prec))
             self.report_kpis()
         else:
-            self.info("Model {0} has not been solved successfully, no reporting done.".format(self.name))
+            status = self.solve_details.status
+            self.info("Model {0} has not been solved successfully, status is: {1}.".format(self.name, status))
 
     def report_kpis(self, solution=None, selected_kpis=None, kpi_format='*  KPI: {1:<{0}} = '):
         """  Prints the values of the KPIs.
@@ -5928,6 +6095,17 @@ class Model(object):
             The KPI expression if found. If the search fails, either raises an exception or returns a dummy
             constant expression with 0.
         """
+        matching_kpi = self._matching_kpi(name, try_match, match_case)
+        if matching_kpi:
+            return matching_kpi
+        # no match was found
+        if do_raise:
+            self.fatal("Model has no KPI with name matching: '{0:s}'", name)
+        else:
+            return self._lfactory.new_zero_expr()
+
+    def _matching_kpi(self, name, try_match=True, match_case=False):
+        # internal
         for kpi in iter(reversed(self._allkpis)):
             kpi_name = kpi.name
             ok = False
@@ -5940,12 +6118,9 @@ class Model(object):
                     ok = kpi_name.lower().find(name.lower()) >= 0
             if ok:
                 return kpi
-        if do_raise:
-            self.fatal('Cannot find any KPI matching: "{0:s}"', name)
-        else:
-            return self._lfactory.new_zero_expr()
+        return None
 
-    def kpi_value_by_name(self, name, solution=None, try_match=True, match_case=False, do_raise=True):
+    def kpi_value_by_name(self, name, solution=None, try_match=True, match_case=False):
         """ Returns a KPI value from a KPI name.
 
         This method fetches a KPI value from a string, using either exact naming or trying
@@ -5958,7 +6133,6 @@ class Model(object):
             try_match (Bool): If True, returns KPI whose name is not equal to the
                 argument, but contains it. Default is True.
             match_case: If True, looks for a case-exact match, else ignores case. Default is False.
-            do_raise: If True, raise an exception when no matching KPI is found.
 
         Example:
             If the KPI name is "Total CO2 Cost" then fetching with argument `co2` and `match_case` to False
@@ -5975,7 +6149,7 @@ class Model(object):
             :class: `docplex.mp.solution.SolveSolution`
             :func: `new_solution`
         """
-        kpi = self.kpi_by_name(name, try_match, match_case=match_case, do_raise=do_raise)
+        kpi = self.kpi_by_name(name, try_match, match_case=match_case, do_raise=True)
         return kpi.compute(solution)
 
     def add_kpi(self, kpi_arg, publish_name=None):
@@ -6015,7 +6189,7 @@ class Model(object):
         """
         self._checker.typecheck_string(publish_name, accept_empty=False, accept_none=True, caller="Model.add_kpi(): ")
         new_kpi = self._lfactory.new_kpi(kpi_arg, publish_name)
-        new_kpi_name = new_kpi.get_name()
+        new_kpi_name = new_kpi.name
         if new_kpi_name in set(kp.name for kp  in self._allkpis):
             self.fatal("Duplicate KPI name: \"{0!s}\" ", new_kpi_name)
         self._allkpis.append(new_kpi)
@@ -6078,12 +6252,22 @@ class Model(object):
         # INTERNAL
         self._progress_listeners.append(listener)
 
+    def _add_qprogress_listener(self, qlistener):
+        self._qprogress_listeners.append(qlistener)
+
     def remove_progress_listener(self, listener):
         """ Remove a progress listener from the model.
 
         :param listener:
         """
-        self._progress_listeners.remove(listener)
+        try:
+            self._progress_listeners.remove(listener)
+        except ValueError:
+            # ignore errors
+            if self.is_docplex_debug():
+                raise
+            else:
+                pass
 
     def iter_progress_listeners(self):
         """ Returns an iterator on the progress listeners attached to the model.
@@ -6105,6 +6289,9 @@ class Model(object):
         """ Remove all progress listeners from the model."""
         self._progress_listeners = []
 
+    def _clear_qprogress_listeners(self):
+        self._qprogress_listeners = []
+
     def _fire_start_solve_listeners(self):
         for l in self._progress_listeners:
             l.notify_start()
@@ -6112,17 +6299,6 @@ class Model(object):
     def _fire_end_solve_listeners(self, has_solution, objective_value):
         for l in self._progress_listeners:
             l.notify_end(has_solution, objective_value)
-
-    def fire_jobid(self, jobid):  # pragma: no cover
-        # INTERNAL
-        for l in self._progress_listeners:
-            l.notify_jobid(jobid)
-
-    def fire_progress(self, progress_data):  # pragma: no cover
-        for l in self._progress_listeners:
-            l.notify_progress(progress_data)
-
-
 
     def prettyprint(self, out=None):
         from docplex.mp.ppretty import ModelPrettyPrinter
@@ -6271,12 +6447,6 @@ class Model(object):
 
         return copy_model
 
-    def _sync_constraint_indices(self, cscope):
-        self.__engine.check_constraint_indices(cscope.iter, cscope.cplex_scope)
-
-    def _sync_var_indices(self):
-        self.__engine.check_var_indices(self.iter_variables())
-
     def end(self):
         """ Terminates a model instance.
 
@@ -6402,6 +6572,13 @@ class Model(object):
     def resync_engine(self):
         # INTERNAL: resync after pickle
         self.__engine.resync()
+
+    def sync_cplex_engine(self):
+        if self.has_cplex():
+            eng = self.get_engine()
+            eng.sync_cplex()
+        else:
+            self.warning('Model has no cplex, sync operation ignored.')
 
     def add_sos1(self, dvars, name=None):
         ''' Adds  an SOS of type 1 to the model.
@@ -6625,8 +6802,7 @@ class Model(object):
         return pwl_func
 
     def _add_pwl_expr(self, pwl_func, arg, yvar=None, resolve=True):
-        pwl_func_usage_counter = self._pwl_counter.get(pwl_func, 0) + 1
-        pwl_expr = self._lfactory.new_pwl_expr(pwl_func, arg, pwl_func_usage_counter, y_var=yvar, resolve=resolve)
+        pwl_expr = self._lfactory.new_pwl_expr(pwl_func, arg, y_var=yvar, resolve=resolve)
         return pwl_expr
 
     def _add_pwl_constraint_internal(self, pwlct):
@@ -6637,11 +6813,6 @@ class Model(object):
     def _register_one_pwl_constraint(self, new_pwl_ct, ct_index):
         self.__notify_new_model_object(
             "pwl", new_pwl_ct, ct_index, mobj_name=None, name_dir=None, idx_scope=self._pwl_scope, is_name_safe=True)
-
-        # Maintain the number of constraints associated to each piecewise function definition.
-        # This counter is used when naming PWL constraints.
-        self._pwl_counter[new_pwl_ct.pwl_func] = new_pwl_ct.usage_counter
-
 
     def iter_pwl_constraints(self):
         """ Iterates over all PWL constraints in the model.
@@ -6732,10 +6903,9 @@ class Model(object):
                 x.resolve()
         # this call updates the dict so we must iterate on somethibg else.
         pwls = [pw for pw in self._pwl_scope.iter_objects()]
+        # BEWARE: need this temp list as resolve will modify the dict, so canno titerate on it.
         for pw in pwls:
             pw.resolve()
-
-
 
     def get_constraint_priority(self, ct):
         # INTERNAL
@@ -6885,3 +7055,5 @@ class Model(object):
     def _is_user_cut_constraint(self, lineart_ct):
         # INTERNAL
         return any(lc is lineart_ct for lc in self.iter_user_cut_constraints())
+
+

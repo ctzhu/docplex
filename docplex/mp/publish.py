@@ -5,10 +5,10 @@
 # --------------------------------------------------------------------------
 
 from docplex.mp.progress import SolutionListener, ProgressClock
+from docplex.mp.qprogress import QProgressListener
 
 from docplex.util.environment import get_environment
 
-import os
 import six
 
 try:
@@ -18,15 +18,33 @@ except ImportError:
 
 from docplex.util.csv_utils import write_csv, write_table_as_csv
 
+
+class _BarrierProgressPubisher(QProgressListener):
+
+    def __init__(self, publish_hook=None):
+        super().__init__()
+        self.publish_hook = publish_hook
+
+    def notify_progress(self, qprogress_data):
+        env = get_environment()
+        # 1. Start with empty table
+        name_values = {}
+
+        # new stats for https://github.ibm.com/IBMDecisionOptimization/dd-planning/issues/2491
+        if env.is_dods():
+            name_values['STAT.cplex.solve.iterationCount'] = qprogress_data.current_nb_iterations
+            name_values['STAT.cplex.solve.elapsedTime'] = qprogress_data.time
+            name_values['STAT.cplex.solve.primalObjective'] = qprogress_data.primal_objective_value
+            name_values['STAT.cplex.solve.dualObjective'] = qprogress_data.dual_objective_value
+            name_values['STAT.cplex.solve.primalInfeasibility'] = qprogress_data.primal_infeas
+            name_values['STAT.cplex.solve.dualInfeasibility'] = qprogress_data.dual_infeas
+
+        # publish ..or perish...
+        if self.publish_hook is not None:
+            self.publish_hook(name_values)
+
+
 class _KpiRecorder(SolutionListener):
-    # '''A specialized subclass of :class:`~SolutionListener` that stores the KPI values
-    # at each intermediate solution.
-    #
-    # The `clock` argument defines which events are listened to.
-    #
-    # See Also:
-    #     the enumerated class :class:`~ProgressClock`
-    # '''
 
     def __init__(self, model, clock=ProgressClock.Gap,
                  publish_hook=None,
@@ -141,7 +159,6 @@ def auto_publishing_kpis_table_names(context):
 
 def get_kpis_name_field(context):
     autopubs = context.solver.auto_publish
-    field = None
     if autopubs is True:
         field = 'Name'
     elif autopubs is False:
@@ -153,7 +170,6 @@ def get_kpis_name_field(context):
 
 def get_kpis_value_field(context):
     autopubs = context.solver.auto_publish
-    field = None
     if autopubs is True:
         field = 'Value'
     elif autopubs is False:

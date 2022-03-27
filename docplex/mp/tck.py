@@ -24,6 +24,10 @@ import six
 
 _vartype_code_map = {sc().cplex_typecode: sc().short_name for sc in VarType.__subclasses__()}
 
+warn_trivial_feasible = 0
+warn_trivial_infeasible = 1
+warn_trivial_none = 2
+
 
 def vartype_code_to_string(vartype_code):
     return _vartype_code_map.get(vartype_code, '????')
@@ -529,7 +533,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                        .format(self, mobj1, mobj2))
 
     def check_trivial_constraints(self):
-        return True
+        return warn_trivial_infeasible
 
     def check_ordered_sequence(self, arg, caller, accept_iterator=True):
         # in some cases, we need an ordered sequence, if not the code won't crash
@@ -671,7 +675,7 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
         pass  # pragma: no cover
 
     def check_trivial_constraints(self):
-        return False
+        return warn_trivial_none
 
     def get_number_validation_fn(self):
         return None
@@ -723,6 +727,9 @@ class FullTypeChecker(StandardTypeChecker):
     @property
     def name(self):
         return "full"
+
+    def check_trivial_constraints(self):
+        return warn_trivial_feasible
 
     def get_number_validation_fn(self):
         return DocplexNumericCheckerMixin.static_validate_num2

@@ -1,21 +1,40 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
+# (c) Copyright IBM Corp. 2015 .. 2021
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
 """
 Compiler converting internal model representation to CPO file format.
+
+This compiler transforms the internal model representation into CPO file format.
+
+The final output is optimized by identifying common sub-expressions that are explicitly separated from
+expressions where they occur.
+
+Only variables that are referenced by the model expressions are declared in the result, except if they are explicitly
+added as root expression of the model.
+
+If the solver parameter 'ModelAnonymizer' is set to 'On', all variables or constraints that are explicitly named are
+renamed with a newly generated token. This is not the case for KPIs whose original name is preserved.
+
+If the context attribute *context.model.length_for_alias* is set to an integer, all variables whose name has a length
+that is greater than this value are replaced by a shorter alias to reduce the global model size.
+A mapping between original name and alias is given as comment.
+This is not the case if anonymization is required.
+
+Detailed description
+--------------------
 """
 
 from docplex.cp.expression import *
 from docplex.cp.expression import _domain_min, _domain_max
 from docplex.cp.solution import *
 from docplex.cp.utils import *
+import docplex.cp.parameters as parameters
 import docplex.cp.config as config
 import datetime
-import itertools
 
 import sys
 import functools
@@ -47,28 +66,30 @@ _ANONYMOUS = "Anonymous"
 
 class CpoCompiler(object):
     """ Compiler to CPO file format """
-    __slots__ = ('model',                    # Source model
-                 'parameters',               # Solving parameters
-                 'add_source_location',      # Indicator to add location traces in generated output
-                 'format_version',           # Output format version
-                 'is_format_less_than_12_8', # Indicates that format version is less than 12.8
-                 'is_format_at_least_12_8',  # Indicates that format version is at least 12.8
-                 'is_format_at_least_12_9',  # Indicates that format version is at least 12.9
-                 'name_all_constraints',     # Indicator to fore a name on each constraint (for conflict refiner)
-                 'min_length_for_alias',     # Minimum variable name length to replace it by an alias
-                 'verbose_output',           # Verbose output (not short_output)
-                 'id_printable_strings',     # Dictionary of printable string for each identifier
-                 'last_location',            # Last source location (file, line)
-                 'list_consts',              # List of constants
-                 'list_vars',                # List of variables
-                 'list_exprs',               # List of model expressions
-                 'list_phases',              # List of search phases
-                 'expr_infos',               # Map of expression infos.
-                                             # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
-                 'expr_by_names',            # Map of expressions by CPO name. Used to retrieve expressions from solutions.
-                 'alias_name_map',           # Map of variable renamed with a shorter name. key = old name, value = new name
-                 'factorize',                # Indicate to factorize expressions used more than ones
-                 'sort_names',               # Type of expressions (variables) sorting: O:None, 1:basic, 2:natural
+    __slots__ = ('model',                     # Source model
+                 'parameters',                # Solving parameters
+                 'add_source_location',       # Indicator to add location traces in generated output
+                 'format_version',            # Output format version
+                 'is_format_less_than_12_8',  # Indicates that format version is less than 12.8
+                 'is_format_at_least_12_8',   # Indicates that format version is at least 12.8
+                 'is_format_at_least_12_9',   # Indicates that format version is at least 12.9
+                 'name_all_constraints',      # Indicator to fore a name on each constraint (for conflict refiner)
+                 'min_length_for_alias',      # Minimum variable name length to replace it by an alias
+                 'verbose_output',            # Verbose output (not short_output)
+                 'id_printable_strings',      # Dictionary of printable string for each identifier
+                 'last_location',             # Last source location (file, line)
+                 'list_consts',               # List of constants
+                 'list_vars',                 # List of variables
+                 'list_exprs',                # List of model expressions
+                 'list_phases',               # List of search phases
+                 'map_blackboxes',            # Dictionary of blackbox functions used in the model
+                                              # Key is the name of the blackbox used in the model, value is the BBF descriptor
+                 'expr_infos',                # Map of expression infos.
+                                              # Key is expression id, value is list [expr, location, ref_count, cpo_name, is_root, is_compiled]
+                 'expr_by_names',             # Map of expressions by CPO name. Used to retrieve expressions from solutions.
+                 'alias_name_map',            # Map of variable renamed with a shorter name. key = old name, value = new name
+                 'factorize',                 # Indicate to factorize expressions used more than ones
+                 'sort_names',                # Type of expressions (variables) sorting: O:None, 1:basic, 2:natural
                  )
 
     def __init__(self, model, **kwargs):
@@ -152,6 +173,7 @@ class CpoCompiler(object):
         self.list_exprs = []
         self.list_phases = []
         self.alias_name_map = {}
+        self.map_blackboxes = {}
 
         # Precompile model
         self._pre_compile_model()
@@ -166,6 +188,16 @@ class CpoCompiler(object):
             Value is the corresponding model expression.
         """
         return self.expr_by_names
+
+
+    def get_blackbox_map(self):
+        """ Get the dictionary of blackbox functions used in this model.
+
+        Returns:
+            Dictionary of blackbox functions used in the model.
+            Key is the name of the blackbox used in the model, value is the BBF descriptor
+        """
+        return self.map_blackboxes
 
 
     def print_model(self, out=None):
@@ -244,6 +276,12 @@ class CpoCompiler(object):
                 out.write(u"   version({});\n".format(self.format_version))
                 out.write(u"}\n")
 
+        # Print blackbox functions if any
+        if self.map_blackboxes:
+            out.write(u"\n//--- Blackbox functions ---\n")
+            for name, bbf in self.map_blackboxes.items():
+                out.write("// blackbox {}({}): {}\n".format(name, ', '.join(t.get_name() for t in bbf.get_arg_types()), bbf.get_dimension()))
+
         # Print renamed variables as comment
         snm = self.alias_name_map
         if snm and self.verbose_output:
@@ -285,25 +323,6 @@ class CpoCompiler(object):
                         continue
                     # Write KPI name
                     out.write(self._get_id_string(k));
-                    # Retrieve expression infos
-                    # if x.name != k:
-                    #     out.write(u" = " + self._compile_expression(x, False))
-                    # xinfo = self.expr_infos.get(id(x))
-                    # if xinfo:
-                    #     xn = xinfo[0].name
-                    #     if ()
-                    #     # Check if expression is already compiled
-                    #     if xinfo[5] and xn != k:
-                    #         self._write_expression(out, [CpoAlias(x, k), l, 1, self._get_id_string(k), False, False])
-                    #     else:
-                    #         if xn is not None:
-                    #             if xinfo[3] is None:
-                    #                xinfo[3] = self._get_id_string(k)
-                    #             self._write_expression(out, xinfo)
-                    #         else:
-                    #             self._write_expression(out, [x, l, 1, self._get_id_string(k), True, False])
-                    # else:
-                    #     self._write_expression(out, [x, l, 1, self._get_id_string(k), True, False])
                     out.write(u";\n")
                 out.write(u"}\n")
             else:
@@ -504,69 +523,8 @@ class CpoCompiler(object):
                 estack.pop()
                 continue
 
-            # Check constant expressions
-            t = e.type
-            if t.is_constant:
-                estack.pop()
-                if t.is_array:
-                    vals = e.value
-                    if len(vals) == 0:
-                        cout.append(_ARRAY_TYPES[t])
-                        cout.append("[]")
-                    else:
-                        cout.append('[')
-                        _compile_integer_var_domain(vals, cout)
-                        cout.append(']')
-                elif t is Type_Bool:
-                    self._compile_boolean_constant(e, cout)
-                elif t is Type_TransitionMatrix:
-                    self._compile_transition_matrix(e, cout)
-                elif t is Type_TupleSet:
-                    self._compile_tuple_set(e, cout)
-                elif t is Type_StepFunction:
-                    _compile_step_function(e, cout)
-                elif t is Type_SegmentedFunction:
-                    _compile_segmented_function(e, cout)
-                else:
-                    cout.append(_number_value_string(e.value))
-
-            # Check variables
-            elif t.is_variable:
-                estack.pop()
-                if t is Type_IntVar:
-                    self._compile_integer_var(e, cout)
-                elif t is Type_IntervalVar:
-                    self._compile_interval_var(e, cout)
-                elif t is Type_SequenceVar:
-                    self._compile_sequence_var(e, cout)
-                elif t is Type_StateFunction:
-                    self._compile_state_function(e, cout)
-                elif t is Type_FloatVar:
-                    self._compile_float_var(e, cout)
-
-            # Check array
-            elif t.is_array:
-                oprnds = e.children
-                alen = len(oprnds)
-                if alen == 0:
-                    cout.append(_ARRAY_TYPES[t])
-                    cout.append("[]")
-                    estack.pop()
-                else:
-                    cnx = edscr[1]
-                    if cnx <= 0:
-                        cout.append("[")
-                    if cnx >= alen:
-                        cout.append("]")
-                        estack.pop()
-                    else:
-                        edscr[1] += 1
-                        if cnx > 0:
-                            cout.append(", ")
-                        estack.append([oprnds[cnx], 0, False])
-
-            # General expression
-            else:
+            # Check function call
+            if isinstance(e, CpoFunctionCall):
                 # Get operation elements
                 oper = e.operation
                 prio = oper.priority
@@ -631,6 +589,71 @@ class CpoCompiler(object):
                                   or ((oplen == 1) and not parents and oprnds[0].children)
                         # Put operand on stack
                         estack.append([arg, 0, chparnts])
+            else:
+                # Check constant expressions
+                t = e.type
+                if t.is_constant:
+                    estack.pop()
+                    if t.is_array:
+                        vals = e.value
+                        if len(vals) == 0:
+                            cout.append(_ARRAY_TYPES[t])
+                            cout.append("[]")
+                        else:
+                            cout.append('[')
+                            _compile_integer_var_domain(vals, cout)
+                            cout.append(']')
+                    elif t is Type_Bool:
+                        self._compile_boolean_constant(e, cout)
+                    elif t is Type_TransitionMatrix:
+                        self._compile_transition_matrix(e, cout)
+                    elif t is Type_TupleSet:
+                        self._compile_tuple_set(e, cout)
+                    elif t is Type_StepFunction:
+                        _compile_step_function(e, cout)
+                    elif t is Type_SegmentedFunction:
+                        _compile_segmented_function(e, cout)
+                    else:
+                        cout.append(_number_value_string(e.value))
+
+                # Check variables
+                elif t.is_variable:
+                    estack.pop()
+                    if t is Type_IntVar:
+                        self._compile_integer_var(e, cout)
+                    elif t is Type_IntervalVar:
+                        self._compile_interval_var(e, cout)
+                    elif t is Type_SequenceVar:
+                        self._compile_sequence_var(e, cout)
+                    elif t is Type_StateFunction:
+                        self._compile_state_function(e, cout)
+                    elif t is Type_FloatVar:
+                        self._compile_float_var(e, cout)
+
+                # Check array
+                elif t.is_array:
+                    oprnds = e.children
+                    alen = len(oprnds)
+                    if alen == 0:
+                        cout.append(_ARRAY_TYPES[t])
+                        cout.append("[]")
+                        estack.pop()
+                    else:
+                        cnx = edscr[1]
+                        if cnx <= 0:
+                            cout.append("[")
+                        if cnx >= alen:
+                            cout.append("]")
+                            estack.pop()
+                        else:
+                            edscr[1] += 1
+                            if cnx > 0:
+                                cout.append(", ")
+                            estack.append([oprnds[cnx], 0, False])
+
+                # Else
+                else:
+                    raise CpoException("Internal error: unable to compile expression of type {}".format(t))
 
         # Check output exists
         if not cout:
@@ -840,12 +863,6 @@ class CpoCompiler(object):
 
         # Add KPIs expressions
         self._scan_expressions(kpiexprs, expr_infos, all_exprs)
-        # kpexprs = []
-        # self._scan_expressions([(x, l) for (x, l) in kpis.values() if isinstance(x, CpoExpr)], expr_infos, kpexprs)
-        # for xnfo in kpexprs:
-        #     x = xnfo[0]
-        #     if x.name and ((not id(x) in expr_infos) or (x.type.is_variable and xnfo[2] == 1)):
-        #         all_exprs.append(xnfo)
 
         # Initialize lists of expressions
         list_consts = []
@@ -856,6 +873,8 @@ class CpoCompiler(object):
         alias_name_map = {}       # List of variable with a name but renamed shortly
         name_constraints = self.name_all_constraints
         min_length_for_alias = self.min_length_for_alias
+        map_blackboxes_name= {}   # Map of blackboxes per name
+        map_blackboxes_id = {}    # Map of blackboxes names per blackbox id
 
         # Create name allocators
         id_allocators = [IdAllocator('_EXP_')] * len(ALL_TYPES)
@@ -864,9 +883,12 @@ class CpoCompiler(object):
         id_allocators[Type_SequenceVar.id] = IdAllocator('_SEQ_')
         id_allocators[Type_StateFunction.id] = IdAllocator('_FUN_')
         id_allocators[Type_Constraint.id] = IdAllocator('_CTR_')
+        id_allocators[Type_Blackbox.id] = IdAllocator('_BBC_')
+        bbf_names_allocator  = IdAllocator('_BBF_')
 
         # Initialize map of names
         expr_by_names = self.expr_by_names = {}
+        anonymize = self.parameters.ModelAnonymizer == parameters.VALUE_ON
 
         # Force to keep original name for KPIs
         for x, l in kpiexprs:
@@ -888,32 +910,26 @@ class CpoCompiler(object):
                     # Already compiled, retrieve stored name for the same expression
                     xinfo[3] = expr_infos[id(expr)][3]
                 else:
+                    # Check if anonymization required
+                    if anonymize and (not xname in kpis):
+                        xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
+                        xinfo[3] = xname
                     # Check if name too long
-                    if min_length_for_alias is not None and len(xname) >= min_length_for_alias and not xname in kpis:
+                    elif (min_length_for_alias is not None) and (len(xname) >= min_length_for_alias) and (not xname in kpis):
                         xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                         alias_name_map[expr.get_name()] = xname
                         xinfo[3] = xname
                     else:
                         # Check if already used elsewhere
-                        # if xname in expr_by_names:
                         ox = expr_by_names.get(xname)
                         if not (ox is None or ox is expr):  # To process the case of pre-allocated names of KPIs
                             # Allocate a next instance
-                            ndx = 1
-                            xname += "@"
-                            nname = xname + "1"
-                            while nname in expr_by_names:
-                                ndx += 1
-                                nname = xname + str(ndx)
-                            xname = nname
+                            xname = _allocate_expr_id_instance(xname, expr_by_names)
                         xinfo[3] = to_printable_id(xname)
                     expr_by_names[xname] = expr
-            elif (xinfo[3] is None) and ((factorize and (xinfo[2] > 1)) or typ.is_variable):
+            elif    ((xinfo[3] is None) and ((factorize and (xinfo[2] > 1)) or typ.is_variable)) \
+                 or ( name_constraints and xinfo[4] and (typ in (Type_Constraint, Type_BoolExpr))):
                 # Allocate name
-                xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
-                expr_by_names[xname] = expr
-                xinfo[3] = xname
-            elif name_constraints and xinfo[4] and (typ in (Type_Constraint, Type_BoolExpr)):
                 xname = _allocate_expr_id(id_allocators[typ.id], expr_by_names)
                 expr_by_names[xname] = expr
                 xinfo[3] = xname
@@ -925,8 +941,30 @@ class CpoCompiler(object):
                 if expr not in vars_set:
                     vars_set.add(expr)
                     list_vars.append(xinfo)
-            elif typ == Type_SearchPhase:
+            elif typ is Type_SearchPhase:
                 list_phases.append(xinfo)
+            elif typ is Type_Blackbox:
+                # Check or allocate blackbox name
+                bbf = expr.blackbox
+                nbbfn = bbfn = bbf.get_name()
+                if (bbfn is None) or (bbfn in expr_by_names):
+                    # Check first if already renamed
+                    nbbfn = map_blackboxes_id.get(id(bbf))
+                    if nbbfn is None:
+                       # Allocate a new name
+                       if bbfn is None:
+                           nbbfn = _allocate_expr_id(bbf_names_allocator, expr_by_names)
+                       else:
+                           nbbfn = _allocate_expr_id_instance(bbfn, expr_by_names)
+                       map_blackboxes_id[id(bbf)] = nbbfn
+                    # Change name in operation
+                    expr.operation = CpoOperation(nbbfn, nbbfn, None, -1, (CpoSignature(Type_FloatExprArray, bbf.argtypes),) )
+                # Add in map of all expressions to allow its retrieval during evaluation
+                expr_by_names[nbbfn] = bbf
+                # Add in local processing
+                map_blackboxes_name[nbbfn] = bbf
+                if xname:# or xinfo[4]:
+                    list_exprs.append(xinfo)
             elif xname or xinfo[4] or (factorize and (xinfo[2] > 1)):
                 list_exprs.append(xinfo)
 
@@ -943,11 +981,11 @@ class CpoCompiler(object):
             self.list_consts = list_consts
             self.list_vars = list_vars
 
-
         # Set other attributes
         self.list_exprs = list_exprs
         self.list_phases = list_phases
         self.alias_name_map = alias_name_map
+        self.map_blackboxes = map_blackboxes_name
 
 
     def _scan_expressions(self, lexpr, expr_infos, all_exprs):
@@ -983,7 +1021,7 @@ class CpoCompiler(object):
                         xid = id(e)
                         xnfo = expr_infos.get(xid)
                         if xnfo:
-                            xnfo[2] += 1
+                            xnfo[2] += 1 # Increment reference count
                             stack.pop()
                             continue
                         # Check if all children processed
@@ -1092,6 +1130,24 @@ def _allocate_expr_id(allocator, exprmap):
     while id in exprmap:
         id = allocator.allocate()
     return id
+
+
+def _allocate_expr_id_instance(name, exprmap):
+    """ Allocate a new free instance of a name
+
+    Args:
+        name:     Existing name
+        exprmap:  Map of existing expression names
+    Returns:
+        New id not in exprmap
+    """
+    ndx = 1
+    name += "@"
+    nname = name + "1"
+    while nname in exprmap:
+        ndx += 1
+        nname = name + str(ndx)
+    return nname
 
 
 def _interval_var_value_string(ibv):

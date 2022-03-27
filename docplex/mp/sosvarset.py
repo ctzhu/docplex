@@ -7,7 +7,7 @@ from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin
 from docplex.mp.constants import CplexScope
 
 
-class SOSVariableSet(_BendersAnnotatedMixin, IndexableObject):
+class SOSVariableSet( IndexableObject, _BendersAnnotatedMixin):
     ''' This class models :index:`Special Ordered Sets` (SOS) of decision variables.
         An SOS has a type (SOS1, SOS2) and an ordered list of variables.
 

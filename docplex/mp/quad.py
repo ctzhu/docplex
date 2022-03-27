@@ -118,12 +118,12 @@ class QuadExpr(_SubscriptionMixin, Expr):
         else:
             return self._linexpr.square()
 
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         # INTERNAL
         quad_value = 0
         for qv0, qv1, qk in self.iter_quad_triplets():
-            quad_value += qk * (qv0._get_solution_value(s) * qv1._get_solution_value(s))
-        lin_value = self._linexpr._get_solution_value(s)
+            quad_value += qk * (qv0._raw_solution_value(s) * qv1._raw_solution_value(s))
+        lin_value = self._linexpr._raw_solution_value(s)
         return quad_value + lin_value
 
     __slots__ = ('_quadterms', '_linexpr', '_transient', '_subscribers')
@@ -289,11 +289,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         Returns:
             True if all quadratic terms are separable.
         """
-        for qv, _ in self.iter_quads():
-            if not qv.is_square():
-                return False
-        else:
-            return True
+        return all(qv.is_square() for qv, _ in self.iter_quads())
 
     def compute_separable_convexity(self, sense=1):
         # INTERNAL
@@ -454,7 +450,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return qv in self._quadterms
 
     def __repr__(self):
-        return "docplex.mp.quad.QuadExpr(%s)" % self.truncated_str()
+        return "docplex.mp.quad.QuadExpr(%s)" % self.repr_str()
 
     def to_stringio(self, oss, nb_digits, use_space, var_namer=lambda v: v.lp_name):
         q = 0
@@ -468,6 +464,8 @@ class QuadExpr(_SubscriptionMixin, Expr):
             # ---
             # sign is printed if  non-first OR negative
             # at the end of this block coeff is positive
+            if q > 0 and use_space:
+                oss.write(SP)
             if qk < 0 or q > 0:
                 oss.write(u'-' if qk < 0 else u'+')
                 if qk < 0:

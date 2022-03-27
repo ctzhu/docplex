@@ -87,7 +87,7 @@ def run_docplex_check_list():
     except ImportError as ie:
         Cplex = None
         diagnostics.append("No local installation of CPLEX has been found.")
-        print("Cplex DLL not found, error importing cplex: {0!s}".format(ie))
+        print("Cplex runtime not found, error importing cplex: {0!s}".format(ie))
         check_python_path(diagnostics)
     # check creation of an empty model...
 

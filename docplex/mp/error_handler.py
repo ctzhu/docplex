@@ -258,11 +258,8 @@ def docplex_fatal(msg, *args):
 
 is_debug = os.environ.get('DOCPLEX_DEBUG')
 
-def docplex_debug_msg(*args):
-    if is_debug:
-        msg = ' '.join(str(x) for x in args)
-        #print(f"-- {msg}")
-        print("-- {0}".format(msg))
+def is_docplex_debug():
+    return not not os.environ.get("DOCPLEX_DEBUG")
 
 
 class DefaultErrorHandler(AbstractErrorHandler):
@@ -287,5 +284,17 @@ class SilentErrorHandler(AbstractErrorHandler):
 
     def flush(self):
         pass
+
+
+def handle_error(logger, error, msg):
+    if error == "raise":
+        raise logger.fatal(msg)
+    elif error == "warn":
+        logger.warn(msg)
+    elif error =="ignore":
+        pass
+    else:
+        print("unknown error directive: {0}, expecting ignore|warn|raise, msg is: {1}".format(error, msg))
+
 
 

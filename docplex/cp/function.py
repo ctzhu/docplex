@@ -572,9 +572,8 @@ class CpoStepFunction(CpoFunction):
             steps: (Optional) Function steps, expressed as a list of couples (x, val).
             name:  (Optional) Function name
         """
-        if steps is None or len(steps) == 0:
-            super(CpoStepFunction, self).__init__(Type_StepFunction, name=name)
-        else:
+        super(CpoStepFunction, self).__init__(Type_StepFunction, name=name)
+        if steps:
             x = []
             v = []
             if steps[0][0] == INTERVAL_MIN:

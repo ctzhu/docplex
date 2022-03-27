@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from docplex.mp.utils import resolve_caller_as_string, is_number, is_ordered_sequence, is_iterable, is_string
+from docplex.mp.utils import resolve_caller_as_string, is_number, is_ordered_sequence, is_iterable, is_string,\
+    str_maxed
 from docplex.mp.constants import BasisStatus
 
 import math
@@ -147,4 +148,8 @@ class StaticTypeChecker(object):
             logger.fatal('{1}Not a logical operand: {0!s} - Expecting binary variable, logical expression or constraint',
                          arg, caller_s)
 
-
+    @classmethod
+    def typecheck_quadexpr_is_separable(cls, logger, quadexpr, caller=None):
+        if quadexpr.is_quad_expr() and not quadexpr.is_separable():
+            caller_s = resolve_caller_as_string(caller)
+            logger.warning("{1}Non-convex quadratic expression: {0!s}", str_maxed(quadexpr, 64), caller_s)

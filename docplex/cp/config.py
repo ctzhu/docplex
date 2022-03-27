@@ -205,9 +205,6 @@ try:
 except:
     IS_IN_WORKER = False
 
-# Indicator that program is running inside a notebook
-IS_IN_NOTEBOOK = 'ipykernel' in sys.modules
-
 # CP Optimizer Interactive executable name
 CPO_EXEC_INTERACTIVE = "cpoptimizer" + (".exe" if IS_WINDOWS else "")
 
@@ -261,7 +258,7 @@ context.model = Context()
 context.model.add_source_location = True
 
 # Minimal variable name length that trigger use of shorter alias. None for no alias.
-context.model.length_for_alias = 15
+context.model.length_for_alias = None
 
 # Automatically add a name to every top-level constraint
 context.model.name_all_constraints = False
@@ -273,7 +270,7 @@ context.model.version = None
 # Name of the directory where store copy of the generated CPO files. None for no dump.
 context.model.dump_directory = None
 
-# Flag to factorize expressions used more than ones
+# Flag to indicate to the compiler to factorize expressions used more than ones
 context.model.factorize_expressions = True
 
 # Flag to generate short model output (internal)
@@ -282,7 +279,7 @@ context.model.short_output = False
 # Type of sort for model variables. Value is in {None, 'alphabetical', 'natural')
 context.model.sort_names = None
 
-# Expression cache
+# Expression cache, global to all models
 context.model.cache = Context()
 context.model.cache.size = 10000
 context.model.cache.active = True
@@ -292,6 +289,12 @@ context.model.cache.active = True
 # Parsing context
 
 context.parser = Context()
+
+# Enable CPO parser to automatically generate blackboxes for unknown functions
+context.parser.auto_blackbox = False
+
+# Indicate to print warning messages (for example for unknown blackbox functions) at the end of parsing
+context.parser.print_warnings = True
 
 # Indicate to FZN parser to reduce model when possible
 context.parser.fzn_reduce = False
@@ -318,7 +321,10 @@ context.solver = Context()
 context.solver.trace_cpo = False
 
 # Indicate to trace solver log on log_output.
-context.solver.trace_log = False
+context.solver.trace_log = True
+if is_in_notebook():
+    # In notebooks, no traces by default because it may crash the environment
+    context.solver.trace_log = False
 
 # Enable undocumented parameters
 context.solver.enable_undocumented_params = False
@@ -332,8 +338,8 @@ context.solver.add_log_to_solution = True
 # Indicate to add the conflict in CPO format to conflict refiner result
 context.solver.add_conflict_as_cpo = True
 
-# Indicate to replace simple solve by a start/next loop
-context.solver.solve_with_start_next = False
+# Indicate to replace simple solve by a search_next loop
+context.solver.solve_with_search_next = False
 
 # Log prefix
 context.solver.log_prefix = "[Solver] "
@@ -468,13 +474,9 @@ if IS_IN_WORKER:
 #-----------------------------------------------------------------------------
 # Create special context for docloud
 
-# Create 2 contexts for local and docloud
+# Create 2 contexts for local and docloud (deprecated)
 LOCAL_CONTEXT = context
 DOCLOUD_CONTEXT = context.clone()
-
-# Set local context specific attributes
-LOCAL_CONTEXT.solver.trace_log = not IS_IN_NOTEBOOK
-LOCAL_CONTEXT.model.length_for_alias = None
 
 # Set DOcloud context specific attributes
 DOCLOUD_CONTEXT.solver.agent = 'docloud'
@@ -653,12 +655,12 @@ def _get_effective_context(**kwargs):
     Returns:
         Updated (cloned) context
     """
-    # If 'url' and 'key' are defined, force agent to be docloud
-    if ('agent' not in kwargs) and not IS_IN_WORKER:
-        url = kwargs.get('url')
-        key = kwargs.get('key')
-        if url and key and is_string(url) and is_string(key) and url.startswith('http'):
-            kwargs['agent'] = 'docloud'
+    # If 'url' and 'key' are defined, force agent to be docloud (OBSOLETE)
+    # if ('agent' not in kwargs) and not IS_IN_WORKER:
+    #     url = kwargs.get('url')
+    #     key = kwargs.get('key')
+    #     if url and key and is_string(url) and is_string(key) and url.startswith('http'):
+    #         kwargs['agent'] = 'docloud'
 
     # Determine source context
     ctx = kwargs.get('context')
@@ -678,6 +680,9 @@ def _get_effective_context(**kwargs):
     if uk in kwargs:
         _change_context_attribute(ctx, uk, kwargs[uk])
     for k, v in kwargs.items():
+        # Replace obsolete solve_with_start_next attribute
+        if k == 'solve_with_start_next':
+            k = 'solve_with_search_next'
         if (k != 'context') and (k != 'params') and (k != uk) and (v not in DEFAULT_VALUES):
             _change_context_attribute(ctx, k, v)
 
@@ -719,6 +724,11 @@ def _eval_file(file):
 # Load all config changes
 for f in ("cpo_config.py", "cpo_config_" + socket.gethostname() + ".py", "docloud_config.py"):
     _eval_file(f)
+
+# Check particular case of renamed solve_with_start_next
+ov = context.solver.solve_with_start_next
+if ov is not None:
+    context.solver.solve_with_search_next = ov
 
 # Overwrite with environment definitions if any
 envchg = os.environ.get(CONTEXT_ENVIRONMENT)

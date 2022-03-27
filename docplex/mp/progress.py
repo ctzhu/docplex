@@ -139,22 +139,50 @@ default_absdiff = 1e-1
 default_reldiff = 1e-2
 
 
-class ProgressListener(object):
-    '''  The base class for progress listeners.
-    '''
+class _AbstractProgressListener(object):
 
-    def __init__(self, clock_arg=ProgressClock.All, absdiff=None, reldiff=None):
+    def __init__(self):
         self._cb = None
-        clock = ProgressClock.parse(clock_arg)
-        self._clock = clock
         self._current_progress_data = None
-        self._absdiff = absdiff if absdiff is not None else default_absdiff
-        self._reldiff = reldiff if reldiff is not None else default_reldiff
-        self._filter = make_clock_filter(clock, absdiff, reldiff)
 
     def _get_model(self):
         ccb = self._cb
         return ccb._model if ccb else None
+
+    def _set_current_progress_data(self, pdata):
+        # INTERNAL
+        self._current_progress_data = pdata
+
+    def _disconnect(self):
+        # INTERNAL
+        self._cb = None
+
+    def _connect_cb(self, cb):
+        # INTERNAL
+        self._cb = cb
+
+    def abort(self):
+        ccb = self._cb
+        if ccb is not None:
+            ccb.abort()
+        else:
+            print('!!! callback is not connected - abort() ignored')
+
+    def notify_start(self):
+        self._current_progress_data = None
+
+
+class ProgressListener(_AbstractProgressListener):
+    '''  The base class for progress listeners.
+    '''
+
+    def __init__(self, clock_arg=ProgressClock.All, absdiff=None, reldiff=None):
+        super().__init__()
+        clock = ProgressClock.parse(clock_arg)
+        self._clock = clock
+        self._absdiff = absdiff if absdiff is not None else default_absdiff
+        self._reldiff = reldiff if reldiff is not None else default_reldiff
+        self._filter = make_clock_filter(clock, absdiff, reldiff)
 
     @property
     def clock(self):
@@ -184,20 +212,8 @@ class ProgressListener(object):
         """
         return self._current_progress_data
 
-    def _set_current_progress_data(self, pdata):
-        # INTERNAL
-        self._current_progress_data = pdata
-
     def accept(self, pdata):
         return self._filter.accept(pdata)
-
-    def _disconnect(self):
-        # INTERNAL
-        self._cb = None
-
-    def _connect_cb(self, cb):
-        # INTERNAL
-        self._cb = cb
 
     def requires_solution(self):
         return False
@@ -222,7 +238,7 @@ class ProgressListener(object):
         internal data which can be modified during solve.
         Always call the superclass `notify_start` before adding specific code in a sub-class.
         """
-        self._current_progress_data = None
+        super().notify_start()
         self._filter.reset()
 
     def notify_jobid(self, jobid):
@@ -257,11 +273,7 @@ class ProgressListener(object):
             no effect.
 
         '''
-        ccb = self._cb
-        if ccb is not None:
-            ccb.abort()
-        else:
-            print('!!! callback is not connected - abort() ignored')
+        super().abort()
 
 
 # noinspection PyUnusedLocal,PyMethodMayBeStatic
@@ -655,4 +667,3 @@ class KpiPrinter(KpiListener):
                 k_format = kpi_str_format
             kps = k_format.format(max_kpi_name_len, kn, kv, itcnt)
             print(kps)
-

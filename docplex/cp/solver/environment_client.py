@@ -74,8 +74,8 @@ class EnvSolverListener(CpoSolverListener):
 
         # Check if calling environment is DODS (Decision Optimization for Data Science)
         if self.env.is_dods():
-            # Force solve() method to proceed with start()/next()
-            solver.context.solver.solve_with_start_next = True
+            # Force solve() method to proceed with search_next sequence
+            solver.context.solver.solve_with_search_next = True
         # Check if debug mode is required
         if self.env.is_debug_mode():
             # Force more debug information
@@ -93,9 +93,9 @@ class EnvSolverListener(CpoSolverListener):
             # Build solve details from model
             mstats = solver.get_model().get_statistics()
             sdetails = {}
-            sdetails["MODEL_DETAIL_INTEGER_VARS"] = mstats.nb_integer_var
-            sdetails["MODEL_DETAIL_INTERVAL_VARS"] = mstats.nb_interval_var
-            sdetails["MODEL_DETAIL_TYPE"] = "CPO CP" if mstats.nb_interval_var == 0 else "CPO Scheduling"
+            sdetails["MODEL_DETAIL_INTEGER_VARS"] = mstats.nb_integer_vars
+            sdetails["MODEL_DETAIL_INTERVAL_VARS"] = mstats.nb_interval_vars
+            sdetails["MODEL_DETAIL_TYPE"] = "CPO CP" if mstats.nb_interval_vars == 0 else "CPO Scheduling"
 
             # Set ordered list of KPIs in solve details
             kpis = solver.get_model().get_kpis()

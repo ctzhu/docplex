@@ -47,6 +47,7 @@ from docplex.cp.config import context
 
 import threading
 import warnings
+from types import GeneratorType
 
 
 #==============================================================================
@@ -185,6 +186,15 @@ class CpoExpr(object):
             True if this expression has a name, False otherwise.
         """
         return self.name is not None
+
+
+    def get_type(self):
+        """ Get the type of this expression.
+
+        Returns:
+            Expression type
+        """
+        return self.type
 
 
     def is_type(self, xtyp):
@@ -903,9 +913,9 @@ class CpoFloatVar(CpoVariable):
         return super(CpoFloatVar, self).equals(other) and (self.min == other.min) and (self.max == self.max)
 
 
-###############################################################################
-## Scheduling expressions
-###############################################################################
+#==============================================================================
+# Scheduling expressions
+#==============================================================================
 
 INTERVAL_MAX = (INT_MAX // 2) - 1
 """ Maximum interval variable range value """
@@ -1167,7 +1177,7 @@ class CpoIntervalVar(CpoVariable):
             granularity: Scale of the intensity function (integer).
         """
         assert (granularity is None) or (is_int(granularity) and (granularity >= 0)), "Argument 'granularity' should be None or positive integer"
-        self.granularity = granularity 
+        self.granularity = granularity
 
     def get_granularity(self):
         """ Get the scale of the intensity function.
@@ -1209,7 +1219,7 @@ class CpoSequenceVar(CpoVariable):
     """
     __slots__ = ('types',  # Variable types
                 )
-    
+
     def __init__(self, vars, types=None, name=None):
         """ Creates a new sequence variable.
 
@@ -1249,7 +1259,7 @@ class CpoSequenceVar(CpoVariable):
             Array of interval variables that are in the sequence.
         """
         return self.children
-    
+
     def get_vars(self):
         """ Gets the array of variables in this sequence variable.
 
@@ -1257,7 +1267,7 @@ class CpoSequenceVar(CpoVariable):
             Array of interval variables
         """
         return self.children
-    
+
     def get_types(self):
         """ Gets the array of types.
 
@@ -1462,9 +1472,9 @@ class CpoStateFunction(CpoVariable):
 
 
 
-###############################################################################
-## Factory Functions
-###############################################################################
+#==============================================================================
+# Factory Functions
+#==============================================================================
 
 def integer_var(min=None, max=None, name=None, domain=None):
     """ Creates an integer variable.
@@ -1951,9 +1961,9 @@ def state_function(trmtx=None, name=None):
     return CpoStateFunction(trmtx, name)
 
 
-###############################################################################
-##  Public Functions
-###############################################################################
+#==============================================================================
+#  Public Functions
+#==============================================================================
 
 def is_cpo_expr(expr, type=None):
     """ Check if an expression is a CPO model expression
@@ -2113,7 +2123,7 @@ def _domain_min(d):
     Returns:
         Domain lower bound
     """
-    if is_array(d):
+    if isinstance(d, (tuple, list)):
         v = d[0]
         return v[0] if isinstance(v, tuple) else v
     return d
@@ -2127,7 +2137,7 @@ def _domain_max(d):
     Returns:
         Domain upper bound
     """
-    if is_array(d):
+    if isinstance(d, (tuple, list)):
         v = d[-1]
         return v[-1] if isinstance(v, tuple) else v
     return d
@@ -2141,7 +2151,7 @@ def _domain_iterator(d):
     Returns:
         Domain iterator
     """
-    if isinstance(d, (list, tuple)):
+    if isinstance(d, (tuple, list)):
         for x in d:
             if isinstance(x, (list, tuple)):
                 min, max = x
@@ -2165,7 +2175,7 @@ def _domain_contains(d, val):
     Returns:
         True if value is in the domain, False otherwise
     """
-    if isinstance(d, (list, tuple)):
+    if isinstance(d, (tuple, list)):
         for x in d:
             if isinstance(x, (list, tuple)):
                 min, max = x
@@ -2176,40 +2186,157 @@ def _domain_contains(d, val):
         return False
     return d == val
 
+#-----------------------------------------------------------------------------
+# CPO expressions cache
+#-----------------------------------------------------------------------------
 
-# Cache of CPO expressions corresponding to Python values
 # This cache is used to retrieve the CPO expression that corresponds to a Python expression
 # that is used multiple times in a model.
 # This allows to:
 #  - speed-up conversion as expression type has not to be recompute again
 #  - reduce CPO file length as common expressions are easily identified.
-_CACHE_CONTEXT = context.model.cache
-_CPO_VALUES_FROM_PYTHON = ObjectCache(_CACHE_CONTEXT.size)
-_CACHE_ACTIVE = _CACHE_CONTEXT.active
-
-# Lock to protect the map
-_CPO_VALUES_FROM_PYTHON_LOCK = threading.Lock()
-
 
 class _CacheKeyTuple(tuple):
     """ Tuple that is used as a key of the expression cache """
+    def __init__(self, tpl):
+        super(_CacheKeyTuple, self).__init__()
+        # Compute hashcode
+        try:
+            self.hash = super(_CacheKeyTuple, self).__hash__()
+            self.base_hash_ok = True
+        except TypeError:
+            # Tuple contains an unhashable element, compute hash from element ids
+            hash = 1
+            for e in self:
+                hash = hash * 31 + id(e)
+            self.hash = hash
+            self.base_hash_ok = False
     def __eq__(self, other):
+        if self.base_hash_ok:
+            return super(_CacheKeyTuple, self).__eq__(other)
         return isinstance(other, tuple) and len(other) == len(self) and all(x1 is x2 for x1, x2 in zip(self, other))
     def __hash__(self):
-        return super(_CacheKeyTuple, self).__hash__()
+        return self.hash
 
 
-def _convert_to_tuple_if_possible(val):
-    try:
-        return tuple(val)
-    except TypeError:
-        return val
+def _is_same_python_expr(expr1, expr2):
+    """ Check if two python expressions are identical """
+    return expr1 == expr2
+
+
+class _ModelExpressionsCache(object):
+    """ Limited size object cache for CPO expressions.
+    This cache is limited in size. This means that, if the max size is reached, adding a new
+    object removes the oldest.
+
+    The key of the object cache dictionary is a either tuple (type, expr) or the id of the source Python object.
+    The first tuple value 'type' is a string identifying the type of object, and 'expr' is the standardized value
+    of the python expression, as given by the 'cache key builder' function.
+
+    The object cache dictionary also reference expressions using source python object id, which is used for an initial
+    search without normalizing the python value. If id is identical, the
+
+    The value of the object cache dictionary is a tuple (kval, cexpr, pexpr) where 'kval' is the normalized
+    representation of the python object, 'pexpr' is the original python expression
+    (to preserve it from being garbaged), and 'cexpr' is the corresponding CPO expression.
+    """
+    __slots__ = ('obj_dict',          # Dictionary of objects
+                 'key_list',          # Ordered list of objects keys in the cache
+                 'max_size',          # Max cache size
+                 'lock',              # Lock to protect the cache
+                 'nb_found_by_id',    # Number of times object is found by id
+                 'nb_found_by_value', # Number of times object is found by value
+                 'nb_create_new',     # Number of times a new object is created
+                 )
+
+    def __init__(self, maxsize):
+        self.obj_dict = {}
+        self.max_size = maxsize
+        self.key_list = deque()
+        self.lock = threading.Lock()
+        self.nb_found_by_id = 0
+        self.nb_found_by_value = 0
+        self.nb_create_new = 0
+
+    def get_or_create(self, tname, pexpr, kbldr, xbldr):
+        """ Get a value from the cache
+
+        Args:
+            tname:  Object type identifier (string)
+            pexpr:  Python expression
+            kbldr:  Cache key builder
+            xbldr:  CPO model expression builder
+        Returns:
+            Value corresponding to the pexpr
+        """
+        # Build cache value key (needed to check with previous value in case it has been changed)
+        try:
+            kval = kbldr(pexpr)
+        except TypeError:
+           raise CpoException("Impossible to build a CP Optimizer expression from value '{}' of type '{}'".format(to_string(pexpr), type(pexpr)))
+        # Search value in cache
+        with self.lock:
+            # First search from source expression id
+            pid = id(pexpr)
+            cval = self.obj_dict.get(pid)
+            if cval is not None:
+                # Verify if key values are identical
+                if _is_same_python_expr(cval[0], kval):
+                    self.nb_found_by_id += 1
+                    return cval[1]
+            # Check if in the cache
+            ckey = (tname, kval)
+            cval = self.obj_dict.get(ckey)
+            if cval is not None:
+                self.nb_found_by_value += 1
+                return cval[1]
+            # Build new model expression
+            cexpr = xbldr(kval)
+            # Remove older object if max size is reached
+            if len(self.key_list) >= self.max_size:
+                kl = self.key_list.popleft()
+                self.obj_dict.pop(kl[0])  # Remove python object id
+                self.obj_dict.pop(kl[1])  # Remove cache expression key
+            # Add new expression in the cache
+            cpval = (kval, cexpr, pexpr)
+            self.obj_dict[pid] = cpval
+            self.obj_dict[ckey] = cpval
+            self.key_list.append((pid, ckey))
+            self.nb_create_new += 1
+        return cexpr
+
+    def size(self):
+        """ Get the current number of expressions in the cache """
+        return len(self.key_list)
+
+    def clear(self):
+        """ Clear all dictionary content """
+        with self.lock:
+            self.obj_dict.clear()
+            self.key_list.clear()
+            self.nb_found_by_id = 0
+            self.nb_found_by_value = 0
+            self.nb_create_new = 0
+
+    def get_stats(self):
+        """ Get the cache statistics as a tuple (nb_get_or_create, nb_found_by_id, nb_found_by_value, nb_create_new) """
+        return (self.nb_found_by_id, self.nb_found_by_value, self.nb_create_new)
+
+    def __len__(self):
+        """ Returns the number of elements in this dictionary """
+        return len(self.obj_dict)
+
+
+# Cache of CPO expressions corresponding to Python values
+_CACHE_CONTEXT = context.model.cache
+_CPO_VALUES_FROM_PYTHON = _ModelExpressionsCache(_CACHE_CONTEXT.size)
+_CACHE_ACTIVE = _CACHE_CONTEXT.active
 
 
 def build_cpo_expr(val):
-    """ Builds an expression from a given Python value.
+    """ Builds a model expression from a given Python value.
 
-    This method uses a cache to return the same CpoExpr for the same constant.
+    If active, this method uses a cache to return the same CpoExpr for the same value.
 
     Args:
         val: Value to convert (possibly already an expression).
@@ -2219,51 +2346,62 @@ def build_cpo_expr(val):
         CpoException if conversion is not possible.
     """
     # Check if already a CPO expression
-    vtyp = type(val)
-    if issubclass(vtyp, CpoExpr):
+    if isinstance(val, CpoExpr):
         return val
 
     #  Check atoms (not cached)
+    vtyp = type(val)
     ctyp = _PYTHON_TO_CPO_TYPE.get(vtyp)
     if ctyp:
         return CpoValue(val, ctyp)
 
     # Check numpy scalars (special case when called from overloaded operator)
-    if vtyp is NUMPY_NDARRAY and not val.shape:
-        return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type))
+    #if vtyp is NUMPY_NDARRAY and not val.shape:
+    if vtyp is NUMPY_NDARRAY:
+        return CpoValue(val, _PYTHON_TO_CPO_TYPE.get(val.dtype.type).parent_array_type)
 
-    # Value is any type of array. Force it as a tuple
-    try:
-        val = _CacheKeyTuple(val)
-    except TypeError:
-       raise CpoException("Impossible to build a CP Optimizer expression with value '{}' of type '{}'".format(to_string(val), type(val)))
+    # Create an array
+    return build_cpo_expr_array(val)
+
+
+def build_cpo_expr_array(val):
+    """ Builds a mode larray expression from a Python value.
+
+    If active, this method uses the value cache to return the same CpoExpr for the same value.
+
+    Args:
+        val: Value to convert. Iterator or iterators of integers.
+    Returns:
+        Model array expression, not editable.
+    Raises:
+        Exception if conversion is not possible.
+    """
+    def normalize_value(val):
+        assert not is_string(val), "Impossible to build an array expression from a string"
+        assert not isinstance(val, dict), "Impossible to build an array expression from a dictionary. Select values() or keys()."
+        try:
+            return _CacheKeyTuple(val)
+        except TypeError:
+           raise CpoException("Impossible to build an array expression from value '{}' of type '{}'".format(to_string(val), type(val)))
+
+
+    # Check if already a CPO expression
+    if isinstance(val, CpoExpr):
+        return val
 
     # Check if already in the cache
     if _CACHE_ACTIVE:
-        with _CPO_VALUES_FROM_PYTHON_LOCK:
-            try:
-                cpval = _CPO_VALUES_FROM_PYTHON.get(val)
-            except TypeError:
-                # Convert to tuple every member of the tuple
-                val = _CacheKeyTuple(_convert_to_tuple_if_possible(x) for x in val)
-                try:
-                    cpval = _CPO_VALUES_FROM_PYTHON.get(val)
-                except TypeError:
-                    raise CpoException("Impossible to build a CP Optimizer expression with value '{}' of type '{}'".format(to_string(val), type(val)))
-            if cpval is None:
-                cpval = _create_cpo_array_expr(val)
-                _CPO_VALUES_FROM_PYTHON.set(val, cpval)
-
+        cpval = _CPO_VALUES_FROM_PYTHON.get_or_create('array', val, normalize_value, _create_cpo_array_expr)
     else:
-        cpval = _create_cpo_array_expr(val)
+        cpval = _create_cpo_array_expr(normalize_value(val))
 
     return cpval
 
 
 def build_cpo_tupleset(val):
-    """ Builds a TupleSet expression from a Python value.
+    """ Builds a TupleSet model expression from a Python value.
 
-    This method uses the value cache to return the same CpoExpr for the same value.
+    If active, this method uses the value cache to return the same CpoExpr for the same value.
 
     Args:
         val: Value to convert. Iterator or iterators of integers, or existing TupleSet expression.
@@ -2272,41 +2410,32 @@ def build_cpo_tupleset(val):
     Raises:
         Exception if conversion is not possible.
     """
+    def normalize_value(val):
+        assert not is_string(val), "Impossible to build a tuple set expression from a string"
+        assert not isinstance(val, dict), "Impossible to build a tuple set expression from a dictionary. Select values() or keys()."
+        try:
+            return tuple(tuple(x) for x in val)
+        except TypeError:
+           raise CpoException("Impossible to build a tuple set from value '{}' of type '{}'".format(to_string(val), type(val)))
+
+
     # Check if already a TupleSet expression
     if isinstance(val, CpoExpr) and val.is_type(Type_TupleSet):
         return val
 
-    # Create result set
-    try:
-        tset = tuple(tuple(x) for x in val)
-    except TypeError:
-        assert False, "Argument should be an iterable of iterables of integers."
-
     # Check if already in the cache
     if _CACHE_ACTIVE:
-        with _CPO_VALUES_FROM_PYTHON_LOCK:
-            key = ('tupleset', tset)
-            cpval = _CPO_VALUES_FROM_PYTHON.get(key)
-            if cpval is None:
-                # Verify new tuple set
-                if tset:
-                    #assert len(tset) > 0, "Tuple set should not be empty"
-                    size = len(tset[0])
-                    assert all(len(t) == size for t in tset), "All tuples in 'tset' should have the same length"
-                    assert all(all(is_int(v) for v in r) for r in tset), "All tupleset values should be integer"
-                # Put tuple set in cache
-                cpval = CpoValue(tset, Type_TupleSet)
-                _CPO_VALUES_FROM_PYTHON.set(key, cpval)
+        cpval = _CPO_VALUES_FROM_PYTHON.get_or_create('tupleset', val, normalize_value, _create_cpo_tuple_set)
     else:
-        cpval = CpoValue(tset, Type_TupleSet)
+        cpval = _create_cpo_tuple_set(normalize_value(val))
 
     return cpval
 
 
 def build_cpo_transition_matrix(val):
-    """ Builds a TransitionMatrix expression from a Python value.
+    """ Builds a TransitionMatrix model expression from a Python value.
 
-    This method uses the value cache to return the same CpoExpr for the same value.
+    If active, this method uses the value cache to return the same CpoExpr for the same value.
 
     Args:
         val: Value to convert. Iterator or iterators of integers, or existing TransitionMatrix expression.
@@ -2315,32 +2444,23 @@ def build_cpo_transition_matrix(val):
     Raises:
         Exception if conversion is not possible.
     """
+    def normalize_value(val):
+        assert not is_string(val), "Impossible to build a transition matrix expression from a string"
+        assert not isinstance(val, dict), "Impossible to build a transition matrix expression from a dictionary. Select values() or keys()."
+        try:
+            return tuple(tuple(x) for x in val)
+        except TypeError:
+           raise CpoException("Impossible to build a transition matrix from value '{}' of type '{}'".format(to_string(val), type(val)))
+
     # Check if already a TransitionMatrix expression
     if isinstance(val, CpoExpr) and val.is_type(Type_TransitionMatrix):
         return val
 
-    # Create internal tuple
-    try:
-        trmx = tuple(tuple(x) for x in val)
-    except TypeError:
-        assert False, "Argument should be an iterable of iterables of integers."
-
     # Check if already in the cache
     if _CACHE_ACTIVE:
-        with _CPO_VALUES_FROM_PYTHON_LOCK:
-            key = ('matrix', trmx)
-            cpval = _CPO_VALUES_FROM_PYTHON.get(key)
-            if cpval is None:
-                # Verify matrix
-                size = len(trmx)
-                assert size > 0, "Transition matrix should not be empty"
-                assert all(len(t) == size for t in trmx), "All matrix lines should have the same length " + str(size)
-                assert all(all(is_int(v) and v >= 0 for v in r) for r in trmx), "All matrix values should be positive integer"
-                # Build matrix and put it in cache
-                cpval = CpoTransitionMatrix(values=trmx)
-                _CPO_VALUES_FROM_PYTHON.set(key, cpval)
+        cpval = _CPO_VALUES_FROM_PYTHON.get_or_create('matrix', val, normalize_value, _create_cpo_transition_matrix)
     else:
-        cpval = CpoTransitionMatrix(values=trmx)
+        cpval = _create_cpo_transition_matrix(normalize_value(val))
 
     return cpval
 
@@ -2375,79 +2495,100 @@ def compare_expressions(x1, x2):
 ###############################################################################
 
 def _create_cpo_array_expr(val):
-    """ Create a new CP expression from a given array Python value
+    """ Create a new CP array expression from a given array Python value
 
     Args:
-        val: Origin value, as a _CacheKeyTuple(val)
+        val: Origin value, as a tuple or _CacheKeyTuple
     Returns:
         New expression
-    Raises:
-        CpoException if it is not possible.
     """
     # Determine type
     typ = _get_cpo_array_type(val)
     if typ is None:
-        raise CpoException("Impossible to build a CP Optimizer expression with value '" + to_string(val) + "'")
+        raise CpoException("Impossible to build a CP Optimizer expression with value '{}'".format(val))
 
     # Convert array elements if required
     if typ.is_array_of_expr:
-        return CpoValue(tuple(build_cpo_expr(v) for v in val), typ)
+        # Array of expressions
+        val = tuple(build_cpo_expr(v) for v in val)
+    elif typ is Type_IntArray:
+        # Convert all elements as simple integers
+        val = tuple(x.value if isinstance(x, CpoValue) else x for x in val)
 
-    # If int array, assure all elements are ints
-    if typ is Type_IntArray:
-        val = [x.value if type(x) is CpoValue else x for x in val]
-
-    # Default
+    # Return expression
     return CpoValue(val, typ)
+
+
+def _create_cpo_tuple_set(tset):
+    """ Create a new CP tuple set expression from a given Python tuple of tuples
+
+    Args:
+        tset: Origin value, as a tuple of tuples
+    Returns:
+        New expression
+    """
+    # Verify new tuple set
+    if tset:
+        #assert len(tset) > 0, "Tuple set should not be empty"
+        size = len(tset[0])
+        assert all(len(t) == size for t in tset), "All tuples in 'tset' should have the same length"
+        assert all(all(is_int(v) for v in r) for r in tset), "All tupleset values should be integer"
+
+    # Create result expression
+    return CpoValue(tset, Type_TupleSet)
+
+
+def _create_cpo_transition_matrix(trmx):
+    """ Create a new CP transition matrix expression from a given Python tuple of tuples
+
+    Args:
+        tset: Origin value, as a tuple of tuples
+    Returns:
+        New expression
+    """
+    # Verify value
+    size = len(trmx)
+    assert size > 0, "Transition matrix should not be empty"
+    assert all(len(t) == size for t in trmx), "All matrix lines should have the same length " + str(size)
+    assert all(all(is_int(v) and v >= 0 for v in r) for r in trmx), "All matrix values should be positive integer"
+
+    # Create result expression
+    return CpoTransitionMatrix(values=trmx)
 
 
 def _get_cpo_array_type(val):
     """ Determine the CPO type of a given Python array value
     Args:
-        val: Python value
+        val: Python value (list or tuple)
     Returns:
         Corresponding CPO Type, None if none
     """
     # Check empty Array
-    if len(val) == 0:
+    if not val:
         return Type_IntArray
 
     # Get the most common type for all array elements
     cet = None
     for v in val:
-        # Determine type of element
         nt = _get_cpo_type(v)
         if nt is None:
             return None
         # Combine with global type
-        ncet = nt if cet is None else cet.get_common_type(nt)
-        if ncet is None:
-            # Check special case of couple of int mixed with ints
-            if cet is Type_Int:
-                if (nt is Type_IntArray) and _is_cpo_int_interval(v):
-                    ncet = Type_Int
-                else:
-                    return None
-            elif cet is Type_IntArray:
-                if nt is Type_Int:
-                    ncet = Type_Int
-                else:
-                    return None
-            else:
-               return None
-        cet = ncet
+        cet = nt if cet is None else cet.get_common_type(nt)
+        if cet is None:
+            return None
 
-    # Determine array type for result element type
+    # Determine special array cases if all intervals
+    if cet is Type_IntInterval:
+        return Type_IntArray
     if cet is Type_IntArray:
-        if all(_is_cpo_int_interval(v) for v in val):
-            return Type_IntArray
-        else:
-            return Type_TupleSet
+        return Type_TupleSet
+
     return cet.parent_array_type
 
 
 def _get_cpo_type(val):
-    """ Determine the CPO type of a given Python value
+    """ Determine the CPO type for a given Python value
     Args:
         val: Python value
     Returns:
@@ -2467,7 +2608,9 @@ def _get_cpo_type(val):
         return _PYTHON_TO_CPO_TYPE.get(val.dtype.type)
 
     # Check array
-    if is_array(val):
+    if isinstance(val, (tuple, list)):
+        if _is_cpo_int_interval(val):
+            return Type_IntInterval
         return _get_cpo_array_type(val)
 
     return None
@@ -2476,8 +2619,7 @@ def _get_cpo_type(val):
 def _clear_value_cache():
     """ Clear the cache of CPO values
     """
-    with _CPO_VALUES_FROM_PYTHON_LOCK:
-        _CPO_VALUES_FROM_PYTHON.clear()
+    _CPO_VALUES_FROM_PYTHON.clear()
 
 
 def _get_cpo_type_str(val):
@@ -2554,7 +2696,7 @@ def _is_cpo_int_interval(val):
     Args:
         val:  Value to check
     Returns:
-        True if value is a tuple representing an interval of integers
+        True if value is a tuple of 2 values representing an interval of integers
     """
     return isinstance(val, tuple) and (len(val) == 2) and _is_cpo_int(val[0]) and _is_cpo_int(val[1]) and (val[1] >= val[0])
 
@@ -2645,7 +2787,7 @@ def _build_int_var_domain(min, max, domain):
         else:
             if max is None:
                 # Test that first argument is directly a domain (ascending compatibility)
-                if is_array(min):
+                if isinstance(min, (tuple, list)):
                     domain = min
                     min = None
                 else:
@@ -2851,8 +2993,8 @@ def _is_equal_values(v1, v2):
     # Check floats
     if is_float(v1):
         return is_float(v2) and (abs(v1 - v2) <= _FLOATING_POINT_PRECISION * max(abs(v1), abs(v2)))
-    if is_array(v1):
-        return is_array(v2) and (len(v1) == len(v2)) and all(_is_equal_values(x1, x2) for x1, x2 in zip(v1, v2))
+    if isinstance(v1, (tuple, list)):
+        return isinstance(v2, (tuple, list)) and (len(v1) == len(v2)) and all(_is_equal_values(x1, x2) for x1, x2 in zip(v1, v2))
     if isinstance(v1, dict):
         return isinstance(v2, dict) and (len(v1) == len(v2)) and all(_is_equal_values(v1[k], v2[k]) for k in v1)
     # Check finally basic equality

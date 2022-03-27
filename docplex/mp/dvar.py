@@ -1,14 +1,14 @@
 from six import PY3
 from docplex.mp.constants import CplexScope
 
-from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin, _ValuableMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.utils import is_number, is_quad_expr
 
 from docplex.mp.sttck import StaticTypeChecker
 
 
-class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
+class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin, _ValuableMixin):
     """Var()
 
     This class models decision variables.
@@ -34,7 +34,6 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
             self._ub = ub
         else:
             self._ub = vartype._compute_ub(ub, model)
-
 
     @property
     def cplex_scope(self):
@@ -226,15 +225,15 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
                 if the model has not been solved succesfully.
 
         """
-        self._check_model_has_solution()
-        return self._get_solution_value()
+        self.model._check_has_solution()
+        return self._raw_solution_value()
 
     @property
-    def unchecked_solution_value(self):
-        # INTERNAL
-        return self._get_solution_value()
+    def sv(self):
+        """ Same as `solution_value` but shorter"""
+        return self.solution_value
 
-    def _get_solution_value(self, s=None):
+    def _raw_solution_value(self, s=None):
         sol = s or self.model._get_solution()
         return sol._get_var_value(self)
 
@@ -357,7 +356,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         return self._make_linear_expr()
 
     def _make_linear_expr(self, constant=0, safe=True):
-        return self.lfactory.linear_expr(self, constant, name=None, safe=safe, transient=True)
+        return self.lfactory.linear_expr(self, constant, safe=safe, transient=True)
 
     def __radd__(self, e):
         return self.plus(e)
@@ -486,13 +485,15 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
     def to_bool(self, precision=1e-6):
         """ Converts a variable value to True or False.
 
-        This is only possible for discrete variables and assumes there is a solution.
+        Assuming the variable is discrete (integer or binary), returns True if the variable value is
+        set a non-zero integer, taking into account precision.
+        For binary variables, returns TRue if the variable value equals 1, taking into account precision.
 
         Raises:
             DOCplexException
                 if the model has not been solved successfully.
             DOCplexException
-                if the variable is not discrete.
+                if the variable is not discrete
 
         Returns:
             Boolean: True if the variable value is nonzero, else False.
@@ -510,11 +511,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
         """
         return self.to_string()
 
-    def to_string(self):
-        return self.lp_name
-
-    def print_name(self):
-        # INTERNAL
+    def to_string(self, use_space=False):
         return self.lp_name
 
     @property
@@ -530,7 +527,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin):
 
     @property
     def cplex_typecode(self):
-        return  self._vartype.cplex_typecode
+        return self._vartype.cplex_typecode
 
     def _must_print_lb(self):
         return self.cplex_typecode not in 'SN' and self.lb == self._vartype.default_lb

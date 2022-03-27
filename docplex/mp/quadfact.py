@@ -15,6 +15,7 @@ from docplex.mp.dvar import is_var
 from docplex.mp.operand import LinearOperand
 from docplex.mp.linear import MonomialExpr, ZeroExpr, AbstractLinearExpr
 from docplex.mp.constr import QuadraticConstraint
+from docplex.mp.sttck import StaticTypeChecker
 
 
 class IQuadFactory(_AbstractModelFactory):
@@ -132,6 +133,9 @@ class QuadFactory(IQuadFactory):
         right_expr = self._to_expr(rhs, context="QuadraticConstraint.right_expr")
         self._model._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = QuadraticConstraint(self._model, left_expr, ct_sense, right_expr, name)
+        mdl = self._model
+        # StaticTypeChecker.typecheck_quadexpr_is_separable(mdl, left_expr)
+        # StaticTypeChecker.typecheck_quadexpr_is_separable(mdl, right_expr)
         left_expr.notify_used(ct)
         right_expr.notify_used(ct)
         return ct

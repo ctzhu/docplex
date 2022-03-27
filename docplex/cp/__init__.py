@@ -16,6 +16,12 @@ import warnings
 import platform
 import sys
 
+# Import cplex package to properly set path to CPXCHECKLIC
+try:
+    import cplex
+except ImportError:
+    pass
+
 
 def check_platform_system():
     """ Check if platform system is compatible with docplex.cp

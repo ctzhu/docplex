@@ -320,52 +320,6 @@ def _is_cpo_array(val):
     return is_array(val) and builtin_any(isinstance(x, CpoExpr) for x in val)
 
 
-# Map of type names
-TYPE_NAMES = {Type_Bool:                  "boolean",
-              Type_BoolExpr:              "boolean expression",
-              Type_BoolExprArray:         "array of boolean expression",
-              Type_BoolInt:               "boolean integer",
-              Type_Constraint:            "constraint expression",
-              Type_CumulAtom:             "cumul atom",
-              Type_CumulAtomArray:        "array of cumul atoms",
-              Type_CumulExpr:             "cumul expression",
-              Type_CumulFunction:         "cumul function",
-              Type_Float:                 "float value",
-              Type_FloatArray:            "array of floats",
-              Type_FloatExpr:             "float expression",
-              Type_FloatExprArray:        "array of float expression",
-              Type_FloatVar:              "float variable",
-              Type_Int:                   "integer",
-              Type_IntArray:              "array of integers",
-              Type_IntExpr:               "integer expression",
-              Type_IntExprArray:          "array of integer expression",
-              Type_IntValueChooser:       "chooser of integer value",
-              Type_IntValueEval:          "evaluator of integer value",
-              Type_IntValueSelector:      "selector of integer value",
-              Type_IntValueSelectorArray: "array of integer value selectors",
-              Type_IntVar:                "integer variable",
-              Type_IntVarArray:           "array of integer variables",
-              Type_IntVarChooser:         "chooser of integer variable",
-              Type_IntVarEval:            "evaluator of integer variable",
-              Type_IntVarSelector:        "selector of integer variable",
-              Type_IntVarSelectorArray:   "array of interval variable selectors",
-              Type_IntervalArray:         "array of intervals",
-              Type_IntervalVar:           "interval variable",
-              Type_IntervalVarArray:      "array of interval variables",
-              Type_Objective:             "objective function",
-              Type_PositiveInt:           "positive integer",
-              Type_SearchPhase:           "search phase",
-              Type_SegmentedFunction:     "segmented function",
-              Type_SequenceVar:           "sequence variable",
-              Type_SequenceVarArray:      "array of sequence variables",
-              Type_StateFunction:         "state function",
-              Type_StepFunction:          "step function",
-              Type_TimeInt:               "integer representing a time",
-              Type_TransitionMatrix:      "transition matrix",
-              Type_TupleSet:              "tuple set",
-             }
-
-
 def _convert_arg(val, name, type, errmsg=None):
     """ Convert a Python value in CPO and check its value
     Args:
@@ -375,7 +329,7 @@ def _convert_arg(val, name, type, errmsg=None):
         errmsg: Optional error message
     """
     val = build_cpo_expr(val)
-    assert val.is_kind_of(type), errmsg if errmsg is not None else "Argument '{}' should be a {}".format(name, TYPE_NAMES[type])
+    assert val.is_kind_of(type), errmsg if errmsg is not None else "Argument '{}' should be a {}".format(name, type.get_public_name())
     return val
 
 
@@ -386,7 +340,7 @@ def _convert_arg_bool_int(val, name):
         name: Argument name
     """
     if isinstance(val, CpoExpr):
-        assert val.is_kind_of(Type_BoolInt), "Argument '{}' should be a {}".format(name, TYPE_NAMES[Type_BoolInt])
+        assert val.is_kind_of(Type_BoolInt), "Argument '{}' should be a {}".format(name, Type_BoolInt.get_public_name())
         return val
     return CpoValue(1 if val else 0, Type_BoolInt)
 

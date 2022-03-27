@@ -50,7 +50,7 @@ from docplex.cp.expression import CpoVariable, CpoIntVar, CpoFloatVar, CpoInterv
     compare_expressions
 from docplex.cp.parameters import CpoParameters
 import types
-from collections import OrderedDict
+from collections import namedtuple, OrderedDict
 import functools
 
 
@@ -172,6 +172,13 @@ ALL_CONFLICT_STATUSES = (CONFLICT_STATUS_UNKNOWN, CONFLICT_STATUS_TERMINATED_NOR
 ##  Public classes
 ###############################################################################
 
+# Fixed value of an interval variable
+IntervalVarValue = namedtuple('IntervalVarValue', ('start', 'end', 'size'))
+
+# Unfixed value of an interval variable
+IntervalVarPartialValue = namedtuple('IntervalVarPartialValue', ('start', 'end', 'size', 'length'))
+
+
 class CpoVarSolution(object):
     """ This class is a super class of all classes representing a solution to a variable.
     """
@@ -190,10 +197,21 @@ class CpoVarSolution(object):
 
 
     def get_expr(self):
-        """ Gets the expression of the variable.
+        """ Get the variable expression for which this object is a solution.
 
         Returns:
-            Model expression of the variable.
+            Model variable expression.
+        """
+        return self.expr
+
+
+    def get_var(self):
+        """ Get the variable expression for which this object is a solution.
+
+        This method is equivalent to get_expr()
+
+        Returns:
+            Model variable expression.
         """
         return self.expr
 
@@ -313,6 +331,17 @@ class CpoIntVarSolution(CpoVarSolution):
         """
         return _domain_contains(self.value, value)
 
+    @classmethod
+    def _create_from_json(cls, var, json):
+        """ Create a integer variable solution from its JSON description
+        Args:
+            var:   Model variable
+            json:  JSON object representing the integer variable
+        Return:
+            New CpoIntVarSolution corresponding to its JSON description
+        """
+        return CpoIntVarSolution(var, _get_domain(json))
+
 
 class CpoFloatVarSolution(CpoVarSolution):
     # """ This class represents a solution to a float variable.
@@ -363,6 +392,17 @@ class CpoFloatVarSolution(CpoVarSolution):
         """ Convert this expression into a string """
         return str(self.get_name()) + ": " + str(self.get_value())
 
+    @classmethod
+    def _create_from_json(cls, var, json):
+        """ Create a float variable solution from its JSON description
+        Args:
+            var:   Model variable
+            json:  JSON object representing the float variable
+        Return:
+            New CpoFloatVarSolution corresponding to its JSON description
+        """
+        return CpoFloatVarSolution(var, _get_domain(json))
+
 
 class CpoIntervalVarSolution(CpoVarSolution):
     """ This class represents a solution to an interval variable.
@@ -389,7 +429,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
             length:   Value of the length, or tuple representing the length range. Default is None.
                       Not to be used if other values are integers.
         """
-        assert isinstance(expr, CpoIntervalVar), "Expression 'expr' should be a CpoIntervalVar expression"
+        assert (expr is None) or isinstance(expr, CpoIntervalVar), "Expression 'expr' should be a CpoIntervalVar expression"
         super(CpoIntervalVarSolution, self).__init__(expr)
         self.presence = presence
         self.start    = start
@@ -490,9 +530,9 @@ class CpoIntervalVarSolution(CpoVarSolution):
         """
         if self.is_present():
             if self.length is None:
-                return (self.start, self.end, self.size, )
+                return IntervalVarValue(self.start, self.end, self.size)
             else:
-                return (self.start, self.end, self.size, self.length, )
+                return IntervalVarPartialValue(self.start, self.end, self.size, self.length)
         return ()
 
 
@@ -511,7 +551,31 @@ class CpoIntervalVarSolution(CpoVarSolution):
             res.append(")")
         return ''.join(res)
 
-     
+    @classmethod
+    def _create_from_json(cls, var, json):
+        """ Create an interval variable solution from its JSON description
+        Args:
+            var:   Model variable
+            json:  JSON object representing the interval variable
+        Return:
+            New CpoIntervalVarSolution corresponding to its JSON description
+        """
+        if 'start' in json:
+            # Check partially instantiated
+            if 'presence' in json:
+                vsol = CpoIntervalVarSolution(var,  True if json['presence'] == 1 else None,
+                                              _get_domain(json['start']), _get_domain(json['end']), _get_domain(json['size']))
+                dlen = json.get('length')
+                if dlen is not None:
+                    vsol.length = _get_domain(dlen)
+            else:
+                vsol = CpoIntervalVarSolution(var, True, _get_num_value(json['start']), _get_num_value(json['end']), _get_num_value(json['size']))
+        else:
+            vsol = CpoIntervalVarSolution(var, False)
+        return vsol
+
+
+
 class CpoSequenceVarSolution(CpoVarSolution):
     """ This class represents a solution to a sequence variable.
     """
@@ -779,6 +843,15 @@ class CpoModelSolution(object):
         return self.var_solutions_list
 
 
+    def has_var_solutions(self):
+        """ Check if this solution contains variable solutions.
+
+        Returns:
+            True if there is at least one variable solution.
+        """
+        return len(self.var_solutions_list) > 0
+
+
     def get_value(self, expr):
         """ Gets the value of a variable or a KPI.
 
@@ -956,39 +1029,28 @@ class CpoModelSolution(object):
         # Add integer variables
         vars = jsol.get('intVars', ())
         for vname in vars:
-            var = _get_expr_from_map(expr_map, vname)
-            self.add_var_solution(CpoIntVarSolution(var, _get_domain(vars[vname])))
+            vsol = CpoIntVarSolution._create_from_json(_get_expr_from_map(expr_map, vname), vars[vname])
+            self.add_var_solution(vsol)
 
         # Add integer variables
         vars = jsol.get('floatVars', ())
         for vname in vars:
-            var = _get_expr_from_map(expr_map, vname)
-            self.add_var_solution(CpoFloatVarSolution(var, _get_domain(vars[vname])))
+            vsol = CpoFloatVarSolution._create_from_json(_get_expr_from_map(expr_map, vname), vars[vname])
+            self.add_var_solution(vsol)
 
         # Add interval variables
         vars = jsol.get('intervalVars', ())
         for vname in vars:
-            var = _get_expr_from_map(expr_map, vname)
-            v = vars[vname]
-            if 'start' in v:
-                # Check partially instantiated
-                if 'presence' in v:
-                    vsol = CpoIntervalVarSolution(var,  True if v['presence'] == 1 else None,
-                                                  _get_domain(v['start']), _get_domain(v['end']), _get_domain(v['size']))
-                    vsol.length = _get_domain(v['length'])
-                else:
-                    vsol = CpoIntervalVarSolution(var, True, _get_num_value(v['start']), _get_num_value(v['end']), _get_num_value(v['size']))
-            else:
-                vsol = CpoIntervalVarSolution(var, False)
+            vsol = CpoIntervalVarSolution._create_from_json(_get_expr_from_map(expr_map, vname), vars[vname])
             self.add_var_solution(vsol)
 
         # Add sequence variables (MUST be done after single variables)
         vars = jsol.get('sequenceVars', ())
         for vname in vars:
             var = _get_expr_from_map(expr_map, vname)
-            vnlist = [v for v in vars[vname]]
-            ivres = [self.get_var_solution(vn) for vn in vnlist]
-            #ivres = [_get_expr_from_map(expr_map, vn) for vn in vnlist]  Should have been this instead of previous line
+            vnlist = vars[vname]
+            #ivres = [self.get_var_solution(vn) for vn in vnlist]
+            ivres = [self.get_var_solution(_get_expr_from_map(expr_map, vn)) for vn in vnlist]
             self.add_var_solution(CpoSequenceVarSolution(var, ivres))
 
         # Add state functions
@@ -1114,7 +1176,10 @@ class CpoModelSolution(object):
             lvars = [v for v in allvars if v.get_name()]
             lvars = sorted(lvars, key=functools.cmp_to_key(lambda v1, v2: compare_expressions(v1.expr, v2.expr)))
             for v in lvars:
-                out.write(u"   {} = {}\n".format(v.get_name(), v.get_value()))
+                vval = v.get_value()
+                if isinstance(v, CpoSequenceVarSolution):
+                    vval = [v.get_name() for v in vval]
+                out.write(u"   {} = {}\n".format(v.get_name(), vval))
             nbanonym = len(allvars) - len(lvars)
             if nbanonym > 0:
                 out.write(u"   + {} anonymous variable{}\n".format(nbanonym, ("s" if nbanonym > 1 else "")))
@@ -1409,10 +1474,13 @@ class CpoSolveResult(CpoRunResult):
 
 
     def is_solution(self):
-        """ Checks if this descriptor is a valid solution to the problem.
+        """ Checks if this descriptor is a new valid solution to the problem.
 
         A solution is present if the solve status is 'Feasible' or 'Optimal'.
         Optimality of the solution should be tested using method :meth:`is_solution_optimal()`.
+
+        Note that this method may return False even if a solution descriptor is present.
+        This may happens for example at the end of a sequence of search_next()
 
         Returns:
             True if this descriptor is a valid solution to the problem.
@@ -1623,8 +1691,9 @@ class CpoSolveResult(CpoRunResult):
             if nsts in ('NextFalse', 'NextTerminated'):
                 # Only for end of search_next
                 self.fail_status = FAIL_STATUS_SEARCH_COMPLETED
-                self.is_a_solution = (self.solve_status == SOLVE_STATUS_OPTIMAL) \
-                                     and (self.solution.get_objective_values() is not None)
+                # self.is_a_solution = (self.solve_status == SOLVE_STATUS_OPTIMAL) \
+                #                      and (self.solution.get_objective_values() is not None)
+                self.is_a_solution = False
             else:
                 rto = jsol.get('responseTo', None)
                 if rto == 'Propagate':
@@ -1916,14 +1985,16 @@ class CpoRefineConflictResult(CpoRunResult):
         self.write(out)
 
 
-    def write(self, out=None):
+    def write(self, out=None, add_cpo=True):
         """ Write the conflict
 
         If the given output is a string, it is considered as a file name that is opened by this method
         using 'utf-8' encoding.
 
         Args:
-            out (Optional): Target output stream or file name. If not given, default value is sys.stdout.
+            out (Optional):     Target output stream or file name. If not given, default value is sys.stdout.
+            add_cpo (Optional): Add the conflict in CPO file format after the detailed list of conflict elements.
+                                By default, this parameter is set to true.
         """
         # Check file
         if is_string(out):
@@ -1965,7 +2036,7 @@ class CpoRefineConflictResult(CpoRunResult):
 
         # Print cpo format if any
         cpo = self.get_cpo()
-        if cpo:
+        if cpo and add_cpo:
             out.write(u"Conflict in CPO format:\n")
             for line in cpo.splitlines():
                 out.write(u"   " + line + "\n")
@@ -2019,10 +2090,22 @@ class CpoSolverInfos(InfoDict):
     NUMBER_OF_SEQUENCE_VARIABLES = 'NumberOfSequenceVariables'
 
     # Total solve time
+    TOTAL_TIME = 'TotalTime'
+
+    # Total solve time
     SOLVE_TIME = 'SolveTime'
 
+    # Number of branches
+    NUMBER_OF_BRANCHES = 'NumberOfBranches'
+
+    # Number of fails
+    NUMBER_OF_FAILS = 'NumberOfFails'
+
+    # Memory usage
+    MEMORY_USAGE = "MemoryUsage"
+
     def __init__(self):
-        super(InfoDict, self).__init__()
+        super(CpoSolverInfos, self).__init__()
 
     def get_number_of_integer_vars(self):
         """ Gets the number of integer variables in the model.
@@ -2060,13 +2143,49 @@ class CpoSolverInfos(InfoDict):
         return self.get(CpoSolverInfos.NUMBER_OF_CONSTRAINTS, 0)
 
 
-    def get_solve_time(self):
+    def get_total_time(self):
         """ Gets the total solve time.
 
         Returns:
             Total solve time in seconds, -1 if unknown
         """
+        return self.get(CpoSolverInfos.TOTAL_TIME, -1)
+
+
+    def get_solve_time(self):
+        """ Gets the solve time.
+
+        Returns:
+            Solve time in seconds, -1 if unknown
+        """
         return self.get(CpoSolverInfos.SOLVE_TIME, -1)
+
+
+    def get_number_of_branches(self):
+        """ Gets the number of branches.
+
+        Returns:
+            Number of branches.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_BRANCHES, 0)
+
+
+    def get_number_of_fails(self):
+        """ Gets the number of fails.
+
+        Returns:
+            Number of fails.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_FAILS, 0)
+
+
+    def get_memory_usage(self):
+        """ Gets the memory usage.
+
+        Returns:
+            Memory usage in bytes.
+        """
+        return self.get(CpoSolverInfos.MEMORY_USAGE, 0)
 
 
 class CpoProcessInfos(InfoDict):
@@ -2083,6 +2202,9 @@ class CpoProcessInfos(InfoDict):
     This class provides few methods to access the most important information stored in it.
     All information is available using regular dictionary access expression.
     """
+
+    # Version of the solver
+    SOLVER_VERSION = "SolverVersion"
 
     # Name of the agent used to solve the model
     SOLVER_AGENT = "SolverAgent"
@@ -2135,6 +2257,15 @@ class CpoProcessInfos(InfoDict):
 
     def __init__(self):
         super(InfoDict, self).__init__()
+
+
+    def get_solver_version(self):
+        """ Returns the version of the solver.
+
+        Returns:
+            Solver version string, None if unknown
+        """
+        return self.get(CpoProcessInfos.SOLVER_VERSION)
 
 
     def get_model_build_time(self):

@@ -8,8 +8,6 @@ from docplex.mp.utils import is_almost_equal
 from docplex.mp.constants import int_probtype_to_string
 from math import isnan
 
-from six import PY2 as SIX_PY2
-
 
 class SolveDetails(object):
     """
@@ -26,7 +24,7 @@ class SolveDetails(object):
     _NO_GAP = NOT_A_NUM  # value used when no gap is available
     _NO_BEST_BOUND = NOT_A_NUM
 
-    def __init__(self, time=0,
+    def __init__(self, time=0, dettime=0,
                  status_code=-1, status_string=None,
                  problem_type=None,
                  ncolumns=0, nonzeros=0,
@@ -35,6 +33,7 @@ class SolveDetails(object):
                  n_iterations=0,
                  n_nodes_processed=0):
         self._time = max(time, 0)
+        self._dettime = max(dettime, 0)
         self._solve_status_code = status_code
         self._solve_status = status_string or self._unknown_label
         self._problem_type = problem_type or self._unknown_label  # string
@@ -84,6 +83,7 @@ class SolveDetails(object):
 
     @staticmethod
     def to_plain_str(arg_s):
+        from six import PY2 as SIX_PY2
         if SIX_PY2:  # we are in py2: docloud returns unicode.
             try:
                 return arg_s.encode()  # if unicode strings , come from cplex worker
@@ -159,7 +159,7 @@ class SolveDetails(object):
         This property returns the CPLEX status code as a number.
         Possible values for the status code are described in the CPLEX documentation
         at:
-        https://www.ibm.com/support/knowledgecenter/SSSA5P_12.8.0/ilog.odms.cplex.help/refcallablelibrary/macros/Solution_status_codes.html
+        https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/refcallablelibrary/macros/Solution_status_codes.html
 
         :return: an integer number (a CPLEX status code)
 
@@ -206,7 +206,7 @@ class SolveDetails(object):
 
         This string is normally the value returned by the CPLEX callable library method
         CPXXgetstatstring,
-        see https://www.ibm.com/support/knowledgecenter/SSSA5P_12.8.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getstatstring.html
+        see https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/refcallablelibrary/cpxapi/getstatstring.html
 
         Example:
             * Returns "optimal" when the solution has been proven optimal.
@@ -250,6 +250,7 @@ class SolveDetails(object):
 
         Note:
             * This property returns NaN when the problem is not a MIP.
+            * This property returns 1e+20 for multi-objective MIP problems.
             * The gap is returned as a floating-point value, not as a percentage.
         """
         return self._miprelgap
@@ -262,6 +263,7 @@ class SolveDetails(object):
 
         Note:
             * This property returns NaN when the problem is not a MIP.
+            * This property returns 1e+20 for multi-objective MIP problems.
         """
         return self._best_bound
 
@@ -286,6 +288,15 @@ class SolveDetails(object):
 
         """
         return self._n_nodes_processed
+
+    @property
+    def dettime(self):
+        """ This property returns the solve deterministic time in ticks.
+
+        """
+        return self._dettime
+
+    deterministic_time = dettime
 
     def __repr__(self):
         return "docplex.mp.SolveDetails(time={0:g},status={1!r})" \

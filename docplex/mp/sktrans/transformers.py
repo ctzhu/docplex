@@ -4,6 +4,8 @@
 # (c) Copyright IBM Corp. 2017
 # --------------------------------------------------------------------------
 
+# gendoc: ignore
+
 try:
     from sklearn.base import TransformerMixin, BaseEstimator
 except ImportError:
@@ -15,7 +17,9 @@ except ImportError:
     
 from docplex.mp.constants import ObjectiveSense
 from docplex.mp.sktrans.modeler import make_modeler
+from docplex.mp.ds_utils import is_scipy_sparse
 from docplex.mp.utils import *
+from docplex.mp.ds_utils import is_scipy_sparse
 
 try:
     import numpy as np

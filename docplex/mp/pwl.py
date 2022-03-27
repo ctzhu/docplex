@@ -599,7 +599,7 @@ class PwlFunction(ModelingObjectBase):
 
     def copy(self, target_model, _):
         pwl_def_copy = self.pwl_def.deepcopy()
-        return target_model._piecewise(pwl_def_copy, self.get_name())
+        return target_model._piecewise(pwl_def_copy, self.name)
 
     @property
     def pwl_def(self):

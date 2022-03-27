@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2019
+# (c) Copyright IBM Corp. 2015, 2021
 # --------------------------------------------------------------------------
 '''Provides utility functions about the runtime environment.
 
@@ -21,7 +21,7 @@ or by invoking the `docplex.mp.environment` package on your shell command line::
 '''
 try:
     import importlib.util as importlib_util
-except ImportError:
+except ImportError:  # pragma: no cover
     importlib_util = None  # Python 2
 import platform
 import os
@@ -145,7 +145,7 @@ class Environment(object):
         if sys_platform == 'Windows':
             return 'x64_win64'
         elif sys_platform == 'Darwin':
-            return 'x86-64osx'
+            return 'x86-64_osx'
         elif sys_platform == 'Linux':
             if machine == 'x86_64':
                 return 'x86-64_linux'
@@ -168,10 +168,7 @@ class Environment(object):
     @property
     def cplex_version_as_tuple(self):
         cpxv = self._cplex_version
-        if cpxv:
-            return tuple(float(x) for x in cpxv.split('.'))
-        else:
-            return (0,)
+        return self.parse_cplex_version(cpxv, fallback=None)
 
     @property
     def has_matplotlib(self):
@@ -258,7 +255,7 @@ class Environment(object):
                 absolute_name = "cplex%s" % version
                 module_location = os.path.join(location, "cplex", "__init__.py")
                 if not os.path.isfile(module_location):
-                    raise FileNotFoundError("Could not load module from %s" % module_location)
+                    return None
                 if importlib_util:
                     spec = importlib_util.spec_from_file_location(absolute_name,
                                                                   module_location)
@@ -287,7 +284,7 @@ class Environment(object):
 
         if default_location is None:
             try:
-                import cplex  #@UnresolvedImport
+                import cplex   # @UnresolvedImport
                 if logger is not None:
                     logger.info("Found cplex with 'import cplex'")
             except (ImportError, ModuleNotFoundError):
@@ -327,7 +324,7 @@ class Environment(object):
         # detecting CPLEX using default search location
         cplex = self.get_cplex_module(logger=logger)
         self._found_cplex = (cplex is not None)
-        if (self.has_cplex):
+        if self.has_cplex:
             cplex_module_file = cplex.__file__
             if cplex_module_file:
                 self._cplex_location = os.path.dirname(os.path.dirname(cplex_module_file))
@@ -353,7 +350,7 @@ class Environment(object):
                     # lazy call the hook once at first check time.
                     self_numpy_hook()
 
-            except ImportError:
+            except ImportError:  # pragma: no cover
                 self._found_numpy = False
                 self._numpy_version = None
 
@@ -364,7 +361,7 @@ class Environment(object):
             from matplotlib import __version__ as matplotlib_version
             self._found_matplotlib = True
             self._matplotlib_version = matplotlib_version
-        except ImportError:
+        except ImportError:  # pragma: no cover
             self._found_matplotlib = False
 
     def check_pandas(self):
@@ -373,7 +370,7 @@ class Environment(object):
                 import pandas
                 self._found_pandas = True
                 self._pandas_version = pandas.__version__
-            except ImportError:
+            except ImportError:  # pragma: no cover
                 self._found_pandas = False
 
     @staticmethod
@@ -414,7 +411,12 @@ class Environment(object):
 
     @staticmethod
     def closed_env():
-        return Environment(start_auto_configure=False)
+        closed = Environment(start_auto_configure=False)
+        # force matplotlib absent
+        closed._found_matplotlib = False
+        closed._found_numpy = False
+        closed._found_pandas = False
+        return closed
 
     @staticmethod
     def make_new_configured_env():
@@ -427,6 +429,20 @@ class Environment(object):
             Environment._default_env = Environment.make_new_configured_env()
         return Environment._default_env
 
+    @staticmethod
+    def parse_cplex_version(version_text, fallback=None):
+        # parse such strings as: 20.1.0.0 | 2020-11-10 | 9bedb6d68
+        if not version_text:
+            return fallback
+        barpos = version_text.find('|')
+        if barpos > 0:
+            assert barpos >= 2
+            before_bar = barpos-1
+            baseline_version = version_text[:before_bar]
+        else:
+            baseline_version = version_text
+        return tuple(float(x) for x in baseline_version.split('.'))
+
     # for pickling: recreate a fresh environment at the other end of pickle.
     def __reduce__(self):
         return Environment.make_new_configured_env, ()
@@ -434,12 +450,7 @@ class Environment(object):
 
 def get_closed_environment():
     # This instance assumes nothing is found, CPLEX, numpy, etc, to be used for tests
-    env = Environment(start_auto_configure=False)
-    # force matplotlib absent
-    env._found_matplotlib = False
-    env._found_numpy = False
-    env._found_pandas = False
-    return env
+    return Environment.closed_env()
 
 
 if __name__ == '__main__':

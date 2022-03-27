@@ -17,6 +17,7 @@ from docplex.cp.catalog import *
 from docplex.cp.solution import *
 from docplex.cp.model import CpoModel
 import docplex.cp.config as config
+from docplex.cp.blackbox import CpoBlackboxFunction, CpoBlackboxFunctionCall
 import math
 import traceback
 
@@ -29,7 +30,7 @@ import traceback
 MIN_CPO_VERSION_NUMBER = "12.6.0.0"
 
 # Maximum CPO format version number
-MAX_CPO_VERSION_NUMBER = "12.10.0.0"
+MAX_CPO_VERSION_NUMBER = "20.10.0.0"
 
 # Map of all operators. Key is operator, value is list of corresponding operation descriptors
 _ALL_OPERATORS = {}
@@ -101,13 +102,16 @@ class CpoParser(object):
                  'pushtoken',      # Pushed token
                  'fun_handlers',   # Special function handlers
                  'current_loc',    # Current source location
+                 'context',        # Parser configuration context
+                 'auto_blackbox',  # Auto generate blackbox functions for unknown functions
                  )
     
-    def __init__(self, mdl=None):
+    def __init__(self, mdl=None, **kwargs):
         """ Create a new CPO format parser
 
         Args:
-            mdl:  Model to fill, None (default) to create a new one.
+            mdl:       Model to fill, None (default) to create a new one.
+            **kwargs: (Optional) changes to context
         """
         super(CpoParser, self).__init__()
         self.model = mdl if mdl is not None else CpoModel()
@@ -117,6 +121,8 @@ class CpoParser(object):
         self.token = None
         self.pushtoken = None
         self.current_loc = None
+        self.context = config._get_effective_context(**kwargs).parser
+        self.auto_blackbox = self.context.auto_blackbox
 
         # Do not store location information (would store parser instead of real lines)
         self.model.source_loc = False
@@ -170,6 +176,8 @@ class CpoParser(object):
         self.tokenizer.close()
         self.tokenizer = None
 
+        self._final_checkings()
+
         return self.model
 
 
@@ -187,6 +195,9 @@ class CpoParser(object):
         self._read_statement_list()
         self.tokenizer.close()
         self.tokenizer = None
+
+        self._final_checkings()
+
         return self.model
 
 
@@ -437,7 +448,7 @@ class CpoParser(object):
         Return:
             Expression that has been read
         """
-
+        auto_blackbox = self.auto_blackbox
         tok = self.token
         toktyp = tok.type
         ntok = self._next_token()
@@ -467,13 +478,41 @@ class CpoParser(object):
                 fun = self.fun_handlers.get(tokval)
                 if fun:
                     return fun()
-
-                # General function call, retrieve operation descriptor
-                op = _ALL_OPERATIONS.get(tokval)
-                if op is None:
-                    self._raise_exception("Unknown operation '" + str(tok.value) + "'")
+                # General function call, read arguments
                 args = self._read_expression_list_up_to_parent_close()
-                return self._create_operation_expression(op, args)
+                # Retrieve operation descriptor
+                op = _ALL_OPERATIONS.get(tokval)
+                if op is not None:
+                    # Check blackbox evaluation function
+                    if auto_blackbox and (op is Oper_eval):
+                        # Update bbf dimension
+                        assert len(args) == 2
+                        bbfc, vx = args
+                        assert isinstance(bbfc, CpoBlackboxFunctionCall)
+                        assert is_int(vx)
+                        bbfc.blackbox._update_dimension(vx)
+                    # Build operation call
+                    return self._create_operation_expression(op, args)
+                # Function call, build argument expressions
+                argexprs = tuple(map(build_cpo_expr, args))
+                # Search in blackbox functions
+                bbf = self.model._get_blackbox_function(tokval)
+                if bbf is not None:
+                    # if auto-created, update argument types
+                    if bbf.auto:
+                        bbf._update_check_arg_types(argexprs)
+                    return CpoBlackboxFunctionCall(bbf, argexprs)
+                # Check if auto blackbox creation is enabled
+                if auto_blackbox:
+                    bbf = CpoBlackboxFunction(name=tokval, dimension=None)
+                    obbf = self.model._get_blackbox_function(tokval)
+                    if obbf is None:
+                        bbf._update_check_arg_types(argexprs)
+                        self.model._add_blackbox_function(bbf)
+                    else:
+                        obbf._update_check_arg_types(argexprs)
+                    return CpoBlackboxFunctionCall(bbf, argexprs)
+                self._raise_exception("Unknown operation '{}'".format(tokval))
 
             if ntok is TOKEN_HOOK_OPEN:
                 # Read typed array
@@ -1063,4 +1102,21 @@ class CpoParser(object):
         """
         self.pushtoken = self.token
         self.token = tok
-        
+
+
+    def _final_checkings(self):
+        """ Proceed to final model checkings
+        """
+        # Check automatic blackboxes never used (no eval)
+        for bbf in self.model._get_blackbox_functions():
+            if bbf.auto and bbf.dimension is None:
+                raise CpoParserException("Function '{}' does not exists as modeling function is is not used as blackbox.".format(bbf.get_name()))
+
+        # Skip if warnings not enabled
+        if not self.context.print_warnings:
+            return
+
+        # Check if all BBF functions have an implementation
+        for bbf in self.model._get_blackbox_functions():
+            if bbf.get_implementation() is None:
+                print("WARNING: Blackbox function '{}' does not have an implementation.".format(bbf))

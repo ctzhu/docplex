@@ -7,7 +7,7 @@
 # gendoc: ignore
 
 # Reference:
-# https://www.ibm.com/support/knowledgecenter/SSSA5P_12.9.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/MST.html
+# https://www.ibm.com/support/knowledgecenter/SSSA5P_20.1.0/ilog.odms.cplex.help/CPLEX/FileFormats/topics/MST.html
 
 # noinspection PyPep8Naming
 import xml.etree.ElementTree as xml_elt

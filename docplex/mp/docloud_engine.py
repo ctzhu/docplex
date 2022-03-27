@@ -255,8 +255,8 @@ class DOcloudEngine(IndexerEngine):
         """
         return True
 
-    def connect_progress_listeners(self, progress_listener_list, model):
-        if progress_listener_list:
+    def connect_progress_listeners(self, model, listeners, qlisteners):
+        if listeners:
             self._model.warning("Progress listeners are not supported on DOcplexcloud.")
 
     def register_callback(self, cb):
@@ -412,9 +412,9 @@ class DOcloudEngine(IndexerEngine):
         # here we go...
         def notify_info(info):
             if "jobid" in info:
-                mdl.fire_jobid(jobid=info["jobid"])
+                self._fire_jobid(mdl, jobid=info["jobid"])
             if "progress" in info:
-                mdl.fire_progress(progress_data=info["progress"])
+                self._fire_progress(mdl, progress_data=info["progress"])
 
         connector = self._connector
         mdl.notify_start_solve()
@@ -513,9 +513,9 @@ class DOcloudEngine(IndexerEngine):
 
         def notify_info(info):
             if "jobid" in info:
-                self._model.fire_jobid(jobid=info["jobid"])
+                self._fire_jobid(self._model, jobid=info["jobid"])
             if "progress" in info:
-                self._model.fire_progress(progress_data=info["progress"])
+                self._fire_progress(self._model, progress_data=info["progress"])
 
         # This block used to be try/catched for DOcloudConnector exceptions
         # and DOcloudException, but then infrastructure error were not
@@ -562,10 +562,23 @@ class DOcloudEngine(IndexerEngine):
         return make_attachment_name(basename + extension)
 
     def export_one_mip_start(self, mipstart, job_name, attachments):
-        warmstart_data = SolutionMSTPrinter.print_to_string(mipstart).encode('utf-8')
+        mstp = SolutionMSTPrinter()
+        warmstart_data = mstp.print_to_string(mipstart).encode('utf-8')
         mipstart_name = mipstart.name.lower() if mipstart.name else job_name
         warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
         attachments.append({'name': warmstart_name, 'data': warmstart_data})
+
+    @classmethod
+    def _fire_jobid(cls, mdl, jobid):
+        # INTERNAL
+        for l in mdl.iter_progress_listeners():
+            l.notify_jobid(jobid)
+
+    @classmethod
+    def _fire_progress(cls, mdl, progress_data):
+        # INTERNAL
+        for l in mdl.iter_progress_listeners():
+            l.notify_progress(progress_data)
 
     # noinspection PyProtectedMember
     def solve(self, mdl, parameters=None, **kwargs):
@@ -592,7 +605,7 @@ class DOcloudEngine(IndexerEngine):
             # if within a lexicographic solve, th elex_mipstart supersedes allother mipstarts
             if lex_mipstart:
                 mipstart_name = lex_mipstart.name.lower() if lex_mipstart.name else job_name
-                warmstart_data = SolutionMSTPrinter.print_to_string(lex_mipstart).encode('utf-8')
+                warmstart_data = SolutionMSTPrinter().print_to_string(lex_mipstart).encode('utf-8')
                 warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
                 attachments.append({'name': warmstart_name, 'data': warmstart_data})
 
@@ -601,7 +614,7 @@ class DOcloudEngine(IndexerEngine):
                 warmstart_name = self._make_attachment_name(mipstart_name, ".mst")
                 mdl_mipstarts = [s for s, _ in mdl.iter_mip_starts()]
                 mdl_efforts = [eff for (_, eff) in mdl.iter_mip_starts()]
-                warmstart_data = SolutionMSTPrinter.print_to_string(mdl_mipstarts, effort_level=mdl_efforts,
+                warmstart_data = SolutionMSTPrinter().print_to_string(mdl_mipstarts, effort_level=mdl_efforts,
                                                                     use_lp_names=True).encode('utf-8')
                 attachments.append({'name': warmstart_name, 'data': warmstart_data})
 
@@ -617,9 +630,9 @@ class DOcloudEngine(IndexerEngine):
 
             def notify_info(info):
                 if "jobid" in info:
-                    mdl.fire_jobid(jobid=info["jobid"])
+                    self._fire_jobid(mdl, jobid=info["jobid"])
                 if "progress" in info:
-                    mdl.fire_progress(progress_data=info["progress"])
+                    self._fire_progress(mdl, info["progress"])
 
             # This block used to be try/catched for DOcloudConnector exceptions
             # and DOcloudException, but then infrastructure error were not

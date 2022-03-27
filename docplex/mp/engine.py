@@ -24,7 +24,7 @@ class IEngine(object):
     def register_callback(self, cb):
         raise NotImplementedError  # pragma: no cover
 
-    def connect_progress_listeners(self, listeners, model):
+    def connect_progress_listeners(self, model, listeners, qlisteners):
         raise NotImplementedError  # pragma: no cover
 
     def solve(self, mdl, parameters, **kwargs):
@@ -229,7 +229,7 @@ class MinimalEngine(IEngine):
         # no callbacks
         pass  # pragma: no cover
 
-    def connect_progress_listeners(self, listeners, model):
+    def connect_progress_listeners(self, model, listeners, qlisteners):
         # no listeners
         if listeners:
             self.only_cplex(mname="connect_progress_listeners")  # pragma: no cover
@@ -424,7 +424,7 @@ class DummyEngine(IEngine):
     def unregister_callback(self, cb):
         pass  # pragma: no cover
 
-    def connect_progress_listeners(self, listeners, model):
+    def connect_progress_listeners(self, model, listeners, qlisteners):
         if listeners:
             model.warning("Progress listeners require CPLEX, not supported on engine {0}.".format(self.name))
 
@@ -618,7 +618,7 @@ class NoSolveEngine(IndexerEngine):
 
     @staticmethod
     def _no_cplex_error(mdl, method_name):  # pragma: no cover
-        mdl.fatal("No CPLEX DLL and no DOcplexcloud credentials: {0} is not available".format(method_name))
+        mdl.fatal("No CPLEX runtime found: {0} is not available".format(method_name))
 
     def solve(self, mdl, parameters, **kwargs):  # pragma: no cover
         """

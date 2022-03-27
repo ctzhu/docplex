@@ -231,7 +231,7 @@ class ModelReader(object):
             verbose: An optional flag to print informative messages, default is False.
             model_class: An optional class type; must be a subclass of Model.
                 The returned model is built using this model_class and the keyword arguments kwargs, if any.
-                By default, the model is class is `Model` (see
+                By default, the model is class is `Model`
             kwargs: A dict of keyword-based arguments that are used when creating the model
                 instance.
 
@@ -518,7 +518,7 @@ class ModelReader(object):
                     vary = cpx_var_index_to_docplex.get(vary_idx, None)
                     breakxy = [(brkx, brky) for brkx, brky in zip(breakx, breaky)]
                     pwl_func = mdl.piecewise(preslope, breakxy, postslope, name=pwl_name)
-                    pwl_expr = mdl._lfactory.new_pwl_expr(pwl_func, varx, 0, add_counter_suffix=False, resolve=False)
+                    pwl_expr = mdl._lfactory.new_pwl_expr(pwl_func, varx, 0, resolve=False)
                     pwl_expr._f_var = vary
                     pwl_expr._ensure_resolved()
 
@@ -652,4 +652,31 @@ class ModelReader(object):
 
 
 def read_model(filename, model_name=None, verbose=False, **kwargs):
+    """ Reads a model from a CPLEX export file.
+
+    Accepts all formats exported by CPLEX: LP, SAV, SAV.gz, MPS.
+
+    If an error occurs while reading the file, the message of the exception
+    is printed and the function returns None.
+
+    Args:
+        filename: The model file to read.
+        model_name: An optional name for the newly created model. If None,
+            the model name will be the path basename.
+        verbose: An optional flag to print informative messages, default is False.
+        model_class: An optional class type; must be a subclass of Model.
+            The returned model is built using this model_class and the keyword arguments kwargs, if any.
+            By default, the model is class is `Model`
+        kwargs: A dict of keyword-based arguments that are passed to the model contructor.
+
+    Example:
+        `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)`
+
+    Returns:
+        An instance of Model, or None if an exception is raised.
+
+    See Also:
+        :class:`docplex.mp.model.Model`
+
+    """
     return ModelReader.read(filename, model_name=model_name, verbose=verbose, **kwargs)

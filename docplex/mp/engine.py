@@ -7,7 +7,7 @@
 
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sdetails import SolveDetails
-from docplex.mp.utils import DOcplexException
+from docplex.mp.utils import DOcplexException, is_number
 from docplex.mp.error_handler import docplex_fatal
 from docplex.util.status import JobSolveStatus
 from docplex.mp.constants import CplexScope
@@ -502,48 +502,45 @@ class IndexerEngine(DummyEngine):
     An abstract engine facade which generates unique indices for variables, constraints
     """
 
-    def __init__(self, initial_index=0):
+    def __init__(self):
         DummyEngine.__init__(self)
-        self._initial_index = initial_index  # CPLEX indices start at 0, not 1
-        self.__var_counter = self._initial_index
-        self._ct_counter = self._initial_index
+        self._counters = {sc: 0 for sc in CplexScope}
 
-    def _increment_vars(self, size):
-        self.__var_counter += size
-        return self.__var_counter
-
-    def _increment_cts(self, size):
-        self._ct_counter += size
-        return self._ct_counter
-
-    def create_one_variable(self, vartype, lb, ub, name):
-        old_count = self.__var_counter
-        self._increment_vars(1)
+    def _scope_incr1(self, sc):
+        old_count = self._counters[sc]
+        self._counters[sc] += 1
         return old_count
 
+    def _scope_incr(self, sc, size):
+        assert size >= 1
+        old_count = self._counters[sc]
+        new_count = old_count + size
+        self._counters[sc] = new_count
+        return range(old_count, new_count)
+
+    def create_one_variable(self, vartype, lb, ub, name):
+        return self._scope_incr1(CplexScope.VAR_SCOPE)
+
     def create_variables(self, nb_vars, vartype, lb, ub, name):
-        old_count = self.__var_counter
-        new_count = self._increment_vars(nb_vars)
-        return list(range(old_count, new_count))
+        return self._scope_incr(CplexScope.VAR_SCOPE, nb_vars)
 
     def create_multitype_variables(self, keys, vartypes, lbs, ubs, names):
-        old_count = self.__var_counter
-        new_count = self._increment_vars(len(keys))
-        return list(range(old_count, new_count))
+        if is_number(keys):
+            l_keys = keys
+            assert l_keys >= 0
+        else:
+            l_keys = len(keys)
+        return self._scope_incr(CplexScope.VAR_SCOPE, l_keys)
 
     def _create_one_ct(self):
-        old_ct_count = self._ct_counter
-        self._increment_cts(1)
-        return old_ct_count
+        return self._scope_incr1(CplexScope.LINEAR_CT_SCOPE)
 
     def create_linear_constraint(self, binaryct):
         return self._create_one_ct()
 
     def create_batch_cts(self, ct_seq):
-        old_ct_count = self._ct_counter
         size = sum(1 for _ in ct_seq)  # iterator is consumed
-        self._increment_cts(size)
-        return range(old_ct_count, self._ct_counter)
+        return self._scope_incr(CplexScope.LINEAR_CT_SCOPE, size)
 
     def create_block_linear_constraints(self, ct_seq):
         return self.create_batch_cts(ct_seq)
@@ -552,16 +549,17 @@ class IndexerEngine(DummyEngine):
         return self._create_one_ct()
 
     def create_logical_constraint(self, logct, is_equivalence):
-        return self._create_one_ct()
+        return self._scope_incr1(CplexScope.IND_CT_SCOPE)
 
     def create_batch_logical_constraints(self, logcts, is_equivalence):
-        return self.create_batch_cts(logcts)
+        size = sum(1 for _ in logcts)  # iterator is consumed
+        return self._scope_incr(CplexScope.IND_CT_SCOPE, size)
 
     def create_quadratic_constraint(self, ind):
-        return self._create_one_ct()
+        return self._scope_incr1(CplexScope.QUAD_CT_SCOPE)
 
     def create_pwl_constraint(self, pwl_ct):
-        return self._create_one_ct()
+        return self._scope_incr1(CplexScope.PWL_CT_SCOPE)
 
     def get_all_reduced_costs(self, mdl):
         return {}
@@ -596,6 +594,9 @@ class IndexerEngine(DummyEngine):
 
         """
         return parameter.get()
+
+    def create_sos(self, sos):
+        return self._scope_incr1(CplexScope.SOS_SCOPE)
 
 
 class NoSolveEngine(IndexerEngine):
@@ -639,8 +640,11 @@ class NoSolveEngine(IndexerEngine):
     def make_from_model(mdl):
         # used in pickle
         eng = NoSolveEngine(mdl)
-        eng._increment_vars(mdl.number_of_variables)
-        eng._increment_cts(mdl.number_of_constraints)
+        eng._scope_incr(CplexScope.VAR_SCOPE, mdl.number_of_variables)
+        eng._scope_incr(CplexScope.LINEAR_CT_SCOPE, mdl.number_of_linear_constraints)
+        eng._scope_incr(CplexScope.IND_CT_SCOPE, mdl.number_of_logical_constraints)
+        eng._scope_incr(CplexScope.QUAD_CT_SCOPE, mdl.number_of_quadratic_constraints)
+        # TODO: add other scopes
         return eng
 
 

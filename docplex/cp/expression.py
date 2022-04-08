@@ -103,14 +103,10 @@ class IntegerDomain(tuple):
 
 
 class CpoExpr(object):
-    """ This class is an abstract class that represents any CPO expression node.
-
-    It does not contain links to children expressions that are implemented in extending classes.
-    However, method allowing to access to children is provided with default return value.
+    """ This class is the super class of all classes representing a CPO expression.
     """
     __slots__ = ('type',             # Expression result type
                  'name',             # Name of the expression (None if none)
-                 'priority',         # Operation priority
                  'children',         # List of children, empty tuple if none
                 )
 
@@ -118,7 +114,7 @@ class CpoExpr(object):
     __array_priority__ = 100
 
     def __init__(self, type, name):
-        """ Constructor:
+        """ **Constructor**
 
         Args:
             type:   Expression type, object of class CpoType.
@@ -127,7 +123,6 @@ class CpoExpr(object):
         super(CpoExpr, self).__init__()
         self.type = type
         self.name = name
-        self.priority = -1
         self.children = ()
 
 
@@ -177,6 +172,17 @@ class CpoExpr(object):
             Name of the expression, None if not defined
         """
         return self.name
+
+
+    def get_priority(self):
+        """ Get the expression operation priority.
+
+        This method is extended by functions requiring a different priority.
+
+        Returns:
+            -1 (no priority)
+        """
+        return -1
 
 
     def has_name(self):
@@ -587,7 +593,7 @@ class CpoValue(CpoExpr):
                 )
 
     def __init__(self, value, type):
-        """ Constructor
+        """ **Constructor**
 
         Args:
             value:  Constant value.
@@ -627,7 +633,7 @@ class CpoAlias(CpoExpr):
                 )
 
     def __init__(self, expr, name):
-        """ Constructor
+        """ **Constructor**
 
         Args:
             expr:  Target expression
@@ -649,7 +655,8 @@ class CpoFunctionCall(CpoExpr):
                 )
 
     def __init__(self, oper, rtype, oprnds):
-        """ Constructor
+        """ **Constructor**
+
         Args:
             oper:   Operation descriptor
             rtype:  Returned type
@@ -658,12 +665,19 @@ class CpoFunctionCall(CpoExpr):
         assert isinstance(oper, CpoOperation), "Argument 'oper' should be a CpoOperation"
         super(CpoFunctionCall, self).__init__(rtype, None)
         self.operation = oper
-        self.priority = oper.priority
 
         # Check no toplevel constraints
         for e in oprnds:
             assert not e.is_type(Type_Constraint), "A constraint can not be operand of an expression."
         self.children = oprnds
+
+    def get_priority(self):
+        """ Get the operation priority.
+
+        Returns:
+            Operation priority
+        """
+        return self.operation.priority
 
     def _equals(self, other):
         """ Checks the equality of this expression with another object.
@@ -686,7 +700,7 @@ class CpoVariable(CpoExpr):
     __slots__ = ()
 
     def __init__(self, type, name):
-        """ Constructor:
+        """ **Constructor**
 
         Args:
             type:   Expression type.
@@ -760,7 +774,7 @@ class CpoIntVar(CpoVariable):
         Returns:
             Domain lower bound.
         """
-        return _domain_min(self.domain)
+        return get_domain_min(self.domain)
 
     def get_domain_max(self):
         """ Gets the domain upper bound.
@@ -768,7 +782,7 @@ class CpoIntVar(CpoVariable):
         Returns:
             Domain upper bound.
         """
-        return _domain_max(self.domain)
+        return get_domain_max(self.domain)
 
     def domain_iterator(self):
         """ Iterator on the individual values of an integer variable domain.
@@ -828,7 +842,7 @@ class CpoIntVar(CpoVariable):
 
 
 class CpoBoolVar(CpoIntVar):
-    # Currently internal
+    # Currently internal. May be produced internally by presolve.
     # """ This class represents a *boolean variable* that can be used in a CPO model.
     #
     # This object should not be created explicitly, but using one of the following factory method:
@@ -1214,17 +1228,14 @@ class CpoIntervalVar(CpoVariable):
 
 class CpoSequenceVar(CpoVariable):
     """ This class represents an *sequence variable* that can be used in a CPO model.
-
-    Variables are stored in 'children' attribute
     """
     __slots__ = ('types',  # Variable types
                 )
 
     def __init__(self, vars, types=None, name=None):
-        """ Creates a new sequence variable.
+        """ **Constructor**
 
-        This method creates an instance of sequence variable on the set of interval variables defined
-        by the array 'vars'.
+        Creates an instance of sequence variable on the set of interval variables defined by the array 'vars'.
         A list of non-negative integer types can be optionally specified.
         List of variables and types must be of the same size and interval variable vars[i] will have type types[i]
         in the sequence variable.
@@ -1303,33 +1314,35 @@ class CpoSequenceVar(CpoVariable):
 
 
 class CpoTransitionMatrix(CpoValue):
-    """ This class represents a *transition matrix* that is used in CPO model to represent transition distances.
+    """ This class represents a *transition matrix* that is used in CPO model to
+    represent transition distances.
+
+    A transition matrix is a square matrix of non-negative integers that represents a minimal distance between
+    two interval variables.
+    An instance of transition matrix can be used in the no_overlap constraint and in state functions.
+
+      * In a no_overlap constraint the transition matrix represents the minimal distance between two
+        non-overlapping interval variables.
+        The matrix is indexed using the integer types of interval variables in the sequence variable
+        of the no_overlap constraint.
+
+      * In a state function, the transition matrix represents the minimal distance between two integer
+        states of the function.
+
+    A transition matrix can be created:
+
+      * Deprecated.
+        Giving only its size. In this case, a transition matrix is created by this constructor with all
+        values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
+
+      * Giving the matrix values as a list of rows, each row being a list of integers.
+        Matrix values can not be changed after it has been created.
+
     """
     __slots__ = ()  # Matrix stored in value field
 
     def __init__(self, size=None, values=None, name=None):
-        """ Creates a new transition matrix (square matrix of integers).
-
-        A transition matrix is a square matrix of non-negative integers that represents a minimal distance between
-        two interval variables.
-        An instance of transition matrix can be used in the no_overlap constraint and in state functions.
-
-          * In a no_overlap constraint the transition matrix represents the minimal distance between two
-            non-overlapping interval variables.
-            The matrix is indexed using the integer types of interval variables in the sequence variable
-            of the no_overlap constraint.
-
-          * In a state function, the transition matrix represents the minimal distance between two integer
-            states of the function.
-
-        A transition matrix can be created:
-
-          * Deprecated.
-            Giving only its size. In this case, a transition matrix is created by this constructor with all
-            values initialized to zero. Matrix values can then be set using :meth:`set_value` method.
-
-          * Giving the matrix values as a list of rows, each row being a list of integers.
-            Matrix values can not be changed after it has been created.
+        """ **Constructor**
 
         Args:
             size (optional):   Matrix size (width and height),
@@ -1416,7 +1429,7 @@ class CpoStateFunction(CpoVariable):
                 )
 
     def __init__(self, trmtx=None, name=None):
-        """ Creates a new state function.
+        """ **Constructor**
 
         Args:
             trmtx (optional): An optional transition matrix defining the transition distance between consecutive states
@@ -1961,9 +1974,9 @@ def state_function(trmtx=None, name=None):
     return CpoStateFunction(trmtx, name)
 
 
-#==============================================================================
+#-----------------------------------------------------------------------------
 #  Public Functions
-#==============================================================================
+#-----------------------------------------------------------------------------
 
 def is_cpo_expr(expr, type=None):
     """ Check if an expression is a CPO model expression
@@ -2069,6 +2082,54 @@ def pretty_print(expr, out=None, mxdepth=None, mxargs=None, adsize=False, indent
         _pretty_print_children(str(expr.operation.cpo_name) + '(', ')', expr.children, out, mxdepth, mxargs, adsize, indent, curdepth)
 
 
+def get_domain_min(d):
+    """ Retrieves the lower bound of an integer or interval variable domain.
+
+    The domain can be either:
+
+     * a single number value,
+     * a list of numbers, or tuple of 2 numbers representing an interval.
+
+    This method returns the first number of the domain.
+
+    Args:
+        d: Domain
+    Returns:
+        Domain lower bound
+    """
+    if isinstance(d, (tuple, list)):
+        d = d[0]
+        if isinstance(d, (tuple, list)):
+            d = d[0]
+    return d
+
+
+def get_domain_max(d):
+    """ Retrieves the upper bound of an integer or interval variable domain.
+
+    The domain can be either:
+
+     * a single number value,
+     * a list of numbers, or tuple of 2 numbers representing an interval.
+
+    This method returns the last number of the domain.
+
+    Args:
+        d: Domain
+    Returns:
+        Domain upper bound
+    """
+    if isinstance(d, (tuple, list)):
+        d = d[-1]
+        if isinstance(d, (tuple, list)):
+            d = d[-1]
+    return d
+
+
+#-----------------------------------------------------------------------------
+#  Private Functions
+#-----------------------------------------------------------------------------
+
 def _pretty_print_children(lstart, lend, lexpr, out, mxdepth, mxargs, adsize, indent, curdepth):
     """ Pretty print list of expression
 
@@ -2115,36 +2176,8 @@ def _pretty_print_children(lstart, lend, lexpr, out, mxdepth, mxargs, adsize, in
     out.write(lend)
 
 
-def _domain_min(d):
-    """ Retrieves the lower bound of a domain
-
-    Args:
-        d: Domain
-    Returns:
-        Domain lower bound
-    """
-    if isinstance(d, (tuple, list)):
-        v = d[0]
-        return v[0] if isinstance(v, tuple) else v
-    return d
-
-
-def _domain_max(d):
-    """ Retrieves the upper bound of a domain
-
-    Args:
-        d: Domain
-    Returns:
-        Domain upper bound
-    """
-    if isinstance(d, (tuple, list)):
-        v = d[-1]
-        return v[-1] if isinstance(v, tuple) else v
-    return d
-
-
 def _domain_iterator(d):
-    """ Iterator on the individual values of an integer variable domain.
+    """ Iterator on the individual values of an integer or interval variable domain.
 
     Args:
         d: Domain to iterate
@@ -2197,31 +2230,23 @@ def _domain_contains(d, val):
 #  - reduce CPO file length as common expressions are easily identified.
 
 class _CacheKeyTuple(tuple):
-    """ Tuple that is used as a key of the expression cache """
+    """ Tuple that is used as a key of the expression cache
+    It implements a hash function based on ids of the elements, enabling:
+     * use of non hashable elements,
+     * comparison of CPO expressions that would not be possible because overloading of __eq__
+       that generates CPO expressions.
+    """
     def __init__(self, tpl):
         super(_CacheKeyTuple, self).__init__()
-        # Compute hashcode
-        try:
-            self.hash = super(_CacheKeyTuple, self).__hash__()
-            self.base_hash_ok = True
-        except TypeError:
-            # Tuple contains an unhashable element, compute hash from element ids
-            hash = 1
-            for e in self:
-                hash = hash * 31 + id(e)
-            self.hash = hash
-            self.base_hash_ok = False
+
     def __eq__(self, other):
-        if self.base_hash_ok:
-            return super(_CacheKeyTuple, self).__eq__(other)
         return isinstance(other, tuple) and len(other) == len(self) and all(x1 is x2 for x1, x2 in zip(self, other))
+
     def __hash__(self):
-        return self.hash
-
-
-def _is_same_python_expr(expr1, expr2):
-    """ Check if two python expressions are identical """
-    return expr1 == expr2
+        hash = 1
+        for e in self:
+            hash = hash * 31 + id(e)
+        return hash
 
 
 class _ModelExpressionsCache(object):
@@ -2234,11 +2259,12 @@ class _ModelExpressionsCache(object):
     of the python expression, as given by the 'cache key builder' function.
 
     The object cache dictionary also reference expressions using source python object id, which is used for an initial
-    search without normalizing the python value. If id is identical, the
+    search without normalizing the python value. If id is identical, the object type and normalized value is
+    verified to be the same.
 
-    The value of the object cache dictionary is a tuple (kval, cexpr, pexpr) where 'kval' is the normalized
-    representation of the python object, 'pexpr' is the original python expression
-    (to preserve it from being garbaged), and 'cexpr' is the corresponding CPO expression.
+    The value of the object cache dictionary is a tuple (kval, type, cexpr, pexpr) where 'kval' is the normalized
+    representation of the python object, 'type' is the type name, 'cexpr' is the corresponding CPO expression,
+    and 'pexpr' is the original python expression (to preserve it from being garbaged).
     """
     __slots__ = ('obj_dict',          # Dictionary of objects
                  'key_list',          # Ordered list of objects keys in the cache
@@ -2269,7 +2295,7 @@ class _ModelExpressionsCache(object):
         Returns:
             Value corresponding to the pexpr
         """
-        # Build cache value key (needed to check with previous value in case it has been changed)
+        # Build normalized value key (needed to check with previous value in case it has been changed)
         try:
             kval = kbldr(pexpr)
         except TypeError:
@@ -2280,16 +2306,16 @@ class _ModelExpressionsCache(object):
             pid = id(pexpr)
             cval = self.obj_dict.get(pid)
             if cval is not None:
-                # Verify if key values are identical
-                if _is_same_python_expr(cval[0], kval):
+                # Verify if same type and if normalized values are identical
+                if (tname == cval[1]) and (cval[0] == kval):
                     self.nb_found_by_id += 1
-                    return cval[1]
-            # Check if in the cache
+                    return cval[2]
+            # Search from type and normalized value
             ckey = (tname, kval)
             cval = self.obj_dict.get(ckey)
             if cval is not None:
                 self.nb_found_by_value += 1
-                return cval[1]
+                return cval[2]
             # Build new model expression
             cexpr = xbldr(kval)
             # Remove older object if max size is reached
@@ -2298,7 +2324,7 @@ class _ModelExpressionsCache(object):
                 self.obj_dict.pop(kl[0])  # Remove python object id
                 self.obj_dict.pop(kl[1])  # Remove cache expression key
             # Add new expression in the cache
-            cpval = (kval, cexpr, pexpr)
+            cpval = (kval, tname, cexpr, pexpr)
             self.obj_dict[pid] = cpval
             self.obj_dict[ckey] = cpval
             self.key_list.append((pid, ckey))
@@ -2319,8 +2345,8 @@ class _ModelExpressionsCache(object):
             self.nb_create_new = 0
 
     def get_stats(self):
-        """ Get the cache statistics as a tuple (nb_get_or_create, nb_found_by_id, nb_found_by_value, nb_create_new) """
-        return (self.nb_found_by_id, self.nb_found_by_value, self.nb_create_new)
+        """ Get the cache statistics as a tuple (size, nb_get_or_create, nb_found_by_id, nb_found_by_value, nb_create_new) """
+        return (len(self.key_list), self.nb_found_by_id, self.nb_found_by_value, self.nb_create_new)
 
     def __len__(self):
         """ Returns the number of elements in this dictionary """

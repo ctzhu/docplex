@@ -113,10 +113,6 @@ class EngineFactory(object):
         except TypeError:
             docplex_fatal("agent: {0!s} failed to create instance from model, kwargs.", agent)
 
-    # # noinspection PyMethodMayBeStatic
-    # def new_docloud_engine(self, model, **kwargs):
-    #     # noinspection PyDeprecation
-    #     return DOcloudEngine(model, **kwargs)
 
     def extend(self, new_agent, new_engine):
         # INTERNAL

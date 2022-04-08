@@ -8,10 +8,11 @@ from docplex.mp.operand import Operand
 from docplex.mp.error_handler import docplex_fatal, DOcplexException
 
 from docplex.mp.utils import is_number, is_string, is_function, str_maxed
+from docplex.mp.basic import _AbstractNamable, _AbstractValuable
 
 
-class KPI(object):
-    """ Abstract class for key performance indicators (KPIs).
+class KPI(_AbstractNamable, _AbstractValuable):
+    """ Base class for key performance indicators (KPIs).
 
     Each KPI has a unique name. A KPI is attached to a model instance and can compute a numerical value,
     using the :func:`compute` method. The `compute` method takes an optional solution argument;
@@ -23,11 +24,7 @@ class KPI(object):
     def __init__(self, name=None):
         self._name = name
 
-    def get_name(self):
-        return self._name
-
-    def set_name(self, new_name):
-        self._check_name(new_name)
+    def _set_name(self, new_name):
         self._name = new_name
 
     @property
@@ -46,10 +43,18 @@ class KPI(object):
         """
         raise NotImplementedError   # pragma: no cover
 
+    @property
+    def model(self):
+        return self.get_model()
+
     def compute(self, s=None):
         raise NotImplementedError   # pragma: no cover
 
-    def _get_solution_value(self, s=None):  # pragma: no cover
+    # def _get_solution_value(self, s=None):  # pragma: no cover
+    #     # to be removed
+    #     return self._raw_solution_value(s)
+
+    def _raw_solution_value(self, s=None):  # pragma: no cover
         return self.compute(s)
 
     def _ensure_solution(self, s, do_raise=True):
@@ -65,13 +70,8 @@ class KPI(object):
             else:
                 return None
 
-    @property
-    def solution_value(self):
-        return self._get_solution_value()
-
-    def _check_name(self, name_arg):
-        if not is_string(name_arg) or not name_arg:
-            self.get_model().fatal("KPI.set_name() expects a non-empty string, got: {0!r}", name_arg)
+    def check_name(self, name_arg):
+        self.model._checker.typecheck_string(name_arg, accept_none=False, accept_empty=False, caller="KPI.name")
 
     def is_decision_expression(self):
         """ returns True if the KPI is based on a decision expression or variable.
@@ -122,7 +122,6 @@ class DecisionKPI(KPI):
         expr = None
         if is_number(kpi_op):
             expr = self.get_model().linear_expr(arg=kpi_op)
-            name = name
         elif isinstance(kpi_op, Operand):
             expr = kpi_op
             expr.notify_used(self)  # kpi is a subscriber

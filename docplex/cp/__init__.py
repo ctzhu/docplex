@@ -42,8 +42,8 @@ def check_python_version():
         Error string if this python version is not supported, None if OK.
     """
     pv = sys.version_info
-    if (pv < (2, 7)) or ((pv[0] == 3) and (pv < (3, 4) or pv >= (3, 9))):
-        return "docplex.cp is supported by Python versions 2.7.9+, 3.4.x, to 3.8.x, not '{}'. Use it at your own risk."\
+    if (pv < (2, 7)) or ((pv[0] == 3) and (pv < (3, 4) or pv >= (3, 10))):
+        return "docplex.cp is supported by Python versions 2.7.9+, 3.4.x, to 3.9.x, not '{}'. Use it at your own risk."\
                .format('.'.join(str(x) for x in pv))
     return None
 

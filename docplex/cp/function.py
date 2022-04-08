@@ -28,7 +28,7 @@ import copy
 
 
 class CpoFunction(CpoExpr):
-    """ Root class for step and segmented functions.
+    """ Parent class for step and segmented functions.
     """
     __slots__ = ('_s0',  # Initial slope of the function
                  '_v0',  # Initial value of the function
@@ -38,7 +38,8 @@ class CpoFunction(CpoExpr):
                  )
 
     def __init__(self, typ, s0=None, v0=None, x=None, v=None, s=None, name=None):
-        """
+        """ **Constructor**
+
         Args:
             typ: Function type.
             s0:  Initial slope of the function.
@@ -512,7 +513,8 @@ class CpoSegmentedFunction(CpoFunction):
     """
 
     def __init__(self, segment0=None, segments=None, name=None):
-        """
+        """ **Constructor**
+
         Args:
             segment0 (tuple): Initial segment of the function (slope, vright).
             segments (list): Segments of the function represented as a list of
@@ -566,7 +568,7 @@ class CpoStepFunction(CpoFunction):
     To change this default value, the first step should be (INTERVAL_MIN, value).
     """
     def __init__(self, steps=None, name=None):
-        """ Step function.
+        """ **Constructor**
 
         Args:
             steps: (Optional) Function steps, expressed as a list of couples (x, val).

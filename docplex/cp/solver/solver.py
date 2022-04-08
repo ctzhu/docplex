@@ -66,10 +66,12 @@ import docplex.cp.solver.solver_listener as listener
 from docplex.cp.solver.cpo_callback import CpoCallback
 from docplex.cp.blackbox import *
 
-import time, importlib, inspect
+import importlib
+import inspect
 import threading
 import time
 import traceback
+import copy
 
 
 ###############################################################################
@@ -116,24 +118,19 @@ class CpoSolverAgent(object):
                  'params',           # Solver parameters
                  'context',          # Solve context
                  'last_json_result', # String of the last received JSON result
-                 'rename_map',       # Map of renamed variables. Key is new name, value is original name
                  'version_info',     # Solver version information (dict)
                  'process_infos',    # Processing information
                  'log_output',       # Log output stream
                  'log_print',        # Print log indicator
                  'log_data',         # Log data buffer (list of strings)
                  'log_enabled',      # Global log enabled indicator
-                 'expr_map',         # Map of expressions to rebuild result
-                 'blackbox_map',     # Set of blackbox functions used in the model
-                 'model_init',       # Indicates whether model has been initialized in the solver
                 )
 
-    def __init__(self, solver, params, context):
+    def __init__(self, solver, context):
         """ Constructor
 
         Args:
             solver:   Parent solver, object of type CpoSolver
-            params:   Solving parameters, object of type CpoParameters
             context:  Solver agent context
         Raises:
             CpoException if agent can not be created properly.
@@ -141,14 +138,11 @@ class CpoSolverAgent(object):
         super(CpoSolverAgent, self).__init__()
         self.solver = solver
         self.model = solver.get_model()
-        self.params = params
+        self.params = context.params
         self.context = context
         self.last_json_result = None
-        self.rename_map = None
         self.version_info = {}
-        self.process_infos = CpoProcessInfos()
-        self.model_init = False
-        self.blackbox_map = None
+        self.process_infos = solver.process_infos
 
         # Initialize log
         self.log_output = context.get_log_output()
@@ -307,52 +301,36 @@ class CpoSolverAgent(object):
         #self.params = None
         #self.context = None
 
-
-    def _get_cpo_model_string(self):
-        """ Get the CPO model as a string, according to configuration.
+    def _is_abort_search_supported(self):
+        """ Check if this agent supports an actual abort_search() instead of killing the solver
 
         Return:
-            String containing the CPO model in CPO file format
+            True if this agent supports actual abort_search()
         """
-        # Build string
-        ctx = self.context
-        stime = time.time()
-        cplr = CpoCompiler(self.model, params=self.params, context=ctx.get_root())
-        cpostr = cplr.get_as_string()
-        self.expr_map = cplr.get_expr_map()
-        self.blackbox_map = cplr.get_blackbox_map()
-        self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
-        self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(cpostr)
+        return False
 
-        # Trace CPO model if required
-        lout = ctx.get_log_output()
-        if lout and ctx.trace_cpo:
-            stime = time.time()
-            lout.write("Model '" + str(self.model.get_name()) + "' in CPO format:\n")
-            lout.write(cpostr)
-            lout.write("\n")
-            self.model.write_information(lout)
-            lout.write("\n")
-            lout.flush()
-            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
-
-        # Dump in dump directory if required
-        if ctx.model.dump_directory:
-            stime = time.time()
-            make_directories(ctx.model.dump_directory)
-            mname = self.model.get_name()
-            if mname is None:
-                mname = "Anonymous"
+    def _log_received_message(self, evt, data):
+        """ Log a received message with json data length depending on log level
+        Args:
+            evt:   Received event name
+            data:  JSON data
+        """
+        # Check enough log level
+        if not self.context.is_log_enabled(5):
+            return
+        # Check no data
+        if data is None:
+            self.context.log(5, "Received: ", evt)
+        else:
+            # Log full data if log level 6
+            if self.context.is_log_enabled(6):
+                # Full version if log level 6
+                self.context.log(6, "Received: ", evt, ", data: '", data, "'")
             else:
-                # Remove special characters introduced by Jupyter
-                mname = mname.replace('<', '').replace('>', '')
-            file = ctx.model.dump_directory + "/" + mname + ".cpo"
-            with utils.open_utf8(file, 'w') as f:
-                f.write(cpostr)
-            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
-
-        # Return
-        return cpostr
+                # Cut at cpInfos if any
+                sx = data.find('"cpInfo" : {')
+                ndata = data if sx < 0 else data[:sx]
+                self.context.log(5, "Received: ", evt, ", data: '", ndata, "...(skipped)...'")
 
 
     def _send_model_to_solver(self, cpostr):
@@ -384,42 +362,48 @@ class CpoSolverAgent(object):
 
     def _init_model_in_solver(self):
         """ Send the model to the solver if not already done. """
-        if self.model_init:
+        if self.solver.model_sent:
             return
 
         # Get solver version for checking
         sver = self.version_info.get('SolverVersion', "1")
 
-        # Add callback if needed.
-        if self.solver.callbacks:
-            # Check solver version
-            if compare_natural(sver, "12.10") < 0:
-                raise CpoSolverException("This version of the CPO solver ({}) does not support solver callbacks.".format(sver))
-            self._add_callback_processing()
-            self.context.log(3, "CPO callback created.")
-
         # Get model string (to force identification of blackbox functions)
-        mstr = self._get_cpo_model_string()
+        mstr = self.solver.get_cpo_model_string()
 
-        # Register blackbox functions if any
-        bbfs = self.blackbox_map
-        if bbfs:
-            # Check solver version
-            # if compare_natural(sver, "20.10") <= 0:
-            #     raise CpoSolverException("This version of the CPO solver ({}) does not support blackbox functions.".format(sver))
-            for name, bbf in bbfs.items():
-                # Check that bbf has an implementation
-                if not bbf.has_implementation():
-                    raise CpoSolverException("Blackbox function '{}' has no implementation".format(name))
-                self._register_blackbox_function(name, bbf)
-            self.context.log(3, "Blackbox function(s) registered.")
+        # Register callback and blackbox functions if any and not already done
+        # Indicator is useful if the same model is solved and then refine conflict with the same CpoSolver
+        # as model is then sent twice (first normally, and secondly with all named constraints)
+        if not self.solver.callbacks_registered:
+            # Register callback
+            if self.solver.callbacks:
+                # Check solver version
+                if compare_natural(sver, "12.10") < 0:
+                    raise CpoSolverException(
+                        "This version of the CPO solver ({}) does not support solver callbacks.".format(sver))
+                self._add_callback_processing()
+                self.context.log(3, "CPO callback created.")
+            # Register blackbox functions
+            bbfs = self.solver.blackbox_map
+            if bbfs:
+                # Check solver version
+                # if compare_natural(sver, "20.10") <= 0:
+                #     raise CpoSolverException("This version of the CPO solver ({}) does not support blackbox functions.".format(sver))
+                for name, bbf in bbfs.items():
+                    # Check that bbf has an implementation
+                    if not bbf.has_implementation():
+                        raise CpoSolverException("Blackbox function '{}' has no implementation".format(name))
+                    self._register_blackbox_function(name, bbf)
+                self.context.log(3, "Blackbox function(s) registered.")
+            # Set registration indicator
+            self.solver.callbacks_registered = True
 
         # Send model to solver
         stime = time.time()
         self._send_model_to_solver(mstr)
         self.process_infos.incr(CpoProcessInfos.MODEL_SUBMIT_TIME, time.time() - stime)
         self.context.log(3, "Model sent to solver.")
-        self.model_init = True
+        self.solver.model_sent = True
 
 
     def _add_log_data(self, data):
@@ -477,7 +461,7 @@ class CpoSolverAgent(object):
             jsol = parse_json_string(jsol)
             self.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
             # Build result structure
-            res._add_json_solution(jsol, self.expr_map)
+            res._add_json_solution(jsol, self.solver.expr_map)
 
         # Process Log
         if self.log_data is not None:
@@ -485,96 +469,6 @@ class CpoSolverAgent(object):
             self.log_data = []
         res.process_infos.update(self.process_infos)
         return res
-
-
-    def _get_blackbox_function_eval_context(self, jdata):
-        """ Get the evaluation context of a blackbox function
-
-        Args:
-            jdata: JSON data containing function evaluation context
-        Returns:
-            tuple (blackbox function descriptor, evaluation arguments)
-        """
-        #print("Enter in _evaluate_blackbox_function: {}".format(jdata))
-
-        # Parse JSON data
-        stime = time.time()
-        fcall = parse_json_string(jdata)
-        self.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
-
-        # Retrieve blackbox descriptor from its name
-        name = fcall.get('name')
-        bbf = self.expr_map.get(name)
-        #bbf = self.model._get_blackbox_function(name)
-        if bbf is None:
-            raise CpoException("Try to evaluate a blackbox function {} that does not exists".format(name))
-        if not isinstance(bbf, CpoBlackboxFunction):
-            raise CpoException("Expression named '{}' is not a blackbox function".format(name))
-
-        # Build arguments values
-        params = fcall.get('parameters', ())
-        ptypes = bbf.get_arg_types()
-        if len(ptypes) != len(params):
-           raise CpoException("Blackbox function call to '{}' contains a wrong number of parameters.".format(name))
-        argvalues = [self._build_arg_value(t, v) for t, v in zip(ptypes, params)]
-
-        return bbf, argvalues
-
-
-    def _build_arg_value(self, tp, vl):
-        """ Build blackbox function call argument value
-        Args:
-            tp: Parameter type
-            vl: Parameter JSON value
-        Returns:
-            Parameter value to be passed to evaluation
-        """
-        n = vl.get('name')
-        t = vl.get('type')
-        v = vl.get('value')
-
-        if tp in (Type_Int, Type_IntVar, Type_IntExpr,):
-            return solution._get_num_value(v)
-
-        if tp in (Type_Float, Type_FloatExpr,):
-            return float(v)
-
-        if tp is Type_IntervalVar:
-            return CpoIntervalVarSolution._create_from_json(None, v)
-
-        if tp is Type_IntArray:
-            return [solution._get_num_value(e) for e in v]
-
-        if tp in (Type_IntVarArray, Type_IntExprArray,):
-            return [solution._get_num_value(e.get('value')) for e in v]
-
-        if tp is Type_FloatArray:
-            return v
-
-        if tp is Type_FloatExprArray:
-            return [float(e.get('value')) for e in v]
-
-        if tp is Type_IntervalVarArray:
-            return [CpoIntervalVarSolution._create_from_json(None, e.get('value')) for e in v]
-
-        if tp is Type_SequenceVar:
-            # Retrieve original variable
-            sv = self.expr_map.get(n)
-            assert sv is not None, "Sequence variable '{}' not found in the model".format(n)
-            vars = sv.get_interval_variables()
-            return [vars[i] for i in v]
-
-        if tp is Type_SequenceVarArray:
-            res = []
-            for jsv in v:
-                svn = jsv.get('name')
-                sv = self.expr_map.get(svn)
-                assert sv is not None, "Sequence variable '{}' not found in the model".format(svn)
-                vars = sv.get_interval_variables()
-                res.append([vars[i] for i in jsv.get('value')])
-            return res
-
-        raise CpoException("INTERNAL ERROR: Unknown blackbox argument type {}".format(tp))
 
 
     def _raise_not_supported(self):
@@ -590,15 +484,24 @@ class CpoSolver(object):
     It create the appropriate :class:`CpoSolverAgent` that actually implements solving functions, depending
     on the value of the configuration parameter *context.solver.agent*.
     """
-    __slots__ = ('model',        # Model to solve
-                 'context',      # Solving context
-                 'agent',        # Solver agent
-                 'status',       # Current solver status
-                 'last_result',  # Last returned solution
-                 'listeners',    # List of solve listeners
-                 'status_lock',  # Lock protecting status change
-                 'callbacks',    # List of CPO solver callbacks
-                )
+    __slots__ = ('model',           # Model to solve
+                 'context',         # Solving context
+                 'cpostr',          # CPO model string
+                 'expr_map',        # Map of expressions to rebuild result
+                 'blackbox_map',    # Set of blackbox functions used in the model
+                 'process_infos',   # Processing information
+                 'agent',           # Solver agent
+                 'status',          # Current solver status
+                 'operation',       # Current running operation
+                 'last_result',     # Last returned solution
+                 'listeners',       # List of solve listeners
+                 'status_lock',     # Lock protecting status change
+                 'callbacks',       # List of CPO solver callbacks
+                 'abort_supported', # Indicates that abort is supported by agent
+                 'model_published', # Indicates if CPO model has been published
+                 'model_sent',      # Indicates if CPO model has been sent to the solver
+                 'callbacks_registered',  # Indicate if callbacks (CPO callback and blackboxes) have been registered
+                 )
 
     def __init__(self, model, **kwargs):
         """ Constructor
@@ -634,14 +537,24 @@ class CpoSolver(object):
         """
         super(CpoSolver, self).__init__()
         self.agent = None
+        self.process_infos = CpoProcessInfos()
+        self.cpostr = None
+        self.expr_map = None
+        self.blackbox_map = None
         self.last_result = None
         self.status = STATUS_IDLE
         self.status_lock = threading.Lock()
         self.listeners = []
         self.callbacks = []
+        self.operation = None
+        self.abort_supported = False
+        self.model_published = False
+        self.model_sent = False
+        self.callbacks_registered = False
 
         # Build effective context from args
         context = config._get_effective_context(**kwargs)
+        context.params = model.merge_with_parameters(context.params)
 
         # If defined, limit the number of threads
         mxt = context.solver.max_threads
@@ -658,6 +571,7 @@ class CpoSolver(object):
 
         # Determine appropriate solver agent
         self.agent = self._get_solver_agent()
+        self.abort_supported = self.agent._is_abort_search_supported()
 
         # Add configured default listeners if any
         # Note: calling solver_created() is not required as it is done by add_listener().
@@ -733,6 +647,15 @@ class CpoSolver(object):
         return self.agent.version_info.get("SolverVersion")
 
 
+    def get_parameters(self):
+        """ Get the actual solver parameters, as modified by configuration or arguments.
+
+        Returns:
+            Solver parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`.
+        """
+        return self.context.params
+
+
     def solve(self):
         """ Solve the model
 
@@ -754,6 +677,8 @@ class CpoSolver(object):
         Raises:
             CpoException: (or derived) if error.
         """
+        self.last_result = None
+
         # Check solve with start/next
         if self.context.solver.solve_with_search_next:
             return self.solve_with_search_next()
@@ -762,8 +687,9 @@ class CpoSolver(object):
         self._notify_listeners_start_operation(listener.OPERATION_SOLVE)
 
         # Solve model
-        stime = time.time()
+        self._check_status(STATUS_IDLE)
         self._set_status(STATUS_SOLVING)
+        stime = time.time()
         try:
             msol = self.agent.solve()
         except Exception as e:
@@ -778,17 +704,13 @@ class CpoSolver(object):
         self.context.solver.log(1, "Model '", self.model.get_name(), "' solved in ", round(stime, 2), " sec.")
         msol.process_infos[CpoProcessInfos.SOLVE_TOTAL_TIME] = stime
 
-        # Set solve time in solution if not done
-        if msol.get_solve_time() == 0:
-            msol._set_solve_time(stime)
-
         # Store last solution
         self.last_result = msol
 
         # Notify listeners
         for lstnr in self.listeners:
             lstnr.new_result(self, msol)
-        self._notify_listeners_end_operation(listener.OPERATION_SOLVE)
+        self._notify_listeners_end_operation()
 
         # Return solution
         return msol
@@ -800,32 +722,40 @@ class CpoSolver(object):
         Return:
             Last solve result
         """
-        # Loop on all solutions
-        last_sol = None
+        # Loop on all new solutions
+        last_res = None
         while True:
             # Search for next solution
-            msol = self.search_next()
-            if msol.get_solve_status() == SOLVE_STATUS_JOB_ABORTED:
-                return last_sol if last_sol is not None else self.last_result
+            sres = self.search_next()
+
+            # Check old-style abort
+            if (not self.abort_supported) and (sres.get_solve_status() == SOLVE_STATUS_JOB_ABORTED):
+                return last_res if last_res is not None else self.last_result
 
             # Check successful search
-            if msol:
-                last_sol = msol
-                if msol.is_solution_optimal():
-                    break
+            if sres.is_new_solution():
+                # Store solution as currently best one to be returned
+                last_res = sres
             else:
                 break
 
         # Process end of search
-        # print("msol: {}, is_sol: {}, isoptimal: {}".format(msol,  msol.is_solution(), msol.is_solution_optimal()))
-        # print("last_sol: {}".format(last_sol))
-        if last_sol is None:
-            last_sol = msol
+        #print("msol: {}, is_sol: {}, isoptimal: {}".format(msol,  msol.is_solution(), msol.is_solution_optimal()))
+        #print("last_sol: {}".format(last_sol))
+        if sres.is_solution_optimal():
+            # Force optimal solution to be new even if already given
+            last_res = sres
+            last_res.new_solution = True
+        elif sres.get_stop_cause() == STOP_CAUSE_ABORT:
+            # Force last solution to be last one to get the abor status
+            last_res = sres
+        elif last_res is None:
+            last_res = sres
         else:
             # Update last solution with last solver infos
-            last_sol.solver_infos = msol.solver_infos
+            last_res.solver_infos = sres.solver_infos
         self.end_search()
-        return last_sol
+        return last_res
 
 
     def search_next(self):
@@ -849,9 +779,10 @@ class CpoSolver(object):
         """
         # Initiate search if needed
         if self.status == STATUS_IDLE:
-            # Notify listeners about start of search
+            self.last_result = None
             self.agent.start_search()
             self._set_status(STATUS_SEARCH_WAITING)
+            # Notify listeners about start of search
             self._notify_listeners_start_operation(listener.OPERATION_SOLVE)
 
         # Check if status is aborted in the mean time (may be caused by listener)
@@ -864,7 +795,7 @@ class CpoSolver(object):
         stime = time.time()
         self._set_status(STATUS_SEARCH_RUNNING)
         try:
-            msol = self.agent.search_next()
+            sres = self.agent.search_next()
         except BaseException as e:
             sys.stdout.flush()
             # Check if aborted in the mean time
@@ -873,23 +804,26 @@ class CpoSolver(object):
             if self.context.log_exceptions:
                 traceback.print_exc()
             raise CpoSolverException("Exception caught from CP solver: {}".format(e))
-        self._set_status(STATUS_SEARCH_WAITING)
+        if self.abort_supported and sres.get_search_status() == SEARCH_STATUS_STOPPED:
+            self._set_status(STATUS_IDLE)
+        else:
+            self._set_status(STATUS_SEARCH_WAITING)
         stime = time.time() - stime
         self.context.solver.log(1, "Model '", self.model.get_name(), "' next solution in ", round(stime, 2), " sec.")
 
-        # Set solve time in solution if not done
-        if msol.get_solve_time() == 0:
-            msol._set_solve_time(stime)
+        # Special case for old solvers where last optimal solution is empty
+        if sres.is_solution_optimal and (sres.solution is None or sres.solution.is_empty()) and (self.last_result is not None):
+            sres.solution = self.last_result.solution
 
         # Store last solution
-        self.last_result = msol
+        self.last_result = sres
 
         # Notify listeners
         for lstnr in self.listeners:
-            lstnr.new_result(self, msol)
+            lstnr.new_result(self, sres)
 
         # Return solution
-        return msol
+        return sres
 
 
     def end_search(self):
@@ -903,13 +837,16 @@ class CpoSolver(object):
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
-        if self.status in (STATUS_IDLE, STATUS_RELEASED, STATUS_ABORTED):
-           return self.last_result
-        self._check_status(STATUS_SEARCH_WAITING)
+        if self.status in (STATUS_RELEASED, STATUS_ABORTED):
+            return self.last_result
+        if not self.abort_supported:
+            if self.status == STATUS_IDLE:
+                return self.last_result
+            self._check_status(STATUS_SEARCH_WAITING)
         msol = self.agent.end_search()
         self._set_status(STATUS_IDLE)
         self.last_result = msol
-        self._notify_listeners_end_operation(listener.OPERATION_SOLVE)
+        self._notify_listeners_end_operation()
         return msol
 
 
@@ -955,7 +892,8 @@ class CpoSolver(object):
         namecstrs = self.context.model.name_all_constraints
         if not namecstrs:
             self.context.model.name_all_constraints = True
-            self.agent.model_init = False
+            self.cpostr = None
+            self.agent.solver.model_sent = False
 
         # Refine conflict
         msol = self.agent.refine_conflict()
@@ -969,7 +907,7 @@ class CpoSolver(object):
 
         # End refine conflict
         self._set_status(STATUS_IDLE)
-        self._notify_listeners_end_operation(listener.OPERATION_REFINE_CONFLICT)
+        self._notify_listeners_end_operation()
 
         return msol
 
@@ -996,11 +934,20 @@ class CpoSolver(object):
             CpoNotSupportedException: method not available in configured solver agent.
         """
         self._check_status(STATUS_IDLE)
-        self._set_status(STATUS_PROPAGATING)
+
+        # Notify listeners
         self._notify_listeners_start_operation(listener.OPERATION_PROPAGATE)
+
+        # Propagate model
+        self._set_status(STATUS_PROPAGATING)
         psol = self.agent.propagate()
         self._set_status(STATUS_IDLE)
-        self._notify_listeners_end_operation(listener.OPERATION_PROPAGATE)
+
+        # Notify listeners
+        for lstnr in self.listeners:
+            lstnr.new_result(self, psol)
+        self._notify_listeners_end_operation()
+
         return psol
 
 
@@ -1028,7 +975,7 @@ class CpoSolver(object):
         self._notify_listeners_start_operation(listener.OPERATION_RUN_SEEDS)
         rsol = self.agent.run_seeds(nbrun)
         self._set_status(STATUS_IDLE)
-        self._notify_listeners_end_operation(listener.OPERATION_RUN_SEEDS)
+        self._notify_listeners_end_operation()
         return rsol
 
 
@@ -1078,36 +1025,17 @@ class CpoSolver(object):
         return msol
 
 
-    def get_last_solution(self):
-        """ Get the last result returned by this solver.
-
-        DEPRECATED. Use get_last_result instead.
-
-        Returns:
-            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
-        """
-        return self.last_result
-
-
-    def get_last_result(self):
-        """ Get the last result returned by this solver.
-
-        Calling this method can be useful to determine, for example, if the last solution returned
-        by a sequence of start_search() and search_next(), or by a solution iterator, is optimal.
-
-        Returns:
-            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
-        """
-        return self.last_result
-
-
     def abort_search(self):
-        # Abort current search if any.
-        self._set_status(STATUS_ABORTED)
-        agt = self.agent
-        self.agent = None
-        if agt is not None:
-            agt.abort_search()
+        if self.abort_supported and self.agent is not None:
+            # Abort search is implemented, just call it.
+            self.agent.abort_search()
+        else:
+            # Abort current search
+            self._set_status(STATUS_ABORTED)
+            agt = self.agent
+            self.agent = None
+            if agt is not None:
+                agt.abort_search()
 
 
     def end(self):
@@ -1146,6 +1074,29 @@ class CpoSolver(object):
         #     Next solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
         # """
         return self.next()
+
+
+    def get_last_solution(self):
+        """ Get the last result returned by this solver.
+
+        DEPRECATED. Use get_last_result instead.
+
+        Returns:
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        """
+        return self.last_result
+
+
+    def get_last_result(self):
+        """ Get the last result returned by this solver.
+
+        Calling this method can be useful to determine, for example, if the last solution returned
+        by a sequence of start_search() and search_next(), or by a solution iterator, is optimal.
+
+        Returns:
+            Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`.
+        """
+        return self.last_result
 
 
     def add_listener(self, lstnr):
@@ -1275,18 +1226,18 @@ class CpoSolver(object):
         Args:
             op:  Operation that is started
         """
+        self.operation = op
         for lstnr in self.listeners:
             lstnr.start_operation(self, op)
 
 
-    def _notify_listeners_end_operation(self, op):
-        """ Call all listeners with operation end
-
-        Args:
-            op:  Operation that is ended
+    def _notify_listeners_end_operation(self):
+        """ Call all listeners with last operation end
         """
+        op = self.operation
         for lstnr in self.listeners:
             lstnr.end_operation(self, op)
+        self.operation = None
 
 
     def _check_status_aborted(self):
@@ -1298,24 +1249,31 @@ class CpoSolver(object):
         if self.status != STATUS_ABORTED:
             return False
 
+        if self.abort_supported:
+            self.status = STATUS_IDLE
+            return False
+
         self._set_status(STATUS_RELEASED)
-        self.last_result = self._create_solution_aborted()
+        self.last_result = self._create_result_aborted()
         for lstnr in self.listeners:
             lstnr.new_result(self, self.last_result)
-        for lstnr in self.listeners:
-            lstnr.end_solve(self)
+        self._notify_listeners_end_operation()
         return True
 
 
-    def _create_solution_aborted(self):
-        """ Create an empty solution with aborted status
+    def _create_result_aborted(self):
+        """ Create a solve result with aborted status
         """
-        res = CpoSolveResult(self.model)
-        res.solve_status = SOLVE_STATUS_UNKNOWN if self.last_result is None else self.last_result.get_solve_status()
+        # Clone last result if any
+        if self.last_result is None:
+            res = CpoSolveResult(self.model)
+            res.solve_status = SOLVE_STATUS_UNKNOWN
+        else:
+            res = copy.copy(self.last_result)
         res.fail_status = FAIL_STATUS_ABORT
         res.search_status = SEARCH_STATUS_STOPPED
         res.stop_cause = STOP_CAUSE_ABORT
-        res.is_a_solution = False
+        res.new_solution = False
         return res
 
 
@@ -1394,8 +1352,175 @@ class CpoSolver(object):
             raise CpoSolverException("Solver agent class '{}' should extend CpoSolverAgent.".format(cpath))
 
         # Create agent instance
-        agent = sclass(self, sctx.params, sctx)
+        agent = sclass(self, sctx)
         return agent
+
+
+    def _build_cpo_model_string(self):
+        """ Build the CPO model string and store data required to retrieve model elements
+        """
+        if self.cpostr is None:
+            stime = time.time()
+            cplr = CpoCompiler(self.model, params=self.context.params, context=self.context)
+            self.cpostr = cplr.get_as_string()
+            self.expr_map = cplr.get_expr_map()
+            self.blackbox_map = cplr.get_blackbox_map()
+            self.process_infos[CpoProcessInfos.MODEL_COMPILE_TIME] = time.time() - stime
+            self.process_infos[CpoProcessInfos.MODEL_DATA_SIZE] = len(self.cpostr)
+
+
+    def _publish_model(self):
+        """ Publish the CPO model on console and in file if required by configuration
+        """
+        # Check if already published
+        if self.model_published:
+            return
+
+        # Trace CPO model if required
+        ctx = self.context
+        lout = ctx.get_log_output()
+        if lout and ctx.solver.trace_cpo:
+            stime = time.time()
+            lout.write("Model '" + str(self.model.get_name()) + "' in CPO format:\n")
+            lout.write(self.cpostr)
+            lout.write("\n")
+            self.model.write_information(lout)
+            lout.write("\n")
+            lout.flush()
+            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
+
+        # Dump in dump directory if required
+        if ctx.model.dump_directory:
+            stime = time.time()
+            make_directories(ctx.model.dump_directory)
+            mname = self.model.get_name()
+            if mname is None:
+                mname = "Anonymous"
+            else:
+                # Remove special characters introduced by Jupyter
+                mname = mname.replace('<', '').replace('>', '')
+            file = ctx.model.dump_directory + "/" + mname + ".cpo"
+            with utils.open_utf8(file, 'w') as f:
+                f.write(self.cpostr)
+            self.process_infos.incr(CpoProcessInfos.MODEL_DUMP_TIME, time.time() - stime)
+
+        # Set published indicator
+        self.model_published = True
+
+
+    def get_cpo_model_string(self):
+        """ Get the CPO model as a string, as it is sent to the solver.
+
+        Result string is the exact string that is sent to solver, including all variations caused by configuration
+        or changes made when creating the solver.
+
+        Return:
+            String containing the CPO model in CPO file format
+        """
+        # Build string
+        self._build_cpo_model_string()
+
+        # Publish model
+        self._publish_model()
+
+        # Return
+        return self.cpostr
+
+
+    def _get_blackbox_function_eval_context(self, jdata):
+        """ Get the evaluation context of a blackbox function
+
+        Args:
+            jdata: JSON data containing function evaluation context
+        Returns:
+            tuple (blackbox function descriptor, argument values, bound values)
+        """
+        #print("Enter in _evaluate_blackbox_function: {}".format(jdata))
+
+        # Parse JSON data
+        stime = time.time()
+        fcall = parse_json_string(jdata)
+        self.process_infos.incr(CpoProcessInfos.TOTAL_JSON_PARSE_TIME, time.time() - stime)
+
+        # Retrieve blackbox descriptor from its name
+        name = fcall.get('name')
+        bbf = self.blackbox_map.get(name)
+        #bbf = self.model._get_blackbox_function(name)
+        if bbf is None:
+            raise CpoException("Try to evaluate a blackbox function {} that does not exists".format(name))
+        if not isinstance(bbf, CpoBlackboxFunction):
+            raise CpoException("Expression named '{}' is not a blackbox function".format(name))
+
+        # Build arguments values
+        params = fcall.get('parameters', ())
+        ptypes = bbf.get_arg_types()
+        if len(ptypes) != len(params):
+           raise CpoException("Blackbox function call to '{}' contains a wrong number of parameters.".format(name))
+        argvalues = [self._build_arg_value(t, v) for t, v in zip(ptypes, params)]
+
+        # Build bound values
+        bnds = fcall.get('returnValuesBounds', ())
+        if len(bnds) != bbf.dimension:
+           raise CpoException("Blackbox function call to '{}' contains a wrong number of bounds.".format(name))
+        bndsvalues = [tuple(solution._get_num_value(v) for v in b) for b in bnds]
+
+        return bbf, argvalues, bndsvalues
+
+
+    def _build_arg_value(self, tp, vl):
+        """ Build blackbox function call argument value
+        Args:
+            tp: Parameter type
+            vl: Parameter JSON value
+        Returns:
+            Parameter value to be passed to evaluation
+        """
+        n = vl.get('name')
+        t = vl.get('type')
+        v = vl.get('value')
+
+        if tp in (Type_Int, Type_IntVar, Type_IntExpr,):
+            return solution._get_num_value(v)
+
+        if tp in (Type_Float, Type_FloatExpr,):
+            return float(v)
+
+        if tp is Type_IntervalVar:
+            return CpoIntervalVarSolution._create_from_json(None, v)
+
+        if tp is Type_IntArray:
+            return [solution._get_num_value(e) for e in v]
+
+        if tp in (Type_IntVarArray, Type_IntExprArray,):
+            return [solution._get_num_value(e.get('value')) for e in v]
+
+        if tp is Type_FloatArray:
+            return v
+
+        if tp is Type_FloatExprArray:
+            return [float(e.get('value')) for e in v]
+
+        if tp is Type_IntervalVarArray:
+            return [CpoIntervalVarSolution._create_from_json(None, e.get('value')) for e in v]
+
+        if tp is Type_SequenceVar:
+            # Retrieve original variable
+            sv = self.expr_map.get(n)
+            assert sv is not None, "Sequence variable '{}' not found in the model".format(n)
+            vars = sv.get_interval_variables()
+            return [vars[i] for i in v]
+
+        if tp is Type_SequenceVarArray:
+            res = []
+            for jsv in v:
+                svn = jsv.get('name')
+                sv = self.expr_map.get(svn)
+                assert sv is not None, "Sequence variable '{}' not found in the model".format(svn)
+                vars = sv.get_interval_variables()
+                res.append([vars[i] for i in jsv.get('value')])
+            return res
+
+        raise CpoException("INTERNAL ERROR: Unknown blackbox argument type {}".format(tp))
 
 
 ###############################################################################

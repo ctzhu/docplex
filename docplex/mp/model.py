@@ -5,17 +5,13 @@
 # --------------------------------------------------------------------------
 
 # pylint: disable=too-many-lines
-from __future__ import print_function
-
 import os
 import sys
 import warnings
-import six
-from six import itervalues, iteritems
 from itertools import chain
+from io import StringIO
 
 from docplex.mp.aggregator import ModelAggregator
-from docplex.mp.compat23 import StringIO, izip
 from docplex.mp.constants import SOSType, CplexScope, ObjectiveSense, BasisStatus, EffortLevel,\
     int_probtype_to_string, ComparisonType
 from docplex.mp.constr import AbstractConstraint, LinearConstraint, RangeConstraint, \
@@ -253,7 +249,7 @@ class Model(object):
         self._checker.typecheck_var(obj)
 
     def _typecheck_num(self, arg, caller=None):
-        self._checker.typecheck_num(arg, caller)
+        self._checker.typecheck_num(arg, caller, safe_number=False)
 
     def _typecheck_as_denominator(self, denominator, numerator):
         StaticTypeChecker.typecheck_as_denominator(self, denominator, numerator)
@@ -276,7 +272,7 @@ class Model(object):
 
     def _parse_kwargs(self, kwargs):
         # parse some arguments from kwargs
-        for arg_name, arg_val in six.iteritems(kwargs):
+        for arg_name, arg_val in kwargs.items():
             if arg_name == "float_precision":
                 self.float_precision = arg_val
             elif arg_name in frozenset({'keep_ordering', 'ordering'}):
@@ -522,8 +518,14 @@ class Model(object):
             except Exception as me:
                 print("* Error in model_build_hook: {0!s}".format(me))
 
-    def get_name(self):
-        return self._name
+        self._ctstatus_counter = 0
+
+    def _new_ct_status_index(self):
+        # INTERNAL
+        new_ct_status_index = self._ctstatus_counter + 1
+        self._ctstatus_counter = new_ct_status_index
+        return new_ct_status_index
+
 
     @property
     def name(self):
@@ -568,11 +570,15 @@ class Model(object):
 
     def _iter_scopes(self):
         # INTERNAL
-        for _, scope in iteritems(self._scope_dict):
+        for _, scope in self._scope_dict.items():
             yield scope
 
+    def _check_scope_indices(self):
+        for scope in self._iter_scopes():
+            scope.check_indices()
+
     def _iter_constraint_scopes(self):
-        for cpxsc, scope in iteritems(self._scope_dict):
+        for cpxsc, scope in self._scope_dict.items():
             if cpxsc.is_constraint_scope():
                 yield scope
 
@@ -932,6 +938,10 @@ class Model(object):
     def solver_agent(self):
         return self.context.solver.agent
 
+    def _set_solver_agent(self, new_agent):
+        assert new_agent
+        self.context.solver.agent = new_agent
+
     @property
     def error_handler(self):
         return self._error_handler
@@ -1052,7 +1062,7 @@ class Model(object):
                 self._solve_details = solve_details
                 self._set_solution(sol)
                 if saved_params:
-                    for p, v in six.iteritems(saved_params):
+                    for p, v in saved_params.items():
                         self_engine.set_parameter(p, v)
 
 
@@ -1074,7 +1084,10 @@ class Model(object):
         self._error_handler.fatal(msg, args)
 
     def fatal_ce_limits(self, *args):
-        self._error_handler.fatal_limits_exceeded()
+        nb_vars = self.number_of_variables
+        nb_constraints = self.number_of_constraints
+
+        self._error_handler.fatal_limits_exceeded(nb_vars, nb_constraints)
 
     def error(self, msg, *args):
         self._error_handler.error(msg, args)
@@ -1208,17 +1221,17 @@ class Model(object):
             # from Ryan
             del engine_to_terminate
 
-    # def set_new_engine_from_agent(self, new_agent):
-    #     self_context = self.context
-    #     # set new agent
-    #     if new_agent is None:
-    #         new_agent = self_context.solver.agent
-    #     elif is_string(new_agent):
-    #         self_context.solver.agent = new_agent
-    #     else:
-    #         self.fatal('unexpected value for agent: {0!r}, expecting string or None', new_agent)
-    #     new_engine = self._make_new_engine_from_agent(new_agent, self_context)
-    #     self._set_engine(new_engine)
+    def _parse_agent(self, new_agent):
+        if not new_agent:
+            new_agent = self.context.solver.agent
+        elif not is_string(new_agent):
+            self.fatal('unexpected value for agent: {0!r} was passed, expecting string or None', new_agent)
+        return new_agent
+
+    def _set_new_engine_from_agent(self, agent_arg):
+        new_agent = self._parse_agent(agent_arg)
+        new_engine = self._make_new_engine_from_agent(new_agent, self.context)
+        self._set_engine(new_engine)
 
     @property
     def solves_with(self):
@@ -1340,7 +1353,7 @@ class Model(object):
     def _register_block_vars(self, allvars, indices, allnames):
         if allnames:
             varname_dict = self._vars_by_name
-            for var, var_index, var_name in izip(allvars, indices, allnames):
+            for var, var_index, var_name in zip(allvars, indices, allnames):
                 var._index = var_index
                 if var_name:
                     if var_name in varname_dict:
@@ -1349,7 +1362,7 @@ class Model(object):
                         self.warning("Duplicate variable name: {0} already used for {1!s}", var_name, old_name_value)
                     varname_dict[var_name] = var
         else:
-            for var, var_index in izip(allvars, indices):
+            for var, var_index in zip(allvars, indices):
                 var._index = var_index
         self._var_scope.notify_obj_indices(objs=allvars, indices=indices)
 
@@ -1377,13 +1390,13 @@ class Model(object):
         ct_name_map = self._cts_by_name
         # --
         if ct_name_map:
-            for ct, ct_index in izip(cts, indices):
+            for ct, ct_index in zip(cts, indices):
                 ct._set_index(ct_index)
                 ct_name = ct.name
                 if ct_name:
                     ct_name_map[ct_name] = ct
         else:
-            for ct, ct_index in izip(cts, indices):
+            for ct, ct_index in zip(cts, indices):
                 ct._index = ct_index
 
         scope.notify_obj_indices(cts, indices)
@@ -1397,15 +1410,30 @@ class Model(object):
         ctn_map = self._container_map
         if ctn_map is None:
             ctn_map = {}
+            doomed_ctns = set()
             for ctn in self.iter_var_containers():
-                for dv in ctn.iter_variables():
-                    ctn_map[dv] = ctn
+                try:
+                    for dv in ctn:
+                        ctn_map[dv] = ctn
+                except RuntimeError: # occurs when the dict has been modified
+                    doomed_ctns.add(ctn)
+                    self.warning(f"Modified variable container has been removed, name='{ctn.name}', shape={ctn.shape}")
             self._container_map = ctn_map
+            # remove those var containers
+            if doomed_ctns:
+                #print(f"-- removing {len(doomed_ctns)} modified containers")
+                clean_containers = [c for c in self.iter_var_containers() if c not in doomed_ctns]
+                self._all_containers = clean_containers
+
         return ctn_map
 
     def iter_var_containers(self):
         # INTERNAL
         return iter(self._all_containers)
+
+    def _get_number_of_var_containers(self):
+        # INTERNAL
+        return len(self._all_containers)
 
     def get_var_container(self, dvar):
         # INTERNAL
@@ -1423,7 +1451,7 @@ class Model(object):
             if ctn_map is not None:
                 # increment var container map, if any
                 assert isinstance(ctn_map, dict)
-                for dv in var_container.iter_variables():
+                for dv in var_container:
                     ctn_map[dv] = var_container
     @staticmethod
     def origin_key(obj):
@@ -1682,13 +1710,19 @@ class Model(object):
         """
         return self._vars_by_name.get(name, None)
 
-    def _get_non_ambiguous_varname(self, base_name):
+    def _disambiguate_varname(self, candidate_name):
         # INTERNAL
         varname_map = self._vars_by_name
-        if varname_map is not None and base_name in varname_map:
-            return '{0}#{1}'.format(base_name, self.number_of_variables)
-        else:
-            return base_name
+        if varname_map is None:
+            return candidate_name
+        safe_name = candidate_name
+        p = 1
+        while safe_name in varname_map:
+            safe_name = f"{candidate_name}#{p}"
+            p += 1
+            if p >= 1001:
+                raise DOcplexException(f"disambiguation fails for name: {candidate_name}")
+        return safe_name
 
     def generate_user_variables(self):
         # internal
@@ -1714,7 +1748,7 @@ class Model(object):
 
         :return: A list of decision variables.
         """
-        return self._find_matching_objs(self.generate_user_variables, pattern, match_case)
+        return self._find_matching_objs(self.generate_user_variables, pattern, match_case, caller='Model.find_matching_vars')
 
     def find_re_matching_vars(self, regexpr):
         """ Finds all variables whose name match a regular expression.
@@ -1736,9 +1770,9 @@ class Model(object):
                 matches.append(dv)
         return matches
 
-    def _find_matching_objs(self, obj_iter, pattern, match_case=False):
+    def _find_matching_objs(self, obj_iter, pattern, match_case=False, caller=None):
         # internal
-        self._checker.typecheck_string(pattern, accept_empty=False, accept_none=False, caller="Model.find_matching_vars")
+        self._checker.typecheck_string(pattern, accept_empty=False, accept_none=False, caller=caller)
         key_pattern = pattern if match_case else pattern.lower()
         matches = []
         for obj in obj_iter():
@@ -1763,7 +1797,26 @@ class Model(object):
 
         *New in version 2.9*
         """
-        return self._find_matching_objs(self.generate_user_linear_constraints, pattern, match_case)
+        return self._find_matching_objs(self.generate_user_linear_constraints, pattern, match_case,
+                                        caller='Model.find_matching_linear_constraints')
+
+    def find_matching_quadratic_constraints(self, pattern, match_case=False):
+        """ Finds all quadratic constraints whose name contain a given string
+
+        This method searches for all quadratic constraints whose name
+        is not empty and contains the passed ``pattern`` string. Anonymous constraints
+        are not considered.
+
+        :param pattern: a non-empty string.
+        :param match_case: optional flag to match case (or not). Default is to not match case.
+
+        :return: A list of quadratic constraints.
+
+        *New in version 2.23*
+        """
+        return self._find_matching_objs(self.iter_quadratic_constraints, pattern, match_case,
+                                        caller='Model.find_matching_quadratic_constraints')
+
 
     def get_var_by_index(self, idx):
         # INTERNAL
@@ -1862,7 +1915,7 @@ class Model(object):
         engine = self.get_engine()
         engine.change_var_lbs(var_lb_dict)
         # now update vars
-        for dv, lb2 in iteritems(var_lb_dict):
+        for dv, lb2 in var_lb_dict.items():
             dv._lb = lb2
 
     def change_var_upper_bounds(self, dvars, ubs, check_bounds=True):
@@ -1910,7 +1963,7 @@ class Model(object):
 
         self.get_engine().change_var_ubs(var_ub_dict)
         # now update vars
-        for dv, ub2 in iteritems(var_ub_dict):
+        for dv, ub2 in var_ub_dict.items():
             dv._ub = ub2
 
     def set_var_lb(self, var, candidate_lb):
@@ -2323,6 +2376,25 @@ class Model(object):
 
         :returns: A list of :class:`doc.mp.linear.Var` objects with type `IntegerVarType`.
 
+        Example:
+            >>> m.integer_var_list(3, name="ij")
+            returns a list of three integer variables from 0 to 1e+20, named ij_0, ij_1, ij_2.
+            The default behavior, when a string argument is passed as name,
+            is to concatenate the string , a "-" separator and a string representation
+            of the key; this allows to build arbitrary name strings from keys.
+
+            >>> m.integer_var_list(3, name=lambda i: "__name_{}__".format(i))
+            uses a functional name argument, producing names: "__name_0__",
+             "__name_1__", "_name__2__".
+
+            >>> m.integer_var_list(3, name="q", lb=1, ub=100)
+            returns a list of three integer variables from 1 to 100, named q_0, q_1, q_3
+
+            >>> m.integer_var_list([1,2,3], name="q", lb=lambda k: k, ub=lambda k: k*k+1)
+            returns a list of three integer variables q_1[1,1**1 +1], q2[2, 2*2+1], q3[3, 3*3+1]
+
+            The last example use the functional lb and ub, to compute bounds that
+            depend on the keys.
         """
         return self._var_list(keys, self.integer_vartype, lb, ub, name, key_format)
 
@@ -2478,6 +2550,7 @@ class Model(object):
 
         Note:
             If `keys` is empty, this method returns an empty dictionary.
+            The returned dictionary should not be modified.
 
         Args:
             keys: Either a sequence of objects, an iterator, or a positive integer. If passed an integer,
@@ -2530,6 +2603,7 @@ class Model(object):
 
         Note:
             If `keys` is empty, this method returns an empty dictionary.
+            The returned dictionary should not be modified.
 
         Args:
             keys: Either a sequence of objects, an iterator, or a positive integer. If passed an integer,
@@ -2582,6 +2656,7 @@ class Model(object):
 
         Note:
             If `keys` is empty, this method returns an empty dictionary.
+            The returned dictionary should not be modified.
 
         Args:
             keys: Either a sequence of objects, an iterator, or a positive integer. If passed an integer,
@@ -2612,6 +2687,7 @@ class Model(object):
 
         Note:
             If `keys` is empty, this method returns an empty dictionary.
+            The returned dictionary should not be modified.
 
         Args:
             keys: Either a sequence of objects, an iterator, or a positive integer. If passed an integer,
@@ -2678,6 +2754,7 @@ class Model(object):
 
         Note:
             If `keys` is empty, this method returns an empty dictionary.
+            The returned dictionary should not be modified.
 
         Args:
             keys: Either a sequence of objects, an iterator, or a positive integer. If passed an integer,
@@ -2889,11 +2966,10 @@ class Model(object):
 
         :returns: An instance of :class:`docplex.mp.linear.LinearExpr`.
         '''
-        self._checker.typecheck_string(arg=name, accept_none=True)
         self._checker.typecheck_num(arg=constant, caller='Model.linear_expr()')
         if name:
-            warnings.warn("Naming expressions is deprecated, use a variable if necessary")
-        return self._lfactory.linear_expr(arg=arg, constant=constant, name=name)
+            warnings.warn("Naming expressions is deprecated -- ignored")
+        return self._lfactory.linear_expr(arg=arg, constant=constant)
 
     def quad_expr(self, name=None):
         ''' Returns a new empty quadratic expression.
@@ -2904,7 +2980,7 @@ class Model(object):
             if self.is_docplex_debug():
                 raise RuntimeError
             warnings.warn("Naming expressions is deprecated, use a variable if necessary")
-        return self._qfactory.new_quad(name=name)
+        return self._qfactory.new_quad()
 
     def abs(self, e):
         """ Builds an expression equal to the absolute value of its argument.
@@ -3183,16 +3259,37 @@ class Model(object):
         return self._aggregator._scal_prod_vars_all_different(var_seq, coefs)
 
     def sum(self, args):
-        """ Creates a linear expression summing over an iterable over expressions or variables.
+        """ Creates an expression summing over an iterable over expressions or variables.
+        This method expects an iterable over any type of expression: quadrayic expression,
+        linear expression, variables, constants.
 
         Note:
-           This method returns 0 if the argument is empty.
+           The returned expression is quadratic as soon as the result is quadratic, otherwise it returns
+           a linear expression, or 0 if the iterable is empty.
         
-        :param args: An iterable returning linear expressions, variables or numbers.
+        :param args: An iterable over expressions (quadratic or linear), variables, or constants.
 
-        :return: A linear expression or 0.
+        :return: A Docplex expression.
         """
         return self._aggregator.sum(args)
+
+    def sums(self, *args):
+        """ Same as `Model.sum()` but accepts a variable number of arguments.
+
+        :param args: A variable number of expressions (quadratic or linear), variables, or constants.
+        :return: A Docplex expression.
+
+        Example:
+            Assuming x is a variable.
+            >>> m.sums(x**2, x, 1)
+            is identical to
+            >> m.sum([x**2, x, 1])
+
+            Both return a quadratic expression "x^2+x+1"
+
+        *New in version 2.22*
+        """
+        return self.sum(args)
 
     def sumsq(self, args):
         """ Creates a quadratic expression summing squares of expressions.
@@ -3242,7 +3339,7 @@ class Model(object):
 
         """
         if isinstance(terms, dict):
-            return self.sum_vars_all_different(itervalues(terms))
+            return self.sum_vars_all_different(terms.values())
         else:
             var_seq = self._checker.typecheck_var_seq_all_different(terms)
             return self._aggregator._sum_vars_all_different(var_seq)
@@ -3468,14 +3565,8 @@ class Model(object):
         self._register_one_constraint(ct, ct_engine_index, is_ctname_safe=True)
         return ct
 
-    def pop_constraint(self):
-        linear_scope = self._linct_scope
-        if linear_scope.size:
-            self._remove_constraint_internal(linear_scope.last)
-
     def _remove_constraint_internal(self, ct):
         self._remove_constraints_internal(cts_to_remove=(ct,))
-
 
     def _resolve_ct(self, ct_arg, silent=False, check_index=True, caller=None):
         verbose = not silent
@@ -3580,7 +3671,7 @@ class Model(object):
                 idxs_by_scope[d.cplex_scope].add(d.index)
                 actual_touched_scopes.add(d._get_index_scope())
 
-            for sc, delset in iteritems(idxs_by_scope):
+            for sc, delset in idxs_by_scope.items():
                 scope = self._get_obj_scope(sc)
                 scope.notify_delete_set(delset)
 
@@ -4654,7 +4745,7 @@ class Model(object):
         context = arg_context
 
         # update the context with provided kwargs
-        for argname, argval in six.iteritems(kwargs):
+        for argname, argval in kwargs.items():
             # skip context argname if any
             if argname == "url":
                 pass
@@ -4703,7 +4794,9 @@ class Model(object):
             or unboundedness. When solve returns None, use Model.solve_details to check the status
             of the latest solve operation: Model.solve_details always returns
             a :class:`docplex.mp.sdetails.SolveDetails` object, whether or not
-            a solution has been found. This object contains detailed information about the latest solve operation.
+            a solution has been found.
+            This object contains detailed information about the latest solve operation, such as status, elapsed time,
+            and for MILP problems, number of nodes processed and final gap.
 
         See Also:
             :func:`solve_details`
@@ -4773,7 +4866,6 @@ class Model(object):
                                              clean_before_solve=clean_before_solve,
                                              lex_timelimits=lex_timelimits,
                                              lex_mipgaps=lex_mipgaps)
-            #self._set_solution(new_solution)
 
             # store solve status as returned by the engine.
             engine_status = self_engine.get_solve_status()
@@ -4928,6 +5020,7 @@ class Model(object):
                          senses='min',
                          abstols=None,
                          reltols=None,
+                         goal_names=None,
                          write_pass_files=False,
                          solution_callbackfn=None,
                          **kwargs):
@@ -4969,17 +5062,28 @@ class Model(object):
         if not is_indexable(goals):
             self.fatal("solve_with_goals requires an indexable sequence of goals, got: {0!s}", goals)
 
-        actual_goals = [(g.name or "goal%d" % (gi + 1), self._lfactory._to_expr(g))  for gi, g in enumerate(goals)]
-        nb_goals = len(actual_goals)
+        is_verbose = kwargs.pop('verbose', False)
+
+        nb_goals =len(goals)
+        actual_goal_names = ["goal%d" % (gi + 1) for gi in range(nb_goals)]
+        if isinstance(goal_names, list):
+            for i in range(nb_goals):
+                try:
+                    gn = goal_names[i]
+                    if gn:
+                        actual_goal_names[i] = gn
+                except (KeyError, TypeError, ValueError):
+                    pass
+
+        actual_goals = [(gn, self._lfactory._to_expr(g))  for gn, g in zip(actual_goal_names, goals)]
         # --- senses ---
         abstols_ = []
         reltols_ = []
 
         # compile tolerances to abstols, reltols
-
-        if abstols:
+        if abstols is not None:
             abstols_ = self._typecheck_optional_num_seq(abstols, expected_size=nb_goals, caller='Model.solve_with_goals')
-        if reltols:
+        if reltols is not None:
             reltols_ = self._typecheck_optional_num_seq(reltols, expected_size=nb_goals, caller='Model.solve_with_goals')
 
         if not abstols_:
@@ -4998,7 +5102,8 @@ class Model(object):
             senses = generate_constant(ObjectiveSense.parse(senses), count_max=nb_goals)
 
         def lex_info(msg):
-            self.info("lexicographic: {0}".format(msg))
+            if is_verbose:
+                print("-- lex_goals: {0}".format(msg))
 
         # keep extra constraints, in order to remove them at the end.
         extra_cts = []
@@ -5022,7 +5127,7 @@ class Model(object):
         solve_kwargs = kwargs.copy()
         current_sol = None
         try:
-            for (goal_name, goal_expr), next_sense, abstol, reltol in izip(actual_goals, senses, abstols_, reltols_):
+            for (goal_name, goal_expr), next_sense, abstol, reltol in zip(actual_goals, senses, abstols_, reltols_):
                 if goal_expr.is_constant() and pass_count > 1:
                     self.warning("Constant expression in lexicographic solve: {0!s}, skipped", goal_expr)
                     continue
@@ -5030,13 +5135,13 @@ class Model(object):
 
                 if pass_count > 1:
                     prev_goal, prev_obj, prev_sense = prev_step
-                    tolerance = compute_tolerance(abstol, reltol, prev_obj)
+                    tolerance = compute_tolerance(prev_obj, abstol, reltol)
                     if prev_sense.is_minimize():
                         pass_ct = m._post_constraint(prev_goal <= prev_obj + tolerance)
                     else:
                         pass_ct = m._post_constraint(prev_goal >= prev_obj - tolerance)
                     pass_ct.name = "lex_{0}_ct".format(pass_count)
-                    lex_info("pass #{0} generated constraint with rhs: {1}, tolerance={2:.3f}"
+                    lex_info("pass #{0} generated constraint with rhs: {1}, tolerance={2:.3g}"
                              .format(pass_count, str(pass_ct.rhs), tolerance))
                     extra_cts.append(pass_ct)
 
@@ -5047,8 +5152,8 @@ class Model(object):
                 m.set_objective(sense, goal_expr)
 
                 if write_pass_files:  # pragma: no cover
-                    pass_basename = 'lex_%s_%s#%d' % (self.name, goal_name, pass_count)
-                    dump_path = self.export_as_sav(basename=pass_basename)
+                    pass_basename = f"lex_{self.name}_{goal_name}_pass{pass_count}"
+                    dump_path = self.export_as_lp(path='.', basename=pass_basename)
                     lex_info("saved pass file: {0}".format(dump_path))
 
                 # --- update pass parameters, if any
@@ -5074,6 +5179,15 @@ class Model(object):
                     prev_step = (goal_expr, current_obj, sense)
                     all_solutions.append(current_sol)
                     lex_info("objective value for pass #{0} is: {1}".format(pass_count, current_sol.objective_value))
+                    if write_pass_files:
+                        pass_basename = f"lex_{self.name}_{goal_name}_pass{pass_count}"
+                        if self.problem_type == 'LP':
+                            bas_path = self.export_basis(path='.', basename=pass_basename)
+                            lex_info("saved pass basis file: {0}".format(bas_path))
+                        else:
+                            write_level = kwargs.get('write_level', 'auto')
+                            mst_path = current_sol.export_as_mst(path='.', basename=pass_basename, write_level=write_level)
+                            lex_info("saved pass MST file: {0}".format(mst_path))
                     if solution_callbackfn:
                         solution_callbackfn(current_sol)
 
@@ -5090,7 +5204,7 @@ class Model(object):
                 # using LIFO logic to avoid holes in indices.
                 ct_to_remove = extra_cts.pop()
                 # print("* removing constraint: name: {0}, idx: {1}".format(ct_to_remove.name, ct_to_remove.index))
-                self.pop_constraint() # self._remove_constraint_internal(ct_to_remove)
+                self._remove_constraint_internal(ct_to_remove)
             # restore objective whatsove
             self.set_objective(old_objective_sense, old_objective_expr)
             # print("<- end restoring model at end of lexicographic")
@@ -5132,7 +5246,7 @@ class Model(object):
         # either a MIP or we don't care...
         return True
 
-    def add_mip_start(self, mip_start_sol, effort_level=None):
+    def add_mip_start(self, mip_start_sol, effort_level=None, write_level=None, complete_vars=False, eps_zero=1e-6):
         """  Adds a (possibly partial) solution to use as a starting point for a MIP.
 
         This is valid only for models with binary or integer decision variables.
@@ -5140,19 +5254,55 @@ class Model(object):
 
         This feature is also known as 'warm start'.
 
+        The solution passed in input is copied into a new instance of :class:`docplex.mp.SolveSolution`.
+        Depending on the "write_level" argument, some filtering operations can be performed: by default (no
+        explicit write level) only discrete variables are copied. When an explicit level is passed,
+        the level controls whether zero values are passed ore not: for example "WiteLevel.NonZeroDiscreteVars" specifies
+        only copying non zero values for discrete variables.
+
         Args:
             mip_start_sol (:class:`docplex.mp.solution.SolveSolution`): The solution object to use as a starting point.
+            write_level: an optional enumerated value from class :class:`docplex.mp.constants.WriteLevel`, controlling
+                which variables are copied to the MIP start solution. By default, only discrete variables are copied.
+            complete_vars: optinal flag. If False (default), only variables mentioned in the solution are copied. If True,
+                all variables in the model are copied to the MIP start.
             effort_level: an optional enumerated value of class :class:`docplex.mp.constants.EffortLevel`, or None.
 
+        Returns:
+            an instance of :class:`doplex.mp.SolveSolution`, different from the one passed in input if the conversion succeeds,
+            else None (typically for LP models).
+
+        Examples:
+            The default values correspond to copying only variables explicitly mentioned in the passed solution,
+            copying only discrete variables, including zeros.
+            To exclude zeros, use
+
+            >>> mdl.add_mip_start(sol, write_level=WriteLevel.NonZeroDiscreteVars)
+
+            To include all variables in the model, wincluding continuous ones, use:
+
+            >>> mdl.add_mip_start(sol, write_level=WriteLevel.AllVars, complete_vars=True)
+
+        See Also:
+            :class:`docplex.mp.constants.EffortLevel`
+            :class:`docplex.mp.constants.WriteLevel`
+            :class:`docplex.mp.solution.SolveSolution`
+
         """
+        assert eps_zero >= 0
+        assert eps_zero < 1
+        mip_start_ = None
         if self._check_solved_as_mip(caller="Model.add_mip_start", do_raise=False):
             try:
-                mip_start_ = mip_start_sol.as_mip_start()
+                mip_start_ = mip_start_sol.as_mip_start(write_level=write_level,
+                                                        complete_vars=bool(complete_vars),
+                                                        eps_zero=eps_zero)
                 mip_start_.check_as_mip_start()
                 effort = EffortLevel.parse(effort_level)
                 self._mipstarts.append((mip_start_, effort))
             except AttributeError:
                 self.fatal("add_mip_starts expects solution, {0!r} was passed", mip_start_sol)
+        return mip_start_
 
     @property
     def mip_starts(self):
@@ -5210,8 +5360,8 @@ class Model(object):
             and the second element is an enumerated value of type `EffortLevel`
 
         See Also:
-            :class: `docplex.mp.constants.EffortLevel`
-            :class: `docplex.mp.solution.SolveSolution`
+            :class:`docplex.mp.constants.EffortLevel`
+            :class:`docplex.mp.solution.SolveSolution`
 
         * New in version 2.10*
 
@@ -5991,8 +6141,8 @@ class Model(object):
         :param kpi_format: an optional format to print the KPi name and its value.
 
         See Also:
-            :class: `docplex.mp.solution.SolveSolution`
-            :func: `new_solution`
+            :class:`docplex.mp.solution.SolveSolution`
+            :func:`new_solution`
         """
         kpi_num_format = kpi_format + self._float_meta_format % (2,)
         kpi_str_format = kpi_format + '{2!s}'
@@ -6146,8 +6296,8 @@ class Model(object):
             float: The KPI value.
 
         See Also:
-            :class: `docplex.mp.solution.SolveSolution`
-            :func: `new_solution`
+            :class:`docplex.mp.solution.SolveSolution`
+            :func:`new_solution`
         """
         kpi = self.kpi_by_name(name, try_match, match_case=match_case, do_raise=True)
         return kpi.compute(solution)
@@ -6344,6 +6494,7 @@ class Model(object):
         for ctn in self.iter_var_containers():
             copied_ctn = ctn.copy(copy_model)
             ctn_map[ctn] = copied_ctn
+            copy_model._add_var_container(copied_ctn)
 
         # clone variables
         def make_memo():
@@ -6388,6 +6539,8 @@ class Model(object):
             return memo
 
         memo = make_memo()
+
+
 
         # copy constraints
         setof_removed_cts = set(removed_cts) if removed_cts else {}
@@ -6637,7 +6790,7 @@ class Model(object):
             self.fatal("A {0:s} variable set must contain at least {1:d} variables, got: {2:d}",
                        sos_type.name, sos_type.size, nb_vars)
         elif nb_vars == sos_type.size:
-            self.warning("{0:s} variable is trivial, conrtains {1} variable(s): all variables set to 1",
+            self.warning("{0:s} variable is trivial, contains {1} variable(s): all variables set to 1",
                        sos_type.name, sos_type.size)
         lweights = StaticTypeChecker.typecheck_optional_num_seq(self, weights, accept_none=True, expected_size=nb_vars,
                                                                 caller='Model.add_sos')
@@ -6853,7 +7006,7 @@ class Model(object):
 
     def iter_benders_annotations(self):
         self_benders = self._benders_annotations
-        return six.iteritems(self_benders) if self_benders is not None else iter([])
+        return self_benders.items() if self_benders is not None else iter([])
 
     def clear_benders_annotations(self):
         self._benders_annotations = None
@@ -6887,8 +7040,6 @@ class Model(object):
         #
         # :return: an instance of the callback
         #
-        # See Also:
-        #     :class: `docplex.mp.callbacks.ModelcallbackMixin`
         cplex_cb = self.__engine.register_callback(cb_type)
         if cplex_cb:
             cplex_cb._model = self
@@ -6901,8 +7052,9 @@ class Model(object):
         for sc in no_pwl_scopes:
             for x in sc.iter_objects():
                 x.resolve()
-        # this call updates the dict so we must iterate on somethibg else.
-        pwls = [pw for pw in self._pwl_scope.iter_objects()]
+        # this call updates the dict so we must iterate on something else.
+        #pwls = [pw for pw in self._pwl_scope.iter_objects()]
+        pwls = list(self._pwl_scope.iter_objects())
         # BEWARE: need this temp list as resolve will modify the dict, so canno titerate on it.
         for pw in pwls:
             pw.resolve()

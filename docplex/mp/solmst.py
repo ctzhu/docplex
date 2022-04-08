@@ -6,10 +6,11 @@
 
 # gendoc: ignore
 
+from itertools import zip_longest as  izip_longest
+
 from docplex.mp.utils import is_iterable, OutputStreamAdapter
 from docplex.mp.format import LPFormat
 from docplex.mp.constants import EffortLevel, WriteLevel
-from docplex.mp.compat23 import izip_longest
 from docplex.mp.solprinter import SolutionPrinter
 
 
@@ -91,7 +92,7 @@ class SolutionMSTPrinter(SolutionPrinter):
               .format(var_name, var_index, var_value, rc_string))
         """
         print_generated = self.print_generated_vars
-        filter_discrete = write_level.filter_discrete()
+        filter_discrete = write_level.filter_nondiscrete()
         eps = 1e-16
         if write_level.filter_zeros():
             for dvar, _ in sol.iter_var_values():
@@ -155,34 +156,3 @@ class SolutionMSTPrinter(SolutionPrinter):
         # <CPLEXSolutions version="1.0">
         osa.write(self.many_solution_end_tag)
         osa.write("\n")
-
-    # @classmethod
-    # def print_to_stream(cls, solutions, out, **kwargs):
-    #     use_lp_names = kwargs.get('use_lp_names', True)
-    #     effort_level = kwargs.get('effort_level', None)
-    #     write_level = WriteLevel.parse(kwargs.get('write_level', WriteLevel.Auto))
-    #     if out is None:
-    #         # prints on standard output
-    #         cls._print_to_stream2(sys.stdout, solutions, write_level, use_lp_names)
-    #     elif isinstance(out, str):
-    #         # a string is interpreted as a path name
-    #         extension = cls.mst_extension
-    #         path = out if out.endswith(extension) else out + extension
-    #         with open(path, "w") as of:
-    #             cls._print_to_stream2(of, solutions, write_level, use_lp_names, effort_level)
-    #             # print("* file: %s overwritten" % path)
-    #     else:
-    #         try:
-    #             cls._print_to_stream2(out, solutions, write_level, use_lp_names, effort_level)
-    #
-    #         except AttributeError as pe:  # pragma: no cover
-    #             pass  # pragma: no cover
-    #             # stringio will raise an attribute error here, due to with
-    #             # print("Cannot use this an output: %s" % str(out))
-    #
-    # @classmethod
-    # def print_to_string(cls, solutions, write_level=WriteLevel.Auto, **kwargs):
-    #     from docplex.mp.compat23 import StringIO
-    #     oss = StringIO()
-    #     cls.print_to_stream(solutions, out=oss, write_level=write_level, **kwargs)
-    #     return oss.getvalue()

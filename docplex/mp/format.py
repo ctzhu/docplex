@@ -7,7 +7,6 @@
 # gendoc: ignore
 
 import re
-from six import PY2
 from docplex.mp.utils import is_string
 
 
@@ -79,7 +78,7 @@ class LPFormat(ExchangeFormat):
     __raw = " -+/\\<>"
     __cooked = "_mp____"
 
-    from docplex.mp.compat23 import mktrans
+    from docplex.mp.utils import mktrans
 
     _str_translate_table = mktrans(__raw, __cooked)
     _unicode_translate_table = {}
@@ -100,15 +99,12 @@ class LPFormat(ExchangeFormat):
         return raw_name.translate(cls._unicode_translate_table)
 
     # which translate_method to use
-    if PY2:
-        _translate_chars = _translate_chars_py2
-    else:  # pragma: no cover
-        _translate_chars = _translate_chars_py3
+    _translate_chars = _translate_chars_py3
 
     def __init__(self):
         ExchangeFormat.__init__(self, "LP", "lp", requires_cplex=False)
 
-    lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&()/.,;?@_`'{}|\"]*")
+    lp_re = re.compile(r"[a-df-zA-DF-Z!#$%&()/,;?@_`'{}|\"][a-zA-Z0-9!#$%&~()/.,;?@_`'{}|\"]*")
 
     @classmethod
     def is_lp_compliant(cls, name, lp_re=lp_re):

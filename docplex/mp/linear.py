@@ -5,12 +5,7 @@
 # --------------------------------------------------------------------------
 
 # pylint: disable=too-many-lines
-from __future__ import print_function
-
-from six import iteritems
-
 from docplex.mp.constants import ComparisonType, UpdateEvent
-from docplex.mp.compat23 import unitext
 from docplex.mp.basic import Expr, ModelingObjectBase, _SubscriptionMixin
 from docplex.mp.operand import LinearOperand
 from docplex.mp.utils import is_int, is_number, iter_emptyset, is_quad_expr
@@ -70,6 +65,7 @@ class AbstractLinearExpr(LinearOperand, Expr):
     def set_coefficients(self, var_coef_seq):
         for dv, k in var_coef_seq:
             self.set_coefficient(dv, k)
+
 
 class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
     # INTERNAL
@@ -348,7 +344,7 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
                 self._num_to_stringio(oss, num=self_coef, ndigits=nb_digits)
             if use_space:
                 oss.write(u' ')
-        oss.write(unitext(var_namer(self._dvar)))
+        oss.write(str(var_namer(self._dvar)))
 
     def __repr__(self):
         return "docplex.mp.MonomialExpr(%s)" % self.to_string()
@@ -380,31 +376,14 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         # INTERNAL
         return self._terms
 
-    def __typecheck_terms_dict(self, terms):  # pragma: no cover
-        if not isinstance(terms, dict):
-            self.fatal("expecting expression terms as python dict, got: {0!s}", terms)
-        self_model = self.model
-        for (v, k) in iteritems(terms):
-            self_model._typecheck_var(v)
-            self_model._typecheck_num(k, 'LinearExpr:importTerms')
-
-    def _assign_terms(self, terms, is_safe=False, assume_normalized=False):  # pragma: no cover
-        if not is_safe:
-            self.__typecheck_terms_dict(terms)
-        if assume_normalized:
-            self._terms = terms
-        else:
-            self._terms = self._model._lfactory.term_dict_type(iteritems(terms))
-        return self
-
     __slots__ = ('_constant', '_terms', '_transient', '_subscribers')
 
     def __hash__(self):
         # py3 requires this function
         return id(self)
 
-    def __init__(self, model, e=None, constant=0, name=None, safe=False, transient=False):
-        ModelingObjectBase.__init__(self, model, name)
+    def __init__(self, model, e=None, constant=0, safe=False, transient=False):
+        ModelingObjectBase.__init__(self, model)
         if not safe and constant:
             model._typecheck_num(constant, 'LinearExpr()')
         self._constant = constant
@@ -416,7 +395,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                 self._terms = e
             else:
                 self_terms = model._lfactory.term_dict_type()
-                for (v, k) in iteritems(e):
+                for (v, k) in e.items():
                     model._typecheck_var(v)
                     model._typecheck_num(k, 'LinearExpr')
                     if k != 0:
@@ -470,16 +449,16 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         else:
             return self.clone()
 
-    def set_name(self, name):
-        Expr.set_name(self, name)
-        # an expression with a name is not transient any more
-        if name:
-            self.keep()
-
-    def _get_name(self):
-        return self._name
-
-    name = property(_get_name, set_name)
+    # def set_name(self, name):
+    #     Expr.set_name(self, name)
+    #     # an expression with a name is not transient any more
+    #     if name:
+    #         self.keep()
+    #
+    # def _get_name(self):
+    #     return self._name
+    #
+    # name = property(_get_name, set_name)
 
     # from private.debug_deco import count_calls
     # @count_calls
@@ -515,7 +494,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         """
         self._constant = - self._constant
         self_terms = self._terms
-        for v, k in iteritems(self_terms):
+        for v, k in self_terms.items():
             self_terms[v] = -k
         self.notify_modified(event=UpdateEvent.LinExprGlobal)
         return self
@@ -552,7 +531,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def as_variable(self):
         # INTERNAL: returns True if expression is in fact a variable (1*x)
-        if 0 == self.constant and 1 == len(self._terms):
+        if 1 == len(self._terms) and not self._constant:
             for v, k in self.iter_terms():
                 if k == 1:
                     return v
@@ -758,7 +737,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
                     oss.write(SP)
 
             varname = var_namer(v)
-            oss.write(unitext(varname))
+            oss.write(str(varname))
             c += 1
 
         k = self.constant
@@ -838,7 +817,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         Returns:
             An iterator over the (variable, coefficient) pairs in the expression.
         """
-        return iteritems(self._terms)
+        return self._terms.items()
 
     def number_of_terms(self):
         return len(self._terms)
@@ -899,7 +878,7 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         elif factor != 1:
             self._constant *= factor
             self_terms = self._terms
-            for v, k in iteritems(self_terms):
+            for v, k in self_terms.items():
                 self_terms[v] = k * factor
 
     def multiply(self, e):

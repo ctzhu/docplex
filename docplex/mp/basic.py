@@ -4,27 +4,90 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-import sys
-from io import StringIO
-
-from enum import Enum
+from abc import abstractmethod, ABCMeta
 
 from docplex.mp.operand import Operand
-from docplex.mp.utils import is_number, is_string
 from docplex.mp.sttck import StaticTypeChecker
 
 
 # noinspection PyUnusedLocal,PyPropertyAccess
 
-class _ModelMixin(object):
-    # a base mixin class to hold the `model` abstract property
-    # used by all sub mixins
+class _AbstractModelObject(metaclass=ABCMeta):
+    """
+    Abstract API for all classes which have a "model" property.
+    """
+
+    @property
+    @abstractmethod
+    def model(self):  # pragma: no cover
+        raise NotImplemented
+
+    def is_in_model(self, mdl):
+        return self.model is mdl
+
+    def get_linear_factory(self):
+        return self.model._lfactory
+
+    @property
+    def lfactory(self):
+        return self.model._lfactory
+
+    @property
+    def qfactory(self):
+        return self.model._qfactory
+
+    def _check_model_has_solution(self):
+        self.model._check_has_solution()
+
+    @property
+    def error_handler(self):
+        return self.logger
+
+    @property
+    def logger(self):
+        return self.model.error_handler
+
+    def fatal(self, msg, *args):
+        self.logger.fatal(msg, args)
+
+    def error(self, msg, *args):
+        self.logger.error(msg, args)
+
+    def warning(self, msg, *args):
+        self.logger.warning(msg, args)
+
+
+class _AbstractValuable(_AbstractModelObject):
+    # abstract API for all objects which can be evaluated from a solution.
 
     __slots__ = ()
 
-    @property
-    def model(self):
+    def _round_if_discrete(self, raw_value):
+        return self.model._round_element_value_if_necessary(self, raw_value)
+
+    @abstractmethod
+    def _raw_solution_value(self, s=None):
+        # INTERNAL: compute raw solution value, no rounding, no checking
         raise NotImplementedError  # pragma: no cover
+
+    @property
+    def solution_value(self):
+        self.model._check_has_solution()
+        raw = self._raw_solution_value()
+        return self._round_if_discrete(raw)
+
+    @property
+    def raw_solution_value(self):
+        self.model._check_has_solution()
+        return self._raw_solution_value()
+
+    @property
+    def sv(self):
+        return self.solution_value
+
+    @property
+    def rsv(self):
+        return self.raw_solution_value
 
 
 class _SubscriptionMixin(object):
@@ -88,7 +151,7 @@ class _SubscriptionMixin(object):
         other.clear_subscribers()
 
 
-class _BendersAnnotatedMixin(_ModelMixin):
+class _AbstractBendersAnnotated(_AbstractModelObject):
     # a maxin class to group all benders-related code.
     __slots__ = ()
 
@@ -99,147 +162,57 @@ class _BendersAnnotatedMixin(_ModelMixin):
         return self.model.get_benders_annotation(self)
 
 
-class _ValuableMixin(_ModelMixin):
-    # a mixin class to group code related to solution evaluation.
-    # common to expressions and variables.
+class _AbstractNamable(metaclass=ABCMeta):
 
-    __slots__ = ()
-
-    def _round_if_discrete(self, raw_value):
-        return self.model._round_element_value_if_necessary(self, raw_value)
-
-    def _raw_solution_value(self, s=None):
-        # INTERNAL: compute raw solution value, no rounding, no checking
-        raise NotImplementedError  # pragma: no cover
+    # abstract name API across all modeling objects.
 
     @property
-    def solution_value(self):
-        self.model._check_has_solution()
-        raw = self._raw_solution_value()
-        return self._round_if_discrete(raw)
+    @abstractmethod
+    def name(self):  # pragma: no cover
+        raise NotImplemented
 
-    @property
-    def raw_solution_value(self):
-        self.model._check_has_solution()
-        return self._raw_solution_value()
+    @abstractmethod
+    def _set_name(self, new_name):  # pragma: no cover
+        raise NotImplementedError
 
-    # tiny names
-    sv = solution_value
-    rsv = raw_solution_value
-
-
-class ModelingObjectBase(object):
-    """ModelingObjectBase()
-
-    Parent class for all modeling objects (variables and constraints).
-
-    This class is not intended to be instantiated directly.
-    """
-
-    __array_priority__ = 100
-
-    __slots__ = ("_name", "_model")
-
-    def __init__(self, model, name=None):
-        self._name = name
-        self._model = model
-
-    @property
-    def name(self):
-        """ This property is used to get or set the name of the modeling object.
-
-        """
-        return self._name
-
-    @name.setter
-    def name(self, new_name):
-        self.set_name(new_name)
+    def check_name(self, new_name):
+        pass
 
     def get_name(self):
-        return self._name
+        # deprecate
+        return self.name
 
     def set_name(self, new_name):
         self.check_name(new_name)
         self._set_name(new_name)
 
-    def _set_name(self, name):
-        self._name = name
-
     @property
     def safe_name(self):
-        return self._name or ''
-
-    def check_name(self, new_name):
-        # INTERNAL: basic method for checking names.
-        pass  # pragma: no cover
+        return self.name or ''
 
     def check_lp_name(self, qualifier, new_name, accept_empty, accept_none):
         return StaticTypeChecker.check_lp_name(logger=self, qualifier=qualifier, obj=self, new_name=new_name,
                                                accept_empty=accept_empty, accept_none=accept_none)
 
     def has_name(self):
-        """ Checks whether the object has a name.
-
-        Returns:
-            True if the object has a name.
-
-        """
-        return self._name is not None
+        return self.name is not None
 
     def has_user_name(self):
-        """ Checks whether the object has a valid name given by the user.
-
-        Returns:
-            True if the object has a valid name given by the user.
-
-        """
         return self.has_name()
+
+
+class ModelObject(_AbstractModelObject):
+    # base for all model objects
+    __array_priority__ = 100
+
+    __slots__ = ('_model',)
+
+    def __init__(self, model):
+        self._model = model
 
     @property
     def model(self):
-        """
-        This property returns the :class:`docplex.mp.model.Model` to which the object belongs.
-        """
         return self._model
-
-    def is_in_model(self, mdl):
-        """
-        Returns True if this object belongs yo the `mdl model.
-
-        Args:
-            mdl: an instance of :class:`docplex.mp.model.Model`.
-        """
-        return self.model is mdl
-
-    def get_linear_factory(self):
-        return self._model._lfactory
-
-    @property
-    def lfactory(self):
-        return self._model._lfactory
-
-    @property
-    def qfactory(self):
-        return self._model._qfactory
-
-    def _check_model_has_solution(self):
-        self.model._check_has_solution()
-
-    def fatal(self, msg, *args):
-        self.error_handler.fatal(msg, args)
-
-    def error(self, msg, *args):
-        self.error_handler.error(msg, args)
-
-    def warning(self, msg, *args):
-        self.error_handler.warning(msg, args)
-
-    def trace(self, msg, *args):
-        self.error_handler.trace(msg, args)
-
-    @property
-    def error_handler(self):
-        return self._model.error_handler
 
     def repr_str(self):
         # INTERNAL
@@ -255,14 +228,68 @@ class ModelingObjectBase(object):
     def _unsupported_binary_operation(self, lhs, op, rhs):
         self.fatal("Unsupported operation: {0!s} {1:s} {2!s}", lhs, op, rhs)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.to_string(use_space=self._model.str_use_space)
 
-    def __str__(self):
-        if sys.version_info[0] == 2:
-            return self.__unicode__().encode('utf-8')
-        else:  # pragma: no cover
-            return self.__unicode__()
+    # def to_string(self):
+    #     raise NotImplementedError
+
+
+class ModelingObjectBase(ModelObject, _AbstractNamable):
+    """ModelingObjectBase()
+
+    Parent class for all modeling objects (variables and constraints).
+
+    This class is not intended to be instantiated directly.
+    """
+
+    __array_priority__ = 100
+
+    __slots__ = ('_name',)
+
+    # noinspection PyMissingConstructor
+    def __init__(self, model, name=None):
+        self._name = name
+        self._model = model
+
+    @property
+    def name(self):
+        """ This property is used to get or set the name of the modeling object.
+
+        """
+        return self._name
+
+    @name.setter
+    def name(self, new_name):
+        self.set_name(new_name)
+
+    def _set_name(self, name):
+        self._name = name
+
+    def has_name(self):
+        """ Checks whether the object has a name.
+
+        Returns:
+            True if the object has a name.
+
+        """
+        return super().has_name()
+
+    def has_user_name(self):
+        """ Checks whether the object has a valid name given by the user.
+
+        Returns:
+            True if the object has a valid name given by the user.
+
+        """
+        return self.has_name()
+
+    @property
+    def model(self):
+        """
+        This property returns the :class:`docplex.mp.model.Model` to which the object belongs.
+        """
+        return super().model
 
 
 class IndexableObject(ModelingObjectBase):
@@ -305,7 +332,7 @@ class IndexableObject(ModelingObjectBase):
 
     @property
     def model(self):
-        return  self._model
+        return self._model
 
     @property
     def index(self):
@@ -344,29 +371,29 @@ class IndexableObject(ModelingObjectBase):
         self._model.set_var_container(self, ctn)
 
     def get_scope(self):
-        scope = None
         try:
             cpx_scope = self.cplex_scope
             return self.model._get_obj_scope(cpx_scope, error='ignore')
         except AttributeError:
-            pass
-            pass
-        return scope
+            return None
 
     @property
     def scope(self):
         return self.get_scope()
 
 
-
-class Expr(ModelingObjectBase, Operand, _ValuableMixin):
+class Expr(ModelObject, Operand, _AbstractValuable):
     """Expr()
 
     Parent class for all expression classes.
     """
     __slots__ = ()
 
-    def clone(self):
+    @property
+    def name(self):
+        return None
+
+    def clone(self):  # pragma: no cover
         raise NotImplementedError  # pragma: no cover
 
     def iter_variables(self):
@@ -395,6 +422,7 @@ class Expr(ModelingObjectBase, Operand, _ValuableMixin):
         return any(dvar is v for v in self.iter_variables())
 
     def to_string(self, nb_digits=None, use_space=False):
+        from io import StringIO
         oss = StringIO()
         if nb_digits is None:
             nb_digits = self.model.float_precision
@@ -426,11 +454,15 @@ class Expr(ModelingObjectBase, Operand, _ValuableMixin):
                 oss.write(u' ')
         # INTERNAL
         ndigits = ndigits or self.model.float_precision
-        if k == int(k):
-            oss.write(u'%d' % k)
-        else:
-            # use second arg as nb digits:
-            oss.write(u"{0:.{1}f}".format(k, ndigits))
+        try:
+            if k == int(k):
+                oss.write(u'%d' % k)
+            else:
+                # use second arg as nb digits:
+                oss.write(u"{0:.{1}f}".format(k, ndigits))
+        except ValueError:
+            # possibly a nan
+            oss.write('?')
 
     # def __pos__(self):
     #     # + e is identical to e
@@ -482,138 +514,6 @@ class Expr(ModelingObjectBase, Operand, _ValuableMixin):
         """
         self.model.unsupported_relational_operator_error(self, "<", e)
 
-
-
-
-# --- Priority class used for relaxation
-class Priority(Enum):
-    """
-    This enumerated class defines the priorities: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH, MANDATORY.
-    """
-
-    def __new__(cls, value, print_name):
-        obj = object.__new__(cls)
-        # predefined
-        obj._value_ = value
-        obj._print_name = print_name
-        return obj
-
-    VERY_LOW = 100, 'Very Low'
-    LOW = 200, 'Low'
-    MEDIUM = 300, 'Medium'
-    HIGH = 400, 'High'
-    VERY_HIGH = 500, 'Very High'
-    MANDATORY = 999999999, 'Mandatory'
-
-    def __repr__(self):
-        return 'Priority<{}>'.format(self.name)
-
-    @property
-    def cplex_preference(self):
-        return self._get_geometric_preference_factor(base=10.0)
-
-
-    def _get_geometric_preference_factor(self, base):
-        # INTERNAL: returns a CPLEX preference factor as a power of "base"
-        # MEDIUM priority is the balance point with a preference of 1.
-        assert is_number(base)
-
-        if self.is_mandatory():
-            return 1e+20
-        else:
-            # noinspection PyTypeChecker
-            medium_index = Priority.MEDIUM.value / 100
-            # pylint complains about no value member but is wrong!
-            diff = self.value / 100 - medium_index
-            factor = 1.0
-            pdiff = diff if diff >= 0 else -diff
-            for _ in range(0, int(pdiff)):
-                factor *= base
-            return factor if diff >= 0 else 1.0 / factor
-
-    def less_than(self, other):
-        assert isinstance(other, Priority)
-        return self.value < other.value
-
-    def __lt__(self, other):
-        return self.less_than(other)
-
-    def __gt__(self, other):
-        return other.less_than(self)
-
-    def is_mandatory(self):
-        return self == Priority.MANDATORY
-
-    @classmethod
-    def parse(cls, arg, logger, accept_none=True, do_raise=True):
-        ''' Converts its argument to a ``Priority`` object.
-
-        Returns `default_priority` if the text is not a string, empty, or does not match.
-
-        Args;
-            arg: The argument to convert.
-
-            logger: An error logger
-
-            accept_none: True if None is a possible value. Typically,
-                Constraint.set_priority accepts None as a way to
-                remove the constraint's own priority.
-
-            do_raise: A Boolean flag indicating if an exception is to be raised if the value
-                is not recognized.
-
-        Returns:
-            A Priority enumerated object.
-        '''
-        if isinstance(arg, cls):
-            return arg
-        elif is_string(arg):
-            key = arg.lower()
-            # noinspection PyTypeChecker
-            for p in cls:
-                if key == p.name.lower() or key == str(p.value):
-                    return p
-            if do_raise:
-                logger.fatal('String does not match priority type: {}', arg)
-            else:
-                logger.error('String does not match priority type: {}', arg)
-                return None
-            return None
-        elif accept_none and arg is None:
-            return None
-        else:
-            logger.fatal('Cannot convert to a priority: {0!s}'.format(arg))
-
-
 # ---
-
-
-class UserPriority(object):
-
-    def __init__(self, pref, name=None):
-        assert pref >= 0
-        self._preference = pref
-        self._name = name
-
-    @property
-    def cplex_preference(self):
-        return self._preference
-
-    # noinspection PyMethodMayBeStatic
-    def is_mandatory(self):
-        return False
-
-    @property
-    def name(self):
-        return self._name or '_user_'
-
-    @property
-    def value(self):
-        return self._preference
-
-    def __str__(self):
-        name = self._name
-        sname = '%s: ' % name if name else ''
-        return 'UserPriority({0}{1})'.format(sname, self._preference)
 
 

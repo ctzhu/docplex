@@ -6,8 +6,6 @@
 
 # gendoc: ignore
 
-from six import iteritems
-
 from docplex.mp.model import Model
 from docplex.mp.aggregator import ModelAggregator
 from docplex.mp.quad import VarPair
@@ -17,7 +15,6 @@ from docplex.mp.utils import is_number, is_iterable, generate_constant, \
 from docplex.mp.ds_utils import is_scipy_sparse
 from docplex.mp.constants import ComparisonType
 
-from docplex.mp.compat23 import izip
 from docplex.mp.xcounter import update_dict_from_item_value
 
 
@@ -73,7 +70,7 @@ class AdvAggregator(ModelAggregator):
         qcc = self._term_dict_type()
         lcc = self._term_dict_type()
         number_validation_fn = self._checker.get_number_validation_fn()
-        for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
+        for coef, lterm, rterm in zip(coefs, left_terms, right_terms):
             if coef:
                 safe_coef = number_validation_fn(coef) if number_validation_fn else coef
                 lcst = lterm.get_constant()
@@ -99,11 +96,11 @@ class AdvAggregator(ModelAggregator):
         qcc = dcc()
         number_validation_fn = self._checker.get_number_validation_fn()
         if number_validation_fn:
-            for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
+            for coef, lterm, rterm in zip(coefs, left_terms, right_terms):
                 safe_coef = number_validation_fn(coef) if number_validation_fn else coef
                 update_dict_from_item_value(qcc, VarPair(lterm, rterm), safe_coef)
         else:
-            for coef, lterm, rterm in izip(coefs, left_terms, right_terms):
+            for coef, lterm, rterm in zip(coefs, left_terms, right_terms):
                 update_dict_from_item_value(qcc, VarPair(lterm, rterm), coef)
         return self._to_expr(qcc=qcc)
 
@@ -159,7 +156,6 @@ class AdvAggregator(ModelAggregator):
         return self._to_expr(qcc=qterms)
 
 
-
 # noinspection PyProtectedMember
 class AdvModel(Model):
     """
@@ -169,7 +165,7 @@ class AdvModel(Model):
     _fast_settings = {'keep_ordering': False, 'keep_all_exprs': False}
 
     def __init__(self, name=None, context=None, **kwargs):
-        for k, v in iteritems(self._fast_settings):
+        for k, v in self._fast_settings.items():
             if k not in kwargs:
                 # force fast settings if not present
                 kwargs[k] = v
@@ -309,7 +305,7 @@ class AdvModel(Model):
         This method is faster than the standard generic scalar quadratic product method due to the fact that it takes only variables and does not take expressions as arguments.
 
         Example:
-            `Model.scal_prod_vars_triple([x, y], [z, t], [2, 3])` returns the expression `2xz + 3yt`.
+            `Model.scal_prod_triple_vars([x, y], [z, t], [2, 3])` returns the expression `2xz + 3yt`.
 
         :param left_terms: A list or an iterator on variables.
         :param right_terms: A list or an iterator on variables.
@@ -370,8 +366,6 @@ class AdvModel(Model):
         <op> is the comparison operator that defines the sense of the constraint. By default, this generates
         a 'less-than-or-equal' constraint.
 
-        Example:
-            `Model.scal_prod_vars_triple([x, y], [z, t], [2, 3])` returns the expression `2xz + 3yt`.
 
         :param coef_mat: A matrix of coefficients with M rows and N columns. This argument accepts
             either a list of lists of numbers, a `numpy` array with size (M,N), or a `scipy` sparse matrix.
@@ -396,11 +390,11 @@ class AdvModel(Model):
 
             then::
 
-                `mdl.matrix_constraint(A, X, B, 'GE')` returns a list of two constraints
+                `mdl.matrix_constraints(A, X, B, 'ge')` returns a list of two constraints
                 [(x + 2y+3z <= 100), (4x + 5y +6z <= 200)].
 
         Note:
-            If the dimensions of the matrix and variables or of the matrix and number sequence do not match,
+            If the dimensions of the matrix and variables, or if the matrix and rhs shapes do not match,
             an error is raised.
 
         """
@@ -485,7 +479,7 @@ class AdvModel(Model):
 
             then::
 
-                `mdl.range_constraints(A, X, L, U)` returns a list of two ranges
+                `mdl.matrix_ranges(A, X, L, U)` returns a list of two ranges
                 [(101 <= x + 2y+3z <= 102), (201 <= 4x + 5y +6z <= 202)].
 
         Note:

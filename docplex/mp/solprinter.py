@@ -49,7 +49,7 @@ class SolutionPrinter(object):
             self._print_to_stream2(out, solutions, **kwargs)
 
     def print_to_string(self, solutions, **kwargs):
-        from docplex.mp.compat23 import StringIO
+        from io import StringIO
         with StringIO() as oss:
             self.print_to_stream(solutions, out=oss, **kwargs)
             return oss.getvalue()

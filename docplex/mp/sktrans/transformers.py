@@ -17,7 +17,6 @@ except ImportError:
     
 from docplex.mp.constants import ObjectiveSense
 from docplex.mp.sktrans.modeler import make_modeler
-from docplex.mp.ds_utils import is_scipy_sparse
 from docplex.mp.utils import *
 from docplex.mp.ds_utils import is_scipy_sparse
 
@@ -208,7 +207,7 @@ class CplexTransformer(CplexTransformerBase):
         nb_vars = nc - 1
         #  convert to coo before iterate()
         x_coo = X.tocoo()
-        cts_sparse_coefs = izip(x_coo.data, x_coo.row, x_coo.col)
+        cts_sparse_coefs = zip(x_coo.data, x_coo.row, x_coo.col)
         return self.build_sparse_linear_model_and_solve(nb_vars, var_lbs, var_ubs, var_types,colnames,
                                                         nr, cts_sparse_coefs,
                                                         objsense=self.objsense, costs=y, **params)

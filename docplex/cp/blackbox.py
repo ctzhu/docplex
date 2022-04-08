@@ -21,6 +21,7 @@ that contains:
  * the number of values that are returned by the evaluation of the function, one by default,
  * the list of argument types, auto-determined if not given,
  * the implementation of the function,
+ * optionally an argument to pass known result bounds when evaluating the function,
  * an indicator allowing parallel evaluation of the blackbox function, False by default.
 
 Each argument type can be given using its symbolic name string, or using its corresponding
@@ -86,6 +87,12 @@ libraries that are not designed to run concurrently.
 By default, blackbox function evaluation is then executed in mutual exclusion, but this can be changed by setting
 the parameter *parallel* to True, or using method :meth:`~CpoBlackboxFunction.set_parallel_eval`
 
+To avoid calling the blackbox function multiple times with the same parameters, the solver can use a cache that may be
+configured at the declaration of the blackbox.
+This cache is by default local to each call instance of the blackbox function in the model, in case the evaluation
+of the function depends on the calling context and may return different results with the same parameters depending
+where the call is placed in the model.
+
 
 Using a blackbox function in a model
 ------------------------------------
@@ -127,7 +134,7 @@ from itertools import count
 # Constants
 #-----------------------------------------------------------------------------
 
-# List of possible argument types
+# List of possible argument types (DO NOT CHANGE AS ENCODING DEPENDS ON IT)
 ARGUMENT_TYPES = (Type_Int, Type_IntVar, Type_IntExpr,
                   Type_Float, Type_FloatExpr,
                   Type_IntervalVar, Type_SequenceVar,
@@ -159,6 +166,7 @@ class CpoBlackboxFunction(object):
      * the list argument types,
      * the implementation of the function, that evaluates the result from a list of
        fully evaluated arguments.
+     * a parameter allowing to pass the known bounds of the result.
 
     Each argument type can be given using its symbolic name string, or using its corresponding
     type descriptor constant object of class :class:`~docplex.cp.catalog.CpoType` listed in module
@@ -180,21 +188,23 @@ class CpoBlackboxFunction(object):
      * 'FloatExprArray' or :const:`~docplex.cp.catalog.Type_FloatExprArray`
      * 'IntervalVarArray' or :const:`~docplex.cp.catalog.Type_IntervalVarArray`
      * 'SequenceVarArray' or :const:`~docplex.cp.catalog.Type_SequenceVarArray`
-
     """
     __slots__ = ('name',         # Name of the blackbox function, None for auto-allocation
                  'dimension',    # Number of result values
                  'argtypes',     # List of argument types
                  'atypes_given', # Indicates that argument types where given at function declaration
                  'impl',         # Implementation of the function
+                 'bounds_param', # Name of the bounds parameter
+                 'cachesize',    # Size of the function call cache
+                 'globalcache',  # Global cache indicator
                  'operation',    # Corresponding operation descriptor
                  'eval_count',   # Number of evaluation resuests
                  'auto',         # Auto-created blackbox (for smart parsing)
                  'eval_mutex',   # Lock to ensure mutual exclusion of function evaluation
                 )
 
-    def __init__(self, impl=None, dimension=1, argtypes=None, name=None, parallel=False):
-        """ Create new blackbox function descriptor.
+    def __init__(self, impl=None, dimension=1, argtypes=None, name=None, parallel=False, bounds_parameter=None, cachesize=-1, globalcache=False):
+        """ **Constructor**
 
         The list of function argument types is optional.
         If not given, it is automatically determined as the most common types of the expression arguments used
@@ -205,23 +215,47 @@ class CpoBlackboxFunction(object):
         to register them in the model prior to parse it.
         However, the model will not be able to be solved.
 
+        Bound parameter is optional.
+        If defined, the known bounds of the function result is passed to the function implementation using this named
+        parameter.
+        If the dimension of the function is 1, the bounds is a simple tuple containing lower and upper bounds.
+        Otherwise, the bounds is a list of tuples, one for each returned value.
+        If unknown, bounds are set to -inf or inf (float("inf") in Python).
+
         The name of the function is optional.
         If not given, a name is automatically allocated when solving the model.
         If given, the name of the function must be a symbol (only letters and digits, starting by a letter)
         that is not already used as the name of an existing modeling function.
 
+        A cache can be used by the solver to avoid calling the blackbox function multiple times with the same values.
+        By default (cachesize=-1), the size of the cache is automatically determined by the solver, but it can be
+        forced to a given value, or zero for no cache at all.
+
+        By default, this cache local to each call instance of the blackbox function in the model, in case the evaluation
+        of the function depends on the calling context and may return different results with the same parameters
+        depending where the call is placed in the model.
+        The parameter *globalcache* can be set to *True* if the same cache can be used for all call instances.
+
         Args:
-            impl:      (Optional) Implementation of the function
-            dimension: (Optional) Number of float values that are returned by the function. Default is 1.
-            argtypes:  (Optional) List of argument types or type names.
-            name:      (Optional) Name of the function, restricted to symbol.
-            parallel:  (Optional) Indicates that the blackbox function evaluation is allowed concurrently.
-                       Default is False.
+            impl:             (Optional) Implementation of the function
+            dimension:        (Optional) Number of float values that are returned by the function. Default is 1.
+            argtypes:         (Optional) List of argument types or type names.
+            name:             (Optional) Name of the function, restricted to symbol.
+            parallel:         (Optional) Indicates that the blackbox function evaluation is allowed concurrently.
+                              Default is False.
+            bounds_parameter: (Optional) Name of the parameter in which known return values bounds can be set.
+                              Default is None.
+            cachesize:        (Optional) Indicates that the blackbox function evaluation is allowed concurrently.
+                              Default value is -1, indicating that the cache is managed by the solver with default settings.
+            globalcache:      (Optional) Indicates that the same cache can be used for all blackbox function call instances
+                              in the model.
+                              Default is False.
         """
         # Check dimension
         if dimension is not None:
             assert is_int(dimension) and dimension >= 1, "Blackbox function dimension should be greater than zero"
         self.dimension = dimension
+        self.bounds_param = bounds_parameter
 
         # Check argument types
         if argtypes is None:
@@ -242,13 +276,15 @@ class CpoBlackboxFunction(object):
 
         # Check function name
         if name is not None:
-            assert is_symbol(name), "Blackbox function name should be a symbol"
             if name in ALL_OPERATIONS_PER_NAME:
                 raise AssertionError("Function name {} is already used for a standard modeling operation".format(name))
         self.name = name
 
         # Store attributes
         self.impl = impl
+        self.cachesize = cachesize
+        self.globalcache = globalcache
+
         self.eval_count = 0
         self.auto = (dimension is None)
         self.set_parallel_eval(parallel)
@@ -350,6 +386,44 @@ class CpoBlackboxFunction(object):
         return self.eval_mutex is None
 
 
+    def set_cache_size(self, size):
+        """ Set the size of evaluation cache.
+
+        Args:
+            size: Cache size, -1 for default, 0 for none.
+        """
+        self.cachesize = size
+
+
+    def get_cache_size(self):
+        """ Get the size of the evaluation cache
+
+        Returns:
+            Evaluation cache size, -1 for default, 0 for none.
+        """
+        return self.cachesize
+
+
+    def set_global_cache(self, glob):
+        """ Set the global cache indicator.
+
+        When set, there is a single evaluation cache for all the blackbox function call instances.
+
+        Args:
+            glob: Global cache indicator
+        """
+        self.globalcache = glob
+
+
+    def is_global_cache(self):
+        """ Check if a global cache has been set.
+
+        Returns:
+            True if there is a global cache for this function.
+        """
+        return self.globalcache
+
+
     def get_eval_count(self):
         """ Get the number of times this blackbox function has been evaluated
 
@@ -411,11 +485,12 @@ class CpoBlackboxFunction(object):
         return "{}({}): {}".format(self.name, argtypes, self.dimension)
 
 
-    def eval(self, *args):
+    def _eval_function(self, rbnds, *args):
         """ Evaluate the function from the list of parameter values
 
         Args:
-            *args:  List of parameter values
+            rbnds: Known result bounds, None in unknown
+            *args: List of parameter values
         Returns:
             List of result float values
         """
@@ -428,11 +503,18 @@ class CpoBlackboxFunction(object):
         if len(args) != len(self.argtypes):
             raise CpoException("Evaluation of blackbox function '{}' with wrong number of parameters {} when {} are expected.".format(self.name, len(args), len(self.argtypes)))
 
+        # Build associated arguments
+        kwargs = {}
+        if (rbnds is not None) and (self.bounds_param is not None):
+            if self.dimension == 1:
+                rbnds = rbnds[0]
+            kwargs[self.bounds_param] = rbnds
+
         # Evaluate function
         if self.impl is None:
             raise CpoException("Blackbox function '{}' implementation is not provided".format(self.name))
 
-        res = self.impl(*args)
+        res = self.impl(*args, **kwargs)
 
         # Check single result (separatly to process the case of zero)
         if is_number(res):
@@ -441,14 +523,27 @@ class CpoBlackboxFunction(object):
         elif is_bool(res):
             assert self.dimension == 1,  "Evaluation of blackbox function '{}' returned 1 result values instead of {} that have been declared.".format(self.name, self.dimension)
             res = (int(res),)
-        # Check result (possibly None)
+        # Check result (None is allowed)
         elif res:
-            assert is_array(res), "Evaluation of blackbox function '{}' should returned a tuple or a list, not {}.".format(self.name, type(res))
+            assert is_array(res), "Evaluation of blackbox function '{}' should return a tuple or a list, not {}.".format(self.name, type(res))
             assert len(res) == self.dimension, "Evaluation of blackbox function '{}' returned {} result values instead of {} that have been declared.".format(self.name, len(res), self.dimension)
             assert all(is_number(v) for v in res), "Evaluation of blackbox function '{}' result should contain only numbers.".format(self.name)
 
         #print("{}{} = {}".format(self.name, args, res))
         return res
+
+
+    def eval(self, *args):
+        """ Evaluate the function from the list of parameter values
+
+        This function evaluates the blackbox function without providing bounds.
+
+        Args:
+            *args: List of parameter values
+        Returns:
+            List of result float values
+        """
+        return self._eval_function(None, *args)
 
 
     def _update_check_arg_types(self, argexprs):
@@ -460,9 +555,7 @@ class CpoBlackboxFunction(object):
         # Check if argument types already known
         if self.argtypes is None:
             # Retrieve argument types from expressions
-            self.argtypes = [a.type for a in argexprs]
-            for t in self.argtypes:
-                assert t in _ARG_TYPES_SET, "Expression type {} is not allowed as blackbox function argument".format(t)
+            self.argtypes = [_get_argument_type(a) for a in argexprs]
             # Set new signature in operation
             self.operation.signatures = (CpoSignature(Type_FloatExprArray, self.argtypes),)
         else:
@@ -470,12 +563,12 @@ class CpoBlackboxFunction(object):
             assert len(argexprs) == len(self.argtypes), "This blackbox function should be called with {} arguments".format(len(self.argtypes))
             if self.atypes_given:
                 for i, a, t in zip(count(), argexprs, self.argtypes):
-                    assert a.is_kind_of(t), "The argument {} of blackbox function '{}' should be a {}".format(i + 1, self.name, t.get_public_name())
+                    assert _get_argument_type(a).is_kind_of(t), "The argument {} of blackbox function '{}' should be a {}".format(i + 1, self.name, t.get_public_name())
             else:
                 tchanged = False
                 for i, a, t in zip(count(), argexprs, self.argtypes):
                     # Determine most common type
-                    ct = a.type.get_common_type(t)
+                    ct = _get_argument_type(a).get_common_type(t)
                     assert ct is not None, "Argument type {} is not compatible with already used type {}".format(a.type, t)
                     assert ct in _ARG_TYPES_SET, "Common expression type {} is not allowed as blackbox function argument".format(ct)
                     if ct != t:
@@ -503,7 +596,7 @@ class CpoBlackboxFunctionCall(CpoFunctionCall):
                 )
 
     def __init__(self, bbf, oprnds):
-        """ Constructor
+        """ **Constructor**
         Args:
             bbf:    Blackbox function descriptor
             oprnds: List of operand expressions.
@@ -525,5 +618,36 @@ class CpoBlackboxFunctionCall(CpoFunctionCall):
             True if 'other' is semantically identical to this object, False otherwise.
         """
         return super(CpoBlackboxFunctionCall, self)._equals(other) and (self.blackbox == other.blackbox)
+
+#-----------------------------------------------------------------------------
+# Private functions
+#-----------------------------------------------------------------------------
+
+# Dictionary of type mapping to accepted type
+_ARG_TYPE_MAPPING = {t: t for t in ARGUMENT_TYPES}
+_ARG_TYPE_MAPPING.update(
+{
+    Type_Bool:           Type_IntExpr,
+    Type_BoolExpr:       Type_IntExpr,
+    Type_BoolArray:      Type_IntArray,
+    Type_BoolExprArray:  Type_IntExprArray,
+})
+
+
+def _get_argument_type(a):
+    """ Get the blackbox argument type corresponding to a given argument type
+
+    Args:
+        a: Argument value
+    Returns:
+        Authorized blackbox argument type
+    Raises:
+        CpoException if given argument type is not supported.
+    """
+    at = a.type
+    nt = _ARG_TYPE_MAPPING.get(at)
+    if nt is None:
+        raise CpoException("Expression type {} is not allowed as blackbox function argument".format(at))
+    return nt
 
 

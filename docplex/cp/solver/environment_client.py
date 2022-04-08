@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Source file provided under Apache License, Version 2.0, January 2004,
 # http://www.apache.org/licenses/
-# (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
+# (c) Copyright IBM Corp. 2015 .. 2021
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
 
@@ -127,15 +127,15 @@ class EnvSolverListener(CpoSolverListener):
             self.env.notify_end_solve(status, solve_time=stime)
 
 
-    def result_found(self, solver, msol):
-        """ Signal that a solution has been found.
+    def result_found(self, solver, sres):
+        """ Signal that a new result has been found.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
-            msol:   Model solution, object of class :class:`~docplex.cp.solution.CpoSolveResult`
+            sres:   Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`
         """
-        # Get last solution
-        if msol is None or not msol:
+        # Check solution
+        if sres is None:
             return
 
         # Publish solve details
@@ -143,7 +143,7 @@ class EnvSolverListener(CpoSolverListener):
             self.publish_context.log(2, "Publish solve details")
 
             # Get solver infos
-            infos = msol.get_infos()
+            infos = sres.get_infos()
             nb_int_vars      = infos.get("NumberOfIntegerVariables")
             nb_interval_vars = infos.get("NumberOfIntervalVariables")
             nb_sequence_vars = infos.get("NumberOfSequenceVariables")
@@ -183,29 +183,29 @@ class EnvSolverListener(CpoSolverListener):
             sdetails["MODEL_DETAIL_TYPE"] = "CPO CP" if nb_interval_vars in (0, "0", None) else "CPO Scheduling"
 
             # Set objective sens
-            mdl = msol.get_model()
+            mdl = sres.get_model()
             if mdl and not mdl.is_satisfaction():
                 sdetails["MODEL_DETAIL_OBJECTIVE_SENSE"] = "maximize" if mdl.is_maximization() else "minimize"
 
             # Set objective if any
-            objs = msol.get_objective_values()
+            objs = sres.get_objective_values()
             if objs is not None:
                 sdetails["PROGRESS_CURRENT_OBJECTIVE"] = ';'.join([str(x) for x in objs])
 
             # Set bound if any
-            bnds = msol.get_objective_bounds()
+            bnds = sres.get_objective_bounds()
             if bnds is not None:
                 sbnd = ';'.join([str(x) for x in bnds])
                 sdetails["PROGRESS_BEST_OBJECTIVE"] = sbnd  # Ugly, should have been PROGRESS_BEST_BOUND
                 sdetails["PROGRESS_BEST_BOUND"] = sbnd      # Added to prepare future use
 
             # Set gap if any
-            gaps = msol.get_objective_gaps()
+            gaps = sres.get_objective_gaps()
             if gaps is not None:
                 sdetails["PROGRESS_GAP"] = ';'.join([str(x) for x in gaps])
 
             # Set KPIs if any
-            kpis = msol.get_kpis()
+            kpis = sres.get_kpis()
             if kpis:
                 # Add ordered list of kpi names
                 sdetails["MODEL_DETAIL_KPIS"] = json.dumps(list(kpis.keys()))
@@ -229,7 +229,7 @@ class EnvSolverListener(CpoSolverListener):
         # Publish kpis
         kpiout = self.publish_context.get_attribute('kpis_output', 'kpis.csv')
         if kpiout:
-            kpis = msol.get_kpis()
+            kpis = sres.get_kpis()
             if kpis:
                 self.publish_context.log(2, "Publish KPIs result output in '", kpiout, "'")
                 fname  = self.publish_context.get_attribute('kpis_output_field_name',  'Name')
@@ -253,13 +253,13 @@ class EnvSolverListener(CpoSolverListener):
             self.publish_context.log(2, "Publish conflict output in '", cfltout, "'")
             with self.env.get_output_stream(cfltout) as fp:
                 fp.write('"Type","Status","Name","Expression"\n'.encode('utf-8'))
-                for c in cflct.get_all_member_constraints():
+                for c in cflct.get_member_constraints():
                     fp.write(self._build_conflict_csv_constraint_line(c, "Member").encode('utf-8'))
-                for c in cflct.get_all_possible_constraints():
+                for c in cflct.get_possible_constraints():
                     fp.write(self._build_conflict_csv_constraint_line(c, "Possible_member").encode('utf-8'))
-                for v in cflct.get_all_member_variables():
+                for v in cflct.get_member_variables():
                     fp.write(self._build_conflict_csv_variable_line(v, "Member").encode('utf-8'))
-                for v in cflct.get_all_possible_variables():
+                for v in cflct.get_possible_variables():
                     fp.write(self._build_conflict_csv_variable_line(v, "Possible_member").encode('utf-8'))
 
 

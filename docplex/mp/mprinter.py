@@ -6,10 +6,7 @@
 
 # coding=utf-8
 # ------------------------------
-from __future__ import print_function
 import sys
-
-import six
 import operator
 
 from docplex.mp.numutils import _NumPrinter
@@ -48,7 +45,7 @@ class ModelPrinter(object):
         if out is None:
             # prints on standard output
             self.print_model_to_stream(sys.stdout, mdl)
-        elif isinstance(out, six.string_types):
+        elif isinstance(out, str):
             # a string is interpreted as a path name
             ext = self.extension()
             path = out if out.endswith(ext) else out + ext
@@ -121,10 +118,7 @@ class TextModelPrinter(ModelPrinter):
         self.sort_variable_names = sort_variable_names
 
         # which translate_method to use
-        if six.PY2:
-            self._translate_chars = self._translate_chars2
-        else:  # pragma: no cover
-            self._translate_chars = self._translate_chars3
+        self._translate_chars = self._translate_chars3
 
     def _get_indent_from_level(self, level):
         cached_indent = self._indent_map.get(level)
@@ -273,7 +267,7 @@ class TextModelPrinter(ModelPrinter):
         prefixed_name = "{0:s}{1:d}".format(prefix, local_index + offset)
         return prefixed_name
 
-    from docplex.mp.compat23 import mktrans
+    from docplex.mp.utils import mktrans
 
     __raw = " -+/\\<>"
     __cooked = "_mp____"

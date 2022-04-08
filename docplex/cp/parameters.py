@@ -296,10 +296,10 @@ ALL_PARAMETER_NAMES = PUBLIC_PARAMETER_NAMES | PRIVATE_PARAMETER_NAMES
 ###############################################################################
 
 class CpoParameters(Context):
-    """ Class for handling solving parameters
+    """ Class handling solving parameters
     """
     def __init__(self, **kwargs):
-        """ Creates a new set of solving parameters.
+        """ **Constructor**
 
         This constructor takes a variable number of optional arguments that allow to set parameters directly.
         For example:

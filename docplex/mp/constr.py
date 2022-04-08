@@ -5,7 +5,8 @@
 # --------------------------------------------------------------------------
 import warnings
 
-from docplex.mp.basic import IndexableObject, ModelingObjectBase, Priority, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, ModelingObjectBase, _AbstractBendersAnnotated
+from docplex.mp.priority import Priority
 from docplex.mp.constants import ComparisonType, UpdateEvent
 from docplex.mp.operand import LinearOperand
 from docplex.mp.sttck import StaticTypeChecker
@@ -43,7 +44,7 @@ class _ConstraintLogicalUsage(object):
             engine.update_constraint(log_ct, event=UpdateEvent.IndicatorLinearConstraint)
 
 
-class AbstractConstraint(IndexableObject, _BendersAnnotatedMixin):
+class AbstractConstraint(IndexableObject, _AbstractBendersAnnotated):
     __slots__ = ()
 
     def __init__(self, model, name=None):
@@ -423,14 +424,18 @@ class BinaryConstraint(AbstractConstraint):
         net_value = left_value - right_value
         ctsense = self._ctsense
         violation = 0
+        raw_violation = 0
         if ctsense == ComparisonType.EQ:
             violation = max(0, abs(net_value) - tolerance)
+            raw_violation = abs(net_value)
         elif ctsense == ComparisonType.LE:
             violation = max(0, net_value - tolerance)
+            raw_violation = max(0, net_value)
         elif ctsense == ComparisonType.GE:
             violation = max(0, - (net_value + tolerance))
+            raw_violation = max(0, -net_value)
 
-        return violation if violation >= _eps_zero else 0
+        return raw_violation if violation >= _eps_zero else 0
 
     def resolve(self):
         self._left_expr.resolve()
@@ -1563,7 +1568,7 @@ class QuadraticConstraint(BinaryConstraint):
             if 0 != net_k:
                 yield lqv, net_k
         for rqv, rqk in qright.iter_sorted_quads():
-            if not qleft.contains_quad(rqv) and 0 != rqk:
+            if not qleft.contains_quad(rqv) and rqk:
                 yield rqv, -rqk
 
     def _set_left_expr(self, new_left_expr):

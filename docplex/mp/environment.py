@@ -138,6 +138,14 @@ class Environment(object):
             docplex_fatal("DOcplex supports Cplex from {0} up, unsupported version {1} was found"
                           .format(s_min_version, self.cplex_version))
 
+    @property
+    def cplex_lp_obj_kw(self):
+        if self.has_cplex and self.cplex_version_as_tuple >= (12, 10):
+            obj_kw = "obj1"
+        else:
+            obj_kw = "obj"
+        return obj_kw
+
     @staticmethod
     def cplex_platform():
         sys_platform = platform.system()
@@ -230,6 +238,7 @@ class Environment(object):
         If `default_location` is None, this method will try to import the cplex module in the following order:
 
             - by importing the module `import cplex` if the import is sucessful
+            - by importing the module in location $CPLEX_STUDIO_DIR20101/cplex/python
             - by importing the module in location $CPLEX_STUDIO_DIR201/cplex/python
             - by importing the module in location $CPLEX_STUDIO_DIR1210/cplex/python
             - by importing the module in location $CPLEX_STUDIO_DIR129/cplex/python
@@ -296,7 +305,8 @@ class Environment(object):
                         # user provided a cos location that was not right, raise warning
                         warnings.warn("Could not load CPLEX from Location provided by DOCPLEX_COS_LOCATION=%s. Using default locations." % user_cos_location)
                 if cplex is None:
-                    try_environs = ['CPLEX_STUDIO_DIR201',
+                    try_environs = ['CPLEX_STUDIO_DIR20101',
+                                    'CPLEX_STUDIO_DIR201',
                                     'CPLEX_STUDIO_DIR1210',
                                     'CPLEX_STUDIO_DIR129',
                                     'CPLEX_STUDIO_DIR128']

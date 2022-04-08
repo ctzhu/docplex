@@ -47,7 +47,6 @@ with the intermediate solution, passed as an instance of :class:`docplex.mp.solu
 See :class:`~SolutionRecorder` as an example of solution listener
 
 '''
-from six import iteritems
 from enum import Enum
 from collections import namedtuple
 
@@ -660,7 +659,7 @@ class KpiPrinter(KpiListener):
         kpi_str_format = self.kpi_format + '{2!s}'
         print('-' * (max_kpi_name_len + 15))
         itcnt = self.current_progress_data.current_nb_iterations
-        for kn, kv in iteritems(kpi_dict):
+        for kn, kv in kpi_dict.items():
             if is_number(kv):
                 k_format = kpi_num_format
             else:

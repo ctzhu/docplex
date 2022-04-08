@@ -3,11 +3,11 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin
+from docplex.mp.basic import IndexableObject, _AbstractBendersAnnotated
 from docplex.mp.constants import CplexScope
 
 
-class SOSVariableSet( IndexableObject, _BendersAnnotatedMixin):
+class SOSVariableSet(IndexableObject, _AbstractBendersAnnotated):
     ''' This class models :index:`Special Ordered Sets` (SOS) of decision variables.
         An SOS has a type (SOS1, SOS2) and an ordered list of variables.
 
@@ -104,7 +104,7 @@ class SOSVariableSet( IndexableObject, _BendersAnnotatedMixin):
         lfactory = mdl._lfactory
         lhs = mdl.sum_vars(self._variables)
         rhs = lfactory.constant_expr(self.sos_type.value)
-        return lfactory.new_binary_constraint(lhs, "eq", rhs, name=self.name)
+        return lfactory.new_binary_constraint(lhs, "le", rhs, name=self.name)
 
 
     def __str__(self):

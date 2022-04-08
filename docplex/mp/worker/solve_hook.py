@@ -5,8 +5,6 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from six import iteritems
-
 
 class _SolveHook(object):
     # INTERNAL
@@ -42,7 +40,7 @@ class TraceSolveHook(_SolveHook):
     def notify_end_solve(self, mdl, has_solution, status, obj, var_value_dict):
         if has_solution:
             print("<- solve succeeds, status={0}, obj={1}".format(status, obj))
-            for vn, vv in iteritems(var_value_dict):
+            for vn, vv in var_value_dict.tems():
                 print("  - var \"{0:s}\" = {1!s}".format(vn, vv))
         else:
             print("<- solve fails, status={0}".format(status))

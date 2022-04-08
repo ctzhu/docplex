@@ -4,7 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from docplex.mp.compat23 import StringIO
+from io import StringIO
 
 
 class ModelStatistics(object):

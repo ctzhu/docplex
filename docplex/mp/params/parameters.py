@@ -4,12 +4,9 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from __future__ import print_function
-
-from six import iteritems
+from io import StringIO
 
 from docplex.mp.utils import is_int, is_string
-from docplex.mp.compat23 import StringIO
 from docplex.mp.error_handler import docplex_fatal, DOcplexException
 
 
@@ -30,8 +27,8 @@ class ParameterGroup(object):
         if parent_group:
             parent_group._add_subgroup(self)
 
-    def to_string(self):
-        return "group<%s>" % self.qualified_name()
+    def to_string(self, include_root=True):
+        return "group<%s>" % self.qualified_name(include_root=include_root)
 
     def __str__(self):
         return self.to_string()
@@ -152,7 +149,7 @@ class ParameterGroup(object):
 
     def prettyprint(self, indent=0):
         tab = indent * 4 * " "
-        print("{0}{1!s}={{".format(tab, self.qualified_name()))
+        print("{0}{1!s}={{".format(tab, self.qualified_name(include_root=False)))
         for p in self.iter_params():
             print("{0}    {1!s}".format(tab, p))
         for sg in self.iter_subgroups():
@@ -198,7 +195,7 @@ class ParameterGroup(object):
         if subgroup_fn:
             subgroup_fn_dict = subgroup_fn()
             subgroup_dict = {group_name: group_fn(self)
-                             for group_name, group_fn in iteritems(subgroup_fn_dict)}
+                             for group_name, group_fn in subgroup_fn_dict.items()}
             self._update_self_dict(subgroup_dict)
 
     def number_of_nondefaults(self):
@@ -520,7 +517,7 @@ class Parameter(object):
         :rtype:
             string
         """
-        return "{0}:{1:s}({2!s})".format(self._name, self.type_name(), self._current_value)
+        return "{0}:{1:s}({2!s})".format(self._name, self.type_name, self._current_value)
 
     def __str__(self):
         return self.to_string()
@@ -587,6 +584,16 @@ class StrParameter(Parameter):
     def type_name(self):
         return "string"
 
+    def to_string(self):
+        """ Converts the parameter to a string.
+
+        This method is used in the `__str__` method to convert a parameter to a string.
+
+        :rtype:
+            string
+        """
+        safe_value = self._current_value or ''
+        return "{0}:{1:s}('{2!s}')".format(self._name, self.type_name, safe_value)
 
 class IntParameter(Parameter):
     __slots__ = ('_min_value', '_max_value')

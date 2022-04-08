@@ -18,21 +18,9 @@ to be performed:
  * *cpo_config.py*, a local set of changes on these parameters,
  * *cpo_config_<hostname>.py*, a hostname dependent set of changes.
 
-Each of these files is searched in the *PYTHONPATH*, and the first one that is found is read.
+Each of these files is searched first in the directory where the Pyton main file is located,
+then in the current directory, and finally in the *PYTHONPATH*. The first one that is found is read.
 Final set of parameters is obtained by reading first this module, and then those listed above.
-
-This module also defines two global variables:
-
- * *LOCAL_CONTEXT*, that contains the appropriate configuration to solve a model with a local
-   installation of the CPO solver.
-   This configuration is available for solver with version number greater or equal to 12.7.0.
-
-   This context is the context by default, referenced by the global variable 'context'.
-
- * *DOCLOUD_CONTEXT*, (deprecated) that contains the configuration necessary to solve a model on DOcloud.
-
-The method :meth:`set_default` allows to set the default configuration to one that is predefined,
-or another that has been totally customized.
 
 If called as main, this module prints the actual configuration on standard output, including
 all customizations made using the mechanism described above.
@@ -164,7 +152,30 @@ Configuration of the `local` solving agent
 *context.solver.local.execfile*
 
     Name or full path of the CP Optimizer Interactive executable file.
-    By default, it is set to *cpoptimizer(.exe)*, which supposes that the program is visible from the system path.
+    By default, it is set to *"cpoptimizer(.exe)"*, and is searched in the file system using the strategy described below.
+
+
+Configuration of the `lib` solving agent
+----------------------------------------
+
+*context.solver.lib.libfile*
+
+    Name or full path of the CP Optimizer library file.
+    By default, it is set to *"lib_cpo_solver_\*(.dll)"*, and is searched in the file system using the strategy described below.
+
+
+Search for executable or library files
+--------------------------------------
+
+If an executable or library file is not given with its full path, it is searched in the file system in a list of
+directories that is built in this order:
+
+   * the directory where the main Python file is located,
+   * the current directory,
+   * all directories of the environment variables 'LD_LIBRARY_PATH' or 'DYLD_LIBRARY_PATH' if defined,
+   * all directories of the environment variable 'PATH'.
+
+If the file name contains an "\*", and if there are multiple files matching the pattern, the most recent is selected.
 
 
 Configuration for best performances
@@ -296,6 +307,9 @@ context.parser.auto_blackbox = False
 # Indicate to print warning messages (for example for unknown blackbox functions) at the end of parsing
 context.parser.print_warnings = True
 
+# Indicate to check format version and raise an exception if out of range
+context.parser.check_format_version = True
+
 # Indicate to FZN parser to reduce model when possible
 context.parser.fzn_reduce = False
 
@@ -423,45 +437,32 @@ except:
 
 
 #-----------------------------------------------------------------------------
-# DoCloud solving agent context (deprecated)
+# Solver simulators
 
-context.solver.docloud = Context()
+# Solver simulator that always fails
+context.solver.simulatorfail = Context()
+context.solver.simulatorfail.class_name = "docplex.cp.solver.solver_simulator.CpoSolverSimulatorFail"
+context.solver.simulatorfail.log_prefix = "[SimulatorFail] "
 
-# Python class implementing the agent
-context.solver.docloud.class_name = "docplex.cp.solver.solver_docloud.CpoSolverDocloud"
+# Solver simulator generating a random solution
+context.solver.simulatorrandom = Context()
+context.solver.class_name = "docplex.cp.solver.solver_simulator.CpoSolverSimulatorRandom"
+context.solver.log_prefix = "[SimulatorRandom] "
 
-# Url of the DOCloud service
-context.solver.docloud.url = "https://api-oaas.docloud.ibmcloud.com/job_manager/rest/v1/"
 
-# Authentication key.
-context.solver.docloud.key = "'Set your key in docloud_config.py''"
+#-----------------------------------------------------------------------------
+# Parameters for solver interactive monitor
 
-# Secret key.
-context.solver.docloud.secret = None
+context.interactive = Context()
 
-# Indicate to verify SSL certificates
-context.solver.docloud.verify_ssl = True
+# Confirm solver monitor window closing
+context.interactive.user_preferences_file = "DocplexCpUserPreferences.prf"
 
-# Proxies (map protocol_name/endpoint, as described in http://docs.python-requests.org/en/master/user/advanced/#proxies)
-context.solver.docloud.proxies = None
+# Confirm solver monitor window closing
+context.interactive.window_confirm_exit = True
 
-# Default unitary request timeout in seconds
-context.solver.docloud.request_timeout = 30
-
-# Time added to expected solve time to compute the total result waiting timeout
-context.solver.docloud.result_wait_extra_time = 60
-
-# Clean job after solve indicator
-context.solver.docloud.clean_job_after_solve = True
-
-# Add 'Connection close' in all headers
-context.solver.docloud.always_close_connection = False
-
-# Log prefix
-context.solver.docloud.log_prefix = "[DOcloud] "
-
-# Polling delay (min, max and increment)
-context.solver.docloud.polling = Context(min=1, max=3, incr=0.2)
+# Abort solve when closing window
+context.interactive.solver_abort_on_exit = True
 
 
 #-----------------------------------------------------------------------------
@@ -472,16 +473,12 @@ if IS_IN_WORKER:
 
 
 #-----------------------------------------------------------------------------
-# Create special context for docloud
+# Create context variable
 
-# Create 2 contexts for local and docloud (deprecated)
+# Create a local context variable
+# Now useless, comes from a time where there was LOCAL_CONTEXT and DOCLOUD_CONTEXT.
+# Kept for ascending compatibility
 LOCAL_CONTEXT = context
-DOCLOUD_CONTEXT = context.clone()
-
-# Set DOcloud context specific attributes
-DOCLOUD_CONTEXT.solver.agent = 'docloud'
-DOCLOUD_CONTEXT.solver.trace_log = False
-DOCLOUD_CONTEXT.model.length_for_alias = 15
 
 
 #=============================================================================
@@ -545,7 +542,25 @@ def _build_search_path (ctx):
     Args:
         ctx:  Context to get information from
     """
+    # Initialize search path
     path = []
+
+    # Set it to COS location if provided
+    cosloc = ctx.get_by_path('cos.location')
+    if cosloc:
+        # Check existence of the directory
+        if not os.path.isdir(cosloc):
+            raise Exception("COS location directory '{}' does not exists.".format(cosloc))
+        # As explicitly defined, add it in front of search path
+        path.append(cosloc + "/bin/" + _get_port_name())
+
+    # Add directory where python main is located
+    mpfile = get_main_file()
+    if mpfile:
+        path.append(os.path.dirname(mpfile))
+
+    # Add current directory
+    path.append('.')
 
     # Add all system path
     path.extend(get_system_path())
@@ -561,15 +576,8 @@ def _build_search_path (ctx):
         path.append("~/.local/bin")
         path.append(os.path.join(python_home, "bin"))
 
-    # Add COS location if defined
-    cdir = ctx.get_by_path('cos.location')
-    if cdir:
-        # Check existence of the directory
-        if not os.path.isdir(cdir):
-            raise Exception("COS location directory '{}' does not exists.".format(cdir))
-        # As explicitly defined, add it in front of search path
-        path = [cdir + "/bin/" + _get_port_name()] + path
-    else:
+    # Add all COS locations if not already forced
+    if not cosloc:
         # Add all existing installed COS starting from the most recent
         for cnv in _COS_ROOT_DIRS_ENV_VARS:
             cdir = os.getenv(cnv)
@@ -613,6 +621,10 @@ def _search_exec_file(file, ctx):
                 # Take most recent executable file
                 lf = [f for f in lf if is_exe_file(f)]
                 if lf:
+                    # Skip "ai" files if any
+                    nlf = [f for f in lf if not os.path.splitext(f)[0].endswith("ai")]
+                    if nlf:
+                        lf = nlf
                     lf.sort(key=lambda x: os.path.getmtime(x))
                     return lf[-1]
     else:
@@ -655,13 +667,6 @@ def _get_effective_context(**kwargs):
     Returns:
         Updated (cloned) context
     """
-    # If 'url' and 'key' are defined, force agent to be docloud (OBSOLETE)
-    # if ('agent' not in kwargs) and not IS_IN_WORKER:
-    #     url = kwargs.get('url')
-    #     key = kwargs.get('key')
-    #     if url and key and is_string(url) and is_string(key) and url.startswith('http'):
-    #         kwargs['agent'] = 'docloud'
-
     # Determine source context
     ctx = kwargs.get('context')
     if (ctx is None) or (ctx in DEFAULT_VALUES):
@@ -673,7 +678,7 @@ def _get_effective_context(**kwargs):
     # First set parameters if given
     prms = kwargs.get('params')
     if prms is not None:
-        ctx.params.add(prms)
+        ctx.params.set_other(prms)
 
     # Process other changes, check first if undocumented params are enabled (or not)
     uk = 'enable_undocumented_params'
@@ -703,12 +708,21 @@ def _get_effective_context(**kwargs):
 # Overload default context with optional customizations
 #=============================================================================
 
+# Compute config files search path
+_CONFIG_SEARCH_PATH = []
+mpfile = get_main_file()     # Add directory of the main file if any
+if mpfile:
+    _CONFIG_SEARCH_PATH.append(os.path.dirname(mpfile))
+_CONFIG_SEARCH_PATH.append('.')       # Add current directory
+_CONFIG_SEARCH_PATH.extend(sys.path)  # Add all PYTHONPATH
+
+
 def _eval_file(file):
     """ If found in python path, evaluate the content of a python module in this module.
     Args:
         file: Python file to evaluate
     """
-    for dir in sys.path:
+    for dir in _CONFIG_SEARCH_PATH:
         f = dir + "/" + file if dir else file
         if os.path.isfile(f):
             try:
@@ -722,7 +736,7 @@ def _eval_file(file):
                 raise Exception("Error while loading config file {}: {}".format(f, str(e)))
 
 # Load all config changes
-for f in ("cpo_config.py", "cpo_config_" + socket.gethostname() + ".py", "docloud_config.py"):
+for f in ("cpo_config.py", "cpo_config_" + socket.gethostname() + ".py",):
     _eval_file(f)
 
 # Check particular case of renamed solve_with_start_next

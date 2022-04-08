@@ -35,15 +35,14 @@ MAX_ITERATED_SOLUTIONS = 6
 class CpoSolverSimulatorFail(solver.CpoSolverAgent):
     """ CPO solver simulator that always fail (status unfeasible) """
     
-    def __init__(self, solver, params, context):
+    def __init__(self, solver, context):
         """ Create a solver simulator
 
         Args:
             solver:   Parent solver
-            params:   Solving parameters
             context:  Solver context
         """
-        super(CpoSolverSimulatorFail, self).__init__(solver, params, context)
+        super(CpoSolverSimulatorFail, self).__init__(solver, context)
 
 
     def solve(self):
@@ -83,7 +82,7 @@ class CpoSolverSimulatorFail(solver.CpoSolverAgent):
         print("WARNING: Solver simulator always returns fail")
         # Build fake infeasible solution
         msol = CpoRefineConflictResult(self.model)
-        msol.solve_status = SOLVE_STATUS_INFEASIBLE
+        msol.conflict_status = CONFLICT_STATUS_TERMINATED_NORMALLY
         return msol
 
 
@@ -91,15 +90,14 @@ class CpoSolverSimulatorFail(solver.CpoSolverAgent):
 class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
     """ CPO solver simulator that generates a random solution """
 
-    def __init__(self, solver, params, context):
+    def __init__(self, solver, context):
         """ Create a solver simulator
 
         Args:
             solver:   Parent solver
-            params:   Solving parameters
             context:  Solver context
         """
-        super(CpoSolverSimulatorRandom, self).__init__(solver, params, context)
+        super(CpoSolverSimulatorRandom, self).__init__(solver, context)
         self.max_iterator_solutions = random.randint(0, MAX_ITERATED_SOLUTIONS)
         self.solution_count = 0
 
@@ -115,7 +113,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
 
         # Force generation of CPO format if required (for testing purpose only)
         if self.context.create_cpo:
-            self._get_cpo_model_string()
+            self.solver.get_cpo_model_string()
 
         # Build fake feasible solution
         return self._generate_solution()
@@ -162,7 +160,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         print("WARNING: Solver simulator returns a random list of solutions")
         # Force generation of CPO format if required (for testing purpose only)
         if self.context.create_cpo:
-            self._get_cpo_model_string()
+            self.solver.get_cpo_model_string()
         self.solution_count = 0
 
 
@@ -206,7 +204,7 @@ class CpoSolverSimulatorRandom(solver.CpoSolverAgent):
         # Build fake feasible solution
         ssol = CpoSolveResult(self.model)
         ssol.solve_status = SOLVE_STATUS_FEASIBLE
-        msol = ssol.solution
+        msol = ssol.solution = CpoModelSolution()
 
         # Generate objective
         x = self.model.get_optimization_expression()

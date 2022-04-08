@@ -9,14 +9,10 @@ from contextlib import contextmanager
 from enum import Enum
 import re
 import numbers
-import six
 import sys
 
 from docplex.mp.engine import IEngine
 from docplex.mp.utils import DOcplexException, is_string
-from docplex.mp.compat23 import izip
-
-
 from docplex.mp.constants import ConflictStatus
 from docplex.mp.constr import IndicatorConstraint, RangeConstraint, BinaryConstraint, \
     EquivalenceConstraint
@@ -28,7 +24,8 @@ from docplex.mp.conflict_refiner import TConflictConstraint, VarLbConstraintWrap
     ConflictRefinerResult
 from docplex.mp.cplex_adapter import CplexAdapter
 
-from docplex.mp.compat23 import fast_range, copyreg
+
+import copyreg
 # noinspection PyPep8Namingc
 from docplex.mp.constants import QualityMetric, UpdateEvent as upd
 
@@ -253,7 +250,7 @@ class _CplexOverwriteParametersCtx(object):
     def __enter__(self):
         # force overwrite values.
         cplex_params = self._cplex._env.parameters
-        for p, v in six.iteritems(self._overwrite_param_dict):
+        for p, v in self._overwrite_param_dict.items():
             cplex_params._set(p.cpx_id, v)
         # return the Cplex instance with the overwritten parameters.
         return self._cplex
@@ -262,7 +259,7 @@ class _CplexOverwriteParametersCtx(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         # whatever happened, restore saved parameter values.
         cplex_params = self._cplex._env.parameters
-        for pid, saved_v in six.iteritems(self._saved_param_values):
+        for pid, saved_v in self._saved_param_values.items():
             cplex_params._set(pid, saved_v)
 
 
@@ -302,7 +299,7 @@ class IndexScope(object):  # pragma: no cover
         first = self._index + 1
         last = first + size
         self._index += size
-        return fast_range(first, last)
+        return range(first, last)
 
     def notify_deleted(self, deleted_index):
         if deleted_index >= 0:
@@ -473,6 +470,7 @@ class CplexEngine(IEngine):
         cpx_arg = kwargs.get('_cplex')
         cpx_owns = kwargs.get('_cpx_owned', True)
         if cpx_arg:
+            assert isinstance(cpx_arg, CplexAdapter)
             cpx_adapter = cpx_arg
             self._owns_cplex = cpx_owns
         else:
@@ -489,8 +487,6 @@ class CplexEngine(IEngine):
         self._saved_log_output = True  # initialization from model is deferred (pickle)
 
         self._cpx_version_as_tuple = tuple(float(x) for x in cpx.get_version().split("."))
-
-        # 12.6 did not return anything, so we had to guess.
         self._allocate_one_index = self.allocate_one_index_return
         self._allocate_range_index = self.allocate_range_index_return
 
@@ -583,8 +579,8 @@ class CplexEngine(IEngine):
     def _check_one_constraint_index(self, cpx_linear, ct, prec=1e-6):
         def sparse_to_terms(indices_, koefs_):
             terms = sorted( zip(indices_, koefs_),key=lambda t: t[0] )
-            terms = [(ix, k) for ix, k in izip(indices_, koefs_)]
-            terms.sort(key=lambda t: t[0])
+            # terms = [(ix, k) for ix, k in zip(indices_, koefs_)]
+            # terms.sort(key=lambda t: t[0])
             return terms
 
         # assert idx > 0
@@ -593,7 +589,7 @@ class CplexEngine(IEngine):
         mdl_idxs, mdl_coefs = self.linear_ct_to_cplex(ct)
         mdl_terms = sparse_to_terms(mdl_idxs, mdl_coefs)
         assert len(cpx_terms) == len(mdl_terms)
-        for cpxt, mdlt in izip(cpx_terms, mdl_terms):
+        for cpxt, mdlt in zip(cpx_terms, mdl_terms):
             assert cpxt[0] == mdlt[0]
             assert abs(cpxt[1] - mdlt[1]) <= prec
 
@@ -702,7 +698,7 @@ class CplexEngine(IEngine):
         return self._create_cpx_variables(nb_vars, cpx_types, lbs, ubs, names)
 
     def _create_cpx_variables(self, nb_vars, cpx_vartypes, lbs, ubs, names):
-        ret_add = self.fast_add_cols(cpx_vartypes, lbs, ubs, names)
+        ret_add = self.fast_add_cols(cpx_vartypes, lbs, ubs, list(names))
         return self._allocate_range_index(size=nb_vars, ret_value=ret_add)
 
     def _apply_var_fn(self, dvars, args, setter_fn, getter_fn=None):
@@ -710,7 +706,7 @@ class CplexEngine(IEngine):
 
         indices = [_v.index for _v in dvars]
         # noinspection PyArgumentList
-        setter_fn(cpxvars, izip(indices, args))
+        setter_fn(cpxvars, zip(indices, args))
         if getter_fn:
             return getter_fn(cpxvars, indices)
         else:
@@ -741,7 +737,7 @@ class CplexEngine(IEngine):
             self.fast_set_var_types(dvars, newtypes)
         else:
             # noinspection PyArgumentList
-            sparses = [(dv.index, vt.cplex_typecode) for (dv, vt) in izip(dvars, newtypes)]
+            sparses = [(dv.index, vt.cplex_typecode) for (dv, vt) in zip(dvars, newtypes)]
             self._cplex.variables.set_types(sparses)
 
     def set_var_lb(self, dvar, lb):
@@ -1033,7 +1029,7 @@ class CplexEngine(IEngine):
                                      linmat, cpx_indtypes,
                                      cpx_names, nnz,
                                      cpxenv._apienc)
-        return fast_range(old_nb_indicators, cpx.indicator_constraints.get_num())
+        return range(old_nb_indicators, cpx.indicator_constraints.get_num())
 
     def fast_add_logicals12100(self, logcts, is_equivalence):
         cpx_adapter = self.cpx_adapter
@@ -1068,7 +1064,7 @@ class CplexEngine(IEngine):
                                      cpx_complemented, cpx_rhss, ''.join(cpx_senses),
                                      linmat, cpx_indtypes,
                                      cpx_names, nnz)
-        return fast_range(old_nb_indicators, cpx.indicator_constraints.get_num())
+        return range(old_nb_indicators, cpx.indicator_constraints.get_num())
 
     def _create_typed_indicator_internal(self, cpx_ind, indvar, linct,
                                          equivalence,
@@ -1095,14 +1091,14 @@ class CplexEngine(IEngine):
 
         # linear part
         net_linears = [(lv._index, float(lk)) for lv, lk in qct.iter_net_linear_coefs()]
-        list_linears = list(izip(*net_linears))
+        list_linears = list(zip(*net_linears))
         if not list_linears:
             list_linears = [(0,), (0.0,)]  # always non empty
         # build a list of three lists: [qv1.index], [qv2.index], [qk..]
 
         net_quad_triplets = [(qvp[0]._index, qvp[1]._index, float(qk)) for qvp, qk in qct.iter_net_quads()]
         if net_quad_triplets:
-            list_quad_triplets = list(izip(*net_quad_triplets))
+            list_quad_triplets = list(zip(*net_quad_triplets))
             ret_add = self_cplex.quadratic_constraints.add(lin_expr=list_linears,
                                                            quad_expr=list_quad_triplets,
                                                            sense=cpx_sense,
@@ -1198,7 +1194,7 @@ class CplexEngine(IEngine):
             doomed_by_scope = defaultdict(list)
             for c in cts:
                 doomed_by_scope[c.cplex_scope].append(c._index)
-            for scope, doomed in six.iteritems(doomed_by_scope):
+            for scope, doomed in doomed_by_scope.items():
                 if doomed:
                     targetfn = self._target_from_scope(scope)
                     if not targetfn:
@@ -1224,7 +1220,7 @@ class CplexEngine(IEngine):
         old = cpx.variables.get_num()
         size = max(len(cpx_vartype), self.safe_len(lbs), self.safe_len(ubs), self.safe_len(names))
         self.cpx_adapter.newcols(cpx_e, cpx_lp, obj=[], lb=lbs, ub=ubs, xctype=cpx_vartype, colname=names)
-        return fast_range(old, old + size)
+        return range(old, old + size)
 
     def _fast_set_longanno(self, anno_idx, anno_objtype, indices, groups):
         if self.setlonganno is not None:
@@ -1244,14 +1240,25 @@ class CplexEngine(IEngine):
             self.cpx_adapter.chgqpcoef(cpx_e, cpx_lp, qv1x, qv2x, float(obj_qk))
 
     def _fast_set_linear_objective(self, linexpr):
-        indices = []
-        koefs = []
+        nterms = linexpr.number_of_terms()
+        if nterms:
+            cpxad = self.cpx_adapter
+            if cpxad.use_fast_C_interface:
+                with cpxad.allocate_int_c_array(nterms) as indices, \
+                        cpxad.allocate_double_c_array(nterms) as koefs:
+                    for i, (dv, k) in enumerate(linexpr.iter_terms()):
+                        indices[i] = (dv._index)
+                        koefs[i] = float(k)
 
-        for dv, k in linexpr.iter_terms():
-            indices.append(dv._index)
-            koefs.append(float(k))
-        if indices:
-            self.cpx_adapter.static_fast_set_linear_obj(self._cplex, indices, koefs)
+                    cpxad.static_fast_set_linear_obj(self._cplex, indices, koefs)
+            else:
+                indices = [-1] * nterms
+                koefs = [0.0] * nterms
+
+                for i, (dv, k) in enumerate(linexpr.iter_terms()):
+                    indices[i] = (dv._index)
+                    koefs[i] = float(k)
+                cpxad.static_fast_set_linear_obj(self._cplex, indices, koefs)
 
     def _fast_set_linear_objective2(self, linexpr):
         nterms = linexpr.number_of_terms()
@@ -1430,10 +1437,10 @@ class CplexEngine(IEngine):
     def update_logical_constraint(self, lgct, event, *args):
         self._resync_if_needed()
         if isinstance(lgct, IndicatorConstraint):
-            self._model.fatal('CPLEX cannot modify a linear constraint used in an indicator: ({0!s})', lgct)
+            self._model.fatal('CPLEX cannot modify linear constraint of indicator: ({0!s})', lgct)
         elif isinstance(lgct, EquivalenceConstraint):
             if not lgct.is_generated():
-                self._model.fatal('CPLEX cannot modify a linear constraint used in an equivalence: ({0!s})', lgct)
+                self._model.fatal('CPLEX cannot modify linear constraint used in equivalence: ({0!s})', lgct)
             else:
                 self._model.fatal('Using the truth value of the constraint: ({0!s}) makes the constraint immutable',
                                   lgct.linear_constraint)
@@ -1539,7 +1546,7 @@ class CplexEngine(IEngine):
             self._fast_set_quadratic_objective(quad_expr=new_objexpr)
             self._fast_set_linear_objective(new_objexpr.linear_part)
         else:
-            self._fast_set_linear_objective2(linexpr=new_objexpr)
+            self._fast_set_linear_objective(linexpr=new_objexpr)
 
     def set_multi_objective_tolerances(self, abstols, reltols):
         self._check_multi_objective_support()
@@ -1693,7 +1700,7 @@ class CplexEngine(IEngine):
     def _sync_var_bounds(self, verbose=False):
         self_var_lbs = self._var_lb_changed
         if self_var_lbs:
-            lb_vars, lb_values = zip(*six.iteritems(self_var_lbs))
+            lb_vars, lb_values = zip(*self_var_lbs.items())
             self._apply_var_fn(dvars=lb_vars, args=lb_values,
                                setter_fn=self.cpx_adapter.cplex_module._internal._subinterfaces.VariablesInterface.set_lower_bounds)
             if verbose:  # pragma: no cover
@@ -1701,7 +1708,7 @@ class CplexEngine(IEngine):
 
         self_var_ubs = self._var_ub_changed
         if self_var_ubs:
-            ub_vars, ub_values = zip(*six.iteritems(self_var_ubs))
+            ub_vars, ub_values = zip(*self_var_ubs.items())
             self._apply_var_fn(dvars=ub_vars, args=ub_values,
                                setter_fn=self.cpx_adapter.cplex_module._internal._subinterfaces.VariablesInterface.set_upper_bounds)
             if verbose:  # pragma: no cover
@@ -1728,7 +1735,7 @@ class CplexEngine(IEngine):
 
                 # at this stage we have a valid annotation index
                 # and a dict of scope -> list of (idx, anno) tuples
-                for cpx_scope, annotated in six.iteritems(annotated_by_scope):
+                for cpx_scope, annotated in annotated_by_scope.items():
                     cpx_anno_objtype = self.annotation_map.get(cpx_scope)
                     if cpx_anno_objtype:
                         annotated_indices = []
@@ -2076,7 +2083,7 @@ class CplexEngine(IEngine):
                 if dvv:
                     vmap[dv] = dvv
             var_value_map = vmap
-            # var_value_map = dict(izip(mdl.iter_variables(), all_var_values))
+            # var_value_map = dict(zip(mdl.iter_variables(), all_var_values))
         else:
             var_value_map = {}
 
@@ -2243,14 +2250,14 @@ class CplexEngine(IEngine):
                 cts_by_type[ct_sense].append(ct_index)
 
         infeas_map = {}
-        for ct_sense, indices in six.iteritems(cts_by_type):
+        for ct_sense, indices in cts_by_type.items():
             if indices:
                 resolver_fn = resolver_map[ct_sense]
                 ctype_infeas = resolver_fn(cpx_sol_values, indices)
                 mscope = model_scope_resolver[ct_sense](model)
                 assert mscope is not None
                 # noinspection PyArgumentList
-                for ct_index, ct_infeas in izip(indices, ctype_infeas):
+                for ct_index, ct_infeas in zip(indices, ctype_infeas):
                     ct = mscope.get_object_by_index(ct_index)
                     if ct is not None:
                         infeas_map[ct] = ct_infeas
@@ -2852,7 +2859,7 @@ def overload_cplex_parameter_values(cpx_engine, overload_dict):
         yield cpx_engine
     finally:
         # restore params
-        for p, saved_value in six.iteritems(old_values):
+        for p, saved_value in old_values.items():
             p.set(saved_value)
 
 

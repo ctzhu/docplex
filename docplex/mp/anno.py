@@ -5,15 +5,11 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from __future__ import print_function
+import sys
+from io import StringIO
 
-from docplex.mp.compat23 import StringIO
 from docplex.mp.constants import CplexScope
 from docplex.mp.utils import OutputStreamAdapter
-
-import sys
-
-from six import iteritems
 
 
 class ModelAnnotationPrinter(object):
@@ -57,7 +53,7 @@ class ModelAnnotationPrinter(object):
         osa.write(cls.annotations_start_tag)
 
         osa.write(cls.benders_start_tag)
-        for cplex_scope, annotated in iteritems(model.get_annotations_by_scope()):
+        for cplex_scope, annotated in model.get_annotations_by_scope().items():
             anno_objtype = cls.cplex_anno_objtype_map.get(cplex_scope)
             if anno_objtype is not None and annotated:
                 osa.write("  <object type='{0:d}'>\n".format(anno_objtype))

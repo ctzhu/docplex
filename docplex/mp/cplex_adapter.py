@@ -6,10 +6,11 @@
 
 # gendoc: ignore
 
+
 from os.path import dirname
 
-from docplex.mp.compat23 import fast_range
 from docplex.mp.environment import Environment
+from docplex.mp.error_handler import is_docplex_debug
 
 
 # returns a _SafeCplexWrapper class for cplex 12.7
@@ -69,32 +70,79 @@ class CplexAdapter(object):
         cpx_cst = self.cplex_module._internal._constants
         self.cpx_cst = cpx_cst
         # methods
-        self.chgcoeflist = self.cplex_module._internal._procedural.chgcoeflist
-        self.chgobj = self.cplex_module._internal._procedural.chgobj
-        self.chgrhs = self.cplex_module._internal._procedural.chgrhs
-        self.chgqpcoef = self.cplex_module._internal._procedural.chgqpcoef
-        self.newcols = self.cplex_module._internal._procedural.newcols
-        self.setintparam = self.cplex_module._internal._procedural.setintparam
-        self.addindconstr = self.cplex_module._internal._procedural.addindconstr
-        self.addrows = self.cplex_module._internal._procedural.addrows
-        self.chgrngval = self.cplex_module._internal._procedural.chgrngval
-        self.addpwl = self.cplex_module._internal._procedural.addpwl
-        self.getnumpwl = self.cplex_module._internal._procedural.getnumpwl
-        self.chgcolname = self.cplex_module._internal._procedural.chgcolname
-        self.getx = self.cplex_module._internal._procedural.getx
-        self.chgctype = self.cplex_module._internal._procedural.chgctype
-        self.getprobtype = self.cplex_module._internal._procedural.getprobtype
-        self.getnumcols = self.cplex_module._internal._procedural.getnumcols
-        self.getnumrows = self.cplex_module._internal._procedural.getnumrows
-        self.getrows = self.cplex_module._internal._procedural.getrows
-        self.getcolname = self.cplex_module._internal._procedural.getcolname
-        self.getlb = self.cplex_module._internal._procedural.getlb
-        self.getub = self.cplex_module._internal._procedural.getub
+        cpxproc = self.cplex_module._internal._procedural
+        self.chgcoeflist = cpxproc.chgcoeflist
+        self.chgobj = cpxproc.chgobj
+        self.chgrhs = cpxproc.chgrhs
+        self.chgqpcoef = cpxproc.chgqpcoef
+        self.newcols = cpxproc.newcols
+        self.setintparam = cpxproc.setintparam
+        self.addindconstr = cpxproc.addindconstr
+        self.addrows = cpxproc.addrows
+        self.chgrngval = cpxproc.chgrngval
+        self.addpwl = cpxproc.addpwl
+        self.getnumpwl = cpxproc.getnumpwl
+        self.chgcolname = cpxproc.chgcolname
+        self.getx = cpxproc.getx
+        self.chgctype = cpxproc.chgctype
+        self.getprobtype = cpxproc.getprobtype
+        self.getnumcols = cpxproc.getnumcols
+        self.getnumrows = cpxproc.getnumrows
+        self.getrows = cpxproc.getrows
+        self.getcolname = cpxproc.getcolname
+        self.getlb = cpxproc.getlb
+        self.getub = cpxproc.getub
+        self.getsense = cpxproc.getsense
+
+        # allocators
+        try:
+            self.allocate_int_c_array = self.cplex_module._internal._list_array_utils.allocate_int_C_array
+            self.allocate_long_c_array = self.cplex_module._internal._list_array_utils.allocate_long_C_array
+            self.allocate_double_c_array = self.cplex_module._internal._list_array_utils.allocate_double_C_array
+            self.fast_get_row_tuples = cpxproc.fast_getrows
+            self.fast_getobj = cpxproc.fast_getobj
+            self._use_fast_C_interface = True
+        except AttributeError:
+            self.allocate_int_c_array = None
+            self.allocate_long_c_array = None
+            self.allocate_double_c_array = None
+            self.fast_get_row_tuples = None
+            self.fast_getobj = None
+            self._use_fast_C_interface = False
+
+
         try:
             # needs cplex > 12.9
-            self.multiobjsetobj = self.cplex_module._internal._procedural.multiobjsetobj
+            self.multiobjsetobj = cpxproc.multiobjsetobj
         except AttributeError:
             self.multiobjsetobj = None
+
+        try:
+            # fast multiobj API:
+            # check one to None to see if it's present.
+            self.fast_multiobj_getweight = cpxproc.fast_multiobjgetweight
+            self.fast_multiobj_getprio   = cpxproc.fast_multiobjgetpriority
+            self.fast_multiobj_getoffset = cpxproc.fast_multiobjgetoffset
+            self.fast_multiobj_getabstol = cpxproc.fast_multiobjgetabstol
+            self.fast_multiobj_getreltol = cpxproc.fast_multiobjgetreltol
+            self.fast_multiobj_getobj    = cpxproc.fast_multiobjgetobj
+            self.has_non_default_lb      = cpxproc.has_non_default_lb
+            self.has_non_default_ub      = cpxproc.has_non_default_ub
+            self.has_name                = cpxproc.has_name
+
+            if is_docplex_debug():
+                print(f"-- using has_xxx methods in C")
+
+        except AttributeError:
+            self.fast_multiobj_getweight = None
+            self.fast_multiobj_getprio   = None
+            self.fast_multiobj_getoffset = None
+            self.fast_multiobj_getabstol = None
+            self.fast_multiobj_getreltol = None
+            self.fast_multiobj_getobj    = None
+            self.has_non_default_lb      = None
+            self.has_non_default_ub      = None
+            self.has_name                = None
 
         subinterfaces = self.cplex_module._internal._subinterfaces
         self.ct_linear = subinterfaces.FeasoptConstraintType.linear
@@ -112,7 +160,7 @@ class CplexAdapter(object):
         # chbmatrix
         try:
             # from 12.7.1 up
-            self.chbmatrix = self.cplex_module._internal._procedural.chbmatrix
+            self.chbmatrix = cpxproc.chbmatrix
         except AttributeError:  # pragma: no cover
             # up to 12.7.0
             try:
@@ -147,7 +195,28 @@ class CplexAdapter(object):
         self.CplexError = self.cplex_module.exceptions.CplexError
         self.CplexSolverError = self.cplex_module.exceptions.CplexSolverError
 
+        self._monkeypatch_LAU()
+
         # ---- END OF INIT -----
+
+
+    @classmethod
+    def _monkeypatch_LAU(cls):
+        try:
+            from cplex._internal._list_array_utils import fast_array_to_list
+            # set "array_to_list" as "fast_array_to_list
+            import cplex._internal._list_array_utils as lau
+            lau.__dict__['array_to_list'] = fast_array_to_list
+            if is_docplex_debug():
+                print(f"-- patched array to list")
+        except ImportError:
+            pass
+
+
+    @property
+    def use_fast_C_interface(self):
+        # TODO: add a yes/no flag in model.
+        return self._use_fast_C_interface
 
     def fast_get_solution(self, cpx, nb_vars):
         return self.getx(cpx._env._e, cpx._lp, 0, nb_vars-1)
@@ -162,13 +231,6 @@ class CplexAdapter(object):
         cpxenv = cpx._env
         nb_vars = self.getnumcols(cpxenv._e, cpxenv._lp)
         return self.getcolname(cpxenv._e, cpx._lp, 0, nb_vars-1)
-
-    # def fast_get_var_names(self, cpx):
-    #     # ported from cplex_engine.py, but does not seem to be used anywhere ?
-    #     if self.is_post1210:
-    #         return self._fast_get_var_names12100(cpx)
-    #     else:
-    #         return self.fast_get_var_names1290(cpx)
 
     def fast_get_rows(self, cpx):
         cpxenv = cpx._env._e
@@ -206,7 +268,7 @@ class CplexAdapter(object):
                            list(range(num_old_rows, num_old_rows + num_new_rows)),
                            ranges)
 
-        return fast_range(num_old_rows, cpx_linearcts.get_num())
+        return range(num_old_rows, cpx_linearcts.get_num())
 
     def fast_add_linear_1210(self, cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
         # INTERNAL
@@ -226,35 +288,37 @@ class CplexAdapter(object):
                 list(range(num_old_rows, num_old_rows + num_new_rows)),
                 ranges)
 
-        return fast_range(num_old_rows, cpx_linearcts.get_num())
+        return range(num_old_rows, cpx_linearcts.get_num())
 
     def static_fast_set_linear_obj(self, cpx, indices, obj_coefs):
         self.chgobj(cpx._env._e, cpx._lp, indices, obj_coefs)
 
-    def add_linear(self, cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
-        if not self.is_post1210 and self.chbmatrix:
-            # BEWARE: expects a string for senses, not a list
-            cpx_linearcts = cpx.linear_constraints
-            num_old_rows = cpx_linearcts.get_num()
-            num_new_rows = len(rhs)
-            cpxenv = cpx._env
-            # noinspection PyArgumentList
-            with self.chbmatrix(lin_expr, cpx._env_lp_ptr, 0,
-                                cpxenv._apienc) as (rmat, nnz):
-                # noinspection PyArgumentList
-                self.addrows(cpxenv._e, cpx._lp, 0,
-                             len(rhs), nnz, rhs, cpx_senses,
-                             rmat, [], names, cpxenv._apienc)
-            if ranges:
-                self.chgrngval(
-                    cpxenv._e, cpx._lp,
-                    list(range(num_old_rows, num_old_rows + num_new_rows)),
-                    ranges)
 
-            return fast_range(num_old_rows, cpx_linearcts.get_num())
-        else:  # pragma: no cover
-            return cpx.linear_constraints.add(lin_expr=lin_expr,
-                                              senses=cpx_senses,
-                                              rhs=rhs,
-                                              names=names,
-                                              range_values=ranges)
+    # def add_linear(self, cpx, lin_expr, cpx_senses, rhs, names, ranges=None):
+    #     if not self.is_post1210 and self.chbmatrix:
+    #         # BEWARE: expects a string for senses, not a list
+    #         cpx_linearcts = cpx.linear_constraints
+    #         num_old_rows = cpx_linearcts.get_num()
+    #         num_new_rows = len(rhs)
+    #         cpxenv = cpx._env
+    #         # noinspection PyArgumentList
+    #         with self.chbmatrix(lin_expr, cpx._env_lp_ptr, 0,
+    #                             cpxenv._apienc) as (rmat, nnz):
+    #             # noinspection PyArgumentList
+    #             self.addrows(cpxenv._e, cpx._lp, 0,
+    #                          len(rhs), nnz, rhs, cpx_senses,
+    #                          rmat, [], names, cpxenv._apienc)
+    #         if ranges:
+    #             self.chgrngval(
+    #                 cpxenv._e, cpx._lp,
+    #                 list(range(num_old_rows, num_old_rows + num_new_rows)),
+    #                 ranges)
+    #
+    #         return range(num_old_rows, cpx_linearcts.get_num())
+    #     else:  # pragma: no cover
+    #         return cpx.linear_constraints.add(lin_expr=lin_expr,
+    #                                           senses=cpx_senses,
+    #                                           rhs=rhs,
+    #                                           names=names,
+    #                                           range_values=ranges)
+

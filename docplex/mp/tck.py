@@ -9,7 +9,6 @@
 
 import math
 
-from docplex.mp.compat23 import izip
 from docplex.mp.constr import AbstractConstraint, LinearConstraint,\
     LogicalConstraint, EquivalenceConstraint, IndicatorConstraint, QuadraticConstraint
 from docplex.mp.error_handler import docplex_fatal
@@ -20,7 +19,6 @@ from docplex.mp.progress import ProgressListener
 from docplex.mp.utils import is_int, is_number, is_iterable, is_string, generate_constant, \
     is_ordered_sequence, is_iterator, resolve_caller_as_string
 from docplex.mp.vartype import VarType
-import six
 
 _vartype_code_map = {sc().cplex_typecode: sc().short_name for sc in VarType.__subclasses__()}
 
@@ -39,13 +37,15 @@ class DocplexNumericCheckerMixin(object):
     def static_validate_num1(e, checked_num=False, infinity=1e+20):
         # checks for number and truncates to 1e=20
         if not checked_num and not is_number(e):
-            docplex_fatal("Expecting number, got: {0!r}".format(e))
+            docplex_fatal("Expecting valid float number, got: {0!r}".format(e))
         elif -infinity <= e <= infinity:
             return e
         elif e >= infinity:
             return infinity
-        else:
+        elif e <= -infinity:
             return -infinity
+        else:
+            docplex_fatal(("Expecting valid float number, got: {0!r}".format(e)))
 
     @staticmethod
     def static_validate_num2(e, infinity=1e+20, context_msg=None):
@@ -194,7 +194,7 @@ class DocplexTypeCheckerI(object):
     def typecheck_zero_or_one(self, arg):
         raise NotImplementedError  # pragma: no cover
 
-    def typecheck_num(self, arg, caller=None):
+    def typecheck_num(self, arg, caller=None, safe_number=False):
         raise NotImplementedError  # pragma: no cover
 
     def typecheck_int(self, arg, accept_negative=False, caller=None):
@@ -448,10 +448,14 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if arg != 0 and arg != 1:
             self.fatal("expecting 0 or 1, got: {0!s}", arg)
 
-    def typecheck_num(self, arg, caller=None):
+    def typecheck_num(self, arg, caller=None, safe_number=False):
         if not is_number(arg):
             caller_string = "{0}: ".format(caller) if caller is not None else ""
             self.fatal("{0}Expecting number, got: {1!r}", caller_string, arg)
+        if not safe_number:
+            num_fn = self.get_number_validation_fn()
+            if num_fn:
+                num_fn(arg)
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):
         caller_string = "{0}: ".format(caller) if caller is not None else ""
@@ -468,7 +472,7 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
         if l_lbs and l_ubs:
             names = names or generate_constant(None, max(l_lbs, l_ubs))
             # noinspection PyArgumentList,PyArgumentList
-            for lb, ub, varname in izip(lbs, ubs, names):
+            for lb, ub, varname in zip(lbs, ubs, names):
                 self.check_var_domain(lb, ub, varname)
 
     def check_var_domain(self, lb, ub, varname):
@@ -482,7 +486,8 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
                 self.fatal("{0}Expecting a non-empty string", s_caller)
         elif not (arg is None and accept_none):
             s_caller = resolve_caller_as_string(caller)
-            self.fatal("{0}Expecting string, got: {1!r}", s_caller, arg)
+            qualifier = "non-empty " if not accept_empty else ""
+            self.fatal("{0}Expecting a {2}string, got: {1!r}", s_caller, arg, qualifier)
 
     def typecheck_string_seq(self, arg, accept_empty=False, accept_none=False, caller=''):
         checked_strings = list(arg)
@@ -544,17 +549,17 @@ class StandardTypeChecker(DOcplexLoggerTypeChecker):
     def check_solution_hook(self, mdl, sol_hook_fn):
         if not callable(sol_hook_fn):
             self.fatal('Solution hook requires a function taking a solution as argument, a non-callable was passed')
-        if six.PY3:
-            try:
-                from inspect import signature
-                hook_signature = signature(sol_hook_fn)
-                nb_params = len(hook_signature.parameters)
-                if nb_params != 1:
-                    self.fatal(
-                        'Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
-                        .format(nb_params))
-            except (ImportError, TypeError):  # not a callable object or no signature
-                pass
+
+        try:
+            from inspect import signature
+            hook_signature = signature(sol_hook_fn)
+            nb_params = len(hook_signature.parameters)
+            if nb_params != 1:
+                self.fatal(
+                    'Solution hook requires a function taking a solution as argument, wrong number of arguments: {0}'
+                    .format(nb_params))
+        except (ImportError, TypeError):  # not a callable object or no signature
+            pass
 
     def typecheck_pwl_function(self, pwl):
         if not isinstance(pwl, PwlFunction):
@@ -640,7 +645,7 @@ class DummyTypeChecker(DOcplexLoggerTypeChecker):
     def typecheck_zero_or_one(self, arg):
         pass  # pragma: no cover
 
-    def typecheck_num(self, arg, caller=None):
+    def typecheck_num(self, arg, caller=None, safe_number=False):
         pass  # pragma: no cover
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):
@@ -708,7 +713,7 @@ class NumericTypeChecker(DummyTypeChecker):
     def get_number_validation_fn(self):
         return DocplexNumericCheckerMixin.static_validate_num2
 
-    def typecheck_num(self, arg, caller=None):
+    def typecheck_num(self, arg, caller=None, safe_number=False):
         DocplexNumericCheckerMixin.typecheck_num(self._logger, arg, check_math=True, caller=caller)
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):
@@ -734,7 +739,7 @@ class FullTypeChecker(StandardTypeChecker):
     def get_number_validation_fn(self):
         return DocplexNumericCheckerMixin.static_validate_num2
 
-    def typecheck_num(self, arg, caller=None):
+    def typecheck_num(self, arg, caller=None, safe_number=False):
         DocplexNumericCheckerMixin.typecheck_num(self._logger, arg, check_math=True, caller=caller)
 
     def typecheck_int(self, arg, accept_negative=True, caller=None):

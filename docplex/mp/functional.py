@@ -30,8 +30,8 @@ class _FunctionalExpr(Expr, LinearOperand):
     # parent class for all nonlinear expressions.
     __slots__ = ('_f_var', '_resolved')
 
-    def __init__(self, model, name=None):
-        Expr.__init__(self, model, name)
+    def __init__(self, model):
+        super().__init__(model)
         self._f_var = None
         self._resolved = False
 
@@ -70,7 +70,8 @@ class _FunctionalExpr(Expr, LinearOperand):
         return gvar
 
     def _new_generated_binary_varlist(self, keys, offset=0, name=None):
-        bvars = self.model.binary_var_list(keys, name)
+        btype = self.model.binary_vartype
+        bvars = self.lfactory.var_list(keys, btype, lb=None, ub=None, name=name, create_container=False)
         for b, bv in enumerate(bvars, start=offset):
             bv.origin = (self, b)
         return bvars
@@ -220,8 +221,8 @@ class _FunctionalExpr(Expr, LinearOperand):
 
 # noinspection PyAbstractClass
 class UnaryFunctionalExpr(_FunctionalExpr):
-    def __init__(self, model, argument_expr, name=None):
-        _FunctionalExpr.__init__(self, model, name)
+    def __init__(self, model, argument_expr):
+        super().__init__(model)
         self._argument_expr = model._lfactory._to_linear_operand(argument_expr)
         self._x_var = self._allocate_arg_var_if_necessary(argument_expr, pos=1)
 
@@ -307,8 +308,8 @@ class AbsExpr(UnaryFunctionalExpr):
 class _SequenceExpr(_FunctionalExpr):
     # INTERNAL: base class for functional exprs with a sequence argument (e.g. min/max)
 
-    def __init__(self, model, exprs, name=None):
-        _FunctionalExpr.__init__(self, model, name)
+    def __init__(self, model, exprs):
+        _FunctionalExpr.__init__(self, model)
         if is_iterable(exprs) or is_iterator(exprs):
             self._exprs = exprs
         else:
@@ -365,14 +366,14 @@ class _SequenceExpr(_FunctionalExpr):
         cloned_expr = memo.get(copy_key)
         if cloned_expr is None:
             copied_exprs = [expr.copy(target_model, memo) for expr in self._exprs]
-            cloned_expr = self.__class__(target_model, copied_exprs, self.name)
+            cloned_expr = self.__class__(target_model, copied_exprs)
             # add in mapping
             memo[copy_key] = cloned_expr
         return cloned_expr
 
     def clone(self):
         # generic clone
-        return self.__class__(self.model, self._exprs, self.name)
+        return self.__class__(self.model, self._exprs)
 
     def get_logical_seq_artefact(self, zvars, pos):
         # 0 -> fvar
@@ -398,8 +399,8 @@ class MinimumExpr(_SequenceExpr):
     of its argument expressions.
     """
 
-    def __init__(self, model, exprs, name=None):
-        _SequenceExpr.__init__(self, model, exprs, name)
+    def __init__(self, model, exprs):
+        _SequenceExpr.__init__(self, model, exprs)
 
     def _get_function_symbol(self):
         return "min"
@@ -451,7 +452,7 @@ class MaximumExpr(_SequenceExpr):
     """
 
     def __init__(self, model, exprs, name=None):
-        _SequenceExpr.__init__(self, model, exprs, name)
+        _SequenceExpr.__init__(self, model, exprs)
 
     def _get_function_symbol(self):
         return "max"
@@ -547,8 +548,8 @@ class _LogicalSequenceExpr(_SequenceExpr):
         self._name_functional_var_name(bvar)
         return bvar
 
-    def __init__(self, model, exprs, name=None):
-        _FunctionalExpr.__init__(self, model, name)
+    def __init__(self, model, exprs):
+        super().__init__(model, exprs)
         assert is_iterable(exprs) or is_iterator(exprs)
         self._exprs = exprs
         # never allocate vars: arguments --are-- binary variables.

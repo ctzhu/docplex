@@ -51,7 +51,7 @@ def run_docplex_check_list():
     diagnostics = []
 
     # check requirements
-    for rm in ["six", "enum", "cloudpickle"]:
+    for rm in ["enum", "cloudpickle"]:
         if not check_import(rm):
             diagnostics.append("Module {0} is missing, run: pip install {0}".format(rm))
 

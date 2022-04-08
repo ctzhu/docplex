@@ -6,19 +6,10 @@
 
 
 # gendoc: ignore
-import logging
 import os
-import sched
 import tempfile
-import threading
-import time
 import sys
-
 from itertools import chain, repeat
-from six import PY2 as SIX_PY2
-from six import itervalues, iteritems
-
-from docplex.mp.compat23 import Queue
 
 __int_types = {int}
 __float_types = {float}
@@ -311,10 +302,11 @@ class DOcplexException(Exception):
 
 
 class DOcplexLimitsExceeded(DOcplexException):
-    cplexce_limits_exceeded_msg = "**** Promotional version. Problem size limits exceeded, CPLEX code=1016"
+    cplexce_limits_exceeded_msg = \
+        "**** Promotional version. Problem size limits (1000 vars, 1000 consts) exceeded, model has {0} vars, {1} consts, CPLEX code=1016"
 
-    def __init__(self):
-        DOcplexException.__init__(self, self.cplexce_limits_exceeded_msg)
+    def __init__(self, nb_vars, nb_consts):
+        DOcplexException.__init__(self, self.cplexce_limits_exceeded_msg.format(nb_vars, nb_consts))
 
 
 class DocplexQuadToLinearException(DOcplexException):
@@ -354,8 +346,6 @@ def normalize_basename(s, force_lowercase=True, maxlen=255):
     """
     # replace all whietspaces by _
     l = s.lower() if force_lowercase else s
-    # table = mktrans(" ", "_")
-    # return l.translate(table)
     trans_table = {" ": "_",
                    "/": "_slash_",
                    "\\": "_backslash_",
@@ -396,22 +386,6 @@ def make_output_path2(actual_name, extension, basename_fmt, path=None):
     if not actual_basename.endswith(extension):
         actual_basename = actual_basename + extension
     return os.path.join(output_dir, actual_basename)
-
-
-def make_path(error_handler, basename, extension, output_dir=None, name_transformer=None):
-    # used for docloud
-    if output_dir is None:
-        output_dir = tempfile.gettempdir()
-    elif not os.path.exists(output_dir):
-        if not os.makedirs(output_dir):
-            error_handler.error("directory not found and not created: {0:s}", output_dir)
-            return None
-
-    norm_name = normalize_basename(basename)
-    basename = norm_name if not name_transformer else name_transformer % norm_name
-    filename = basename + extension
-    full_path = '/'.join([output_dir, filename])
-    return full_path
 
 
 def generate_constant(the_constant, count_max):
@@ -463,19 +437,11 @@ def str_maxed(arg, maxlen, ellipsis_str=".."):
         return "%s%s" % (s[:maxlen], ellipsis_str)
 
 
-def compute_is_index(seq, obj):
-    # assume obj is iterable multiple times
-    for i, elt in enumerate(seq):
-        if elt is obj:  # use 'is' to identify obj
-            return i
-
-    return None
-
-
 DOCPLEX_CONSOLE_HANDLER = None
 
 
 def get_logger(name, verbose=False):
+    import logging
     logging_level = logging.WARNING
     if verbose:
         logging_level = logging.DEBUG
@@ -510,205 +476,6 @@ def open_universal_newline(filename, mode):
         else:
             # for other errors, just raise them
             raise
-
-
-class CyclicLoop(object):
-    """ A cyclic loop executes actions at specified intervals, until
-    ``stop()`` is called.
-
-    This loop is based on sched.scheduler
-
-    Attributes:
-        stopped: True if the loop is stopped.
-    """
-
-    class Task(object):
-        """This class stores information needed to manage tasks.
-
-        Attributes:
-            id: The id of the task (automatically generated)
-            interval: The interval on which that task is called
-            action: The action function to call at ``interval``
-            argument: The arguments for the action function
-        """
-        id = 0
-        idgen_lock = threading.Lock()
-
-        def __init__(self, interval, priority, action, argument=()):
-            self.interval = interval
-            self.priority = priority
-            self.action = action
-            self.argument = argument
-            with self.idgen_lock:
-                self.id = CyclicLoop.Task.id
-                CyclicLoop.Task.id += 1
-
-    def __init__(self):
-        """Initialize a new empty CyclicLoop
-        """
-        self.stop_lock = threading.Lock()
-        self.stopped = False
-        self.scheduler = sched.scheduler(time.time, time.sleep)
-        # maps task id -> ev
-        self.events_by_id = {}
-        self.tasks_by_id = {}  # task id -> task
-
-    def enter(self, interval, priority, action, argument=()):
-        """Schedule a new event.
-
-        Works like sched.scheduler.enter(), but instead of a ``delay``, the
-        first argument is the ``interval`` the action must be performed.
-        """
-        with self.stop_lock:
-            if not self.stopped:
-                task = CyclicLoop.Task(interval, priority, action, argument)
-                self.tasks_by_id[task.id] = task
-                self._queue(task)
-
-    def _queue(self, task):
-        def process_task(task_id):
-            self._process_task(task_id)
-
-        ev = self.scheduler.enter(task.interval, task.priority, process_task, (task.id,))
-        self.events_by_id[task.id] = ev
-
-    def _process_task(self, task_id):
-        task = self.tasks_by_id[task_id]
-        task.action(*task.argument)
-        del self.events_by_id[task_id]
-        # do not reschedule if we are shutting down
-        with self.stop_lock:
-            if not self.stopped:
-                self._queue(task)
-
-    def start(self):
-        """Starts the loop. The loop stops only when ``stop()`` is called.
-        """
-        self.scheduler.run()
-
-    def stop(self):
-        """Stops the Loop.
-
-        When the loop is stopped, its ``stopped`` attribute is set immediately,
-        then all tasks in the scheduler are canceled.
-        """
-        with self.stop_lock:
-            self.stopped = True
-            for ev in itervalues(self.events_by_id):
-                try:
-                    self.scheduler.cancel(ev)
-                except ValueError:
-                    # if stop() is called from an event, the event has already
-                    # been triggered and poped'
-                    pass
-
-
-class ClosableQueue(Queue):
-    LAST = object()
-
-    def close(self):
-        self.put(self.LAST)
-
-    def __iter__(self):
-        while True:
-            item = self.get()
-            try:
-                if item is self.LAST:
-                    return
-                yield item
-            finally:
-                self.task_done()
-
-
-class ThreadedCyclicLoop(object):
-    """ A cyclic loop executes actions at specified intervals, until
-    ``stop()`` is called.
-
-    This loop is based on threads.
-
-    Attributes:
-        stopped: True if the loop is stopped.
-    """
-
-    class Task(threading.Thread):
-        """
-        Attributes:
-            id: The id of the task (automatically generated)
-            interval: The interval on which that task is called
-            action: The action function to call at ``interval``
-            argument: The arguments for the action function
-        """
-
-        def __init__(self, loop, interval, priority, action, argument=()):
-            super(ThreadedCyclicLoop.Task, self).__init__()
-            self.loop = loop
-            self.interval = interval
-            self.priority = priority
-            self.action = action
-            self.argument = argument
-            self.stopped = False
-
-        def run(self):
-            while not self.stopped:
-                # instead of one big sleep, do some smaller sleeps so that
-                # we can stop the thread with smaller granularity
-                for _ in range(self.interval):
-                    time.sleep(1)
-                    if self.stopped:
-                        break
-                if not self.stopped:
-                    self.perform()
-
-        def stop(self):
-            self.stopped = True
-
-        def perform(self):
-            self.action(*self.argument)
-
-    def __init__(self):
-        """Initialize a new empty ThreadedCyclicLoop
-        """
-        self.stop_lock = threading.Lock()
-        self.stopped = False
-        self.threads = set()
-        self.event_queue = ClosableQueue()
-
-    def enter(self, interval, priority, action, argument=()):
-        """Schedule a new event.
-
-        Works like sched.scheduler.enter(), but instead of a ``delay``, the
-        first argument is the ``interval`` the action must be performed.
-        """
-        with self.stop_lock:
-            if not self.stopped:
-                task = ThreadedCyclicLoop.Task(self, interval, priority,
-                                               action, argument)
-                self.threads.add(task)
-
-    def start(self, mt_worker=None, mt_arg=()):
-        """Starts the loop. The loop stops only when ``stop()`` is called.
-        """
-        for t in self.threads:
-            t.start()
-        if mt_worker:
-            while not self.stopped:
-                for task in self.event_queue:
-                    mt_worker(*((task,) + mt_arg))
-        for t in self.threads:
-            t.join()
-
-    def stop(self):
-        """Stops the Loop.
-
-        When the loop is stopped, its ``stopped`` attribute is set immediately,
-        then all tasks in the scheduler are canceled.
-        """
-        with self.stop_lock:
-            self.stopped = True
-        self.event_queue.close()
-        for t in self.threads:
-            t.stop()
-
 
 class _SymbolGenerator(object):
     def __init__(self, pattern, offset=1):
@@ -792,11 +559,11 @@ class _IndexScope(object):
             return self._index_map[size - 1]
 
     def iter_objects(self):
-        if SIX_PY2:
-            sorted_by_index = sorted((o for o in itervalues(self._index_map)), key=lambda o: o.index)
-            return iter(sorted_by_index)
-        else:
-            return iter(self._index_map.values())
+        # if SIX_PY2:
+        #     sorted_by_index = sorted((o for o in itervalues(self._index_map)), key=lambda o: o.index)
+        #     return iter(sorted_by_index)
+        # else:
+        return iter(self._index_map.values())
 
     def generate_objects_filtered(self, pred):
         for obj in self.iter_objects():
@@ -862,7 +629,7 @@ class _IndexScope(object):
         nb_deleted = len(delset)
         idxmap = self._index_map
         if nb_deleted and idxmap is not None:
-            kept = [o for o in itervalues(idxmap) if o.index not in delset]
+            kept = [o for o in idxmap.values() if o.index not in delset]
             new_map = {}
             for nx, obj in enumerate(kept):
                 obj._set_index(nx)
@@ -873,14 +640,14 @@ class _IndexScope(object):
         if max_lines is None or max_lines < 0:
             max_lines = 1e+20
         print("-- scope: {0}[{1}]".format(self.qualifier, self.size))
-        for l, (k, o) in iteritems(self._index_map):
+        for l, (k, o) in self._index_map.items():
             if l > max_lines:
                 break
             print("  {0}> index={1}: {2:s}".format(l, k, o))
 
     def check_indices(self):
         # internal, checks that indices and keys are in sync
-        for k, o in iteritems(self._index_map):
+        for k, o in self._index_map.items():
             if k != o.index:
                 raise ValueError("key-index mismatch, key: {0}, index: {1}"
                                  .format(k, o.index))
@@ -955,6 +722,10 @@ class OutputStreamAdapter:
         if self.stream_is_binary:
             output_s = s.encode(self.encoding)
         self.stream.write(output_s)
+
+
+def mktrans(a, b):              # pragma: no cover
+    return str.maketrans(a, b)  # pragma: no cover
 
 
 def izip2_filled(it1, it2, **kwds):
@@ -1137,3 +908,56 @@ def _var_match_function(source_model, target_model, match="auto", error='ignore'
                 match)
 
     return find_matching_var
+
+
+
+
+class MockIterable:
+    """ Utility clas which behaves like a sequence of N items, with constant memory space
+
+    """
+
+    @classmethod
+    def from_value(cls, size, val):
+        """ Returns a mock iterable over a constant
+
+        :param size: size of the iterable
+        :param val:  constant value
+        :return: an instance of MockIterable
+        """
+        mock_iter_val = _MockIterableConstant(size, val)
+        return mock_iter_val
+
+    def __init__(self, size, fn_k):
+        self.fn_k = fn_k
+        self.size = size
+        assert size >= 0
+
+    def __len__(self):
+        return self.size
+
+    def _as_gen(self):
+        for i in range(self.size):
+            yield self.fn_k(i)
+
+    def __iter__(self):
+        return self._as_gen()
+
+    def __getitem__(self, index):
+        if 0 <= index < self.size:
+            return self.fn_k(index)
+        else:
+            raise IndexError
+
+class _MockIterableConstant(MockIterable):
+    def __init__(self, size, cst):
+        def fnk(k):
+            return cst
+        super().__init__(size, fnk)
+        self.size = size
+        self.constant = cst
+        assert size >= 0
+
+    def __getitem__(self, index):
+        return self.constant
+

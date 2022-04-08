@@ -91,6 +91,17 @@ class LinearOperand(Operand):
         """
         return self
 
+    @property
+    def linear_part(self):
+        """ Returns the linear part of the expression: for a linear expression,
+        returns the expression itself.
+
+        Defined for compatibility with quadratic expressions.
+
+        :return: a linear expression (returns itself for any linear operand).
+        """
+        return self
+
     def iter_terms(self):
         # iterates over all linear terms, if any
         return iter_emptyset()
@@ -106,6 +117,9 @@ class LinearOperand(Operand):
 
     # noinspection PyMethodMayBeStatic
     def iter_quads(self):
+        return iter_emptyset()
+
+    def iter_quad_triplets(self):
         return iter_emptyset()
 
     def is_quad_expr(self):

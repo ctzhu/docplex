@@ -35,8 +35,7 @@ scope, and you set values from this context::
 import os
 
 from copy import deepcopy
-import six
-from six import iteritems
+
 import shlex
 import socket
 import sys
@@ -174,7 +173,7 @@ def check_credentials(context):
         message = "API key is not a string: {0!s}".format(context.key)
         credentials_ok = False
     if context.key and credentials_ok:
-        credentials_ok = isinstance(context.key, six.string_types)
+        credentials_ok = isinstance(context.key, str)
     return credentials_ok, message
 
 
@@ -264,7 +263,7 @@ class SolverContext(BaseContext):
         cls = self.__class__
         result = cls.__new__(cls)
         memo[id(self)] = result
-        for k, v in iteritems(self):
+        for k, v in self.items():
             # do not duplicate those (io like objects)
             if k == "log_output" and hasattr(v, "write"):
                 value = v
@@ -534,7 +533,7 @@ class Context(BaseContext):
             # try a dictionary of parameter qualified names, parameter values
             # e.g. cplex_parameters={'mip.tolerances.mipgap': 0.01, 'timelimit': 180}
             try:
-                for pk, pv in iteritems(arg_params):
+                for pk, pv in arg_params.items():
                     p = new_params.find_parameter(key=pk)
                     if not p:
                         docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))
@@ -562,7 +561,7 @@ class Context(BaseContext):
         elif k == 'log_output':
             self.solver.log_output = value
         elif k == 'override':
-            self.update_from_list(iteritems(value))
+            self.update_from_list(value.items())
         elif k == 'proxies':
             self.solver.docloud.proxies = value
         elif k == '_env':
@@ -622,7 +621,7 @@ class Context(BaseContext):
             if len(file_list) == 0:
                 file_list = None  # let read_settings use its default behavior
 
-        if isinstance(file_list, six.string_types):
+        if isinstance(file_list, str):
             file_list = [file_list]
 
         if file_list is not None:
@@ -761,7 +760,7 @@ class ContextOverride(Context):
         elif k == 'log_output':
             self.solver.log_output = value
         elif k == 'override':
-            self.update_from_list(iteritems(value))
+            self.update_from_list(value.items())
         elif k == 'proxies':
             self.solver.docloud.proxies = value
         elif k == '_env':
@@ -782,7 +781,7 @@ class ContextOverride(Context):
         # try a dictionary of parameter qualified names, parameter values
         # e.g. cplex_parameters={'mip.tolerances.mipgap': 0.01, 'timelimit': 180}
         try:
-            for pk, pv in iteritems(arg_params):
+            for pk, pv in arg_params.items():
                 p = new_params.find_parameter(key=pk)
                 if not p:
                     docplex_fatal('Cannot find matching parameter from: {0!r}'.format(pk))

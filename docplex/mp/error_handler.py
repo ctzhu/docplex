@@ -4,7 +4,6 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from __future__ import print_function
 from docplex.mp.utils import DOcplexException, DOcplexLimitsExceeded, resolve_pattern, is_int, is_string
 
 from enum import Enum
@@ -210,9 +209,9 @@ class AbstractErrorHandler(IErrorHandler):
         docplex_error_stop_here()
         raise DOcplexException(resolved_message)
 
-    def fatal_limits_exceeded(self):
+    def fatal_limits_exceeded(self, nb_vars, nb_constraints):
         docplex_error_stop_here()
-        raise DOcplexLimitsExceeded()
+        raise DOcplexLimitsExceeded(nb_vars, nb_constraints)
 
 
     def ok(self):
@@ -256,10 +255,15 @@ def docplex_fatal(msg, *args):
     docplex_error_stop_here()
     raise DOcplexException(resolved_message)
 
-is_debug = os.environ.get('DOCPLEX_DEBUG')
-
 def is_docplex_debug():
-    return not not os.environ.get("DOCPLEX_DEBUG")
+    return not not os.environ.get('DOCPLEX_DEBUG')
+
+
+def docplex_debug_msg(*args):
+    if is_docplex_debug():
+        msg = ' '.join(str(x) for x in args)
+        #print(f"-- {msg}")
+        print("-- {0}".format(msg))
 
 
 class DefaultErrorHandler(AbstractErrorHandler):

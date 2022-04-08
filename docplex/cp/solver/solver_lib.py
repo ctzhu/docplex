@@ -25,11 +25,15 @@ import sys
 import time
 import os
 import traceback
+import threading
 
 
 #-----------------------------------------------------------------------------
 # Constants
 #-----------------------------------------------------------------------------
+
+# Version of this client
+CLIENT_VERSION = 6
 
 # Events received from library
 _EVENT_SOLVER_INFO     = 1  # Information on solver as JSON document
@@ -67,7 +71,16 @@ _LIB_FUNCTION_PROTYTYPES = \
     'setExplainFailureTags': (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int))),
     'setCpoCallback'       : (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_void_p,)),
     'addBlackBoxFunction'  : (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, )),
+    'addBlackBoxFunction2' : (False, ctypes.c_int,    (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, )),
+    'setClientVersion'     : (False, ctypes.c_int,    (ctypes.c_int,)),
 }
+
+# Dictionary of loaded libraries. Key is lib file, value is a tuple (lib handler, set of available function names)
+# This is neeeded as library file can be changed dynamically when solving, and multiple libraries may then be used.
+_LOADED_LIBRARIES = {}
+
+# Lock to protect creation of lib handler
+_LOADED_LIBRARIES_LOCK = threading.Lock()
 
 
 #-----------------------------------------------------------------------------
@@ -83,38 +96,46 @@ class CpoSolverLib(CpoSolverAgent):
                  'first_solver_error',   # First error (exception) thrown by solver
                  'callback_proto',       # Prototype of the CPO callback function
                  'blackbox_eval_proto',  # Prototype of the blackbox function evaluation function
-                 'absent_funs',          # Set of optional lib functions that are not available
+                 'present_funs',         # Set lib functions that are available
                  'last_conflict_cpo',    # Last conflict in CPO format
+                 'proxy_version',        # Library version number
                  )
 
-    def __init__(self, solver, params, context):
+    def __init__(self, solver, context):
         """ Create a new solver using shared library.
 
         Args:
             solver:   Parent solver
-            params:   Solving parameters
             context:  Solver agent context
         Raises:
             CpoSolverException if library is not found
         """
         # Call super
-        super(CpoSolverLib, self).__init__(solver, params, context)
+        super(CpoSolverLib, self).__init__(solver, context)
 
         # Initialize attributes
         self.first_log_error = None
         self.first_solver_error = None
         self.lib_handler = None # (to not block end() in case of init failure)
         self.last_conflict_cpo = None
+        self.process_infos['ClientVersion'] = CLIENT_VERSION
 
         # Connect to library
-        self.lib_handler = self._get_lib_handler()
+        self._access_library()
         self.context.log(2, "Solving library: '{}'".format(self.context.lib))
+
+        # Set client version
+        if 'setClientVersion' in self.present_funs:
+            self.lib_handler.setClientVersion(CLIENT_VERSION)
 
         # Create session
         # CAUTION: storing callback prototype is mandatory. Otherwise, it is garbaged and the callback fails.
         self.notify_event_proto = _EVENT_NOTIF_PROTOTYPE(self._notify_event)
         self.session = self.lib_handler.createSession(self.notify_event_proto)
         self.context.log(5, "Solve session: {}".format(self.session))
+
+        # Get library version
+        self.proxy_version = self.version_info.get('ProxyVersion', 0)
 
         # Transfer all solver infos in process info
         self.process_infos.update(self.version_info)
@@ -211,7 +232,7 @@ class CpoSolverLib(CpoSolverAgent):
 
         # Check if cpo format required
         self.last_conflict_cpo = None
-        if self.context.add_conflict_as_cpo and ('refineConflictWithCpo' not in self.absent_funs):
+        if self.context.add_conflict_as_cpo and ('refineConflictWithCpo' in self.present_funs):
             # Request refine conflict with CPO format
             self._call_lib_function('refineConflictWithCpo', True, True)
         else:
@@ -305,6 +326,15 @@ class CpoSolverLib(CpoSolverAgent):
             super(CpoSolverLib, self).end()
 
 
+    def _is_abort_search_supported(self):
+        """ Check if this agent supports an actual abort_search() instead of killing the solver
+
+        Return:
+            True if this agent supports actual abort_search()
+        """
+        return self.proxy_version >= 9
+
+
     def _init_solver(self):
         """ Initialize solver
         """
@@ -326,12 +356,10 @@ class CpoSolverLib(CpoSolverAgent):
         """
         # Log call
         if self.context.is_log_enabled(5):
-            self.context.log(5, "Call library function: '", dfname, "' with arguments:")
             if args:
-                for a in args:
-                    self.context.log(5, "   ", a, " (", type(a), ")")
+                self.context.log(5, "Call lib function: ", dfname, "(", ", ".join(str(a) for a in args))
             else:
-                self.context.log(5, "   None")
+                self.context.log(5, "Call lib function: ", dfname, "()")
 
         # Reset JSON result if JSON required
         if json:
@@ -360,7 +388,7 @@ class CpoSolverLib(CpoSolverAgent):
         if json:
             if self.last_json_result is None:
                raise CpoSolverException("No JSON result provided by function '{}'".format(dfname))
-            self.context.log(5, "JSON result: ", self.last_json_result)
+            self._log_received_message(dfname, self.last_json_result)
 
 
     def _notify_event(self, event, data):
@@ -442,16 +470,16 @@ class CpoSolverLib(CpoSolverAgent):
         self.context.log(5, "JSON blackbox evaluation request: ", jeval)
 
         # Retrieve evaluation elements
-        bbf, args = self._get_blackbox_function_eval_context(jeval)
+        bbf, args, bnds = self.solver._get_blackbox_function_eval_context(jeval)
 
         # Process blackbox function evaluation request
         lck = bbf.eval_mutex
         try:
             if lck is not None:
                 with bbf.eval_mutex:
-                    res = bbf.eval(*args)
+                    res = bbf._eval_function(bnds, *args)
             else:
-                res = bbf.eval(*args)
+                res = bbf._eval_function(bnds, *args)
             # Store result
             if res:
                 nbres[0] = len(res)
@@ -468,67 +496,11 @@ class CpoSolverLib(CpoSolverAgent):
             mlen = min(szexcpt - 1, len(err))
             for i in range(mlen):
                 excpt[i] = err[i]
-            excpt[mlen] = 0
-
-
-    def _get_lib_handler(self):
-        """ Access the CPO library
-        Returns:
-            Library handler, with function prototypes defined.
-        Raises:
-            CpoSolverException if library is not found
-        """
-        # Access library
-        libf = self.context.libfile
-        if not libf:
-            _notify_libfile_not_found()
-            raise CpoSolverException("CPO library file should be given in 'solver.lib.libfile' context attribute.")
-
-        # Load library
-        lib = self._load_lib(libf)
-
-        # Define function prototypes
-        self.absent_funs = set()
-        for name, proto in _LIB_FUNCTION_PROTYTYPES.items():
-            mand, rtype, argtypes = proto
+            # Add ending zero
             try:
-                f = getattr(lib, name)
-                f.restype = rtype
-                f.argtypes = argtypes
+                excpt[mlen] = 0
             except:
-                if mand:
-                    raise CpoSolverException("Function '{}' not found in the library {}".format(name, lib))
-                else:
-                    self.absent_funs.add(name)
-
-        # Return
-        return lib
-
-
-    def _load_lib(self, libf):
-        """ Attempt to load a particular library
-        Returns:
-            Library handler
-        Raises:
-            CpoSolverException or other Exception if library is not found
-        """
-        # Search for library file
-        if not os.path.isfile(libf):
-            lf = find_library(libf)
-            if lf is None:
-                _notify_libfile_not_found()
-                raise CpoSolverException("Can not find library '{}'".format(libf))
-            libf = lf
-        # Check library is executable
-        if not is_exe_file(libf):
-            _notify_libfile_not_found()
-            raise CpoSolverException("Library file '{}' is not executable".format(libf))
-        # Load library
-        try:
-            return ctypes.CDLL(libf)
-        except Exception as e:
-            _notify_libfile_not_found()
-            raise CpoSolverException("Can not load library '{}': {}".format(libf, e))
+                excpt[mlen] = '\x00'
 
 
     def _send_model_to_solver(self, cpostr):
@@ -568,6 +540,8 @@ class CpoSolverLib(CpoSolverAgent):
         ver = self.version_info.get('LibVersion', 0)
         if ver < 7:
             raise CpoSolverException("This version of the CPO library ({}) does not support blackbox functions.".format(ver))
+        if ver < 8:
+            raise CpoSolverException("This version of the CPO library ({}) does not support blackbox cache configuration.".format(ver))
 
         # Encode list of argument types
         atypes = [BLACKBOX_ARGUMENT_TYPES_ENCODING[t] for t in bbf.get_arg_types()]
@@ -580,24 +554,91 @@ class CpoSolverLib(CpoSolverAgent):
         name = name.encode('utf-8')
         dimension = bbf.get_dimension()
         nbargs = len(atypes)
-        self._call_lib_function('addBlackBoxFunction', False, name, dimension, nbargs, (ctypes.c_int * nbargs)(*atypes), self.blackbox_eval_proto)
+        if (ver < 8):
+            self._call_lib_function('addBlackBoxFunction', False, name, dimension, nbargs, (ctypes.c_int * nbargs)(*atypes),
+                                    self.blackbox_eval_proto)
+        else:
+            self._call_lib_function('addBlackBoxFunction2', False, name, dimension, nbargs, (ctypes.c_int * nbargs)(*atypes),
+                                    bbf.get_cache_size(), bbf.is_global_cache(), self.blackbox_eval_proto)
 
 
-#-----------------------------------------------------------------------------
-#  Private functions
-#-----------------------------------------------------------------------------
+    def _access_library(self):
+        """ Access the CPO library.
+        This method uses a library cache to optimize connection to the library in case of multiple solves.
+        This method sets local attributes lib_handler and present_funs.
+        Raises:
+            CpoSolverException if library is not found
+        """
+        # Access library
+        libf = self.context.libfile
+        if not libf:
+            msg = "CPO library file should be given in 'solver.lib.libfile' context attribute."
+            self._notify_libfile_not_found(msg)
+            raise CpoSolverException(msg)
 
-def _notify_libfile_not_found():
-    """ Print an error message if library file is not found """
-    out = sys.stdout
-    banner = "#" * 79
-    out.write(banner + '\n')
-    out.write("# Solver library file is not found !\n")
-    out.write("# Please check that:\n")
-    out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
-    out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
-    out.write("#  - your system path includes a reference to the directory where the library file 'lib_cpo_solver_*(.lib or .so)' is located,\n")
-    out.write("#  - the context attribute 'context.solver.lib.libfile' is properly set to 'lib_cpo_solver_*(.lib or .so)',\n")
-    out.write("#  - or that it is set to an absolute path to this file.\n")
-    out.write(banner + '\n')
-    out.flush()
+        # Lock to access loaded libraries cache
+        with _LOADED_LIBRARIES_LOCK:
+            t = _LOADED_LIBRARIES.get(libf)
+            if t is None:
+                # Search for library file
+                if not os.path.isfile(libf):
+                    lf = find_library(libf)
+                    if lf is None:
+                        msg = "Can not find library '{}'".format(libf)
+                        self._notify_libfile_not_found(msg)
+                        raise CpoSolverException(msg)
+                    libf = lf
+                # Check library is executable
+                if not is_exe_file(libf):
+                    msg = "Library file '{}' is not executable".format(libf)
+                    self._notify_libfile_not_found(msg)
+                    raise CpoSolverException(msg)
+                # Load library
+                try:
+                    lib = ctypes.CDLL(libf)
+                except Exception as e:
+                    msg = "Can not load library '{}': {}".format(libf, e)
+                    self._notify_libfile_not_found(msg)
+                    raise CpoSolverException(msg)
+
+                # Define function prototypes
+                prfuns = set()
+                for name, proto in _LIB_FUNCTION_PROTYTYPES.items():
+                    mand, rtype, argtypes = proto
+                    try:
+                        f = getattr(lib, name)
+                        f.restype = rtype
+                        f.argtypes = argtypes
+                        prfuns.add(name)
+                    except:
+                        if mand:
+                            raise CpoSolverException("Function '{}' not found in the library {}".format(name, lib))
+
+                # Add lib into the cache
+                t = (lib, prfuns)
+                _LOADED_LIBRARIES[libf] = t
+
+        # Set local attributes
+        self.lib_handler, self.present_funs = t
+
+
+    def _notify_libfile_not_found(self, msg):
+        """ Print an error message and display warning about library file
+        Args:
+            msg:  Error message to print
+        """
+        #traceback.print_stack()
+        out = self.context.get_log_output()
+        if out is None:
+            out = sys.stdout
+        banner = "#" * 79
+        out.write(banner + '\n')
+        out.write("# {}\n".format(msg))
+        out.write("# Please check that:\n")
+        out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
+        out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
+        out.write("#  - your system path includes a reference to the directory where the library file 'lib_cpo_solver_*(.lib or .so)' is located,\n")
+        out.write("#  - the context attribute 'context.solver.lib.libfile' is properly set to 'lib_cpo_solver_*(.lib or .so)',\n")
+        out.write("#  - or that it is set to an absolute path to this file.\n")
+        out.write(banner + '\n')
+        out.flush()

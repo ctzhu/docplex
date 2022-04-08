@@ -1885,8 +1885,8 @@ def start_of(interval, absentValue=None):
     """ Returns the start of a specified interval variable.
 
     This function returns an integer expression that is equal to start of the interval
-    variable *interval* if it is present. If it is absent, then the value of the
-    expression is *absentValue* (zero by default).
+    variable *interval* if it is present.
+    If it is absent, then the value of the expression is *absentValue* (zero by default).
 
     Args:
         interval: Interval variable.
@@ -1905,8 +1905,8 @@ def end_of(interval, absentValue=None):
     """ Returns the end of specified interval variable.
 
     This function returns an integer expression that is equal to end of the interval
-    variable *interval* if it is present. If it is absent then the value of the
-    expression is *absentValue* (zero by default).
+    variable *interval* if it is present.
+    If it is absent then the value of the expression is *absentValue* (zero by default).
 
     Args:
         interval: Interval variable.
@@ -1924,9 +1924,9 @@ def end_of(interval, absentValue=None):
 def length_of(interval, absentValue=None):
     """ Returns the length of specified interval variable.
 
-    This function returns an integer expression that is equal to the length (*end -
-    start*) of the interval variable *interval* if it is present. If it is absent, then
-    the value of the expression is *absentValue* (zero by default).
+    This function returns an integer expression that is equal to the length (*end - start*) of the
+    interval variable *interval* if it is present.
+    If it is absent, then the value of the expression is *absentValue* (zero by default).
 
     Args:
         interval: Interval variable.
@@ -1945,8 +1945,8 @@ def size_of(interval, absentValue=None):
     """ Returns the size of a specified interval variable.
 
     This function returns an integer expression that is equal to size of the interval
-    variable *interval* if it is present. If it is absent then the value of the
-    expression is *absentValue* (zero by default).
+    variable *interval* if it is present.
+    If it is absent then the value of the expression is *absentValue* (zero by default).
 
     Args:
         interval: Interval variable.

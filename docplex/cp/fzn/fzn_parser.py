@@ -1825,8 +1825,8 @@ class FznParser(object):
         """
         dom = var.domain
         #print("   constrain expression {} to domain {}".format(expr, dom))
-        dmin = expression._domain_min(dom)
-        dmax = expression._domain_max(dom)
+        dmin = expression.get_domain_min(dom)
+        dmax = expression.get_domain_max(dom)
 
         # Check boolean expression
         if dmin == 0 and dmax == 1:

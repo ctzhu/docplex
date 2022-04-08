@@ -1,8 +1,30 @@
 Changelog
 ---------
 
-Changed in 2.21.207:
+Changed in 2.22.213:
 ````````````````````
+* Removed zeppelin examples
+* In ``docplex.mp``:
+    * Added a variant of Model.sum() with variable number of arguments: Model.sums()
+    * Removed all Python2 compatibility code
+    * Added deterministic time in solve details.
+    * Linear relaxer now relaxes SOS variable sets (linear sum relaxation)
+    * Fixed a bug on Model.solve_with_goals() with quadratic sub-objectives
+    * Fixed a bug in SolveSolution.kpi_value_by_name
+    * Fixed a bug in SolveSolution.get_value_dict() about precision filtering
+    * Fixed a bug when updating a constraint rhs with a NaN value now raises exception.
+
+* In ``docplex.cp``:
+    * Add new methods get_objective_value(), get_objective_bound() and get_objective_gap() on CpoModelSolution 
+	  and CpoSolveResult to access directly the first objective, bound or gap.
+    * Support real call to abort_search() instead of killing the solver.
+    * Add a method get_parameters() to CpoSolver to retrieve actual solving parameters.
+    * Fix problem of order of computation of actual solving parameters.
+
+
+Changed in 2.21.207 (2021.06):
+``````````````````````````````
+
 * In ``docplex.mp``:
     * Add support for importing solution from a different model, provided variables
         can be matched between both models (Model.import_solution)

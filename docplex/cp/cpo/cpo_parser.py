@@ -30,7 +30,7 @@ import traceback
 MIN_CPO_VERSION_NUMBER = "12.6.0.0"
 
 # Maximum CPO format version number
-MAX_CPO_VERSION_NUMBER = "20.10.0.0"
+MAX_CPO_VERSION_NUMBER = "21.10.0.0"
 
 # Map of all operators. Key is operator, value is list of corresponding operation descriptors
 _ALL_OPERATORS = {}
@@ -43,8 +43,6 @@ for op in ALL_OPERATIONS:
     if op.priority >= 0:
         _ALL_OPERATORS[op.keyword] = op
     _ALL_OPERATIONS[op.cpo_name] = op
-_ALL_OPERATIONS['alldiff'] = Oper_all_diff
-_ALL_OPERATIONS['allDiff'] = Oper_all_diff
 
 # Known identifiers
 _KNOWN_IDENTIFIERS = {"intmax": INT_MAX, "intmin": INT_MIN,
@@ -58,6 +56,7 @@ _ARRAY_TYPES = {'intArray': Type_IntArray, 'floatArray': Type_FloatArray,
                 'intervalVarArray': Type_IntervalVarArray, 'sequenceVarArray': Type_SequenceVarArray,
                 'intValueSelectorArray': Type_IntValueSelectorArray, 'intVarSelectorArray': Type_IntVarSelectorArray,
                 'tupleSet' : Type_TupleSet,
+                'cumulExprArray': Type_CumulExprArray,
                 '_cumulAtomArray' : Type_CumulAtomArray}
 
 # Fake operator '..' to read intervals properly
@@ -73,7 +72,7 @@ class CpoParserException(CpoException):
     """ The base class for exceptions raised by the CPO parser
     """
     def __init__(self, msg):
-        """ Create a new exception
+        """ **Constructor**
         Args:
             msg: Error message
         """
@@ -84,7 +83,7 @@ class CpoUnsupportedFormatVersionException(CpoParserException):
     """ Exception raised when a version mismatch is detected
     """
     def __init__(self, msg):
-        """ Create a new exception
+        """ **Constructor**
         Args:
             msg: Error message
         """
@@ -107,7 +106,7 @@ class CpoParser(object):
                  )
     
     def __init__(self, mdl=None, **kwargs):
-        """ Create a new CPO format parser
+        """ **Constructor**
 
         Args:
             mdl:       Model to fill, None (default) to create a new one.
@@ -141,6 +140,7 @@ class CpoParser(object):
             'stepFunction':      self._read_fun_stepFunction,
             'segmentedFunction': self._read_fun_segmentedFunction,
             'transitionMatrix':  self._read_fun_transitionMatrix,
+            '_intervalArray':    self._read_fun_intervalArray,
         }
 
         # TODO: parse and include source information ?
@@ -661,6 +661,15 @@ class CpoParser(object):
         return CpoTransitionMatrix(values=(mtrx[i * size : (i+1) * size] for i in range(size)))
 
 
+    def _read_fun_intervalArray(self):
+        """ Read a function call to '_intervalArray'
+        Returns: New expression
+        """
+        # Read list of couples
+        lcpls = self._read_expression_list_up_to_parent_close()
+        return CpoValue(lcpls, Type_IntervalArray)
+
+
     def _read_expression_list_in_parenthesis(self):
         """ Read a list of expressions between parenthesis
         Opening parenthesis is read and checked by this method.
@@ -796,12 +805,13 @@ class CpoParser(object):
                 if vtok.type is TOKEN_TYPE_VERSION:
                     ver = vtok.get_string()
                     self.model.set_format_version(ver)
-                    if compare_natural(ver, MIN_CPO_VERSION_NUMBER) < 0:
-                        raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
-                                                                   .format(ver, MIN_CPO_VERSION_NUMBER))
-                    if compare_natural(ver, MAX_CPO_VERSION_NUMBER) > 0:
-                        raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
-                                                                   .format(ver, MAX_CPO_VERSION_NUMBER))
+                    if self.context.check_format_version:
+                        if compare_natural(ver, MIN_CPO_VERSION_NUMBER) < 0:
+                            raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, lower than {}"
+                                                                       .format(ver, MIN_CPO_VERSION_NUMBER))
+                        if compare_natural(ver, MAX_CPO_VERSION_NUMBER) > 0:
+                            raise CpoUnsupportedFormatVersionException("Can not parse a CPO file with version {}, greater than {}"
+                                                                       .format(ver, MAX_CPO_VERSION_NUMBER))
                 self._check_token(self._next_token(), TOKEN_PARENT_CLOSE)
             tok = self._next_token()
 

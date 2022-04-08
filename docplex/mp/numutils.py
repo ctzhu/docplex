@@ -115,7 +115,24 @@ class _NumPrinter(object):
             except AttributeError:
                 return '%d' % num
 
-def compute_tolerance(abstol, reltol , baseline):
+def compute_tolerance(baseline: float, abstol: float, reltol: float) -> float:
+    """ Computes effective tolerance from a baseline value and relative and absolute tolerances.
+
+    :param baseline: the input value
+    :param abstol: absolute tolerance
+    :param reltol: relative tolerance
+    :return: tolerance to use for th einput value
+
+
+    Example:
+        >> compute_tolerance(1000, 3, 0.01)
+        >> 10
+        >> compute_tolerance(1000, 1, 0.002)
+        >> 2
+    """
+    assert abstol >= 0
+    assert reltol >= 0
+    assert reltol < 1
     return max(abstol, reltol * abs(baseline))
 
 

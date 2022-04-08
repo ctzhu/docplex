@@ -6,9 +6,6 @@
 
 # gendoc: ignore
 
-from six import itervalues, iteritems
-from docplex.mp.compat23 import izip
-
 from docplex.mp.xcounter import update_dict_from_item_value
 
 from docplex.mp.utils import is_number, is_iterable, is_iterator, is_pandas_series, \
@@ -79,7 +76,7 @@ class ModelAggregator(object):
 
         number_validation_fn = checker.get_number_validation_fn()
 
-        for item, coef in izip(terms, coefs):
+        for item, coef in zip(terms, coefs):
             if not coef:
                 continue
 
@@ -116,8 +113,10 @@ class ModelAggregator(object):
         return self._to_expr(qcc, lcc, total_num)
 
     def _scal_prod_f(self, dvars, coef_fn, assume_alldifferent):
-        if isinstance(dvars, dict) and hasattr(dvars, 'items'):
-            var_key_iter = iteritems
+        def _iter_items(dd):
+            return dd.items()
+        if isinstance(dvars, dict):
+            var_key_iter = _iter_items
         elif is_ordered_sequence(dvars):
             var_key_iter = enumerate
         else:
@@ -178,7 +177,7 @@ class ModelAggregator(object):
             if not coefs:
                 return self.new_zero_expr()
             else:
-                sum_of_vars =  self._sum_vars_all_different(terms)
+                sum_of_vars = self._sum_vars_all_different(terms)
                 return sum_of_vars * coefs
         else:
             # coefs is iterable
@@ -188,7 +187,7 @@ class ModelAggregator(object):
             number_validation_fn = checker.get_number_validation_fn() or identity
             lcc = lcc_type()
             lcc_setitem = lcc_type.__setitem__
-            for dvar, coef in izip(terms, coefs):
+            for dvar, coef in zip(terms, coefs):
                 safe_coef = number_validation_fn(coef)
                 if safe_coef:
                     lcc_setitem(lcc, dvar, safe_coef)
@@ -203,7 +202,7 @@ class ModelAggregator(object):
             sum_res = self.sum(sum_args.values)
         elif isinstance(sum_args, dict):
             # handle dict: sum all values
-            sum_res = self._sum_with_iter(itervalues(sum_args))
+            sum_res = self._sum_with_iter(sum_args.values())
         elif is_iterable(sum_args):
             sum_res = self._sum_with_seq(sum_args)
 
@@ -255,7 +254,7 @@ class ModelAggregator(object):
             return self.sum(dvars.values)
         elif isinstance(dvars, dict):
             # handle dict: sum all values
-            return self._sum_vars(itervalues(dvars))
+            return self._sum_vars(dvars.values())
         elif is_iterable(dvars):
             checked_dvars = self._checker.typecheck_var_seq(dvars, caller='Model.sumvars()')
             sumvars_terms = self._varlist_to_terms(checked_dvars)
@@ -389,7 +388,7 @@ class ModelAggregator(object):
         lfactory = self._linear_factory
         exprs = [lfactory.linear_expr() for _ in range(nb_exprs)]
         coo_mat = sp_mat.tocoo()
-        for coef, row, col in izip(coo_mat.data, coo_mat.row, coo_mat.col):
+        for coef, row, col in zip(coo_mat.data, coo_mat.row, coo_mat.col):
             exprs[row]._add_term(dvars[col], coef)
         return exprs
 
@@ -415,14 +414,14 @@ class ModelAggregator(object):
         lfactory = self._linear_factory
 
         return [lfactory._new_binary_constraint(lhs=self._scal_prod(svars, row), sense=op, rhs=rhs)
-                for row, rhs in izip(row_gen, srhs)]
+                for row, rhs in zip(row_gen, srhs)]
 
     def _matrix_ranges(self, coef_mat, svars, lbs, ubs):
         row_gen = self.generate_rows(coef_mat)
         lfactory = self._linear_factory
 
         return [lfactory.new_range_constraint(expr=self._scal_prod(svars, row), lb=lb, ub=ub)
-                for row, lb, ub in izip(row_gen, lbs, ubs)]
+                for row, lb, ub in zip(row_gen, lbs, ubs)]
 
     def _sparse_matrix_ranges(self, sp_coef_mat, svars, lbs, ubs):
         assert len(lbs) == len(ubs)
@@ -436,5 +435,5 @@ class ModelAggregator(object):
         lfactory = self._linear_factory
         assert len(left_exprs) == len(right_exprs)
         ct_factory_fn = lfactory._new_binary_constraint
-        cts = [ct_factory_fn(left, sense, right) for left, right in izip(left_exprs, right_exprs)]
+        cts = [ct_factory_fn(left, sense, right) for left, right in zip(left_exprs, right_exprs)]
         return cts

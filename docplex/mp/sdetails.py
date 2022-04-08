@@ -3,7 +3,7 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from docplex.mp.compat23 import StringIO
+from io import StringIO
 from docplex.mp.utils import is_almost_equal
 from docplex.mp.constants import int_probtype_to_string
 from math import isnan
@@ -83,14 +83,7 @@ class SolveDetails(object):
 
     @staticmethod
     def to_plain_str(arg_s):
-        from six import PY2 as SIX_PY2
-        if SIX_PY2:  # we are in py2: docloud returns unicode.
-            try:
-                return arg_s.encode()  # if unicode strings , come from cplex worker
-            except AttributeError:
-                return str(arg_s)
-        else:
-            return arg_s  # in py3 do nothing.
+        return arg_s  # in py3 do nothing.
 
     # ---
     # list of fields to be retrieved from the details
@@ -116,7 +109,7 @@ class SolveDetails(object):
         if not json_details:
             return SolveDetails.make_dummy()
 
-        # for k,v in json_details.iteritems():
+        # for k,v in json_details.items():
         # print("{0}: {1!s}".format(k, v))
         # print("# -------------------------")
         details = SolveDetails()

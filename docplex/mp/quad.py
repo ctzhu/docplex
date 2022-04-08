@@ -3,9 +3,6 @@
 # http://www.apache.org/licenses/
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
-from six import iteritems as six_iteritems
-
-from docplex.mp.compat23 import unitext
 from docplex.mp.constants import UpdateEvent
 from docplex.mp.basic import _SubscriptionMixin
 from docplex.mp.linear import Expr, ZeroExpr
@@ -98,7 +95,6 @@ class QuadExpr(_SubscriptionMixin, Expr):
         return QuadExpr(model=target_model,
                         quads=copied_quads,
                         linexpr=copied_linear,
-                        name=self.name,
                         safe=True)
 
     def relaxed_copy(self, relaxed_model, var_map):
@@ -128,8 +124,8 @@ class QuadExpr(_SubscriptionMixin, Expr):
 
     __slots__ = ('_quadterms', '_linexpr', '_transient', '_subscribers')
 
-    def __init__(self, model, quads=None, linexpr=None, name=None, safe=False):
-        Expr.__init__(self, model, name)
+    def __init__(self, model, quads=None, linexpr=None, safe=False):
+        Expr.__init__(self, model)
         self._transient = False
         self._subscribers = []  # used by subscription mixin
         if quads is None:
@@ -140,7 +136,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
             else:
                 # check
                 safe_quads = self._new_term_dict()
-                for qvp, qk in six_iteritems(quads):
+                for qvp, qk in quads.items():
                     model._typecheck_num(qk)
                     if not isinstance(qvp, VarPair):
                         self.fatal("Expecting variable-pair, got: {0!r}", qvp)
@@ -194,11 +190,9 @@ class QuadExpr(_SubscriptionMixin, Expr):
             A quadratic expression.
         """
         cloned_linear = self._linexpr.clone()
-        self_name = self.name
-        cloned_name = self_name if self_name is None else self_name[:]
         new_quad = QuadExpr(self.model, quads=self._quadterms.copy(),
                             linexpr=cloned_linear,
-                            name=cloned_name, safe=True)
+                            safe=True)
         return new_quad
 
     def is_discrete(self):
@@ -207,19 +201,19 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 return False
         return self._linexpr.is_discrete()
 
-    def generate_quad_triplets(self):
+    def _generate_quad_triplets(self):
         # INTERNAL
         # a generator that returns triplets (i.e. tuples of len 3)
         # with the variable pair and the coefficient
-        for qvp, qk in six_iteritems(self._quadterms):
+        for qvp, qk in self.iter_quads():
             yield qvp[0], qvp[1], qk
 
     def iter_quads(self):
-        return six_iteritems(self._quadterms)
+        return iter(self._quadterms.items())
 
     def iter_sorted_quads(self):
         if self._model.keep_ordering:
-            return six_iteritems(self._quadterms)
+            return self.iter_quads()
         else:
             return self._iter_sorted_quads()
 
@@ -242,7 +236,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
         Returns:
             An iterator object.
         """
-        return self.generate_quad_triplets()
+        return self._generate_quad_triplets()
 
     def iter_terms(self):
         """ Iterates over the linear terms in the quadratic expression.
@@ -428,6 +422,24 @@ class QuadExpr(_SubscriptionMixin, Expr):
         for lv in linexpr.iter_variables():
             yield lv
 
+    def _quad_variable_set(self):
+        # INTERNAL
+        setof_qvars = set()
+        for qvp, _ in self.iter_quads():
+            setof_qvars.add(qvp[0])
+            if not qvp.is_square():
+                setof_qvars.add(qvp[1])
+        return setof_qvars
+
+    def iter_quad_variables(self):
+        # iterates on quadratic variables,
+        # returns each variable only once
+        # order is irrelevant.
+        setof_qvars = self._quad_variable_set()
+        return iter(setof_qvars)
+
+    iter_quad_vars = iter_quad_variables
+
     def __contains__(self, dvar):
         return self.contains_var(dvar)
 
@@ -480,7 +492,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
                 if use_space:
                     oss.write(SP)
 
-            oss.write(unitext(varname1))
+            oss.write(str(varname1))
             if qv1 is qv2:
                 oss.write(u"^2")
             else:
@@ -490,7 +502,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
                     oss.write(SP)
                 else:
                     oss.write(u'*')
-                oss.write(unitext(var_namer(qv2)))
+                oss.write(str(var_namer(qv2)))
             q += 1
         # problem for linexpr: force '+' ssi c>0
         linexpr = self._linexpr
@@ -634,7 +646,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
     def negate(self):
         # INTERNAL: negate sall coefficients, modify self
         qterms = self._quadterms
-        for qvp, qk in six_iteritems(qterms):
+        for qvp, qk in qterms.items():
             qterms[qvp] = -qk
         self._linexpr.negate()
         self.notify_modified(event=UpdateEvent.QuadExprGlobal)

@@ -4,12 +4,11 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from six import iteritems
 from collections import defaultdict, namedtuple
 from docplex.mp.constants import RelaxationMode
 
 from docplex.mp.utils import is_function, apply_thread_limitations, _to_list
-from docplex.mp.basic import Priority
+from docplex.mp.priority import Priority
 from docplex.mp.constr import AbstractConstraint
 from docplex.mp.error_handler import docplex_fatal
 from docplex.mp.sdetails import SolveDetails
@@ -178,7 +177,7 @@ class MatchNamePrioritizer(Prioritizer):
             ctname_to_match = ctname if self._is_case_sensitive else ctname.lower()
             best_matched = 0
             best_matching_priority = self.priority_for_non_matching_cts
-            for (prio_symbol, prio) in iteritems(self.priority_by_symbol):
+            for (prio_symbol, prio) in self.priority_by_symbol.items():
                 if ctname_to_match.find(prio_symbol) >= 0:
                     matched = len(prio_symbol)
                     # longer matches are preferred
@@ -210,7 +209,7 @@ class MappingPrioritizer(Prioritizer):
         # --- typecheck that this dict is a a {ct: prio} mapping.
         if not isinstance(priority_mapping, dict):
             raise TypeError
-        for k, v in iteritems(priority_mapping):
+        for k, v in priority_mapping.items():
             if not isinstance(k, AbstractConstraint):
                 raise TypeError
 
@@ -565,7 +564,7 @@ class Relaxer(PublishResultAsDf, object):
         so this iterator returns ``(ct, violation)`` pairs.
         """
         self._check_successful_relaxation()
-        return iteritems(self._relaxations)
+        return iter(self._relaxations.items())
 
     def relaxations(self):
         """  Returns a dictionary with all relaxed constraints.

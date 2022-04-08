@@ -46,8 +46,8 @@ class QuadFactory(IQuadFactory):
         # INTERNAL
         self._model.fatal("cannot multiply {0!s} by {1!s}", factor1, factor2)
 
-    def new_quad(self, quads=None, linexpr=None, name=None, safe=False):
-        return QuadExpr(self._model, quads=quads, linexpr=linexpr, name=name, safe=safe)
+    def new_quad(self, quads=None, linexpr=None, safe=False):
+        return QuadExpr(self._model, quads=quads, linexpr=linexpr, safe=safe)
 
     def new_linear_expr(self, e=0, cst=0):
         return self._lfactory.linear_expr(e, cst)
@@ -133,7 +133,7 @@ class QuadFactory(IQuadFactory):
         right_expr = self._to_expr(rhs, context="QuadraticConstraint.right_expr")
         self._model._checker.typecheck_two_in_model(self._model, left_expr, right_expr, "new_binary_constraint")
         ct = QuadraticConstraint(self._model, left_expr, ct_sense, right_expr, name)
-        mdl = self._model
+        # mdl = self._model
         # StaticTypeChecker.typecheck_quadexpr_is_separable(mdl, left_expr)
         # StaticTypeChecker.typecheck_quadexpr_is_separable(mdl, right_expr)
         left_expr.notify_used(ct)

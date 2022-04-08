@@ -29,7 +29,7 @@ Detailed description
 """
 
 from docplex.cp.expression import *
-from docplex.cp.expression import _domain_min, _domain_max
+from docplex.cp.expression import get_domain_min, get_domain_max
 from docplex.cp.solution import *
 from docplex.cp.utils import *
 import docplex.cp.parameters as parameters
@@ -40,9 +40,9 @@ import sys
 import functools
 
 
-###############################################################################
-## Utilities
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Utilities
+#-----------------------------------------------------------------------------
 
 # Map of CPO names for each array type
 _ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
@@ -60,9 +60,9 @@ _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
 _ANONYMOUS = "Anonymous"
 
 
-###############################################################################
-## Public classes
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Public classes
+#-----------------------------------------------------------------------------
 
 class CpoCompiler(object):
     """ Compiler to CPO file format """
@@ -90,10 +90,11 @@ class CpoCompiler(object):
                  'alias_name_map',            # Map of variable renamed with a shorter name. key = old name, value = new name
                  'factorize',                 # Indicate to factorize expressions used more than ones
                  'sort_names',                # Type of expressions (variables) sorting: O:None, 1:basic, 2:natural
+                 'compil_functions',          # Dictionary of compilation functions per type
                  )
 
     def __init__(self, model, **kwargs):
-        """ Create a new compiler
+        """ **Constructor**
 
         Args:
             model:  Source model
@@ -107,15 +108,9 @@ class CpoCompiler(object):
         super(CpoCompiler, self).__init__()
 
         # Build effective context
-        if model:
-            mparams = model.get_parameters()
-            if mparams:
-                pparams = kwargs.get('params')
-                if pparams:
-                    mparams = mparams.clone()
-                    mparams.add(pparams)
-                kwargs['params'] = mparams
         context = config._get_effective_context(**kwargs)
+        if model:
+            context.params = model.merge_with_parameters(context.params)
 
         # Initialize processing
         self.model = model
@@ -174,6 +169,14 @@ class CpoCompiler(object):
         self.list_phases = []
         self.alias_name_map = {}
         self.map_blackboxes = {}
+
+        # Initialize compilation functions
+        self.compil_functions = [None] * len(ALL_TYPES)
+        for t, f in _COMPILATION_FUNCTION.items():
+            self.compil_functions[t.id] = f
+        self.compil_functions[Type_IntervalVar.id] = self._compile_interval_var
+        self.compil_functions[Type_SequenceVar.id] = self._compile_sequence_var
+        self.compil_functions[Type_StateFunction.id] = self._compile_state_function
 
         # Precompile model
         self._pre_compile_model()
@@ -421,9 +424,9 @@ class CpoCompiler(object):
         # Build starting point declaration
         cout = []
         if isinstance(var, CpoIntVarSolution):
-            self._compile_integer_var_starting_point(var, cout)
+            _compile_integer_var_starting_point(var, cout)
         elif isinstance(var, CpoIntervalVarSolution):
-            self._compile_interval_var_starting_point(var, cout)
+            _compile_interval_var_starting_point(var, cout)
         else:
             #raise CpoException("Internal error: unsupported starting point variable: " + str(var))
             pass
@@ -546,7 +549,7 @@ class CpoCompiler(object):
                             estack[-1] = [res, 0, False]
                             continue
 
-                        cout.append(oper.keyword)
+                        cout.append(self._get_id_string(oper.keyword))
                         cout.append("(")
                     if cnx >= oplen:
                         cout.append(")")
@@ -581,7 +584,7 @@ class CpoCompiler(object):
                             cout.append(" " + oper.keyword + " ")
                         # Check if operand will require to have parenthesis
                         arg = oprnds[cnx]
-                        nprio = arg.priority
+                        nprio = arg.get_priority()
                         # Parenthesis required if priority is greater than parent node, or if this node is not first child
                         chparnts = (nprio > prio) \
                                   or (nprio >= 5) \
@@ -590,45 +593,14 @@ class CpoCompiler(object):
                         # Put operand on stack
                         estack.append([arg, 0, chparnts])
             else:
-                # Check constant expressions
+                # Check constant or variables expressions
                 t = e.type
-                if t.is_constant:
+                if t.is_const_or_var:
                     estack.pop()
-                    if t.is_array:
-                        vals = e.value
-                        if len(vals) == 0:
-                            cout.append(_ARRAY_TYPES[t])
-                            cout.append("[]")
-                        else:
-                            cout.append('[')
-                            _compile_integer_var_domain(vals, cout)
-                            cout.append(']')
-                    elif t is Type_Bool:
-                        self._compile_boolean_constant(e, cout)
-                    elif t is Type_TransitionMatrix:
-                        self._compile_transition_matrix(e, cout)
-                    elif t is Type_TupleSet:
-                        self._compile_tuple_set(e, cout)
-                    elif t is Type_StepFunction:
-                        _compile_step_function(e, cout)
-                    elif t is Type_SegmentedFunction:
-                        _compile_segmented_function(e, cout)
-                    else:
-                        cout.append(_number_value_string(e.value))
-
-                # Check variables
-                elif t.is_variable:
-                    estack.pop()
-                    if t is Type_IntVar:
-                        self._compile_integer_var(e, cout)
-                    elif t is Type_IntervalVar:
-                        self._compile_interval_var(e, cout)
-                    elif t is Type_SequenceVar:
-                        self._compile_sequence_var(e, cout)
-                    elif t is Type_StateFunction:
-                        self._compile_state_function(e, cout)
-                    elif t is Type_FloatVar:
-                        self._compile_float_var(e, cout)
+                    cfun = self.compil_functions[t.id]
+                    if cfun is None:
+                        raise CpoException("Internal error: unable to compile expression of type {}".format(t))
+                    cfun(e, cout)
 
                 # Check array
                 elif t.is_array:
@@ -660,175 +632,6 @@ class CpoCompiler(object):
             # Raise exception without calling str on expr (recursion)
             raise CpoException("Internal error: unable to compile expression of type {}".format(type(expr)))
         return u''.join(cout)
-
-
-    def _compile_boolean_constant(self, v, cout):
-        """ Compile a boolean constant in a string in CPO format
-        Args:
-            v:    Constant value
-            cout: Output string list
-        """
-        cout.append("true()" if v.value else "false()")
-
-
-    def _compile_integer_var(self, v, cout):
-        """ Compile a integer variable in a string in CPO format
-        Args:
-            v:    Variable
-            cout: Output string list
-        """
-        cout.append("intVar(")
-        _compile_integer_var_domain(v.get_domain(), cout)
-        cout.append(")")
-
-
-    def _compile_float_var(self, v, cout):
-        """ Compile a float variable in a string in CPO format
-        Args:
-            v:    Variable
-            cout: Output string list
-        """
-        cout.append("floatVar(")
-        cout.append(_number_value_string(v.get_domain_min()))
-        cout.append(", ")
-        cout.append(_number_value_string(v.get_domain_max()))
-        cout.append(")")
-
-
-    def _compile_interval_var(self, v, cout):
-        """ Compile a IntervalVar in a string in CPO format
-        Args:
-            v:    Variable
-            cout: Output string list
-        """
-        cout.append("intervalVar(")
-        args = []
-        if v.is_absent():
-            args.append("absent")
-        elif v.is_optional():
-            args.append("optional")
-        if v.start != DEFAULT_INTERVAL:
-            args.append("start=" + _interval_var_domain_string(v.start))
-        if v.end != DEFAULT_INTERVAL:
-            args.append("end=" + _interval_var_domain_string(v.end))
-        if v.length != DEFAULT_INTERVAL:
-            args.append("length=" + _interval_var_domain_string(v.length))
-        if v.size != DEFAULT_INTERVAL:
-            args.append("size=" + _interval_var_domain_string(v.size))
-        if v.intensity is not None:
-            args.append("intensity=" + self._compile_expression(v.intensity, root=False))
-        if v.granularity is not None:
-            args.append("granularity=" + str(v.granularity))
-        cout.append(", ".join(args) + ")")
-
-
-    def _compile_integer_var_starting_point(self, v, cout):
-        """ Compile a integer variable starting point in a string in CPO format
-        Args:
-            v:    Variable solution (CpoIntVarSolution)
-            cout: Output string list
-        """
-        cout.append("(")
-        dom = v.value
-        dmin = _domain_min(dom)
-        dmax = _domain_max(dom)
-        cout.append(_int_var_value_string(dmin))
-        if dmin != dmax:
-            cout.append('..')
-            cout.append(_int_var_value_string(dmax))
-        cout.append(")")
-
-
-    def _compile_interval_var_starting_point(self, v, cout):
-        """ Compile a starting IntervalVar in a string in CPO format
-        Args:
-            v:    Variable solution (CpoIntervalVarSolution)
-            cout: Output string list
-        """
-        if v.is_absent():
-            cout.append("absent")
-            return
-        cout.append("(")
-        cout.append("present" if v.is_present() else "optional")
-        rng = v.get_start()
-        if rng is not None:
-            cout.append(", start=" + _interval_var_domain_string(rng))
-        rng = v.get_end()
-        if rng is not None:
-            cout.append(", end=" + _interval_var_domain_string(rng))
-        rng = v.get_size()
-        if rng is not None:
-            cout.append(", size=" + _interval_var_domain_string(rng))
-        cout.append(")")
-
-
-    def _compile_sequence_var(self, sv, cout):
-        """ Compile a SequenceVar in a string in CPO format
-        Args:
-            sv:   Sequence variable
-            cout: Output string list
-        """
-        cout.append("sequenceVar(")
-        lvars = sv.get_interval_variables()
-        if len(lvars) == 0:
-            cout.append("intervalVarArray[]")
-        else:
-            cout.append("[" + ", ".join(self._get_expr_id(v) for v in lvars) + "]")
-        types = sv.get_types()
-        if types is not None:
-            if len(lvars) == 0:
-                cout.append(", intArray[]")
-            else:
-                cout.append(", [" + ", ".join(str(t) for t in types) + "]")
-        cout.append(")")
-
-
-    def _compile_state_function(self, stfct, cout):
-        """ Compile a State in a string in CPO format
-
-        Args:
-           stfct: Segmented function
-           cout:  Output string list
-        """
-        cout.append("stateFunction(")
-        trmx = stfct.get_transition_matrix()
-        if trmx is not None:
-            cout.append(self._compile_expression(trmx, root=False))
-        cout.append(")")
-
-
-    @staticmethod
-    def _compile_transition_matrix(tm, cout):
-        """ Compile a TransitionMatrix in a string in CPO format
-
-        Args:
-            tm:   Transition matrix
-            cout: Output string list
-        """
-        cout.append("transitionMatrix(")
-        cout.append(", ".join(str(v) for v in tm.get_all_values()))
-        cout.append(")")
-
-
-    def _compile_tuple_set(self, e, cout):
-        """ Compile a TupleSet in a string in CPO format
-
-        Args:
-           e:    Tuple set expression
-           cout: Output string list
-        """
-        tplset = e.value
-        if tplset:
-            cout.append("[")
-            for i, tpl in enumerate(tplset):
-                if i > 0:
-                    cout.append(", ")
-                cout.append("[")
-                _compile_integer_var_domain(tpl, cout)
-                cout.append("]")
-            cout.append("]")
-        else:
-            cout.append("tupleSet[]")
 
 
     def _pre_compile_model(self):
@@ -947,7 +750,9 @@ class CpoCompiler(object):
                 # Check or allocate blackbox name
                 bbf = expr.blackbox
                 nbbfn = bbfn = bbf.get_name()
-                if (bbfn is None) or (bbfn in expr_by_names):
+                # Check if name already used
+                x = expr_by_names.get(bbfn)
+                if (bbfn is None) or ((x is not None) and (x is not bbf)):
                     # Check first if already renamed
                     nbbfn = map_blackboxes_id.get(id(bbf))
                     if nbbfn is None:
@@ -1038,10 +843,355 @@ class CpoCompiler(object):
             # Append to the list of expressions
             all_exprs.append(xinfo)
 
+    def _compile_interval_var(self, v, cout):
+        """ Compile a IntervalVar in a string in CPO format
+        Args:
+            v:    Variable
+            cout: Output string list
+        """
+        cout.append("intervalVar(")
+        args = []
+        if v.is_absent():
+            args.append("absent")
+        elif v.is_optional():
+            args.append("optional")
+        if v.start != DEFAULT_INTERVAL:
+            args.append("start=" + _interval_var_domain_string(v.start))
+        if v.end != DEFAULT_INTERVAL:
+            args.append("end=" + _interval_var_domain_string(v.end))
+        if v.length != DEFAULT_INTERVAL:
+            args.append("length=" + _interval_var_domain_string(v.length))
+        if v.size != DEFAULT_INTERVAL:
+            args.append("size=" + _interval_var_domain_string(v.size))
+        if v.intensity is not None:
+            # Call compile of expression in case intensity has already been compiled
+            args.append("intensity=" + self._compile_expression(v.intensity, root=False))
+        if v.granularity is not None:
+            args.append("granularity=" + str(v.granularity))
+        cout.append(", ".join(args) + ")")
 
-###############################################################################
-## Public functions
-###############################################################################
+    def _compile_sequence_var(self, sv, cout):
+        """ Compile a SequenceVar in a string in CPO format
+        Args:
+            sv:   Sequence variable
+            cout: Output string list
+        """
+        cout.append("sequenceVar(")
+        lvars = sv.get_interval_variables()
+        if len(lvars) == 0:
+            cout.append("intervalVarArray[]")
+        else:
+            cout.append("[" + ", ".join(self._get_expr_id(v) for v in lvars) + "]")
+        types = sv.get_types()
+        if types is not None:
+            if len(lvars) == 0:
+                cout.append(", intArray[]")
+            else:
+                cout.append(", [" + ", ".join(str(t) for t in types) + "]")
+        cout.append(")")
+
+    def _compile_state_function(self, stfct, cout):
+        """ Compile a State in a string in CPO format
+
+        Args:
+           stfct: Segmented function
+           cout:  Output string list
+        """
+        cout.append("stateFunction(")
+        trmx = stfct.get_transition_matrix()
+        if trmx is not None:
+            # Call compile expression in case it has already been compiled
+            cout.append(self._compile_expression(trmx, root=False))
+        cout.append(")")
+
+
+
+#-----------------------------------------------------------------------------
+#  Compilation functions
+#-----------------------------------------------------------------------------
+
+def _compile_integer_var_domain(dom, cout):
+    """ Compile a integer variable domain in CPO format
+
+    Args:
+        dom:   Variable domain
+        cout:  Output string list
+    """
+    if is_array(dom):
+        imin = imax = None
+        isfirst = True
+        for d in dom:
+            if isinstance(d, (list, tuple)):
+                if imax is None:
+                    imin, imax = d
+                else:
+                    # Check if current interval extends
+                    if d[0] == imax + 1:
+                        imax = d[1]
+                    else:
+                        _compile_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin, imax = d
+            else:
+                if imax is None:
+                    imin = imax = d
+                else:
+                    # Check if current interval extends
+                    if d == imax + 1:
+                        imax = d
+                    else:
+                        _compile_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin = imax = d
+        # Write last interval if any
+        if imin is not None:
+            _compile_domain_interval(imin, imax, isfirst, cout)
+    else:
+        # Domain is a single value
+        cout.append(_number_value_string(dom))
+
+
+def _compile_domain_interval(imin, imax, isfirst, cout):
+    """ Write a domain interval
+    Args:
+        imin:     Interval lower bound
+        imax:     Interval upper bound
+        isfirst:  First interval indicator
+        cout:     Output string list
+    """
+    if not isfirst:
+        cout.append(", ")
+    cout.append(_number_value_string(imin))
+    if imin != imax:
+        cout.append(", " if imax == imin + 1 else "..")
+        cout.append(_number_value_string(imax))
+
+
+def _compile_boolean_constant(v, cout):
+    """ Compile a boolean constant in a string in CPO format
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    cout.append("true()" if v.value else "false()")
+
+
+def _compile_number_constant(v, cout):
+    """ Compile a number constant in a string in CPO format
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    cout.append(_number_value_string(v.value))
+
+
+def _compile_integer_array(v, cout):
+    """ Compile an array of integers
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    vals = v.value
+    if len(vals) == 0:
+        cout.append("intArray[]")
+    else:
+        cout.append("[")
+        _compile_integer_var_domain(vals, cout)
+        cout.append("]")
+
+
+def _compile_float_array(v, cout):
+    """ Compile an array of floats
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    vals = v.value
+    nbv = len(vals)
+    if nbv == 0:
+        cout.append("floatArray[]")
+    else:
+        cout.append("[")
+        cout.append(_number_value_string(vals[0]))
+        for i in range(1, nbv):
+            cout.append(", ")
+            cout.append(_number_value_string(vals[i]))
+        cout.append("]")
+
+
+def _compile_integer_var(v, cout):
+    """ Compile a integer variable in a string in CPO format
+    Args:
+        v:    Variable
+        cout: Output string list
+    """
+    cout.append("intVar(")
+    _compile_integer_var_domain(v.get_domain(), cout)
+    cout.append(")")
+
+
+def _compile_float_var(v, cout):
+    """ Compile a float variable in a string in CPO format
+    Args:
+        v:    Variable
+        cout: Output string list
+    """
+    cout.append("floatVar(")
+    cout.append(_number_value_string(v.get_domain_min()))
+    cout.append(", ")
+    cout.append(_number_value_string(v.get_domain_max()))
+    cout.append(")")
+
+
+def _compile_integer_var_starting_point(v, cout):
+    """ Compile a integer variable starting point in a string in CPO format
+    Args:
+        v:    Variable solution (CpoIntVarSolution)
+        cout: Output string list
+    """
+    cout.append("(")
+    dom = v.value
+    dmin = get_domain_min(dom)
+    dmax = get_domain_max(dom)
+    cout.append(_int_var_value_string(dmin))
+    if dmin != dmax:
+        cout.append('..')
+        cout.append(_int_var_value_string(dmax))
+    cout.append(")")
+
+
+def _compile_interval_var_starting_point(v, cout):
+    """ Compile a starting IntervalVar in a string in CPO format
+    Args:
+        v:    Variable solution (CpoIntervalVarSolution)
+        cout: Output string list
+    """
+    if v.is_absent():
+        cout.append("absent")
+        return
+    cout.append("(")
+    cout.append("present" if v.is_present() else "optional")
+    rng = v.get_start()
+    if rng is not None:
+        cout.append(", start=" + _interval_var_domain_string(rng))
+    rng = v.get_end()
+    if rng is not None:
+        cout.append(", end=" + _interval_var_domain_string(rng))
+    rng = v.get_size()
+    if rng is not None:
+        cout.append(", size=" + _interval_var_domain_string(rng))
+    cout.append(")")
+
+
+def _compile_transition_matrix(tm, cout):
+    """ Compile a TransitionMatrix in a string in CPO format
+
+    Args:
+        tm:   Transition matrix
+        cout: Output string list
+    """
+    cout.append("transitionMatrix(")
+    cout.append(", ".join(str(v) for v in tm.get_all_values()))
+    cout.append(")")
+
+
+def _compile_tuple_set(e, cout):
+    """ Compile a TupleSet in a string in CPO format
+
+    Args:
+       e:    Tuple set expression
+       cout: Output string list
+    """
+    tplset = e.value
+    if tplset:
+        cout.append("[")
+        for i, tpl in enumerate(tplset):
+            if i > 0:
+                cout.append(", ")
+            cout.append("[")
+            _compile_integer_var_domain(tpl, cout)
+            cout.append("]")
+        cout.append("]")
+    else:
+        cout.append("tupleSet[]")
+
+
+def _compile_interval_array(e, cout):
+    """ Compile a TupleSet in a string in CPO format
+
+    Args:
+       e:    Interval array expression
+       cout: Output string list
+    """
+    itvar = e.value
+    cout.append('_intervalArray')
+    if itvar:
+        cout.append("(")
+        for i, tpl in enumerate(itvar):
+            if i > 0:
+                cout.append(", ")
+            cout.append("(")
+            cout.append(_number_value_string(tpl[0]))
+            cout.append(", ")
+            cout.append(_number_value_string(tpl[1]))
+            cout.append(")")
+        cout.append(")")
+    else:
+        cout.append("()")
+
+
+def _compile_list_of_integers(lint, cout):
+    """ Compile a list of integers in CPO format
+
+    Args:
+        lint:  List of integers
+        cout:  Output string list
+    """
+    llen = len(lint)
+    i = 0
+    while i < llen:
+        if i > 0:
+            cout.append(", ")
+        j = i + 1
+        while (j < llen) and (lint[j] == lint[j - 1] + 1):
+            j += 1
+        if j > i + 1:
+            cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
+        else:
+            cout.append(str(lint[i]))
+        i = j
+
+
+def _compile_step_function(stfct, cout):
+    """ Compile a StepFunction in a string in CPO format
+
+    Args:
+       stfct: Step function
+       cout:  Output string list
+    """
+    cout.append("stepFunction(")
+    for i, s in enumerate(stfct.get_step_list()):
+        if i > 0:
+            cout.append(", ")
+        cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
+    cout.append(")")
+
+
+def _compile_segmented_function(sgfct, cout):
+    """ Compile a SegmentedFunction in a string in CPO format
+
+    Args:
+       sgfct: Segmented function
+       cout:  Output string list
+    """
+    cout.append("segmentedFunction(")
+    cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
+    cout.append(")")
+
+
+#-----------------------------------------------------------------------------
+#  Public functions
+#-----------------------------------------------------------------------------
 
 def get_cpo_model(model, **kwargs):
     """ Convert a model into a string with CPO file format.
@@ -1072,9 +1222,9 @@ def expr_to_string(expr):
     return CpoCompiler(None)._compile_expression(expr)
 
 
-###############################################################################
-## Private functions
-###############################################################################
+#-----------------------------------------------------------------------------
+#  Private functions
+#-----------------------------------------------------------------------------
 
 _NUMBER_CONSTANTS = {INT_MIN: "intmin", INT_MAX: "intmax",
                      INTERVAL_MIN: "intervalmin", INTERVAL_MAX: "intervalmax",
@@ -1185,112 +1335,6 @@ def _interval_var_domain_string(dom):
         return _interval_var_value_string(dom)
 
 
-def _compile_integer_var_domain(dom, cout):
-    """ Compile a integer variable domain in CPO format
-
-    Args:
-        dom:   Variable domain
-        cout:  Output string list
-    """
-    if is_array(dom):
-        imin = imax = None
-        isfirst = True
-        for d in dom:
-            if isinstance(d, (list, tuple)):
-                if imax is None:
-                    imin, imax = d
-                else:
-                    # Check if current interval extends
-                    if d[0] == imax + 1:
-                        imax = d[1]
-                    else:
-                        _write_domain_interval(imin, imax, isfirst, cout)
-                        isfirst = False
-                        imin, imax = d
-            else:
-                if imax is None:
-                    imin = imax = d
-                else:
-                    # Check if current interval extends
-                    if d == imax + 1:
-                        imax = d
-                    else:
-                        _write_domain_interval(imin, imax, isfirst, cout)
-                        isfirst = False
-                        imin = imax = d
-        # Write last interval if any
-        if imin is not None:
-            _write_domain_interval(imin, imax, isfirst, cout)
-    else:
-        # Domain is a single value
-        cout.append(_number_value_string(dom))
-
-
-def _write_domain_interval(imin, imax, isfirst, cout):
-    """ Write a domain interval
-    Args:
-        imin:     Interval lower bound
-        imax:     Interval upper bound
-        isfirst:  First interval indicator
-        cout:     Output string list
-    """
-    if not isfirst:
-        cout.append(", ")
-    cout.append(_number_value_string(imin))
-    if imin != imax:
-        cout.append(", " if imax == imin + 1 else "..")
-        cout.append(_number_value_string(imax))
-
-
-def _compile_list_of_integers(lint, cout):
-    """ Compile a list of integers in CPO format
-
-    Args:
-        lint:  List of integers
-        cout:  Output string list
-    """
-    llen = len(lint)
-    i = 0
-    while i < llen:
-        if i > 0:
-            cout.append(", ")
-        j = i + 1
-        while (j < llen) and (lint[j] == lint[j - 1] + 1):
-            j += 1
-        if j > i + 1:
-            cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
-        else:
-            cout.append(str(lint[i]))
-        i = j
-
-
-def _compile_step_function(stfct, cout):
-    """ Compile a StepFunction in a string in CPO format
-
-    Args:
-       stfct: Step function
-       cout:  Output string list
-    """
-    cout.append("stepFunction(")
-    for i, s in enumerate(stfct.get_step_list()):
-        if i > 0:
-            cout.append(", ")
-        cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
-    cout.append(")")
-
-
-def _compile_segmented_function(sgfct, cout):
-    """ Compile a SegmentedFunction in a string in CPO format
-
-    Args:
-       sgfct: Segmented function
-       cout:  Output string list
-    """
-    cout.append("segmentedFunction(")
-    cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
-    cout.append(")")
-
-
 def _compare_xinfo_natural(x1, x2):
     """ Compare two expressions infos using natural order
 
@@ -1353,4 +1397,330 @@ def _compare_xinfo_alphabetical(x1, x2):
     return 0 if xn1 == xn2 else -1 if xn1 < xn2 else 1
 
 
+#-----------------------------------------------------------------------------
+#  Compilation functions
+#-----------------------------------------------------------------------------
+
+def _compile_integer_var_domain(dom, cout):
+    """ Compile a integer variable domain in CPO format
+
+    Args:
+        dom:   Variable domain
+        cout:  Output string list
+    """
+    if is_array(dom):
+        imin = imax = None
+        isfirst = True
+        for d in dom:
+            if isinstance(d, (list, tuple)):
+                if imax is None:
+                    imin, imax = d
+                else:
+                    # Check if current interval extends
+                    if d[0] == imax + 1:
+                        imax = d[1]
+                    else:
+                        _compile_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin, imax = d
+            else:
+                if imax is None:
+                    imin = imax = d
+                else:
+                    # Check if current interval extends
+                    if d == imax + 1:
+                        imax = d
+                    else:
+                        _compile_domain_interval(imin, imax, isfirst, cout)
+                        isfirst = False
+                        imin = imax = d
+        # Write last interval if any
+        if imin is not None:
+            _compile_domain_interval(imin, imax, isfirst, cout)
+    else:
+        # Domain is a single value
+        cout.append(_number_value_string(dom))
+
+
+def _compile_domain_interval(imin, imax, isfirst, cout):
+    """ Write a domain interval
+    Args:
+        imin:     Interval lower bound
+        imax:     Interval upper bound
+        isfirst:  First interval indicator
+        cout:     Output string list
+    """
+    if not isfirst:
+        cout.append(", ")
+    cout.append(_number_value_string(imin))
+    if imin != imax:
+        cout.append(", " if imax == imin + 1 else "..")
+        cout.append(_number_value_string(imax))
+
+
+def _compile_boolean_constant(v, cout):
+    """ Compile a boolean constant in a string in CPO format
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    cout.append("true()" if v.value else "false()")
+
+
+def _compile_number_constant(v, cout):
+    """ Compile a number constant in a string in CPO format
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    cout.append(_number_value_string(v.value))
+
+
+def _compile_integer_array(v, cout):
+    """ Compile an array of integers
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    vals = v.value
+    if len(vals) == 0:
+        cout.append("intArray[]")
+    else:
+        cout.append("[")
+        _compile_integer_var_domain(vals, cout)
+        cout.append("]")
+
+
+def _compile_float_array(v, cout):
+    """ Compile an array of floats
+    Args:
+        v:    Constant value
+        cout: Output string list
+    """
+    vals = v.value
+    nbv = len(vals)
+    if nbv == 0:
+        cout.append("floatArray[]")
+    else:
+        cout.append("[")
+        cout.append(_number_value_string(vals[0]))
+        for i in range(1, nbv):
+            cout.append(", ")
+            cout.append(_number_value_string(vals[i]))
+        cout.append("]")
+
+
+def _compile_integer_var(v, cout):
+    """ Compile a integer variable in a string in CPO format
+    Args:
+        v:    Variable
+        cout: Output string list
+    """
+    cout.append("intVar(")
+    _compile_integer_var_domain(v.get_domain(), cout)
+    cout.append(")")
+
+
+def _compile_bool_var(v, cout):
+    """ Compile a boolean variable variable in a string in CPO format
+    Args:
+        v:    Variable
+        cout: Output string list
+    """
+    cout.append("boolVar(")
+    _compile_integer_var_domain(v.get_domain(), cout)
+    cout.append(")")
+
+
+def _compile_float_var(v, cout):
+    """ Compile a float variable in a string in CPO format
+    Args:
+        v:    Variable
+        cout: Output string list
+    """
+    cout.append("floatVar(")
+    cout.append(_number_value_string(v.get_domain_min()))
+    cout.append(", ")
+    cout.append(_number_value_string(v.get_domain_max()))
+    cout.append(")")
+
+
+def _compile_integer_var_starting_point(v, cout):
+    """ Compile a integer variable starting point in a string in CPO format
+    Args:
+        v:    Variable solution (CpoIntVarSolution)
+        cout: Output string list
+    """
+    cout.append("(")
+    dom = v.value
+    dmin = get_domain_min(dom)
+    dmax = get_domain_max(dom)
+    cout.append(_int_var_value_string(dmin))
+    if dmin != dmax:
+        cout.append('..')
+        cout.append(_int_var_value_string(dmax))
+    cout.append(")")
+
+
+def _compile_interval_var_starting_point(v, cout):
+    """ Compile a starting IntervalVar in a string in CPO format
+    Args:
+        v:    Variable solution (CpoIntervalVarSolution)
+        cout: Output string list
+    """
+    if v.is_absent():
+        cout.append("absent")
+        return
+    cout.append("(")
+    cout.append("present" if v.is_present() else "optional")
+    rng = v.get_start()
+    if rng is not None:
+        cout.append(", start=" + _interval_var_domain_string(rng))
+    rng = v.get_end()
+    if rng is not None:
+        cout.append(", end=" + _interval_var_domain_string(rng))
+    rng = v.get_size()
+    if rng is not None:
+        cout.append(", size=" + _interval_var_domain_string(rng))
+    cout.append(")")
+
+
+def _compile_transition_matrix(tm, cout):
+    """ Compile a TransitionMatrix in a string in CPO format
+
+    Args:
+        tm:   Transition matrix
+        cout: Output string list
+    """
+    cout.append("transitionMatrix(")
+    cout.append(", ".join(str(v) for v in tm.get_all_values()))
+    cout.append(")")
+
+
+def _compile_tuple_set(e, cout):
+    """ Compile a TupleSet in a string in CPO format
+
+    Args:
+       e:    Tuple set expression
+       cout: Output string list
+    """
+    tplset = e.value
+    if tplset:
+        cout.append("[")
+        for i, tpl in enumerate(tplset):
+            if i > 0:
+                cout.append(", ")
+            cout.append("[")
+            _compile_integer_var_domain(tpl, cout)
+            cout.append("]")
+        cout.append("]")
+    else:
+        cout.append("tupleSet[]")
+
+
+def _compile_interval_array(e, cout):
+    """ Compile a TupleSet in a string in CPO format
+
+    Args:
+       e:    Interval array expression
+       cout: Output string list
+    """
+    itvar = e.value
+    cout.append('_intervalArray')
+    if itvar:
+        cout.append("(")
+        for i, tpl in enumerate(itvar):
+            if i > 0:
+                cout.append(", ")
+            cout.append("(")
+            cout.append(_number_value_string(tpl[0]))
+            cout.append(", ")
+            cout.append(_number_value_string(tpl[1]))
+            cout.append(")")
+        cout.append(")")
+    else:
+        cout.append("()")
+
+
+def _compile_list_of_integers(lint, cout):
+    """ Compile a list of integers in CPO format
+
+    Args:
+        lint:  List of integers
+        cout:  Output string list
+    """
+    llen = len(lint)
+    i = 0
+    while i < llen:
+        if i > 0:
+            cout.append(", ")
+        j = i + 1
+        while (j < llen) and (lint[j] == lint[j - 1] + 1):
+            j += 1
+        if j > i + 1:
+            cout.append(str(lint[i]) + ".." + str(lint[j - 1]))
+        else:
+            cout.append(str(lint[i]))
+        i = j
+
+
+def _compile_step_function(stfct, cout):
+    """ Compile a StepFunction in a string in CPO format
+
+    Args:
+       stfct: Step function
+       cout:  Output string list
+    """
+    cout.append("stepFunction(")
+    for i, s in enumerate(stfct.get_step_list()):
+        if i > 0:
+            cout.append(", ")
+        cout.append('(' + _number_value_string(s[0]) + ", " + str(s[1]) + ')')
+    cout.append(")")
+
+
+def _compile_segmented_function(sgfct, cout):
+    """ Compile a SegmentedFunction in a string in CPO format
+
+    Args:
+       sgfct: Segmented function
+       cout:  Output string list
+    """
+    cout.append("segmentedFunction(")
+    cout.append(", ".join(map(to_string, sgfct.get_segment_list())))
+    cout.append(")")
+
+
+# Initialize dict of compilation function per expression type
+_COMPILATION_FUNCTION = \
+{
+    # Constants
+    Type_Bool:              _compile_boolean_constant,
+    Type_Int:               _compile_number_constant,
+    Type_TimeInt:           _compile_number_constant,
+    Type_PositiveInt:       _compile_number_constant,
+    Type_BoolInt:           _compile_number_constant,
+    Type_Float:             _compile_number_constant,
+    Type_IntInterval:       _compile_integer_array,
+    Type_TransitionMatrix:  _compile_transition_matrix,
+    Type_TupleSet:          _compile_tuple_set,
+    Type_StepFunction:      _compile_step_function,
+    Type_SegmentedFunction: _compile_segmented_function,
+
+    # Constant arrays
+    Type_BoolArray:         _compile_integer_array,
+    Type_IntArray:          _compile_integer_array,
+    Type_FloatArray:        _compile_float_array,
+    Type_IntervalArray:     _compile_interval_array,
+
+    # Variables
+    Type_IntVar:            _compile_integer_var,
+    Type_BoolVar:           _compile_bool_var,
+    Type_FloatVar:          _compile_float_var,
+
+    # Attached to compiler instance because of references to it
+    #Type_IntervalVar:       _compile_interval_var,
+    #Type_SequenceVar:       _compile_sequence_var,
+    #Type_StateFunction:     _compile_state_function,
+}
 

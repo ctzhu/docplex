@@ -9,8 +9,6 @@ from docplex.mp.qprogress import QProgressListener
 
 from docplex.util.environment import get_environment
 
-import six
-
 try:
     import pandas as pd
 except ImportError:
@@ -130,7 +128,7 @@ def get_auto_publish_names(context, prop_name, default_name):
     else:
         name = None
 
-    if isinstance(name, six.string_types):
+    if isinstance(name, str):
         # only one string value: make this the name of the table
         # in a list with one object
         name = [name]

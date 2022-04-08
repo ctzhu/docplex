@@ -3,7 +3,6 @@
 from docplex.mp.utils import DocplexLinearRelaxationError
 
 from collections import defaultdict
-import six
 
 
 class LinearRelaxer(object):
@@ -15,14 +14,14 @@ class LinearRelaxer(object):
         self._unrelaxables = defaultdict(list)
 
     def iter_unrelaxables(self):
-        return six.iteritems(self._unrelaxables)
+        return self._unrelaxables.items()
 
     def main_cause(self):
         unrelaxables = self._unrelaxables
         max_urx = -1
         justifier = None
         main_cause = None
-        for cause, urxs in six.iteritems(unrelaxables):
+        for cause, urxs in unrelaxables.items():
             if len(urxs) > max_urx:
                 max_urx = len(urxs)
                 main_cause = cause
@@ -30,11 +29,11 @@ class LinearRelaxer(object):
         return main_cause, justifier
 
     @staticmethod
-    def make_relaxed_model(mdl, **kwargs):
+    def make_relaxed_model(mdl, return_partial=False, **kwargs):
         lrx = LinearRelaxer()
-        return lrx.linear_relaxation(mdl, **kwargs)
+        return lrx.linear_relaxation(mdl, return_partial=return_partial, **kwargs)
 
-    def linear_relaxation(self, mdl, **kwargs):
+    def linear_relaxation(self, mdl, return_partial=False, **kwargs):
         """ Returns a continuous relaxation of the model.
 
         Variable types are set to continuous (note that semi-xxx variables have their LB set to zero)
@@ -48,6 +47,8 @@ class LinearRelaxer(object):
         keyword argument `copy_parameters=True`
 
         :param mdl: the initial model
+        :param return_partial: if True, returns the partially relaxed model anyway, default is False,
+            if an unrelaxable item is encountered, None is returned
 
         :return: a new model with continuous relaxation, if possible, else None.
         """
@@ -55,6 +56,8 @@ class LinearRelaxer(object):
         relax_name = kwargs.get('relaxed_name', None)
         verbose = kwargs.get('verbose', True)
         copy_parameters = kwargs.get('copy_parameters', False)
+        # relax sos by default
+        relax_sos = kwargs.get('relax_sos', True)
 
         model_name = mdl.name
 
@@ -143,18 +146,27 @@ class LinearRelaxer(object):
                 info("copied {0} initial model parameters to relaxed model".format(nb_copied))
 
         #
-        for sos in mdl.iter_sos():
-            unrelaxables['sos'].append(sos)
+        if relax_sos:
+            for sos in mdl.iter_sos():
+                # list of mapped variables for original sos
+                sos_vars = [var_mapping[dv1] for dv1 in sos.iter_variables()]
+                sos_type = sos.sos_type
+                sos_ctname = f"relaxed_sos{sos_type.value}#{sos.index+1}"
+                relaxed_model.add(relaxed_model.sum_vars(sos_vars) <= sos_type.value, sos_ctname)
+        else:
+            for sos in mdl.iter_sos():
+                unrelaxables['sos'].append(sos)
 
         self._unrelaxables = unrelaxables
         if unrelaxables:
             nb_unrelaxables = len(unrelaxables)
             main_cause, justifier = self.main_cause()
 
-            print("* model {0}: found {1} un-relaxable elements, main cause is {2} (e.g. {3})"
-                  .format(mdl.name, nb_unrelaxables, main_cause, justifier))
+            if verbose and not return_partial:
+                print("* model {0}: found {1} un-relaxable elements, main cause is {2} (e.g. {3})"
+                      .format(mdl.name, nb_unrelaxables, main_cause, justifier))
             if verbose:
-                for cause, urxs in six.iteritems(unrelaxables):
+                for cause, urxs in unrelaxables.items():
                     print('* reason: {0}: {1} unrelaxables'.format(cause, len(urxs)))
                     for u, urx in enumerate(urxs):
                         if hasattr(urx, "is_generated") and urx.is_generated():
@@ -162,8 +174,12 @@ class LinearRelaxer(object):
                         else:
                             s_gen = ""
                         print('--  {0}: cannot be relaxed: {1!s}{2}'.format(u + 1, urx, s_gen))
-
-            return None
+            if return_partial:
+                if verbose:
+                    print(f"-- returning partially relaxed model")
+                return relaxed_model
+            else:
+                return None
         else:
             # force cplex if any, on docloud nothing to do...
             cpx = relaxed_model.get_cplex(do_raise=False)

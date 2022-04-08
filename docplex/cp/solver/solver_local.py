@@ -29,6 +29,9 @@ import traceback
 #  Private constants
 #-----------------------------------------------------------------------------
 
+# Version of this client
+CLIENT_VERSION = 8
+
 # List of command ids that can be sent to solver
 CMD_EXIT                = "Exit"              # End process (no data)
 CMD_SET_CPO_MODEL       = "SetCpoModel"       # CPO model as string
@@ -36,6 +39,7 @@ CMD_SOLVE_MODEL         = "SolveModel"        # Complete solve of the model (no 
 CMD_START_SEARCH        = "StartSearch"       # Start search (no data)
 CMD_SEARCH_NEXT         = "SearchNext"        # Get next solution (no data)
 CMD_END_SEARCH          = "EndSearch"         # End search (no data)
+CMD_ABORT_SEARCH        = "AbortSearch"       # Abort search (no data)
 CMD_REFINE_CONFLICT     = "RefineConflict"    # Refine conflict (no data)
 CMD_PROPAGATE           = "Propagate"         # Propagate (no data)
 CMD_RUN_SEEDS           = "RunSeeds"          # Run with multiple seeds.
@@ -70,9 +74,6 @@ _MAX_RECEIVED_DATA_SIZE = 1000000
 # Python 2 indicator
 IS_PYTHON_2 = (sys.version_info[0] == 2)
 
-# Version of this client
-CLIENT_VERSION = 6
-
 
 #-----------------------------------------------------------------------------
 #  Public classes
@@ -88,14 +89,15 @@ class CpoSolverLocal(CpoSolverAgent):
                  'timeout_kill',        # Indicates process have been killed by timeout
                  'out_lock',            # Lock to protect output stream
                  'proxy_version',       # Version of the remote proxy
+                 'os',                  # Hack for Python 38 to avoid display of "OSError: [WinError 6] The handle is invalid"
+                                        # when this object is deleted. (Don't ask why this work, it is a mystery)
                 )
 
-    def __init__(self, solver, params, context):
+    def __init__(self, solver, context):
         """ Create a new solver that solves locally with CP Optimizer Interactive.
 
         Args:
             solver:  Parent solver
-            params:  Solving parameters
             context: Solver context
         Raises:
             CpoException if proxy executable does not exists
@@ -104,18 +106,19 @@ class CpoSolverLocal(CpoSolverAgent):
         self.process = None
         self.active = True
         self.timeout_kill = False
-        super(CpoSolverLocal, self).__init__(solver, params, context)
+        super(CpoSolverLocal, self).__init__(solver, context)
+        self.process_infos['ClientVersion'] = CLIENT_VERSION
 
         # Check if executable file exists
         xfile = context.execfile
         if xfile is None or not is_string(xfile):
-            _notify_execfile_not_found()
+            self._notify_execfile_not_found()
             raise CpoException("Executable file should be given in 'execfile' context attribute.")
         if not os.path.isfile(xfile):
-            _notify_execfile_not_found()
+            self._notify_execfile_not_found()
             raise CpoException("Executable file '{}' does not exists".format(xfile))
         if not is_exe_file(xfile):
-            _notify_execfile_not_found()
+            self._notify_execfile_not_found()
             raise CpoException("Executable file '{}' is not executable".format(xfile))
 
         # Create solving process
@@ -126,7 +129,7 @@ class CpoSolverLocal(CpoSolverAgent):
         try:
             self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, stdout=subprocess.PIPE, universal_newlines=False)
         except:
-            _notify_execfile_not_found()
+            self._notify_execfile_not_found()
             raise CpoException("Can not execute command '{}'. Please check availability of required executable file.".format(' '.join(cmd)))
         self.pout = self.process.stdin
         self.pin = self.process.stdout
@@ -265,10 +268,17 @@ class CpoSolverLocal(CpoSolverAgent):
         """ Abort current search.
         This method is designed to be called by a different thread than the one currently solving.
         """
-        try:
-            self.process.kill()
-        except:
-            pass
+        # Check if remote angel is capable of processing abort_search
+        if self._is_abort_search_supported():
+            # Request abort search
+            self._write_message(CMD_ABORT_SEARCH)
+            # No event returned back because solve is supposed to wait for another
+        else:
+            # Old fashion, just kill the sub-process
+            try:
+                self.process.kill()
+            except:
+                pass
 
 
     def refine_conflict(self):
@@ -405,27 +415,37 @@ class CpoSolverLocal(CpoSolverAgent):
         if self.active:
             self.active = False
             try:
+                #traceback.print_stack()
                 self._write_message(CMD_EXIT)
-            except:
+            except BaseException:
                 pass
             try:
                 self.process.kill()
-            except:
+            except BaseException:
                 pass
             try:
                 self.process.wait()
-            except:
+            except BaseException:
                 pass
             self.process = None
             try:
                 self.pout.close()
-            except:
+            except BaseException:
                 pass
             try:
                 self.pin.close()
-            except:
+            except BaseException:
                 pass
             super(CpoSolverLocal, self).end()
+
+
+    def _is_abort_search_supported(self):
+        """ Check if this agent supports an actual abort_search() instead of killing the solver
+
+        Return:
+            True if this agent supports actual abort_search()
+        """
+        return self.proxy_version >= 17
 
 
     def _wait_event(self, xevt):
@@ -467,15 +487,15 @@ class CpoSolverLocal(CpoSolverAgent):
                 did = data[:sx]
                 data = data[sx + 1:]
                 # Retrieve evaluation elements
-                bbf, args = self._get_blackbox_function_eval_context(data)
+                bbf, args, bnds = self.solver._get_blackbox_function_eval_context(data)
                 # Process blackbox function evaluation request
                 if bbf.is_parallel_eval():
                     # Evaluate in a separate thread
-                    thrd = threading.Thread(target=lambda:self._eval_blackbox(did, bbf, args))
+                    thrd = threading.Thread(target=lambda:self._eval_blackbox(did, bbf, args, bnds))
                     thrd.start()
                 else:
                     # Evaluate synchronously (ensure mutual exclusion)
-                    self._eval_blackbox(did, bbf, args)
+                    self._eval_blackbox(did, bbf, args, bnds)
 
             elif evt in (EVT_SOLVER_OUT_STREAM, EVT_SOLVER_WARN_STREAM):
                 if data:
@@ -505,16 +525,17 @@ class CpoSolverLocal(CpoSolverAgent):
                 raise CpoSolverException("Unknown event received from local solver: " + str(evt))
 
 
-    def _eval_blackbox(self, did, bbf, args):
-        """ Wait for a JSON result while forwarding logs if any.
+    def _eval_blackbox(self, did, bbf, args, bnds):
+        """ Evaluate a blackbox function
         Args:
             did:  Dialog id
             bbf:  Blackbox function descriptor
             args: Argument values
+            bnds: Result bounds
         """
         # Process blackbox function evaluation request
         try:
-            res = bbf.eval(*args)
+            res = bbf._eval_function(bnds, *args)
             # Build response
             if res:
                 rdata = did + ' ' + (str(len(res)) if res else "0") + ' ' + (' '.join(str(v) for v in res))
@@ -633,7 +654,7 @@ class CpoSolverLocal(CpoSolverAgent):
         self.process_infos.incr(CpoProcessInfos.TOTAL_DATA_RECEIVE_SIZE, tsize + 6)
 
         # Log received message
-        self.context.log(5, "Read message: ", evt, ", data: '", data, "'")
+        self._log_received_message(evt, data)
 
         return evt, data
 
@@ -733,35 +754,41 @@ class CpoSolverLocal(CpoSolverAgent):
         nbargs = len(argtypes)
 
         # Build message frame
-        frm = bytearray(2 + len(argtypes) + len(name) + 1)
+        frm = bytearray(2 + len(argtypes) + 5 + len(name) + 1)
+
+        # Add dimension and parameters
         frm[0] = dimension
         frm[1] = nbargs
         for i in range(nbargs):
             frm[2 + i] = BLACKBOX_ARGUMENT_TYPES_ENCODING[argtypes[i]]
+
+        # Add cache attributes
+        encode_integer_big_endian_4(bbf.cachesize, frm, 2 + nbargs)
+        frm[6 + nbargs] = 1 if bbf.globalcache else 0
+
+        # Add name
         for i in range(len(name)):
-            frm[2 + nbargs + i] = name[i]
-        frm[2 + nbargs + len(name)] = 0
+            frm[7 + nbargs + i] = name[i]
+        frm[7 + nbargs + len(name)] = 0
 
         # Send message
         self._write_message(CMD_ADD_BLACKBOX_FUN, data=frm)
         self._wait_event(EVT_SUCCESS)
 
 
-#-----------------------------------------------------------------------------
-#  Private functions
-#-----------------------------------------------------------------------------
-
-def _notify_execfile_not_found():
-    """ Print an error message if solver is not found """
-    out = sys.stdout
-    banner = "#" * 79
-    out.write(banner + '\n')
-    out.write("# Solver executable file is not found !\n")
-    out.write("# Please check that:\n")
-    out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
-    out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
-    out.write("#  - your system path includes a reference to the directory where the executable file 'cpoptimizer(.exe)' is located,\n")
-    out.write("#  - the context attribute 'context.solver.local.execfile' is properly set to 'cpoptimizer(.exe)',\n")
-    out.write("#  - or that it is set to an absolute path to this file.\n")
-    out.write(banner + '\n')
-    out.flush()
+    def _notify_execfile_not_found(self):
+        """ Print an error message if solver is not found """
+        out = self.context.get_log_output()
+        if out is None:
+            out = sys.stdout
+        banner = "#" * 79
+        out.write(banner + '\n')
+        out.write("# Solver executable file is not found !\n")
+        out.write("# Please check that:\n")
+        out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
+        out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
+        out.write("#  - your system path includes a reference to the directory where the executable file 'cpoptimizer(.exe)' is located,\n")
+        out.write("#  - the context attribute 'context.solver.local.execfile' is properly set to 'cpoptimizer(.exe)',\n")
+        out.write("#  - or that it is set to an absolute path to this file.\n")
+        out.write(banner + '\n')
+        out.flush()

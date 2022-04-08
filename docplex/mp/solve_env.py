@@ -6,10 +6,7 @@
 
 # gendoc: ignore
 
-from six import iteritems
-
-from docplex.mp.cloudutils import is_in_docplex_worker
-from docplex.mp.cloudutils import make_new_kpis_dict
+from docplex.mp.worker_utils import is_in_docplex_worker, make_new_kpis_dict
 from docplex.mp.publish import auto_publishing_kpis_table_names, \
     auto_publishing_result_output_names, _KpiRecorder
 from docplex.util.environment import get_environment
@@ -23,6 +20,7 @@ try:
     import numpy
 except ImportError:
     numpy = None
+
 
 class SolveEnv(object):
 
@@ -40,11 +38,21 @@ class SolveEnv(object):
         mdl._notify_solve_hit_limit(solve_details)
         mdl._solve_details = solve_details
 
+        # call notify_end on listeners
+        if solve_res:
+            obj = solve_res.objective_value
+            has_solution = True
+        else:
+            has_solution = False
+            obj = None
+
+        mdl._fire_end_solve_listeners(has_solution, obj)
+
 
 class DocloudSolveEnv(SolveEnv):
 
     def __init__(self, m):
-        super(DocloudSolveEnv, self).__init__(m)
+        super().__init__(m)
 
     def before_solve(self, context):
         mdl = self._model
@@ -57,17 +65,16 @@ class CplexLocalSolveEnv(SolveEnv):
 
     def __init__(self, m):
         super(CplexLocalSolveEnv, self).__init__(m)
-        # cached number of threads, if overwritten by solve
         self._saved_params = {}
 
     def before_solve(self, context):
         mdl = self._model
-        auto_publish_details = is_auto_publishing_solve_details(context)
 
         # step 1 : notify start solve
         mdl.notify_start_solve()
 
         the_env = get_environment()
+        auto_publish_details = is_auto_publishing_solve_details(context)
         if is_in_docplex_worker() and auto_publish_details:
             # do not use lambda here
             def env_kpi_hookfn(kpd):
@@ -138,6 +145,7 @@ class CplexLocalSolveEnv(SolveEnv):
         super(CplexLocalSolveEnv, self).after_solve(context, solve_res, engine)
 
         mdl._disconnect_progress_listeners()
+        mdl._clear_qprogress_listeners()
 
         # --- specific to local
         the_env = get_environment()
@@ -147,7 +155,7 @@ class CplexLocalSolveEnv(SolveEnv):
             details = mdl.solve_details.as_worker_dict()
             if solve_res:
                 new_solution = solve_res
-                kpis = mdl.kpis_as_dict(new_solution, use_names=True)
+                kpi_dict = mdl.kpis_as_dict(new_solution, use_names=True)
 
                 def publish_name_fn(kn):
                     return 'KPI.%s' % kn
@@ -161,7 +169,7 @@ class CplexLocalSolveEnv(SolveEnv):
                 publish_value = convert_from_numpy if numpy else identity
                 # build a dict of kpi names (formatted) -> kpi values
                 # kpi values are converted to python types if they are numpy types
-                kpi_details_dict = {publish_name_fn(kn): publish_value(kv) for kn, kv in iteritems(kpis)}
+                kpi_details_dict = {publish_name_fn(kn): publish_value(kv) for kn, kv in kpi_dict.items()}
                 details.update(kpi_details_dict)
                 # add objective with predefined key name
                 details['PROGRESS_CURRENT_OBJECTIVE'] = new_solution.objective_value
@@ -183,11 +191,11 @@ class CplexLocalSolveEnv(SolveEnv):
                                  model=mdl,
                                  solution=solve_res)
 
-        # restore tcached params
+        # restore cached params
         saved_params = self._saved_params
         if saved_params:
             self_engine = mdl.get_engine()
-            for p, v in iteritems(saved_params):
+            for p, v in saved_params.items():
                 self_engine.set_parameter(p, v)
                 # clear saved
                 self._saved_params = {}
@@ -202,5 +210,4 @@ class CplexLocalSolveEnv(SolveEnv):
         except (AttributeError, ValueError):
             pass
 
-        mdl._clear_qprogress_listeners()
 

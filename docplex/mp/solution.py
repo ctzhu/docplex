@@ -4,12 +4,8 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-from __future__ import print_function
-
 import sys
 import copy
-
-import six
 
 try:  # pragma: no cover
     from itertools import zip_longest as izip_longest
@@ -17,19 +13,16 @@ except ImportError:  # pragma: no cover
     # noinspection PyUnresolvedReferences
     from itertools import izip_longest
 
-from six import iteritems, iterkeys
-
-from docplex.mp.compat23 import StringIO
+from io import StringIO
 from docplex.mp.constants import CplexScope, BasisStatus, WriteLevel
 from docplex.mp.utils import is_iterable, is_number, is_string, is_indexable, str_maxed, normalize_basename
 from docplex.mp.utils import make_output_path2, _var_match_function
 from docplex.mp.dvar import Var
 from docplex.mp.error_handler import docplex_fatal, handle_error
 
-
-from docplex.mp.solmst  import SolutionMSTPrinter
+from docplex.mp.solmst import SolutionMSTPrinter
 from docplex.mp.soljson import SolutionJSONPrinter
-from docplex.mp.solsol  import SolutionSolPrinter
+from docplex.mp.solsol import SolutionSolPrinter
 
 from collections import defaultdict
 
@@ -118,7 +111,7 @@ class SolveSolution(object):
         if model.round_solution:
             # only for models which specify round_solution
             roundfn = sol._model._round_function
-            for dvar, value in iteritems(var_value_map):
+            for dvar, value in var_value_map.items():
                 if value and dvar.is_discrete() and value != int(value):
                     var_value_map[dvar] = roundfn(value)
         # do trust engines...
@@ -131,20 +124,34 @@ class SolveSolution(object):
     def _get_var_by_name(self, varname):
         return self._model.get_var_by_name(varname)
 
-    def as_mip_start(self):
-        # INTERNAL
+    def as_mip_start(self, write_level=WriteLevel.DiscreteVars, complete_vars=False, eps_zero=1e-6):
+        write_level_ = WriteLevel.parse(write_level)
+        filter_discrete = write_level_.filter_nondiscrete()
+        filter_zeros = write_level_.filter_zeros()
+        mdl = self.model
+        mipstart_dict = {}
+
+        def generate_completed_var_values():
+            for dv_ in mdl.generate_user_variables():
+                yield dv_, self._get_var_value(dv_)
+
+        if not complete_vars:
+            vv_iter = self.iter_var_values()
+        else:
+            vv_iter = generate_completed_var_values()
+        for dv, dvv in vv_iter:
+            if filter_discrete and not dv.is_discrete():
+                continue
+            if filter_zeros and abs(dvv) <= eps_zero:
+                continue
+            mipstart_dict[dv] = dvv
+
         mipstart = SolveSolution(self.model, name=self.name,
                                  var_value_map=None,
                                  obj=self.objective_value,
                                  solved_by=self.solved_by,
-                                 keep_zeros=self._keep_zeros)
-        # copy value dict
-        mipstart._var_value_map = self._var_value_map.copy()
-        if self.solved_by and not self._keep_zeros:
-            # completion: add all discrete, non-generated:
-            for dvi in self.model.generate_user_variables():
-                if dvi.is_discrete() and dvi not in self._var_value_map:
-                    mipstart._set_var_value_internal(dvi, 0)
+                                 keep_zeros=True)
+        mipstart._var_value_map = mipstart_dict
         return mipstart
 
     def clear(self):
@@ -281,7 +288,7 @@ class SolveSolution(object):
 
         """
         keep_zeros = self._keep_zeros
-        for k, v in iteritems(var_values_iterable):
+        for k, v in var_values_iterable.items():
             self._set_var_key_value(k, v, keep_zeros)
 
     @property
@@ -400,7 +407,7 @@ class SolveSolution(object):
 
     def _store_var_value_map(self, key_value_map, keep_zeros=False):
         # INTERNAL
-        for e, val in iteritems(key_value_map):
+        for e, val in key_value_map.items():
             # need to check var_keys and values
             self.set_var_key_value(var_key=e, value=val, keep_zero=keep_zeros)
 
@@ -411,7 +418,7 @@ class SolveSolution(object):
     @staticmethod
     def _resolve_attribute_index_map(attr_idx_map, obj_mapper):
         return {obj_mapper(idx): attr_val
-                for idx, attr_val in iteritems(attr_idx_map)
+                for idx, attr_val in attr_idx_map.items()
                 if attr_val and obj_mapper(idx) is not None}
 
     @classmethod
@@ -433,6 +440,7 @@ class SolveSolution(object):
     def store_attribute_lists(self, mdl, slacks):
         def linct_mapper(idx):
             return mdl.get_constraint_by_index(idx)
+
         resolved_linear_slacks = self._resolve_attribute_list(slacks, linct_mapper)
         self._slack_values = defaultdict(dict)
         self._slack_values[CplexScope.LINEAR_CT_SCOPE] = resolved_linear_slacks
@@ -444,9 +452,7 @@ class SolveSolution(object):
             iterator: A dict-style iterator which returns a two-component tuple (variable, value)
             for all variables mentioned in the solution.
         """
-        return iteritems(self._var_value_map)
-
-    iteritems = iter_var_values
+        return self._var_value_map.items()
 
     def iter_variables(self):
         """Iterates over all variables mentioned in the solution.
@@ -454,7 +460,7 @@ class SolveSolution(object):
         Returns:
            iterator: An iterator object over all variables mentioned in the solution.
         """
-        return iterkeys(self._var_value_map)
+        return self._var_value_map.keys()
 
     def contains(self, dvar):
         """
@@ -516,7 +522,7 @@ class SolveSolution(object):
         """
         Gets the value of a sequence of variables in a solution.
         If a variable is not mentioned in the solution,
-        the method assumes 0 and does not raise an exception.
+        the method assumes a 0 value.
 
         Args:
             dvars: an ordered sequence of decision variables.
@@ -541,13 +547,22 @@ class SolveSolution(object):
         self_value_map = self._var_value_map
         return [self_value_map.get(dv, 0) for dv in dvars]
 
-    def get_all_values(self):
+    def _get_all_values(self):
         # internal: no checks are done.
         self_value_map = self._var_value_map
         m = self._model
         return [self_value_map.get(dv, 0) for dv in m.iter_variables()]
 
-    def get_value_dict(self, var_dict, keep_zeros=True, precision=0):
+    @staticmethod
+    def _accept_value(value, accept_zeros: bool, precision: float = 1e-6):
+        # INTERNAL
+        if not value:
+            # accepting zero values is controlled by the accept_zeros flag.
+            return accept_zeros
+        else:
+            return abs(value) >= precision
+
+    def get_value_dict(self, var_dict, keep_zeros=True, precision=1e-6):
         """ Converts a dictionary of variables to a dictionary of solutions
 
         Assuming `var_dict` is a dictionary of variables
@@ -557,21 +572,21 @@ class SolveSolution(object):
 
         :param var_dict: a dictionary of decision variables.
         :param keep_zeros: an optional flag to keep zero values (default is True)
-        :param precision: an optional precision, used when filtering out zero values. The default is 1e-6.
-            When keep_zeros is False, all values smaller than this value are left out.
+        :param precision: an optional precision, used to filter small non-zero values.
+        The default is 1e-6.
 
         :return: A dictionary from variable keys to solution values (floats).
         """
         # assume var_dict is a key-> variable dictionary
-        if keep_zeros:
-            return {k: self._get_var_value(v) for k, v in iteritems(var_dict)}
-        else:
-            value_dict = {}
-            for key, dvar in iteritems(var_dict):
-                dvar_value = self._get_var_value(dvar)
-                if (precision and abs(dvar_value) >= precision) or dvar_value:
-                    value_dict[key] = dvar_value
-            return value_dict
+
+        assert precision >= 0
+        # if precision -> abs(dvv) >= prec else dvv
+        value_dict = {}
+        for key, dvar in var_dict.items():
+            dvar_value = self._get_var_value(dvar)
+            if self._accept_value(dvar_value, keep_zeros, precision=precision):
+                value_dict[key] = dvar_value
+        return value_dict
 
     def get_value_df(self, var_dict, value_column_name=None, key_column_names=None):
         """ Returns values of a dicitonary of variables, as a pandas dataframe.
@@ -585,8 +600,8 @@ class SolveSolution(object):
 
         :return: a pandas DataFrame, if pandas is present.
         """
-        keys = list(six.iterkeys(var_dict))
-        values = self.get_values(six.itervalues(var_dict))
+        keys = list(var_dict.keys())
+        values = self.get_values((dv for dv in var_dict.values()))
         if isinstance(keys[0], tuple):
             keys = list(zip(*keys))
             knames = None
@@ -594,7 +609,7 @@ class SolveSolution(object):
                 if len(key_column_names) == len(keys):
                     knames = key_column_names
             if not knames:
-                knames = ['key_%d' % k for k in range(1, len(keys)+1)]
+                knames = ['key_%d' % k for k in range(1, len(keys) + 1)]
             kd = {kn: ks for kn, ks in zip(knames, keys)}
         else:
             kn = key_column_names or 'key'
@@ -613,8 +628,13 @@ class SolveSolution(object):
 
     @property
     def number_of_var_values(self):
-        """ This property returns the number of variable values stored in this solution.
+        """ This property returns the number of variable/value pairs stored in this solution.
+        """
+        return len(self._var_value_map)
 
+    @property
+    def size(self):
+        """ This property returns the number of variable/value pairs stored in this solution.
         """
         return len(self._var_value_map)
 
@@ -714,7 +734,9 @@ class SolveSolution(object):
             m.warning("invalid domain vars: {0}".format(len(invalid_domain_vars)))
             for v, invd_var in enumerate(invalid_domain_vars, start=1):
                 dvv = self.get_var_value(invd_var)
-                m.warning("{0} - invalid value {1} for variable {2}({5}), [{3}, {4}]".format(v, dvv, invd_var.lp_name, invd_var.lb, invd_var.ub, invd_var.cplex_typecode))
+                m.warning("{0} - invalid value {1} for variable {2}({5}), [{3}, {4}]".format(v, dvv, invd_var.lp_name,
+                                                                                             invd_var.lb, invd_var.ub,
+                                                                                             invd_var.cplex_typecode))
 
         unsat_cts = self.find_unsatisfied_constraints(m, tolerance)
         if verbose and unsat_cts:
@@ -727,8 +749,8 @@ class SolveSolution(object):
                     uctv = uct._compute_violation(self, tolerance)
                     s_violated = f', violated: {uctv:0.3g}'
                 s_uct = uct.to_readable_string()
-                ctx = uct.index+1
-                m.warning("{0} - unsatisfied constraint ct{1}: {2}{3}".format(u, ctx, s_uct, s_violated))
+                ctx = uct.index + 1
+                m.warning("{0} - unsatisfied constraint[#{1}]: {2}{3}".format(u, ctx, s_uct, s_violated))
         return not (invalid_domain_vars or unsat_cts)
 
     is_feasible_solution = is_valid_solution
@@ -752,8 +774,8 @@ class SolveSolution(object):
             return False
 
         # noinspection PyPep8
-        this_triplets  = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
-                                                                                  self.iter_var_values())]
+        this_triplets = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
+                                                                                 self.iter_var_values())]
         other_triplets = [(dv.index, dv.name, svalue) for dv, svalue in dropwhile(lambda dvv: not dvv[1],
                                                                                   other.iter_var_values())]
         # noinspection PyArgumentList
@@ -888,17 +910,6 @@ class SolveSolution(object):
         self.to_stringio(oss, print_zeros=print_zeros)
         return oss.getvalue()
 
-    def _problem_objective_name(self, default_obj_name="objective"):
-        # INTERNAL
-        # returns the string used for displaying the objective
-        # if the problem has an objective with a name, use it
-        # else return the default (typically "objective"
-        # self_objective_expr = self._problem_objective_expr
-        # if self_objective_expr is not None and self_objective_expr.has_name():
-        #     return self_objective_expr.name
-        # else:
-        return default_obj_name
-
     def to_stringio(self, oss, print_zeros=True):
         problem_name = self.problem_name
         if problem_name:
@@ -922,7 +933,7 @@ class SolveSolution(object):
             s_obj = "obj={0:g}".format(self.objective_value)
         else:
             s_obj = "obj=N/A"
-        s_values = ",".join(["{0!s}:{1:g}".format(var, val) for var, val in iteritems(self._var_value_map)])
+        s_values = ",".join(["{0!s}:{1:g}".format(var, val) for var, val in self.iter_var_values()])
         r = "docplex.mp.solution.SolveSolution({0},values={{{1}}})".format(s_obj, s_values)
         return str_maxed(r, maxlen=72)
 
@@ -1068,9 +1079,9 @@ class SolveSolution(object):
     @classmethod
     def _new_printer(cls, format_spec):
         printers = {'json': SolutionJSONPrinter,
-                    'xml' : SolutionMSTPrinter,
-                    'mst' : SolutionMSTPrinter,
-                    'sol' : SolutionSolPrinter
+                    'xml': SolutionMSTPrinter,
+                    'mst': SolutionMSTPrinter,
+                    'sol': SolutionSolPrinter
                     }
         printer_type = printers.get(format_spec.lower())
         if not printer_type:
@@ -1091,7 +1102,7 @@ class SolveSolution(object):
         """
         printer = self._new_printer(format)
 
-        if isinstance(file_or_filename, six.string_types):
+        if isinstance(file_or_filename, str):
             fp = open(file_or_filename, "w")
             close_fp = True
         else:
@@ -1151,6 +1162,7 @@ class SolveSolution(object):
         # return a dictionary of variable_name: variable_value
         def var_name_or_lp_name(dvar_):
             return dvar_.name or dvar_.lp_name
+
         return self._as_dict(var_name_or_lp_name, keep_zeros, error)
 
     def as_index_dict(self, keep_zeros=False, error='ignore'):
@@ -1159,6 +1171,7 @@ class SolveSolution(object):
         def var_valid_index(dvar_):
             var_idx = dvar_.index
             return var_idx if var_idx >= 0 else None
+
         return self._as_dict(var_valid_index, keep_zeros, error)
 
     def _as_dict(self, var_to_key_fn, keep_zeros=False, error='ignore'):
@@ -1171,7 +1184,7 @@ class SolveSolution(object):
                     key_value_dict[dvar_key] = dval
                 else:
                     msg = ("Invalid variable key in solution.as_dict, variable: {0}, transformer: {1}"
-                                     .format(dvar, var_to_key_fn.__name__))
+                           .format(dvar, var_to_key_fn.__name__))
                     handle_error(logger=self.model, error=error, msg=msg)
         return key_value_dict
 
@@ -1317,7 +1330,7 @@ class SolutionPool(object):
                 obj_max = obj
             obj_sum1 += obj
             obj_sum2 += obj * obj
-        obj_med = sorted(objs)[nb_solutions//2]
+        obj_med = sorted(objs)[nb_solutions // 2]
 
         obj_mean = obj_sum1 / nb_solutions
         variance = (obj_sum2 / nb_solutions) - (obj_mean ** 2)

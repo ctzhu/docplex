@@ -5,10 +5,11 @@
 # --------------------------------------------------------------------------
 
 import os
+import time
 
 # docplex
 from docplex.mp.model import Model
-from docplex.mp.utils import DOcplexException
+from docplex.mp.utils import DOcplexException, MockIterable
 from docplex.mp.environment import Environment
 
 from docplex.mp.params.cplex_params import get_params_from_cplex_version
@@ -16,8 +17,8 @@ from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint
 
 from docplex.mp.cplex_adapter import CplexAdapter
+from docplex.mp.cplex_engine import CplexEngine
 
-from docplex.mp.compat23 import izip
 from docplex.mp.quad import VarPair
 
 
@@ -61,35 +62,22 @@ class _CplexReaderFileContext(object):
             self._cplex = None
 
 
-def compute_full_dotf(mdl, coefs, constant=0):
-    """
-
-    :param constant:
-    :param mdl:
-    :param coefs:
-    :return:
-    """
-    def coef_fn(dvx):
-        return coefs[dvx]
-
-    lfactory = mdl._lfactory
-    terms_dict = lfactory._new_term_dict()
-    for dv in mdl.iter_variables():
-        coef = coef_fn(dv.index)
-        if coef:
-            terms_dict[dv] = coef
-    linear_expr = lfactory.linear_expr(terms_dict, constant=constant, safe=True)
-    return linear_expr
+# def compute_full_dotf(mdl, coefs, constant=0):
+#     def coef_fn(dvx):
+#         return coefs[dvx]
+#
+#     lfactory = mdl._lfactory
+#     terms_dict = lfactory._new_term_dict()
+#     for dv in mdl.iter_variables():
+#         coef = coef_fn(dv.index)
+#         if coef:
+#             terms_dict[dv] = coef
+#     linear_expr = lfactory.linear_expr(terms_dict, constant=constant, safe=True)
+#     return linear_expr
 
 
 def compute_full_dot(mdl, coefs, constant=0):
-    """
-
-    :param constant:
-    :param mdl:
-    :param coefs:
-    :return:
-    """
+    # compute a scalar product, with possible zeros as coefs
     lfactory = mdl._lfactory
     terms_dict = lfactory._new_term_dict()
     for dv, k in zip(mdl.iter_variables(), coefs):
@@ -102,27 +90,24 @@ def compute_full_dot(mdl, coefs, constant=0):
 # noinspection PyArgumentList
 class ModelReader(object):
     """ This class is used to read models from CPLEX files (e.g.  SAV, LP, MPS)
-
-    Note:
-        This class requires CPLEX to be installed and present in ``PYTHONPATH``. The following file formats are
-        accepted: LP, SAV, MPS.
+    This class requires CPLEX runtime, otherwise an exception is raised.
 
     Example:
-        Use the class method ``read`` to read a model file.
+        Use class method ``read`` to read a model file.
 
-        Reads the contents of file ``mymodel.sav`` into an `AdvModel` instance, built with the context `my_ctx`,
-        with the parameter ``ignore_names`` set to True::
+        >>> m = ModelReader.read('mymodel.lp', ignore_names=True)
 
-            m = ModelReader.read(path='mymodel.lp', model_class=AdvModel, context=my_ctx, ignore_names=True)
+        reads a model while ignoring all names.
+
+        Global function ``read_model`` is a synonym for ``ModelReader.read``,
+        and is the preferred way to read model files.
 
     """
 
     @staticmethod
     def _build_linear_expr_from_sparse_pair(lfactory, var_map, cpx_sparsepair):
-        expr = lfactory.linear_expr(arg=0, safe=True)
-        for ix, k in izip(cpx_sparsepair.ind, cpx_sparsepair.val):
-            dv = var_map[ix]
-            expr._add_term(dv, k)
+        terms = {var_map[ix]: k for ix, k in zip(cpx_sparsepair.ind, cpx_sparsepair.val)}
+        expr = lfactory.linear_expr(arg=terms, safe=True)
         return expr
 
     _sense2comp_dict = {'L': ComparisonType.LE, 'E': ComparisonType.EQ, 'G': ComparisonType.GE}
@@ -188,7 +173,7 @@ class ModelReader(object):
                 raise
 
     @classmethod
-    def _read_cplex(cls, filename, silent=True):
+    def _read_cplex(cls, filename, datacheck=None, silent=True):
         cpx_adapter = CplexAdapter()
         cpx = cpx_adapter.cpx
         # no warnings
@@ -198,18 +183,53 @@ class ModelReader(object):
             cpx.set_warning_stream(None)
             cpx.set_error_stream(None)  # remove messages about names
         try:
+            if datacheck is not None:
+                assert datacheck in {0,1,2}
+                cpx.parameters.read.datacheck.set(datacheck)
+            t0 = time.time()
             cpx.read(filename)
+            t1 = time.time() - t0
+            if Model.is_docplex_debug() and t1 >= 0.1:
+                print(f"-- cplex read time={t1:.1f}s")
             return cpx_adapter
         except cpx_adapter.CplexError as cpx_e:
             raise ModelReaderError("*CPLEX error {0!s} reading file {1} - exiting".format(cpx_e, filename))
 
     @classmethod
+    def _make_expr_from_varmap_coefs_dict(cls, lfactory, varmap, var_indices, coefs, offset=0):
+        terms_dict = {varmap.get(dvx): k for dvx, k in zip(var_indices, coefs)}
+        return lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
+
+    @classmethod
+    def _make_expr_from_var_coef_seq_dict(cls, lfactory, varmap, var_coefs, constant=0):
+        terms_dict = {varmap.get(dvx): k for dvx, k in var_coefs}
+        return lfactory.linear_expr(arg=terms_dict, constant=constant, safe=True)
+
+    @classmethod
+    def _make_expr_from_varmap_coefs_nodict(cls, lfactory, varmap, var_indices, coefs, offset=0):
+        terms_dict = lfactory._new_term_dict()
+        for dvx, k in zip(var_indices, coefs):
+            dv = varmap.get(dvx)
+            if dv is not None:
+                terms_dict[dv] = k
+        return lfactory.linear_expr(arg=terms_dict, constant=offset, safe=True)
+
+    @classmethod
+    def _make_expr_from_var_coef_seq_nodict(cls, lfactory, varmap, var_coefs, constant=0):
+        terms_dict = lfactory._new_term_dict()
+        for dvx, k in var_coefs:
+            dv = varmap.get(dvx)
+            if dv is not None:
+                terms_dict[dv] = k
+        return lfactory.linear_expr(arg=terms_dict, constant=constant, safe=True)
+
+    @classmethod
     def _make_expr_from_varmap_coefs(cls, lfactory, varmap, var_indices, coefs, offset=0):
         if Environment.env_is_python36:
-            terms_dict = {varmap.get(dvx): k for dvx, k in izip(var_indices, coefs)}
+            terms_dict = {varmap.get(dvx): k for dvx, k in zip(var_indices, coefs)}
         else:
             terms_dict = lfactory._new_term_dict()
-            for dvx, k in izip(var_indices, coefs):
+            for dvx, k in zip(var_indices, coefs):
                 dv = varmap.get(dvx)
                 if dv is not None:
                     terms_dict[dv] = k
@@ -231,12 +251,14 @@ class ModelReader(object):
             verbose: An optional flag to print informative messages, default is False.
             model_class: An optional class type; must be a subclass of Model.
                 The returned model is built using this model_class and the keyword arguments kwargs, if any.
-                By default, the model is class is `Model`
-            kwargs: A dict of keyword-based arguments that are used when creating the model
-                instance.
+                By default, the model class is :class:`docplex.mp.model.Model`.
+            kwargs: A dict of keyword-based arguments that are used when creating the modelpassed to the
+                model constructor.
 
         Example:
-            `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)`
+            `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", ignore_names=True)`
+
+            reads a ,odel from file "c:/temp/foo.mps", sets its name to "docplex_foo", and discard all names.
 
         Returns:
             An instance of Model, or None if an exception is raised.
@@ -253,7 +275,7 @@ class ModelReader(object):
             name_to_use = model_name
         else:
             basename = os.path.basename(filename)
-            if '.' not in filename:
+            if '.' not in filename:  # pragma: no cover
                 raise RuntimeError('ModelReader.read_model(): path has no extension: {}'.format(filename))
             dotpos = basename.find(".")
             if dotpos > 0:
@@ -267,9 +289,10 @@ class ModelReader(object):
             print("* file is empty: {0} - exiting".format(filename))
             return model_class(name=name_to_use, **kwargs)
 
+        data_check = kwargs.pop('datacheck', None)
         if verbose:
             print("-> CPLEX starts reading file: {0}".format(filename))
-        cpx_adapter = cls._read_cplex(filename)
+        cpx_adapter = cls._read_cplex(filename, datacheck=data_check)
         cpx = cpx_adapter.cpx
         if verbose:
             print("<- CPLEX finished reading file: {0}".format(filename))
@@ -279,6 +302,9 @@ class ModelReader(object):
 
         final_output_level = kwargs.get("output_level", "info")
         debug_read = kwargs.get("debug", False)
+        final_agent = kwargs.get('agent', 'cplex')
+        use_new = kwargs.pop('use_new', True)
+
 
         try:
             # force no tck
@@ -288,11 +314,20 @@ class ModelReader(object):
                 final_checker = 'default'
             # build the model with no checker, then restore final_checker in the end.
             kwargs['checker'] = 'off'
+            kwargs['agent'] = 'zero'
 
             ignore_names = kwargs.get('ignore_names', False)
             # -------------
+            if Environment.env_is_python36:
+                make_terms_fn = cls._make_expr_from_varmap_coefs_dict
+                make_terms_seq_fn = cls._make_expr_from_var_coef_seq_dict
+            else:
+                make_terms_fn = cls._make_expr_from_varmap_coefs_nodict
+                make_terms_seq_fn = cls._make_expr_from_var_coef_seq_nodict
 
             mdl = model_class(name=name_to_use, **kwargs)
+            if data_check is not None:
+                mdl.parameters.read.datacheck = data_check
             mdl._provenance = filename
             lfactory = mdl._lfactory
             qfactory = mdl._qfactory
@@ -305,46 +340,62 @@ class ModelReader(object):
 
             def cpx_type_to_docplex_type(cpxt):
                 return vartype_map.get(cpxt, vartype_cont)
+
             # 1 upload variables
             cpx_nb_vars = cpx.variables.get_num()
 
             if verbose:
                 print("-- uploading {0} variables...".format(cpx_nb_vars))
 
-            cpx_var_names = [] if ignore_names else cls._safe_call_get_names(cpx_adapter,
-                                                                             cpx.variables.get_names)
+            cpx_env_e = cpx._env._e
+            cpx_lp = cpx._lp
+            has_non_default_lb = cpx_adapter.has_non_default_lb
+            has_non_default_ub = cpx_adapter.has_non_default_ub
+            has_name = cpx_adapter.has_name
+
+            cpx_var_names = []
+            if not ignore_names:
+                if not has_name or has_name(cpx_env_e, cpx_lp, 0, cpx_nb_vars - 1):
+                    cpx_var_names = cls._safe_call_get_names(cpx_adapter, cpx.variables.get_names)
 
             # check whether all varianbles have same type, it's worth it.
             unique_type = None
-            cpx_vartypes = []
+            docplex_vartypes = None
             if cpx._is_MIP():
                 cpx_types = cpx.variables.get_types()
                 first_cpxtype = cpx_types[0]
                 if all(cpxt == first_cpxtype for cpxt in cpx_types):
                     unique_type = cpx_type_to_docplex_type(first_cpxtype)
                 else:
-                    cpx_vartypes = [cpx_type_to_docplex_type(cpxt) for cpxt in cpx_types]
+                    # docplex_vartypes = [cpx_type_to_docplex_type(cpxt) for cpxt in cpx_types]
+                    def kth_vartype(k):
+                        return cpx_type_to_docplex_type(cpx_types[k])
+                    docplex_vartypes = MockIterable(size=cpx_nb_vars, fn_k=kth_vartype)
             else:
                 unique_type = vartype_cont
 
-            cpx_var_lbs = cpx.variables.get_lower_bounds()
-            if not any(cpx_var_lbs):
+            if use_new and has_non_default_lb and not has_non_default_lb(cpx_env_e, cpx_lp, 0, cpx_nb_vars - 1):
                 cpx_var_lbs = []
             else:
-                cpx_var_lbs = list(cpx_var_lbs)
+                # either we have no fast predicate or we dont use it.
+                cpx_var_lbs = cpx.variables.get_lower_bounds()
+                # we have no predicate, so we might try to avoid building a large list??
+                if not has_non_default_lb and not any(cpx_var_lbs):  # all equal 0
+                    cpx_var_lbs = []
 
-            cpx_var_ubs = cpx.variables.get_upper_bounds()
-            if all(cpxu >= 1e+20 for cpxu in cpx_var_ubs):
+            if use_new and has_non_default_ub and not has_non_default_ub(cpx_env_e, cpx_lp, 0, cpx_nb_vars - 1):
                 cpx_var_ubs = []
             else:
-                cpx_var_ubs = list(cpx_var_ubs)
+                cpx_var_ubs = cpx.variables.get_upper_bounds()
+
+                if not has_non_default_ub and all(cpxu >= 1e+20 for cpxu in cpx_var_ubs):
+                    cpx_var_ubs = []
 
             # if no names, None is fine.
             model_varnames = cpx_var_names or None
 
             model_lbs = cpx_var_lbs
             model_ubs = cpx_var_ubs
-            model_types = cpx_vartypes
 
             # vars
             if unique_type:
@@ -358,9 +409,9 @@ class ModelReader(object):
                                                    _safe_names=True
                                                    )
             else:
-                assert model_types
+                assert docplex_vartypes
                 model_vars = lfactory.new_multitype_var_list(cpx_nb_vars,
-                                                             model_types,
+                                                             docplex_vartypes,
                                                              model_lbs,
                                                              model_ubs,
                                                              model_varnames)
@@ -371,9 +422,9 @@ class ModelReader(object):
             # 2. upload linear constraints and ranges (mixed in cplex)
             cpx_linearcts = cpx.linear_constraints
             nb_linear_cts = cpx_linearcts.get_num()
-            all_rows = cpx_adapter.fast_get_rows(cpx)
+
             all_rhs = cpx_linearcts.get_rhs()
-            all_senses = cpx_linearcts.get_senses()
+            all_senses = cpx_adapter.getsense(cpx_env_e, cpx_lp, 0, nb_linear_cts - 1)
             if 'R' in all_senses:
                 all_range_values = cpx_linearcts.get_range_values()
             else:
@@ -382,42 +433,52 @@ class ModelReader(object):
             cpx_ctnames = [] if ignore_names else cls._safe_call_get_names(cpx_adapter,
                                                                            cpx_linearcts.get_names)
 
-            deferred_cts = []
-
             def make_constant_expr(k):
                 return lfactory.constant_expr(k, safe_number=True)
 
             if verbose:
                 print("-- uploading {0} linear constraints...".format(nb_linear_cts))
-            for c in range(nb_linear_cts):
-                row = all_rows[c]
-                sense = all_senses[c]
-                rhs = all_rhs[c]
-                ctname = cpx_ctnames[c] if cpx_ctnames else None
 
-                indices, coefs = row
-                expr = cls._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
+            def upload_rows(row_iter):
+                cts_ = []
+                for c, (indices, coefs) in enumerate(row_iter):
+                    sense = all_senses[c]
+                    rhs = all_rhs[c]
 
-                if sense == 'R':
-                    # no use of querying range vars if no R constraints
-                    range_val = all_range_values[c]
-                    # rangeval can be negative !!! issue 52
-                    if range_val >= 0:
-                        range_lb = rhs
-                        range_ub = rhs + range_val
+                    ctname = cpx_ctnames[c] if cpx_ctnames else None
+
+                    expr = make_terms_fn(lfactory, cpx_var_index_to_docplex, indices, coefs)
+
+                    if sense == 'R':
+                        # no use of querying range vars if no R constraints
+                        range_val = all_range_values[c]
+                        # rangeval can be negative !!! issue 52
+                        if range_val >= 0:
+                            range_lb = rhs
+                            range_ub = rhs + range_val
+                        else:
+                            range_ub = rhs
+                            range_lb = rhs + range_val
+
+                        rgct = lfactory.new_range_constraint(lb=range_lb, ub=range_ub, expr=expr, name=ctname,
+                                                             check_feasible=False)
+                        cts_.append(rgct)
                     else:
-                        range_ub = rhs
-                        range_lb = rhs + range_val
+                        op = cls.parse_sense(sense)
+                        rhs_expr = make_constant_expr(rhs)
 
-                    rgct = mdl.range_constraint(lb=range_lb, ub=range_ub, expr=expr, rng_name=ctname)
-                    deferred_cts.append(rgct)
+                        ct = LinearConstraint(mdl, expr, op, rhs_expr, ctname)
+                        cts_.append(ct)
+
+                return cts_
+            if nb_linear_cts:
+                fast_get_rows_tuple = cpx_adapter.fast_get_row_tuples
+                if fast_get_rows_tuple:
+                    with fast_get_rows_tuple(cpx_env_e, cpx_lp) as rowgen:
+                        deferred_cts = upload_rows(rowgen)
                 else:
-                    op = cls.parse_sense(sense)
-                    rhs_expr = make_constant_expr(rhs)
-
-                    ct = LinearConstraint(mdl, expr, op, rhs_expr, ctname)
-                    deferred_cts.append(ct)
-            if deferred_cts:
+                    all_rows = cpx_adapter.fast_get_rows(cpx)
+                    deferred_cts = upload_rows(all_rows)
                 # add constraint as a block
                 lfactory._post_constraint_block(posted_cts=deferred_cts)
 
@@ -446,7 +507,7 @@ class ModelReader(object):
                     if linear_nb_non_zeros > 0:
                         indices, coefs = linear_component.unpack()
                         # linexpr = mdl._aggregator._scal_prod((cpx_var_index_to_docplex[idx] for idx in indices), coefs)
-                        linexpr = cls._make_expr_from_varmap_coefs(lfactory, cpx_var_index_to_docplex, indices, coefs)
+                        linexpr = make_terms_fn(lfactory, cpx_var_index_to_docplex, indices, coefs)
                     else:
                         linexpr = None
 
@@ -454,7 +515,7 @@ class ModelReader(object):
                         qfactory = mdl._qfactory
                         ind1, ind2, coefs = quadratic_component.unpack()
                         quads = qfactory.term_dict_type()
-                        for idx1, idx2, coef in izip(ind1, ind2, coefs):
+                        for idx1, idx2, coef in zip(ind1, ind2, coefs):
                             quads[VarPair(cpx_var_index_to_docplex[idx1], cpx_var_index_to_docplex[idx2])] = coef
 
                     else:  # pragma: no cover
@@ -486,7 +547,7 @@ class ModelReader(object):
                     ind_name = all_ind_names[i] if all_ind_names else None
                     ind_rhs = all_ind_rhs[i]
                     ind_linear = all_ind_linearcts[i]  # SparsePair(ind, val)
-                    ind_sense = all_ind_senses[i]
+                    ind_sense = cls.parse_sense(all_ind_senses[i])
                     ind_complemented = all_ind_complemented[i]
                     ind_type = all_ind_types[i]
                     # 1 . check the bvar is ok
@@ -494,8 +555,7 @@ class ModelReader(object):
                     # each var appears once
                     ind_linexpr = cls._build_linear_expr_from_sparse_pair(lfactory, cpx_var_index_to_docplex,
                                                                           ind_linear)
-                    op = ComparisonType.cplex_ctsense_to_python_op(ind_sense)
-                    ind_lct = op(ind_linexpr, ind_rhs)
+                    ind_lct = lfactory._new_binary_constraint(ind_linexpr, ind_sense, ind_rhs)
                     if ind_type == ind_equiv_type:
                         logct = lfactory.new_equivalence_constraint(
                             ind_bvar, ind_lct, true_value=1 - ind_complemented, name=ind_name)
@@ -512,7 +572,7 @@ class ModelReader(object):
                 cpx_pwl_names = pwl_fallback_names if ignore_names else cls._safe_call_get_names(cpx_adapter,
                                                                                                  cpx_pwl.get_names,
                                                                                                  pwl_fallback_names)
-                for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in izip(cpx_pwl_defs,
+                for (vary_idx, varx_idx, preslope, postslope, breakx, breaky), pwl_name in zip(cpx_pwl_defs,
                                                                                                 cpx_pwl_names):
                     varx = cpx_var_index_to_docplex.get(varx_idx, None)
                     vary = cpx_var_index_to_docplex.get(vary_idx, None)
@@ -537,17 +597,21 @@ class ModelReader(object):
             if cpx_multiobj is None or cpx_multiobj.get_num() <= 1:
                 cpx_obj = cpx.objective
                 cpx_sense = cpx_obj.get_sense()
-
-                cpx_all_lin_obj_coeffs = cpx_obj.get_linear()
-                obj_expr = compute_full_dot(mdl, cpx_all_lin_obj_coeffs)
+                fast_getobj = cpx_adapter.fast_getobj
+                if fast_getobj:
+                    with fast_getobj(cpx_env_e, cpx_lp, 0, cpx_nb_vars-1) as var_coefs_tuple:
+                        obj_expr = make_terms_seq_fn(lfactory, cpx_var_index_to_docplex, var_coefs_tuple)
+                else:
+                    cpx_all_lin_obj_coeffs = cpx_obj.get_linear()
+                    obj_expr = compute_full_dot(mdl, cpx_all_lin_obj_coeffs)
 
                 if cpx_obj.get_num_quadratic_variables() > 0:
                     cpx_all_quad_cols_coeffs = cpx_obj.get_quadratic()
                     quads = qfactory.term_dict_type()
-                    for v, col_coefs in izip(cpx_var_index_to_docplex, cpx_all_quad_cols_coeffs):
+                    for v, col_coefs in zip(cpx_var_index_to_docplex, cpx_all_quad_cols_coeffs):
                         var1 = cpx_var_index_to_docplex[v]
                         indices, coefs = col_coefs.unpack()
-                        for idx, coef in izip(indices, coefs):
+                        for idx, coef in zip(indices, coefs):
                             vp = VarPair(var1, cpx_var_index_to_docplex[idx])
                             quads[vp] = quads.get(vp, 0) + coef / 2
 
@@ -562,6 +626,7 @@ class ModelReader(object):
                     mdl.minimize(obj_expr)
             else:
                 # we have multiple objective
+
                 nb_multiobjs = cpx_multiobj.get_num()
                 exprs = [0] * nb_multiobjs
                 priorities = [1] * nb_multiobjs
@@ -569,13 +634,29 @@ class ModelReader(object):
                 abstols = [0] * nb_multiobjs
                 reltols = [0] * nb_multiobjs
                 if ignore_names:
-                    names = ["Goal_{0}".format(g) for g in range(1, nb_multiobjs+1)]
+                    names = ["Goal_{0}".format(g) for g in range(1, nb_multiobjs + 1)]
                 else:
                     names = cpx_multiobj.get_names()
 
+                fast_multiobj = cpx_adapter.fast_multiobj_getobj is not None
+                if fast_multiobj:
+                    def get_kth_multiobj(k):
+                        weight = cpx_adapter.fast_multiobj_getweight(cpx_env_e, cpx_lp, k)
+                        offset = cpx_adapter.fast_multiobj_getoffset(cpx_env_e, cpx_lp, k)
+                        priority = cpx_adapter.fast_multiobj_getprio(cpx_env_e, cpx_lp, k)
+                        abstol = cpx_adapter.fast_multiobj_getabstol(cpx_env_e, cpx_lp, k)
+                        reltol = cpx_adapter.fast_multiobj_getreltol(cpx_env_e, cpx_lp, k)
+                        with cpx_adapter.fast_multiobj_getobj(cpx_env_e, cpx_lp, k, 0, cpx_nb_vars-1) as objk_tuples:
+                            obj_expr = make_terms_seq_fn(lfactory, cpx_var_index_to_docplex, objk_tuples, constant=offset)
+                        return obj_expr, weight, priority, abstol, reltol
+                else:
+                    def get_kth_multiobj(k):
+                        (obj_coeffs, obj_offset, weight, prio, abstol, reltol) = cpx_multiobj.get_definition(k)
+                        obj_expr = compute_full_dot(mdl, obj_coeffs, obj_offset)
+                        return obj_expr, weight, prio, abstol, reltol
+
                 for m in range(nb_multiobjs):
-                    (obj_coeffs, obj_offset, weight, prio, abstol, reltol) = cpx_multiobj.get_definition(m)
-                    obj_expr = compute_full_dot(mdl, obj_coeffs, obj_offset)
+                    (obj_expr, weight, prio, abstol, reltol) = get_kth_multiobj(m)
                     exprs[m] = obj_expr
                     priorities[m] = prio
                     weights[m] = weight
@@ -593,7 +674,7 @@ class ModelReader(object):
                 cpx_sos_names = cpx_sos.get_names()
                 if not cpx_sos_names:
                     cpx_sos_names = [None] * cpx_sos_num
-                for sostype, sos_sparse, sos_name in izip(cpx_sos_types, cpx_sos_indices, cpx_sos_names):
+                for sostype, sos_sparse, sos_name in zip(cpx_sos_types, cpx_sos_indices, cpx_sos_names):
                     sos_var_indices = sos_sparse.ind
                     sos_weights = sos_sparse.val
                     isostype = int(sostype)
@@ -637,7 +718,19 @@ class ModelReader(object):
 
         finally:
             # clean up CPLEX instance...
-            cpx.end()
+            # cpx.end()
+            pass
+        if mdl:
+            # reset engine, if necessary
+            if final_agent == 'zero':
+                pass  # nothing to do
+            if final_agent == 'cplex':
+                mdl._set_engine(CplexEngine(mdl, _cplex=cpx_adapter))
+                # mdl._check_scope_indices()
+            else:
+                # set a new non-cplex agent
+                mdl._set_new_engine_from_agent(final_agent)
+            mdl._set_solver_agent(final_agent)
 
         return mdl
 
@@ -664,16 +757,18 @@ def read_model(filename, model_name=None, verbose=False, **kwargs):
         model_name: An optional name for the newly created model. If None,
             the model name will be the path basename.
         verbose: An optional flag to print informative messages, default is False.
-        model_class: An optional class type; must be a subclass of Model.
-            The returned model is built using this model_class and the keyword arguments kwargs, if any.
-            By default, the model is class is `Model`
         kwargs: A dict of keyword-based arguments that are passed to the model contructor.
+
+    Note:
+        This function requires CPLEX runtime, otherwise an exceotion is raised.
 
     Example:
         `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)`
 
     Returns:
         An instance of Model, or None if an exception is raised.
+
+
 
     See Also:
         :class:`docplex.mp.model.Model`

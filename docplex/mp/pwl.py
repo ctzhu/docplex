@@ -7,7 +7,7 @@
 from docplex.mp.utils import is_iterable
 from docplex.mp.basic import ModelingObjectBase
 from docplex.mp.utils import DOcplexException, is_number
-from docplex.mp.compat23 import izip
+
 from docplex.mp.sttck import StaticTypeChecker
 
 import copy
@@ -281,7 +281,7 @@ class PwlFunction(ModelingObjectBase):
                 all_breaks_right = arg._get_all_breaks(all_x_coord)
                 result_breaksxy = []
                 # Both lists have same size, with same x-coord for breaks ==> perform the addition on each break
-                for br_l, br_r in izip(all_breaks_left, all_breaks_right):
+                for br_l, br_r in zip(all_breaks_left, all_breaks_right):
                     if isinstance(br_l, tuple) and isinstance(br_r, tuple):
                         result_breaksxy.append((br_l[0], br_l[1] + br_r[1]))
                     else:
@@ -501,7 +501,7 @@ class PwlFunction(ModelingObjectBase):
                 result_slopebreaksxy = []
                 # Both lists have same size, with same x-coord for slopebreaks
                 #   ==> perform the addition of slopes on each break
-                for sbr_l, sbr_r in izip(all_slopebreaks_left, all_slopebreaks_right):
+                for sbr_l, sbr_r in zip(all_slopebreaks_left, all_slopebreaks_right):
                     if isinstance(sbr_l, tuple) and isinstance(sbr_r, tuple):
                         result_slopebreaksxy.append((sbr_l[0] + sbr_r[0], sbr_l[1]))
                     else:

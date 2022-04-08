@@ -553,11 +553,11 @@ class WriteLevel(Enum):
 
     The possible values are (in order of decreasing quantity of information written).
 
-        - AllVars: all variables are written
-        - DiscreteVars: all discrete variables are  written (binary, integer, semi-integer)
-        - NonZeroVars: all non-zero vars are written, regardless of their type.
-        - DiscreteNonZeroVars: all discrete non-zero vars are written.
-        - Auto: automatic value, same as DiscreteVars.
+        - AllVars (1): all variables are written
+        - DiscreteVars (2): all discrete variables are  written (binary, integer, semi-integer)
+        - NonZeroVars (3): all non-zero vars are written, regardless of their type.
+        - DiscreteNonZeroVars (4): all discrete non-zero vars are written.
+        - Auto (0): automatic value, same as DiscreteVars.
 
     *New in version 2.10*
     """
@@ -578,7 +578,7 @@ class WriteLevel(Enum):
     def filter_zeros(self):
         return self in {WriteLevel.NonZeroVars, WriteLevel.NonZeroDiscreteVars}
 
-    def filter_discrete(self):
+    def filter_nondiscrete(self):
         return self in {WriteLevel.Auto, WriteLevel.DiscreteVars, WriteLevel.NonZeroDiscreteVars}
 
     @classmethod

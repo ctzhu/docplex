@@ -5,7 +5,6 @@
 # (c) Copyright IBM Corp. 2017
 # ---------------------------------------------------------------------------
 
-from docplex.mp.compat23 import izip
 from docplex.mp.cplex_engine import CplexEngine
 
 
@@ -105,7 +104,7 @@ class ModelCallbackMixin(object):
             # noinspection PyUnresolvedReferences
             var_values = super(ModelCallbackMixin, self).get_values(indices)
             # noinspection PyArgumentList
-            var_value_dict = {v: val for v, val in izip(dvars, var_values)}
+            var_value_dict = {v: val for v, val in zip(dvars, var_values)}
         else:  # pragma: no cover
             var_value_dict = {}
         return self.model.new_solution(var_value_dict)
@@ -119,6 +118,9 @@ class ModelCallbackMixin(object):
         """
         all_vars = list(self.model.iter_variables())
         return self.make_solution_from_vars(all_vars)
+
+    # compatibility
+    make_solution = make_complete_solution
 
 
 class ConstraintCallbackMixin(ModelCallbackMixin):

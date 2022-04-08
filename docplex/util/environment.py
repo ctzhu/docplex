@@ -113,8 +113,11 @@ except ImportError:
 
 from six import iteritems
 
-from docplex.util.logging_utils import LoggerToFile, LoggerToDocloud
+from docplex.util import lazy
+from docplex.util.logging_utils import LoggerToDocloud
 from docplex.util.csv_utils import write_table_as_csv
+
+from .ws.util import START_SOLVE_EVENT, END_SOLVE_EVENT, Tracker
 
 in_ws_nb = None
 
@@ -123,7 +126,7 @@ if in_ws_nb is None:
     dsx_home_set = 'dsxuser' in os.environ.get('HOME', '').split('/')
     has_hw_spec = 'RUNTIME_HARDWARE_SPEC' in os.environ
     rt_region_set = 'RUNTIME_ENV_REGION' in os.environ
-    
+
     in_ws_nb = in_notebook and dsx_home_set and has_hw_spec and rt_region_set
 
 
@@ -183,6 +186,7 @@ def default_solution_storage_handler(env, solution):
             # try jsonify
             with env.get_output_stream(name) as fp:
                 json.dump(value, fp)
+
 
 # The global output lock
 global_output_lock = threading.Lock()
@@ -265,6 +269,7 @@ class Environment(object):
         self.record_min_time = 1
         self.recorded_solve_details_count = 0  # number of solve details that have been sent to recording
         self.autoreset = True
+        self.logger = logging.getLogger("docplex.util.environment.logger")
 
     def _reset_record_history(self, force=False):
         if self.autoreset or force:
@@ -329,6 +334,7 @@ class Environment(object):
         Returns:
             A file object to read the input from.
         '''
+        self.logger.info(lazy(lambda: f"set input stream: name={name}"))
         return None
 
     def read_df(self, name, reader=None, **kwargs):
@@ -423,7 +429,7 @@ class Environment(object):
             name: Name of the output object.
             filename: The name of the file to attach.
         '''
-        pass
+        self.logger.info(lazy(lambda: f"set output attachment: name={name}, filename={filename}"))
 
     def get_output_stream(self, name):
         ''' Get a file-like object to write the output of the program.
@@ -443,6 +449,7 @@ class Environment(object):
         Returns:
             A file object to write the output to.
         '''
+        self.logger.info(lazy(lambda: f"set output stream: name={name}"))
         return None
 
     def get_available_core_count(self):
@@ -507,19 +514,24 @@ class Environment(object):
         #             :attr:`.Context.solver.auto_publish.solve_details`
         #         '''
         # ===============================================================================
+        self.logger.info(lazy(lambda: f"Notify start solve: engine_type={engine_type}, solve_details={json.dumps(solve_details, indent=3)}"))
         self._reset_record_history()
 
     def update_solve_details(self, details):
         '''Update the solve details.
 
-        You use this method to send solve details to the DOcplexcloud service.
+        You use this method to send solve details to the solve service.
         If ``context.solver.auto_publish`` is set, the underlying
         solver will automatically update solve details once the solve has
         finished.
 
+        This method might filter details and publish them with rate limitations.
+        It actually publish de details by calling `publish_solve_details`.
+
         Args:
             details: A ``dict`` with solve details as key/value pairs.
         '''
+        self.logger.info(lazy(lambda: f"Update solve details: {json.dumps(details, indent=3)}"))
         # publish details
         to_publish = None
         if self.update_solve_details_dict:
@@ -536,15 +548,19 @@ class Environment(object):
 
         if self.details_filter:
             if self.details_filter.filter(details):
+                self.logger.debug("Published as filtered details")
                 self.publish_solve_details(to_publish)
             else:
                 # just store the details for later use
+                self.logger.debug("Publish filter refused details, stored as unpublished")
                 self.unpublished_details = to_publish
         else:
+            self.logger.debug("Published as unfiltered details")
             self.publish_solve_details(to_publish)
 
     def record_in_history(self, details):
         self.recorded_solve_details_count += 1
+        self.logger.debug(lazy(lambda: f"record in history: {json.dumps(details)}"))
         for f in self.record_history_fields:
             if f in details:
                 current_ts = round(time.time(), self.record_history_time_decimals)
@@ -553,12 +569,16 @@ class Environment(object):
                 self.record_history[f] = l
                 last_ts = l[-1][0] if len(l) >= 1 else -9999
                 if (current_ts - last_ts) >= self.record_min_time:
+                    self.logger.debug(lazy(lambda: f"record added in history for field {f}"))
                     l.append(current_history_element)
                     details['%s.history' % f] = json.dumps(list(l))  # make new copy
+                    # make current also last history record
+                    self.last_history_record[f] = current_history_element
                 else:
+                    self.logger.debug(lazy(lambda: f"record stored as current for field {f}"))
                     self.last_history_record[f] = current_history_element
         return details
-    
+
     def prepare_last_history(self):
         details = {}
         details.update(self.last_solve_details)
@@ -582,7 +602,7 @@ class Environment(object):
         Returns:
             The published details
         '''
-        pass
+        self.logger.info(lazy(lambda: f"Publish solve details: {json.dumps(details, indent=3)}"))
 
     def notify_end_solve(self, status, solve_time=None):
         # ===============================================================================
@@ -604,9 +624,12 @@ class Environment(object):
         #             solve_time: The solve time
         #         '''
         # ===============================================================================
+        self.logger.info(f"Notify end solve, status={status}, solve_time={solve_time}")
         if self.unpublished_details:
+            self.logger.debug("Notify end solve: has unpublished details, so publish them")
             self.publish_solve_details(self.unpublished_details)
         if self.recorded_solve_details_count >= 1 and self.last_history_record:
+            self.logger.debug("Notify end solve: has more than 1 solve details, prepare and publish history")
             last_details = self.prepare_last_history()
             if last_details:
                 self.publish_solve_details(last_details)
@@ -677,17 +700,12 @@ class Environment(object):
         value = os.environ.get("IS_DODS")
         return str(value).lower() == "true"
 
-    def get_logger(self):
-        '''Returns a ``docplex.util.logging.DocplexLogger`` that can be use
-        for logging purposes.
-        '''
-        return None
 
 class AbstractLocalEnvironment(Environment):
     # The environment solving environment using all local input and outputs.
     def __init__(self):
         super(AbstractLocalEnvironment, self).__init__()
-        self.logger = None
+        self.logger = logging.getLogger('docplex.util.environment.logger')
 
         # init number of cores. Default is no limits (engines will use
         # number of cores reported by system).
@@ -726,26 +744,21 @@ class AbstractLocalEnvironment(Environment):
         if os.path.dirname(os.path.abspath(filename)) != os.getcwd():
             shutil.copyfile(filename, name)  # copy to current
 
-    def get_logger(self):
-        if not self.logger:  # lazy init
-            self.logger = LoggerToFile(sys.stdout)
-        return self.logger
-
     def get_available_core_count(self):
         return self._available_cores
+
 
 class LocalEnvironment(AbstractLocalEnvironment):
     def __init__(self):
         super(LocalEnvironment, self).__init__()
 
-from .ws.util import START_SOLVE_EVENT, END_SOLVE_EVENT, Tracker
 
 class WSNotebookEnvironment(AbstractLocalEnvironment):
     def __init__(self, tracker=None):
         super(WSNotebookEnvironment, self).__init__()
         self._start_time = None
         self.solve_id = str(uuid.uuid4())  # generate random uuid for each session
-        self.model_type = None # set in start solve
+        self.model_type = None  # set in start solve
         self.tracker = tracker if tracker else Tracker()
 
     def notify_start_solve(self, solve_details):
@@ -769,17 +782,18 @@ class WSNotebookEnvironment(AbstractLocalEnvironment):
         self.model_type = model_type
         self.tracker.notify_ws(START_SOLVE_EVENT, details)
         self._start_time = time.time()
-        
+
     def notify_end_solve(self, status, solve_time=None):
         super(WSNotebookEnvironment, self).notify_end_solve(status, solve_time=solve_time)
         # do the watson studio things
-        if (self._start_time and solve_time == None):
+        if (self._start_time and solve_time is None):
             solve_time = (time.time() - self._start_time)
         details = {'solveTime': solve_time,
                    'modelType': self.model_type,
                    'solveId': self.solve_id}
         self.tracker.notify_ws(END_SOLVE_EVENT, details)
         self._start_time = None
+
 
 class OutputFileWrapper(object):
     # Wraps a file object so that on __exit__() and on close(), the wrapped file is closed and
@@ -829,6 +843,10 @@ class WorkerEnvironment(Environment):
         if solve_hook:
             self.solve_hook.stop_callback = partial(worker_env_stop_callback, self)
         self.logger = None
+        if hasattr(self.solve_hook, 'logger'):
+            self.logger = LoggerToDocloud(self.solve_hook.logger)
+        else:
+            self.logger = logging.getLogger('docplex.util.environment.logger')
 
     def get_available_core_count(self):
         return self.solve_hook.get_available_core_count()
@@ -898,14 +916,6 @@ class WorkerEnvironment(Environment):
         warnings.warn('get_stop_callback() is deprecated since 2.4 - Use the abort_callbacks property instead')
         return self.abort_callbacks[1] if self.abort_callbacks else None
 
-    def get_logger(self):
-        if not self.logger:
-            if hasattr(self.solve_hook, 'logger'):
-                self.logger = LoggerToDocloud(self.solve_hook.logger)
-            else:
-                self.logger = LoggerToFile(sys.stdout)
-        return self.logger
-
 
 class OverrideEnvironment(object):
     '''Allows to temporarily replace the default environment.
@@ -944,7 +954,9 @@ def _get_default_environment():
         return WSNotebookEnvironment()
     return LocalEnvironment()
 
+
 default_environment = _get_default_environment()
+
 
 def _get_cplex_edition():
     with OverrideEnvironment(Environment()):
@@ -1139,6 +1151,7 @@ def remove_abort_callback(cb):
         cb: The abort callback
     '''
     default_environment.abort_callbacks.remove(cb)
+
 
 attachment_invalid_characters = '/\\?%*:|"#<> '
 attachment_trans_table = maketrans(attachment_invalid_characters, '_' * len(attachment_invalid_characters))

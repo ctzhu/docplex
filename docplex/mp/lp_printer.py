@@ -4,10 +4,6 @@
 # (c) Copyright IBM Corp. 2015, 2016
 # --------------------------------------------------------------------------
 
-
-from __future__ import print_function
-
-
 from docplex.mp.constants import ComparisonType
 from docplex.mp.constr import LinearConstraint, RangeConstraint, QuadraticConstraint, PwlConstraint
 from docplex.mp.environment import env_is_64_bit
@@ -16,8 +12,6 @@ from docplex.mp.utils import fix_whitespace
 
 from docplex.mp.format import LP_format
 from itertools import chain
-from six import iteritems, PY3
-from docplex.mp.compat23 import izip
 
 
 # gendoc: ignore
@@ -190,7 +184,10 @@ class LPModelPrinter(TextModelPrinter):
             # try to indent with space of '0 <= ', that is 5 space
             out.write(" %s %s %s\n" % (varname_indent, varname, free_symbol))
         elif lb is None:
-            out.write(" %s %s %s %s\n" % (varname_indent, varname, le_symbol, num_printer.to_string(ub)))
+            if ub:
+                out.write(" %s %s %s %s\n" % (varname_indent, varname, le_symbol, num_printer.to_string(ub)))
+            else:
+                out.write(" %s %s %s %s\n" % (varname_indent, varname, '=', '0'))
         elif ub is None:
             out.write(" %s %s %s\n" % (num_printer.to_string(lb), le_symbol, varname))
         elif lb == ub:
@@ -217,9 +214,9 @@ class LPModelPrinter(TextModelPrinter):
         if model.name:
             # make sure model name is ascii
             encoded = model.name.encode('ascii', 'backslashreplace')
-            if PY3:  # pragma: no cover
+            # if PY3:  # pragma: no cover
                 # in python 3, encoded is a bytes at this point. Make it a string again
-                encoded = encoded.decode('ascii')
+            encoded = encoded.decode('ascii')
             model_name = encoded.replace('\\\\', '_').replace('\\', '_')
         printed_name = model_name or 'CPLEX'
         out.write("\\Problem name: %s\n" % printed_name)
@@ -322,7 +319,7 @@ class LPModelPrinter(TextModelPrinter):
             import sys
             sys.__stdout__.write("DOcplex: refine variable names\n")
             k = 0
-            for dv, lp_varname in iteritems(self._var_name_map):
+            for dv, lp_varname in self._var_name_map.items():
                 refined_name = "%s#%d" % (lp_varname, k)
                 self._var_name_map[dv] = refined_name
                 k += 1
@@ -499,7 +496,7 @@ class LPModelPrinter(TextModelPrinter):
                 wrapper.write('S%d ::' % sos.sos_type.value)  # 1 or 2
                 ranks = sos.weights
                 # noinspection PyArgumentList
-                for rank, sos_var in izip(ranks, sos._variables):
+                for rank, sos_var in zip(ranks, sos._variables):
                     wrapper.write('%s : %d' % (name_fn(sos_var), rank))
                 wrapper.flush(print_newline=True)
 

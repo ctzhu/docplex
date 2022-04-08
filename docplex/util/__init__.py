@@ -22,3 +22,30 @@ def as_df(what, **kwargs):
         return what.__as_df__(**kwargs)
     except AttributeError:
         return None
+
+
+class LazyEvaluation(object):
+    def __init__(self, func):
+        self._func = func
+
+    def __str__(self):
+        return self._func()
+
+
+def lazy(f):
+    '''
+    Sometimes, we want to use some `f(x)` where `f` can be anything from a function that
+    does nothing to a function that prints things. However, `x` can be a time consuming
+    operation, so we don't always want x to be evaluated. Typicallly, loggers:
+
+       logger.info(f"Doing something to n: {json.dumps(n)}")
+
+    In the example above, it would be nice that the expression is not evaluated if
+    the logger is a dymmy logger.
+
+    `lazy()` allows this to be rewritten as:
+
+       logger.info(lazy(lambda: f"Doing something to n: {json.dumps(n)}"))
+
+    '''
+    return LazyEvaluation(f)

@@ -10,7 +10,7 @@ import sys
 
 from docplex.mp.error_handler import DOcplexException
 from docplex.mp.utils import is_iterable, OutputStreamAdapter
-from docplex.mp.compat23 import izip_longest
+from itertools import zip_longest as izip_longest
 
 import json
 

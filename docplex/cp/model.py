@@ -105,7 +105,7 @@ class CpoModelStatistics(object):
     """
 
     def __init__(self, model=None, json=None):
-        """ Create new model statistics
+        """ **Constructor**
 
         Can be created either by giving source model, or json object.
 
@@ -318,7 +318,7 @@ class CpoModel(object):
     """
 
     def __init__(self, name=None, sfile=None, version=None):
-        """ Constructor.
+        """ **Constructor**
 
         Args:
             name:    (Optional) Model name (source file name).
@@ -474,47 +474,73 @@ class CpoModel(object):
             raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase, not an object of type {}.".format(type(expr)))
 
 
-    def remove(self, expr):
-        """ Remove a single expression from the model.
+    # def remove(self, expr):
+    #     """ Remove a single expression from the model.
+    #
+    #     This method removes from the model the first occurrence of the expression given as parameter.
+    #     It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
+    #     it does not remove the expression if it used as sub-expression of another expression.
+    #
+    #     If you have multiple expressions to remove, use method :meth:`~CpoModel.remove_expressions` instead.
+    #
+    #     Args:
+    #         expr: Expression to remove.
+    #     Returns:
+    #         True if expression has been removed, False if not found
+    #     """
+    #     # Check if it is current objective expression
+    #     if expr is self.objective:
+    #         self.objective = None
+    #     # Remove from list of expressions
+    #     for ix, (x, l) in enumerate(self.expr_list):
+    #         if x is expr:
+    #             del self.expr_list[ix]
+    #             return True
+    #     return False
 
-        This method removes from the model the first occurrence of the expression given as parameter.
-        It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
-        it does not remove the expression if it used as sub-expression of another expression.
 
-        If you have multiple expressions to remove, use method :meth:`~CpoModel.remove_expressions` instead.
+    def remove(self, *expr):
+        """ Remove one or several expressions from the model.
+
+        This method removes one or more CPO expression from the model.
+
+        The argument *expr* can be:
+
+         * any expression previously added to the model using method :meth:`add`
+         * an iterable of such expressions.
+
+        Expressions are removed from the top-level expressions of the model. There is no attempst to search for sub-expressions.
+
+        The expressions to remove are compared to existing ones using their id.
+        If an expression is not found, it is ignored.
 
         Args:
-            expr: Expression to remove.
+            expr: CPO expressions (constraint, boolean, objective, etc) to remove from the model,
+                  or iterable of expressions to remove from the model.
         Returns:
-            True if expression has been removed, False if not found
-        """
-        # Check if it is current objective expression
-        if expr is self.objective:
-            self.objective = None
-        # Remove from list of expressions
-        for ix, (x, l) in enumerate(self.expr_list):
-            if x is expr:
-                del self.expr_list[ix]
-                return True
-        return False
-
-
-    def remove_expressions(self, lexpr):
-        """ Remove a list of expressions from the model.
-
-        This method removes from the model all occurrences of the expressions given in the list.
-        It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
-        it does not remove the expressions that are used as sub-expression of another expression.
-
-        This method is more efficient than calling :meth:`~CpoModel.remove` multiple times.
-
-        Args:
-            lexpr: List of expressions to remove from the model.
-        Returns:
-            Number of expressions actually removed from the model
+            Number of expressions actually removed from the model.
+        Raises:
+            CpoException in case of error.
         """
         # Build a set of ids of expressions to remove
-        idset = set(id(x) for x in lexpr)
+        idset = set()
+        for xp in expr:
+            # Check simple expression
+            if isinstance(xp, CpoExpr):
+                idset.add(id(xp))
+            else:
+                # Argument may be an iterable of expressions
+                if is_string(xp):
+                    raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
+                # Try as iterable
+                try:
+                    for x in xp:
+                        if isinstance(x, CpoExpr):
+                            idset.add(id(x))
+                        else:
+                            raise CpoException("All elements from an iterable 'expr' should be a CpoExpr")
+                except:
+                    raise CpoException("Argument 'expr' should be a CpoExpr or an iterable of CpoExpr")
         # Check if objective is in the expressions to remove
         if id(self.objective) in idset:
             self.objective = None
@@ -529,6 +555,25 @@ class CpoModel(object):
         self.expr_list = nlist
         # Return
         return nbrem
+
+
+    def remove_expressions(self, lexpr):
+        """ Remove a list of expressions from the model.
+
+        DEPRECATED: use directly :meth:`remove` instead, as it supports multiple or lists of expressions to remove.
+
+        This method removes from the model all occurrences of the expressions given in the list.
+        It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
+        it does not remove the expressions that are used as sub-expression of another expression.
+
+        This method is more efficient than calling :meth:`~CpoModel.remove` multiple times.
+
+        Args:
+            lexpr: List of expressions to remove from the model.
+        Returns:
+            Number of expressions actually removed from the model
+        """
+        return self.remove(lexpr)
 
 
     def minimize(self, expr):
@@ -630,6 +675,24 @@ class CpoModel(object):
             Solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`, or None if not defined.
         """
         return self.parameters
+
+
+    def merge_with_parameters(self, params):
+        """ Merge parameters of this model with external parameters.
+
+        The model parameters (if any) are overwritten by the given parameters.
+        If parameters are defined at model level, they are cloned, and the parameters given as argument are added to
+        it and then returned.
+        If no parameters are defined, the parameters given as argument are returned as they are.
+
+        Returns:
+            Merged dolving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`.
+        """
+        if self.parameters is None:
+            return params
+        res = self.parameters.clone()
+        res.set_other(params)
+        return res
 
 
     def set_search_phases(self, phases):
@@ -832,7 +895,14 @@ class CpoModel(object):
 
 
     def _add_blackbox_function(self, bbf):
-        """ Add a new blackbox function to this model.
+        """ Add a new blackbox function descriptor to this model.
+
+        Calling this function is mandatory before importing a CPO model that contains references to a blackbox function,
+        if the context attribute *context.parser.auto_blackbox* is set to False (default).
+
+        If the context attribute *context.parser.auto_blackbox* is set to True, then an empty blackbox function
+        descriptor is automatically generated for every unknown function in the model.
+        As there is no implementation, the model can not be solved.
 
         Args:
             bbf:  Blackbox function descriptor, object of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
@@ -853,7 +923,7 @@ class CpoModel(object):
         """ Gets the list of all blackbox functions registered in this model.
 
         Returns:
-            List of all blackbox functions occuring in this model, objects of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
+            List of all blackbox functions occurring in this model, objects of class :class:`~docplex.cp.blackbox.CpoBlackboxFunction`
         """
         return list(self.blackbox_funs.values())
 

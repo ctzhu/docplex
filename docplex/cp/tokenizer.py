@@ -26,7 +26,7 @@ class Token(object):
                  )
 
     def __init__(self, type, value):
-        """ Create a new token
+        """ **Constructor**
         Args:
             type:  Token type
             value: Token value

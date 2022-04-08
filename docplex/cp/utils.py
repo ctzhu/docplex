@@ -84,7 +84,7 @@ class CpoException(Exception):
     """ Exception thrown in case of CPO errors.
     """
     def __init__(self, msg):
-        """ Create a new exception
+        """ **Constructor**
 
         Args:
             msg: Error message
@@ -96,7 +96,7 @@ class CpoNotSupportedException(CpoException):
     """ Exception thrown when a CPO function is not supported.
     """
     def __init__(self, msg):
-        """ Create a new exception
+        """ **Constructor**
 
         Args:
             msg: Error message
@@ -107,7 +107,7 @@ class CpoNotSupportedException(CpoException):
 class Context(dict):
     """ Class handling miscellaneous list of parameters. """
     def __init__(self, **kwargs):
-        """ Create a new context
+        """ **Constructor**
 
         Args:
             **kwargs: List of key=value to initialize context with.
@@ -166,12 +166,11 @@ class Context(dict):
         if name.startswith('__'):
             raise AttributeError
         ctx = self
-        while True:
+        while ctx is not None:
             if name in ctx:
                return ctx.get(name)
             ctx = ctx.get_parent()
-            if ctx is None:
-                return default
+        return default
 
 
     def del_attribute(self, name):
@@ -313,8 +312,8 @@ class Context(dict):
         return res
 
 
-    def add(self, ctx):
-        """ Add another context to this one.
+    def set_other(self, ctx):
+        """ Set another context into this one.
 
         All attributes of given context are set in this one, replacing previous value if any.
         If one value is another context, it is cloned before being set.
@@ -326,6 +325,11 @@ class Context(dict):
             if isinstance(v, Context):
                 v = v.clone()
             self.set_attribute(k, v)
+
+
+    def add(self, ctx):
+        # Obsolete implementation, kept to assure ascending compatibility
+        self.set_other(ctx)
 
 
     def is_log_enabled(self, vrb):
@@ -532,7 +536,7 @@ class PersistentContext(Context):
     """ Persistent context stored in a file. """
 
     def __init__(self, cfile):
-        """ Create a new persistent Context
+        """ **Constructor**
 
         If the given file exists, it is read in this context.
 
@@ -563,7 +567,7 @@ class IdAllocator(object):
     DIGITS = "0123456789"
     LETTERS_AND_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     def __init__(self, prefix, bdgts="0123456789"):
-        """ Create a new id allocator.
+        """ **Constructor**
 
         Args:
             prefix:  Prefix of all ids
@@ -620,7 +624,7 @@ class SafeIdAllocator(object):
                  'lock',    # Lock to protect counter
                  )
     def __init__(self, prefix, bdgts="0123456789"):
-        """ Create a new id allocator.
+        """ **Constructor**
 
         Args:
             prefix:  Prefix of all ids
@@ -931,7 +935,8 @@ class Chrono(object):
     __slots__ = ('startTime',  # Chrono start time
                  )
     def __init__(self):
-        """ Create a new chronometer initialized with current time.
+        """ **Constructor**
+         Create a new chronometer initialized with current time.
         """
         super(Chrono, self).__init__()
         self.restart()
@@ -978,7 +983,7 @@ class Barrier(object):
                  'barrier'   # Threads blocking lock
                  )
     def __init__(self, parties):
-        """ Create a new barrier
+        """ **Constructor**
 
         Args:
             parties:  Number of parties required before unlocking the barrier
@@ -1012,7 +1017,8 @@ class FunctionCache(object):
                  'funct',   # Function whose results is cached.
                  )
     def __init__(self, f):
-        """
+        """ **Constructor**
+
         Args:
             f:  Function whose results should be cached.
         """
@@ -1767,6 +1773,17 @@ else:
         return isinstance(val, (list, tuple))
 
 
+def is_tuple(val):
+    """ Check if a value is a tuple.
+
+    Args:
+        val: Value to check
+    Returns:
+        True if value is a tuple
+    """
+    return isinstance(val, tuple)
+
+
 if IS_PANDA_AVAILABLE:
 
     def is_panda_series(val):
@@ -2052,17 +2069,35 @@ def is_exe_file(f):
     return os.path.isfile(f) and os.access(f, os.X_OK)
 
 
+def get_main_file():
+    """ Get the name of the main Python module
+
+    Returns:
+        Absolute path of the Python module that has been used as main.
+        None if unknown.
+    """
+    try:
+        return os.path.abspath(sys.modules['__main__'].__file__)
+    except:
+        try:
+            return os.path.abspath(sys.argv[0])
+        except:
+            pass
+    return None
+
+
 def get_system_path():
-    """ Get the system path as a list of files
+    """ Get the system path as a list of directory names
 
     Returns:
         List of names in the system path
     """
-    path = os.getenv('PATH')
-    if path:
-        return path.split(os.pathsep)
-    return []
-
+    rpath = []
+    for pn in ('LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'PATH'):
+        path = os.getenv(pn)
+        if path:
+            rpath.extend(path.split(os.pathsep))
+    return rpath
 
 
 def search_exec_file(f, path):
@@ -2210,7 +2245,7 @@ def write_checking_unicode_errors(out, data):
         if not encoding:
             encoding = 'ascii'
         # Rewrite data encoding it explicitly
-        out.write(data.encode(encoding, errors='backslashreplace'))
+        out.write(data.encode(encoding, errors='backslashreplace').decode(encoding, errors='backslashreplace'))
 
 #-----------------------------------------------------------------------------
 # Zip iterator functions to scan lists simultaneously

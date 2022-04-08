@@ -33,7 +33,7 @@ class DOcplexModeler(object):
 
         # -- solving
         s = mdl.solve()
-        all_values = s.get_all_values() if s else None
+        all_values = s._get_all_values() if s else None
         return solution_maker(all_values, colnames, keep_zeros)
 
 

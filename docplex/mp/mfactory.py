@@ -19,15 +19,15 @@ from docplex.mp.constr import LinearConstraint, RangeConstraint, \
 from docplex.mp.functional import MaximumExpr, MinimumExpr, AbsExpr, PwlExpr, LogicalAndExpr, LogicalOrExpr, \
     LogicalNotExpr
 from docplex.mp.pwl import PwlFunction
-from docplex.mp.compat23 import fast_range, izip_longest
+
+from itertools import zip_longest as izip_longest
 from docplex.mp.environment import Environment
 from docplex.mp.utils import DOcplexException, DocplexQuadToLinearException
-from docplex.mp.utils import MultiObjective
+from docplex.mp.utils import MultiObjective, MockIterable
 from docplex.mp.utils import is_string, is_pandas_dataframe, is_function, is_iterable, is_int, is_number, has_len,\
-                              is_iterator, str_maxed, generate_constant, is_ordered_sequence
+         is_iterator, str_maxed, generate_constant, is_ordered_sequence
 
 
-from docplex.mp.compat23 import izip
 from docplex.mp.kpi import KPI
 from docplex.mp.solution import SolveSolution
 from docplex.mp.sttck import StaticTypeChecker
@@ -132,7 +132,7 @@ def compile_naming_function(keys, user_name, dimension=1, key_format=None,
         if len(list_names) < len(keys):
             raise DOcplexException("An array of names should have same len as keys, expecting: {0}, go: {1}"
                                    .format(len(keys), len(list_names)))
-        key_to_names_dict = {k: nm for k, nm in izip(keys, list_names)}
+        key_to_names_dict = {k: nm for k, nm in zip(keys, list_names)}
         # use a closure
         return lambda k: key_to_names_dict[k]  # if k in key_to_names_dict else default_fn()
 
@@ -179,6 +179,7 @@ class _AbstractModelFactory(object):
 
 
 class ModelFactory(_AbstractModelFactory):
+    status_var_prefix = '_bool'
     status_var_fmt = '_bool{{{0:s}}}'
 
     @staticmethod
@@ -238,10 +239,15 @@ class ModelFactory(_AbstractModelFactory):
         if model.ignore_names or status_var_fmt is None:
             varname = None
         else:
-            # use name if any else use truncated ct string representation
-            base_varname = self.status_var_fmt.format(ct.name or str_maxed(ct, maxlen=20))
+            # use name if any
+            if ct.name:
+                base_varname = self.status_var_fmt.format(ct.name)
+            else:
+                status_index = model._new_ct_status_index()
+                base_varname = f"{self.status_var_prefix}#{status_index}"
+            # base_varname = self.status_var_fmt.format(ct.name or str_maxed(ct, maxlen=20))
             # if name is already taken, use unique index at end to disambiguate
-            varname = model._get_non_ambiguous_varname(base_varname)
+            varname = model._disambiguate_varname(base_varname)
 
         return self._make_new_var(binary_vartype, 0, 1, varname, origin=ct)
 
@@ -286,7 +292,6 @@ class ModelFactory(_AbstractModelFactory):
             is_tuple = isinstance(first_key, tuple)
             stringifier = str_flatten_tuple if is_tuple else str
         return stringifier
-
 
     def _expand_names(self, keys, user_name, dimension, key_format):
         if user_name is None or self._model.ignore_names:
@@ -366,12 +371,12 @@ class ModelFactory(_AbstractModelFactory):
     def _bad_bounds_fatal(self, bad_bound):
         self.fatal("unexpected variable bound: {0!s}, expecting: None|number|function|iterable", bad_bound)
 
-    @staticmethod
-    def safe_kth(array_or_empty, k, fallback=None):
-        if array_or_empty:
-            return array_or_empty[k]
-        else:
-            return fallback
+    # @staticmethod
+    # def safe_kth(array_or_empty, k, fallback=None):
+    #     if array_or_empty:
+    #         return array_or_empty[k]
+    #     else:
+    #         return fallback
 
     def new_multitype_var_list(self, size, vartypes, lbs=None, ubs=None, names=None,
                                var_factory_fn=Var):
@@ -386,9 +391,7 @@ class ModelFactory(_AbstractModelFactory):
         assert not ubs or size == len(ubs)
         assert not names or size == len(names)
         # -------------------------
-        safe_kth_fn = self.safe_kth
-        if mdl.ignore_names:
-            names = []
+
         if not lbs:
             for v, vt in enumerate(vartypes):
                 if vt.is_semi_type():
@@ -401,12 +404,22 @@ class ModelFactory(_AbstractModelFactory):
             else:
                 return fallback_fn()
 
+        if mdl.ignore_names or not names:
+            names = MockIterable.from_value(size=size, val=None)
+
+        def kth_default_lb(k):
+            return vartypes[k].default_lb
+        def kth_default_ub(k):
+            return vartypes[k].default_ub
+        it_lbs = lbs or MockIterable(size, kth_default_lb)
+        it_ubs = ubs or MockIterable(size, kth_default_ub)
+
         allvars = [var_factory_fn(mdl, vartypes[k],
-                                  safe_kth_fn(names, k, None),
-                                  safe_kth_functional(lbs, k, lambda: vartypes[k].default_lb),
-                                  safe_kth_functional(ubs, k, lambda: vartypes[k].default_ub),
+                                  names[k],
+                                  it_lbs[k],
+                                  it_ubs[k],
                                   _safe_lb=True,
-                                  _safe_ub=True) for k in fast_range(size)]
+                                  _safe_ub=True) for k in range(size)]
         cpxnames = names or []  # no None
         cpxlbs = lbs or []
         cpxubs = ubs or []
@@ -414,11 +427,14 @@ class ModelFactory(_AbstractModelFactory):
         mdl._register_block_vars(allvars, indices, names)
         return allvars
 
-    def var_list(self, keys, vartype, lb, ub, name=None, key_format=None):
+    def var_list(self, keys, vartype, lb, ub, name=None, key_format=None, create_container=True):
         actual_name, fixed_keys = self.make_key_seq(keys, name)
-        ctn = self._new_var_container(vartype, key_list=[fixed_keys], lb=lb, ub=ub, name=name)
-        var_list = self.new_var_list(ctn, fixed_keys, vartype, lb, ub, actual_name, 1, key_format)
-        ctn._attach_var_list(var_list)
+        if create_container:
+            ctn = self._new_var_container(vartype, key_list=[fixed_keys], lb=lb, ub=ub, name=name)
+            var_list = self.new_var_list(ctn, fixed_keys, vartype, lb, ub, actual_name, 1, key_format)
+            ctn._attach_var_list(var_list)
+        else:
+            var_list = self.new_var_list(None, fixed_keys, vartype, lb, ub, actual_name, 1, key_format, _add_container=False)
         return var_list
 
     def new_var_list(self, var_container,
@@ -460,29 +476,30 @@ class ModelFactory(_AbstractModelFactory):
             self._checker.check_vars_domain(xlbs, xubs, xnames)
 
         mdl = self._model
+        itnames = xnames or MockIterable.from_value(size=number_of_vars, val=None)
+        itlbs = xlbs or MockIterable.from_value(number_of_vars, default_lb)
+        itubs = xubs or MockIterable.from_value(number_of_vars, default_ub)
         allvars = [var_factory_fn(mdl,
                                   vartype,
-                                  self.safe_kth(xnames, k, None),
-                                  self.safe_kth(xlbs, k, default_lb),
-                                  self.safe_kth(xubs, k, default_ub),
+                                  itnames[k],
+                                  itlbs[k],
+                                  itubs[k],
                                   _safe_lb=safe_lbs,
-                                  _safe_ub=safe_ubs) for k in fast_range(number_of_vars)]
+                                  _safe_ub=safe_ubs) for k in range(number_of_vars)]
 
         # query the engine for a list of indices.
-        indices = self._engine.create_variables(len(key_seq), vartype, xlbs, xubs, xnames)
+        indices = self._engine.create_variables(number_of_vars, vartype, xlbs, xubs, xnames)
         mdl._register_block_vars(allvars, indices, xnames)
         if _add_container:
             # TRue if list is user-generated, False for dicts
             mdl._add_var_container(var_container)
-        # if var_container:
-        #     for dv in allvars:
-        #         mdl.set_var_container(dv, var_container)
+
         return allvars
 
     def _make_var_dict(self, keys, var_list, ordered):
         self._checker.check_for_duplicate_keys(keys)
         _dict_type = self.var_dict_type(ordered)
-        vdict = _dict_type(izip(keys, var_list))
+        vdict = _dict_type(zip(keys, var_list))
         return vdict
 
     def new_var_dict(self, keys, vartype, lb, ub, name, key_format, ordered=False):
@@ -529,7 +546,7 @@ class ModelFactory(_AbstractModelFactory):
         ctn = self._new_var_container(vartype, key_list=matrix_keys, lb=lb, ub=ub, name=name)
         lvars = self.new_var_list(ctn, matrix_keys, vartype, lb, ub, name, dimension=2, key_format=None)
         # TODO: see how to do without this temp dict
-        dd = dict(izip(matrix_keys, lvars))
+        dd = dict(zip(matrix_keys, lvars))
         # row-oriented dict
         rowd = {row_k: [dd[row_k, col_k] for col_k in col_keys] for row_k in row_keys}
         vdtf = DataFrame.from_dict(rowd, orient='index', dtype='object')
@@ -553,16 +570,14 @@ class ModelFactory(_AbstractModelFactory):
         else:
             return self._new_constant_expr(cst, safe_number=safe_number)
 
-    def linear_expr(self, arg=None, constant=0, name=None, safe=False, transient=False):
-        return LinearExpr(self._model, arg, constant, name, safe=safe, transient=transient)
+    def linear_expr(self, arg=None, constant=0, safe=False, transient=False):
+        return LinearExpr(self._model, arg, constant, safe=safe, transient=transient)
 
     def _new_monomial_expr(self, dvar, coeff, safe=True):
         if coeff:
             return MonomialExpr(self._model, dvar, coeff, safe)
         else:
             return self.new_zero_expr()
-
-
 
     @staticmethod
     def _is_operand(arg, accept_numbers=False):
@@ -658,7 +673,8 @@ class ModelFactory(_AbstractModelFactory):
             self._model.error("infeasible range constraint, lb={0}, ub={1}, expr={2}", lb, ub, expr)
 
     def new_range_constraint(self, lb, expr, ub, name=None, check_feasible=True):
-        self._check_range_feasibility(lb, ub, expr)
+        if check_feasible:
+            self._check_range_feasibility(lb, ub, expr)
         linexpr = self._to_linear_operand(expr)
         rng = RangeConstraint(self._model, linexpr, lb, ub, name)
         linexpr.notify_used(rng)
@@ -709,11 +725,11 @@ class ModelFactory(_AbstractModelFactory):
 
     def new_batch_equivalence_constraints(self, bvars, linear_cts, active_values, names):
         return [self.new_equivalence_constraint(bv, lct, active, name)
-                for bv, lct, active, name in izip(bvars, linear_cts, active_values, names)]
+                for bv, lct, active, name in zip(bvars, linear_cts, active_values, names)]
 
     def new_batch_indicator_constraints(self, bvars, linear_cts, active_values, names):
         return [self.new_indicator_constraint(bv, lct, active, name)
-                for bv, lct, active, name in izip(bvars, linear_cts, active_values, names)]
+                for bv, lct, active, name in zip(bvars, linear_cts, active_values, names)]
 
     def new_binary_constraint_or(self, ct1, arg2):
         orexpr = self.new_logical_or_expr([ct1, arg2])
@@ -999,17 +1015,17 @@ class ModelFactory(_AbstractModelFactory):
             names = generate_constant(None, None)
 
         ranges = [self.new_range_constraint(lb, exp, ub, name) for lb, exp, ub, name in
-                  izip(lbs, exprs, ubs, names)]
-        # else:
-        #     ranges = [self.new_range_constraint(lb, exp, ub) for lb, exp, ub in izip(lbs, exprs, ubs)]
+                  zip(lbs, exprs, ubs, names)]
         self._post_constraint_block(ranges)
         return ranges
 
     def new_solution(self, var_value_dict=None, name=None, objective_value=None, **kwargs):
         keep_zeros = kwargs.get('keep_zeros', True)
+        solved_by_arg = kwargs.get('solved_by')
 
         return SolveSolution(model=self._model, obj=objective_value,
                              var_value_map=var_value_dict, name=name,
+                             solved_by=solved_by_arg,
                              keep_zeros=keep_zeros)
 
     def _new_var_container(self, vartype, key_list, lb, ub, name):
@@ -1131,12 +1147,13 @@ class _VariableContainer(object):
         else:
             return next(islice(product(*self._keyss), relative_offset, None), None)
 
+    @property
     def shape(self):
         return tuple(len(k) for k in self._keyss)
 
     @property
     def dimension_string(self):
-        dim_string = "".join(["[%d]" % s for s in self.shape()])
+        dim_string = "".join(["[%d]" % s for s in self.shape])
         return dim_string
 
     def to_string(self):
@@ -1154,10 +1171,11 @@ class _VariableContainer(object):
 
     def _attach_var_dict(self, var_dict):
         self._var_collection = var_dict
+
         def iter_dict_values(dd):
-            from six import itervalues
-            return itervalues(dd)
+            #  call of iter() is necessary here!
+            return iter(dd.values())
         self._iter_vars = iter_dict_values(var_dict)
 
-    def iter_variables(self):
+    def __iter__(self):
         return self._iter_vars

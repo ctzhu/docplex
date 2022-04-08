@@ -133,7 +133,7 @@ class StaticTypeChecker(object):
         elif not is_string(new_name):
             logger.fatal("{0} name expects a string, {1!r} was passed", qualifier, new_name)
         elif not accept_empty and not new_name:
-            logger.fatal("{0} name expects a non-empty string, {0!r} was passed", qualifier, new_name)
+            logger.fatal("{0} name expects a non-empty string, {1!r} was passed", qualifier, new_name)
         elif new_name.find(' ') >= 0:
             logger.warning("{0} name contains blank space, var: {0!s}, name: \'{1!s}\'", qualifier, obj, new_name)
         elif not LP_format.is_lp_compliant(new_name):

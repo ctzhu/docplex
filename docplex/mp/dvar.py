@@ -1,14 +1,14 @@
-from six import PY3
+
 from docplex.mp.constants import CplexScope
 
-from docplex.mp.basic import IndexableObject, _BendersAnnotatedMixin, _ValuableMixin
+from docplex.mp.basic import IndexableObject, _AbstractBendersAnnotated, _AbstractValuable
 from docplex.mp.operand import LinearOperand
 from docplex.mp.utils import is_number, is_quad_expr
 
 from docplex.mp.sttck import StaticTypeChecker
 
 
-class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin, _ValuableMixin):
+class Var(IndexableObject, LinearOperand, _AbstractBendersAnnotated, _AbstractValuable):
     """Var()
 
     This class models decision variables.
@@ -231,15 +231,11 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin, _ValuableMixin
     @property
     def sv(self):
         """ Same as `solution_value` but shorter"""
-        return self.solution_value
+        return super().sv
 
     def _raw_solution_value(self, s=None):
         sol = s or self.model._get_solution()
         return sol._get_var_value(self)
-
-    def get_container_index(self):
-        ctn = self.container
-        return ctn.index if ctn else -1
 
     def get_key(self):
         """ Returns the key used to create the variable, or None.
@@ -291,7 +287,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin, _ValuableMixin
         import inspect
         # need to get 2 steps higher to find caller to add/sub
         frame = inspect.stack()[2]
-        code_context = frame.code_context if PY3 else frame[4]
+        code_context = frame.code_context # if PY3 else frame[4]
 
         def find_in_line(line_):
             for xhs_s, xhs_p in _searched_patterns:
@@ -310,7 +306,7 @@ class Var(IndexableObject, LinearOperand, _BendersAnnotatedMixin, _ValuableMixin
                     # strip whitespace before code...
                     ct_varname = line[:spos - 1].lstrip()
                     # evaluate ct in caller locals dict
-                    subframe = frame.frame if PY3 else frame[0]
+                    subframe = frame.frame # if PY3 else frame[0]
                     ct_object = subframe.f_locals.get(ct_varname)
                     # returns a constraint (or None if that fails), plus 0-1 (0 for lhs, 1 for rhs)
                     return ct_object, lr

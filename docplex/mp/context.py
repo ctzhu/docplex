@@ -19,7 +19,6 @@ Instead, you should obtain a Context by the following ways:
 
     * cplex_config.py
     * cplex_config_<hostname>.py
-    * docloud_config.py
 
 When obtaining a Context with make_default_context(), the PYTHONPATH is
 searched for the configuration files and read.
@@ -27,8 +26,6 @@ searched for the configuration files and read.
 Configuration files are evaluated with a `context` object in their
 scope, and you set values from this context::
 
-    context.solver.docloud.url = 'https://your.application.url.ibm.com'
-    context.solver.docloud.key = 'This is an api_key'
     context.cplex_parameters.emphasis.memory = 1
     context.cplex_parameters.emphasis.mip = 2
 '''
@@ -340,23 +337,6 @@ class Context(BaseContext):
             docplex.mp.progress.KpiFilterLevel or a string representation of
             one of the values of this enum (Unfiltered, FilterObjectiveAndBound,
             FilterObjective)
-        solver.docloud: The parent node for attributes controlling the solve on Decision Optimization on Cloud.
-        solver.docloud.url: The DOcplexcloud service URL.
-        solver.docloud.key: The DOcplexcloud service API key.
-        solver.docloud.run_deterministic: Specific engine parameters are uploaded to keep the
-            run deterministic.
-        solver.docloud.verbose: Makes the connector verbose.
-        solver.docloud.timeout: The timeout for requests.
-        solver.docloud.waittime: The wait time to wait for jobs to finish.
-        solver.docloud.verify: If True, verifies SSL certificates.
-        solver.docloud.log_requests: If True, the REST requests are logged.
-        solver.docloud.log_poll_interval: The interval for log polling.
-        solver.docloud.progress_poll_interval: The interval for progress polling.
-        solver.docloud.exchange_format: The exchange format to use.
-            When setting the format, you can use the following strings: "lp".
-            When getting the format, the property type is
-            `docplex.mp.format.ExchangeFormat`.
-        solver.docloud.job_parameters: dict of job parameters passed to DOCplexcloud.
     """
 
     def __init__(self, **kwargs):
@@ -370,7 +350,7 @@ class Context(BaseContext):
         if 'solver_context' in kwargs:
             solver_context = kwargs.pop('solver_context')
         else:
-            solver_context = SolverContext(docloud=create_default_docloud_context())
+            solver_context = SolverContext() #create_default_auto_publish_context(defaults=False) #Context.make_default_context()
 
         super(Context, self).__init__(solver=solver_context,
                                       cos=BaseContext(),
@@ -420,7 +400,6 @@ class Context(BaseContext):
 
                 * cplex_config.py
                 * cplex_config_<hostname>.py
-                * docloud_config.py
 
         Args:
             file_list: The list of config files to read.
@@ -500,12 +479,8 @@ class Context(BaseContext):
             - cplex_parameters: A set of CPLEX parameters to use instead of the parameters defined as ``context.cplex_parameters``.
             - agent: Changes the ``context.solver.agent`` parameter.
                 Supported agents include:
-
-                - ``docloud``: forces the solve operation to use DOcplexcloud
                 - ``local``: forces the solve operation to use native CPLEX
 
-            - url: Overwrites the URL of the DOcplexcloud service defined by ``context.solver.docloud.url``.
-            - key: Overwrites the authentication key of the DOcplexcloud service defined by ``context.solver.docloud.key``.
             - log_output: if ``True``, solver logs are output to stdout.
                 If this is a stream, solver logs are output to that stream object.
                 Overwrites the ``context.solver.log_output`` parameter.
@@ -545,25 +520,15 @@ class Context(BaseContext):
                 docplex_fatal('Expecting CPLEX parameters or dict, got: {0!r}'.format(arg_params))
 
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
-        if k == 'docloud_context':
-            warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
-            self.solver.docloud = value
-        elif k == 'cplex_parameters':
+        if k == 'cplex_parameters':
             if isinstance(value, RootParameterGroup):
                 self.cplex_parameters = value
             else:
                 self.update_cplex_parameters(value)
-
-        elif k == 'url':
-            self.solver.docloud.url = value
-        elif k == 'api_key' or k == 'key':
-            self.solver.docloud.key = value
         elif k == 'log_output':
             self.solver.log_output = value
         elif k == 'override':
             self.update_from_list(value.items())
-        elif k == 'proxies':
-            self.solver.docloud.proxies = value
         elif k == '_env':
             # do nothing this is just here to avoid creating too many envs
             pass
@@ -592,7 +557,6 @@ class Context(BaseContext):
 
                 * cplex_config.py
                 * cplex_config_<hostname>.py
-                * docloud_config.py
 
         Args:
             file_list: The list of config files to read.
@@ -604,8 +568,7 @@ class Context(BaseContext):
         if file_list is None:
             file_list = []
             targets = ['cplex_config.py',
-                       'cplex_config_{0}.py'.format(socket.gethostname()),
-                       'docloud_config.py'
+                       'cplex_config_{0}.py'.format(socket.gethostname())
                        ]
             for target in targets:
                 if isabs(target) and isfile(target) and target not in file_list:
@@ -674,48 +637,6 @@ def create_default_auto_publish_context(defaults=True):
     return auto_publish
 
 
-def create_default_docloud_context():
-    # for internal use.
-    # Returns a context to use as the context.solver.docloud member.
-    #
-    # This is a Context with predefined fields.
-    #
-    dctx = BaseContext()
-    # There'se a bunch of properties defined so that we can set
-    # any values
-    dctx.url = None
-    dctx.key = None
-    dctx.run_deterministic = False
-    dctx.verbose = False
-    dctx.timeout = None
-    dctx.waittime = None
-    dctx.verify = None  # default is None so that we use defaults
-    dctx.log_requests = None
-    dctx.exchange_format = None
-    dctx.debug_dump = None
-    dctx.debug_dump_dir = None
-    dctx.log_poll_interval = None
-    dctx.progress_poll_interval = None
-    dctx.verbose_progress_logger = None
-    dctx.delete_job = True
-    # if true, download job info after solve() has finished and fire
-    # the last details as a progress_info. Mostly for debug.
-    dctx.fire_last_progress = False
-    # Mostly for debug: This callback is called when the solve is finished.
-    # It should be a method taking **kwargs. It will be called with those kwargs:
-    # - jobid: the jobid
-    # - client: the docloud client used to connect to docloud
-    # - connector: the DOcloudConnector
-    dctx.on_solve_finished_cb = None
-    # The proxies
-    dctx.proxies = None
-    # additional job parameters
-    dctx.job_parameters = None
-    # mangle names into x<...?>
-    dctx.mangle_names = False
-    return dctx
-
-
 class ContextOverride(Context):
 
     def __init__(self, initial_context):
@@ -731,10 +652,7 @@ class ContextOverride(Context):
     #     return self._solver
 
     def update_key_value(self, k, value, create_missing_nodes=False, warn=True):
-        if k == 'docloud_context':
-            warnings.warn('docloud_context is deprecated, use context.solver.docloud instead')
-            self.solver.docloud = value
-        elif k == 'cplex_parameters':
+        if k == 'cplex_parameters':
             if isinstance(value, RootParameterGroup):
                 self.cplex_parameters = value
             else:
@@ -752,17 +670,10 @@ class ContextOverride(Context):
                 pass
             if time_limit_failed:
                 print("Invalid time limit: {0!r} - ignored".format(value))
-
-        elif k == 'url':
-            self.solver.docloud.url = value
-        elif k == 'api_key' or k == 'key':
-            self.solver.docloud.key = value
         elif k == 'log_output':
             self.solver.log_output = value
         elif k == 'override':
             self.update_from_list(value.items())
-        elif k == 'proxies':
-            self.solver.docloud.proxies = value
         elif k == '_env':
             # do nothing this is just here to avoid creating too many envs
             pass

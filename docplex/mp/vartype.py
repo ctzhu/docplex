@@ -28,11 +28,12 @@ class VarType(object):
     def cplex_typecode(self):
         """ This property returns the CPLEX type code for this type.
         Possible values are:
-            'B' for binary type
-            'I' for integer type
-            'C' for continuous type
-            'S' for semicontinuous type
-            'N' for semiinteger type
+        
+            - 'B' for binary type
+            - 'I' for integer type
+            - 'C' for continuous type
+            - 'S' for semicontinuous type
+            - 'N' for semiinteger type
 
         :return: a one-letter string.
         """

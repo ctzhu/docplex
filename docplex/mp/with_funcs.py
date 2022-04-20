@@ -28,7 +28,7 @@ def model_parameters(mdl, temp_parameters):
     :return: the same model, with overridden parameters.
 
     See Also:
-        - :func:`docplex.mp.params.Parameter.qualified_name'
+        - :func:`docplex.mp.params.Parameter.qualified_name`
 
     *New in version 2.21*
     """
@@ -65,8 +65,9 @@ def model_objective(mdl, temp_obj, temp_sense=None):
 
     :param mdl: an instance of `:class:Model`.
     :param temp_obj: an expression.
-    :param temp_sense: an optional objective sense to override thg model's. Default is None (keep same objective).
-        Accepts either an instance of enumerated value `:class:docplex.mp.constants.ObjectiveSensea string 'min' or 'max'.
+    :param temp_sense: an optional objective sense to override the model's. Default is None (keep same objective).
+        Accepts either an instance of enumerated value `:class:docplex.mp.constants.ObjectiveSense` or a string
+        'min' or 'max'.
     :return: the same model, with overridden objective.
 
     *New in version 2.21*

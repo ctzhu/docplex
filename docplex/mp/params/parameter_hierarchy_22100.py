@@ -131,7 +131,8 @@ def _group_mip_cuts_make(pgroup):
 # generating code for group: MIP_Limits
 def _group_mip_limits_params(pgroup):
     return dict(aggforcut=IntParameter(pgroup, "aggforcut", "CPX_PARAM_AGGCUTLIM", 2054, "constraint aggregation limit for cut generation", default_value=3, min_value=0, max_value=2100000000),
-                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1, max_value=12),
+                auxrootthreads=IntParameter(pgroup, "auxrootthreads", "CPX_PARAM_AUXROOTTHREADS", 2139, "number of threads to use for auxiliary root tasks", default_value=0, min_value=-1, max_value=8),
+                lowerobjstop=NumParameter(pgroup, "lowerobjstop", "CPX_PARAM_LOWEROBJSTOP", 2233, "Lower limit on the objective before triggering the end of a minimization MIP", default_value=-1e+75, min_value=-1e+75, max_value=1e+75),
                 cutpasses=IntParameter(pgroup, "cutpasses", "CPX_PARAM_CUTPASS", 2056, "number of cutting plane passes", default_value=0, min_value=-1, max_value=9223372036800000000),
                 cutsfactor=NumParameter(pgroup, "cutsfactor", "CPX_PARAM_CUTSFACTOR", 2033, "rows multiplier factor to limit cuts", default_value=-1.0, min_value=-1.0, max_value=1e+75),
                 eachcutlimit=IntParameter(pgroup, "eachcutlimit", "CPX_PARAM_EACHCUTLIM", 2102, "limit on number of cuts for each type per pass", default_value=2100000000, min_value=0, max_value=2100000000),
@@ -145,7 +146,8 @@ def _group_mip_limits_params(pgroup):
                 solutions=IntParameter(pgroup, "solutions", "CPX_PARAM_INTSOLLIM", 2015, "mixed integer solutions limit", default_value=9223372036800000000, min_value=1, max_value=9223372036800000000),
                 strongcand=IntParameter(pgroup, "strongcand", "CPX_PARAM_STRONGCANDLIM", 2045, "strong branching candidate limit", default_value=10, min_value=1, max_value=2100000000),
                 strongit=IntParameter(pgroup, "strongit", "CPX_PARAM_STRONGITLIM", 2046, "strong branching iteration limit", default_value=0, min_value=0, max_value=9223372036800000000),
-                treememory=NumParameter(pgroup, "treememory", "CPX_PARAM_TRELIM", 2027, "upper limit on size of tree in megabytes", default_value=1e+75, min_value=0.0, max_value=1e+75)
+                treememory=NumParameter(pgroup, "treememory", "CPX_PARAM_TRELIM", 2027, "upper limit on size of tree in megabytes", default_value=1e+75, min_value=0.0, max_value=1e+75),
+                upperobjstop=NumParameter(pgroup, "upperobjstop", "CPX_PARAM_UPPEROBJSTOP", 2234, "Upper limit on the objective before triggering the end of a maximization MIP", default_value=1e+75, min_value=-1e+75, max_value=1e+75)
                 )
 
 
@@ -477,8 +479,8 @@ def _group_cpxparam_subgroups():
                 tune=_group_tune_make)
 
 
-def make_root_params_21100():
-    proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "21.1.0.0")
+def make_root_params_22100():
+    proot = RootParameterGroup.make("parameters", _group_cpxparam_params, _group_cpxparam_subgroups, "22.1.0.0")
     # -- set synchronous params
     proot.read.datacheck._synchronous = True
     return proot

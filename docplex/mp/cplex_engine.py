@@ -1863,19 +1863,30 @@ class CplexEngine(IEngine):
         lct_int_stats = [stat.value for stat in lct_stats]
         cpx.start.set_start(dvar_int_stats, lct_int_stats, col_primal=[], col_dual=[], row_primal=[], row_dual=[])
 
-    def build_multiobj_paramsets(self, mdl, lex_timelimits, lex_mipgaps):
+    def _create_parameter_sets(self, mdl):
+        self._check_multi_objective_support()
         cpx = self._cplex
-        paramsets = None
-        if lex_timelimits is not None or lex_mipgaps is not None:
-            self._check_multi_objective_support()
+        if self._has_multi_objective(cpx):
+            cpx.create_parameter_set()
+            parameter_sets = [cpx.create_parameter_set() for objidx in range(cpx.multiobj.get_num())]
+            return parameter_sets
+        else:
+            mdl.fatal("parameterset are supported only with multi objectives optimization")
 
+    def _build_multiobj_paramsets(self, mdl, lex_timelimits, lex_mipgaps):
+        self._check_multi_objective_support()
+        cpx = self._cplex
+        if not self._has_multi_objective(cpx):
+            mdl.fatal("parameterset are supported only with multi objectives optimization")
+        if lex_timelimits is not None or lex_mipgaps is not None:
+            #paramsets = None
             # Get list of priorities in decreasing order
             decreasing_ordered_prio = self._get_priorities_list_in_decreasing_order()
 
             if lex_timelimits is not None and len(lex_timelimits) != len(decreasing_ordered_prio):
-                mdl.fatal("lex_timelimits list length does not match number of priorities for multiobjective solve")
+                mdl.fatal(f"lex_timelimits list length does not match number of priorities for multiobjective solve: {len(lex_timelimits)}/{len(decreasing_ordered_prio)}")
             if lex_mipgaps is not None and len(lex_mipgaps) != len(decreasing_ordered_prio):
-                mdl.fatal("lex_mipgaps list length does not match number of priorities for multiobjective solve")
+                mdl.fatal(f"lex_mipgaps list length does not match number of priorities for multiobjective solve: {len(lex_mipgaps)}/{len(decreasing_ordered_prio)}")
             paramsets = []
             for _ in decreasing_ordered_prio:
                 paramset = cpx.create_parameter_set()
@@ -1888,7 +1899,9 @@ class CplexEngine(IEngine):
                     paramsets[paramIdx].add(self.cpx_cst.CPX_PARAM_EPGAP, mipgap)
             # If there is a single priority level, timelimit and mipgaps are handled at the cplex_parameters level
             paramsets = paramsets if len(paramsets) > 1 else None
-        return paramsets
+            return paramsets
+        else:
+            return self._create_parameter_sets(mdl=mdl)
 
     def sync_cplex(self, mdl=None):
         mdl_ = self._model if mdl is None else mdl
@@ -1923,9 +1936,9 @@ class CplexEngine(IEngine):
         nb_columns = 0
         cpx_probtype = None
 
-        lex_mipstart = kwargs.pop('_lex_mipstart', None)
-        lex_mipgaps = kwargs.pop('lex_mipgaps', None)
-        lex_timelimits = kwargs.pop('lex_timelimits', None)
+        lex_mipstart = kwargs.pop('lex_mipstart', None)
+
+        parameter_sets = kwargs.pop('parameter_sets', None)
         clean_before_solve = kwargs.pop('clean_before_solve', False)
 
         # print("--> starting CPLEX solve #", self.__solveCount)
@@ -1960,10 +1973,8 @@ class CplexEngine(IEngine):
             cpx_probtype = cpx.problem_type[cpx.get_problem_type()]
             nb_iterations, nb_nodes_processed = 0, 0
 
-            # Handle lex_timelimits list
-            paramsets = self.build_multiobj_paramsets(mdl, lex_timelimits, lex_mipgaps)
-            if paramsets:
-                cpx.solve(paramsets=paramsets)
+            if parameter_sets:
+                cpx.solve(paramsets=parameter_sets)
             else:
                 cpx.solve()
 

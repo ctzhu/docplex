@@ -181,7 +181,7 @@ class LinearRelaxer(object):
             else:
                 return None
         else:
-            # force cplex if any, on docloud nothing to do...
+            # force cplex if any...
             cpx = relaxed_model.get_cplex(do_raise=False)
             if cpx:
                 # force type to LP

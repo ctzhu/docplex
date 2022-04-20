@@ -250,7 +250,7 @@ class QuadExpr(_SubscriptionMixin, Expr):
             Calling this method on (x^2 +2x+1) will return one pair (x, 2).
 
         See Also:
-            :function:`docplex.mp.linear.LinearExpr.iter_terms`
+            :func:`docplex.mp.linear.LinearExpr.iter_terms`
         """
         return self._linexpr.iter_terms()
 
@@ -348,18 +348,30 @@ class QuadExpr(_SubscriptionMixin, Expr):
             self.model._typecheck_var(var2)
         self._set_quadratic_coefficient(var1, var2, k)
 
-    def _set_quadratic_coefficient(self, var1, var2, k):
+    def _set_quadratic_coefficient_internal(self, var1, var2, k):
         vp = VarPair(var1, var2 or var1)
-        event = UpdateEvent.QuadExprGlobal
         self_quadterms = self._quadterms
         if not k:
             if vp in self_quadterms:
                 del self_quadterms[vp]
+                return True
             else:
-                event = UpdateEvent.NoOp
+                return False
         else:
             self_quadterms[vp] = k
-        self.notify_modified(event)
+            return True
+
+    def _set_quadratic_coefficient(self, var1, var2, k):
+        if self._set_quadratic_coefficient_internal(var1, var2, k):
+            self.notify_modified(event=UpdateEvent.QuadExprGlobal)
+
+    def _set_quadratic_coefficients(self, var_coef_seq):
+        nb_changes = 0
+        for (var1, var2), k in var_coef_seq:
+            if self._set_quadratic_coefficient_internal(var1, var2, k):
+                nb_changes += 1
+        if nb_changes:
+            self.notify_modified(event=UpdateEvent.QuadExprGlobal)
 
     # ---
     def equals(self, other):

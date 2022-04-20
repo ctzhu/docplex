@@ -5,15 +5,12 @@
 # --------------------------------------------------------------------------
 
 # gendoc: ignore
-from docplex.mp.params.parameter_hierarchy_12620 import make_root_params_12620
-from docplex.mp.params.parameter_hierarchy_12630 import make_root_params_12630
-from docplex.mp.params.parameter_hierarchy_12700 import make_root_params_12700
-from docplex.mp.params.parameter_hierarchy_12710 import make_root_params_12710
+
 from docplex.mp.params.parameter_hierarchy_12800 import make_root_params_12800
 from docplex.mp.params.parameter_hierarchy_12900 import make_root_params_12900
 from docplex.mp.params.parameter_hierarchy_121000 import make_root_params_121000
 from docplex.mp.params.parameter_hierarchy_20100 import make_root_params_20100
-from docplex.mp.params.parameter_hierarchy_21100 import make_root_params_21100
+from docplex.mp.params.parameter_hierarchy_22100 import make_root_params_22100
 
 
 def _make_default_parameters():
@@ -36,8 +33,8 @@ def get_params_from_cplex_version(cpx_version):
         return make_root_params_121000()
     elif cpx_version.startswith("20.1.0"):
         return make_root_params_20100()
-    elif cpx_version.startswith("21.1.0"):
-        return make_root_params_21100()
+    elif cpx_version.startswith("22.1.0"):
+        return make_root_params_22100()
     else:
         params = _make_default_parameters()
         print(f"-- cannot find parameters matching version: {cpx_version}, using: {params.cplex_version}")

@@ -124,20 +124,22 @@ class RelaxationMode(Enum):
     searches for an optimal solution while keeping the relaxation at the minimal value found in phase 1.
 
     Enumerated values work in pairs: MinXXX, OptXXX
+    
         - MinXXX values stop at phase 1, they look for a feasible soluion, they do not
-            optimize the objective.
+          optimize the objective.
         - OptXXX run the two phases, looking for an optimal relaxed solution. They take longer.
 
     The metric used to evaluate the quality of the relaxation is determined by the XXX part of
     the name. There are three metrics:
-      - Inf (MinInf, OptInf) minimizes the number of relaxed constraints.  This metric
-        will prefer to relax one constraint, even with a huge slack, instead of two.
-      - Sum (MinSum, OptSum): minimizes the sum of relaxations.
-      - Quand (MinQuad, OptQuad): minimizes the sum of squares of relaxations.
-        This metric is the most expensive in computation time,
-        but avoids huge discrepancies between relaxations:
-        two constraints with relaxations of 2,2 will have a better quality (2^2 + 2^2 = 8)
-        than relaxations of 3,1 (3^2 +1 = 10).
+    
+        - Inf (MinInf, OptInf) minimizes the number of relaxed constraints.  This metric
+          will prefer to relax one constraint, even with a huge slack, instead of two.
+        - Sum (MinSum, OptSum): minimizes the sum of relaxations.
+        - Quand (MinQuad, OptQuad): minimizes the sum of squares of relaxations.
+          This metric is the most expensive in computation time,
+          but avoids huge discrepancies between relaxations:
+          two constraints with relaxations of 2,2 will have a better quality (2^2 + 2^2 = 8)
+          than relaxations of 3,1 (3^2 +1 = 10).
     """
 
     MinSum, OptSum, MinInf, OptInf, MinQuad, OptQuad = range(6)

@@ -573,7 +573,7 @@ class SolveSolution(object):
         :param var_dict: a dictionary of decision variables.
         :param keep_zeros: an optional flag to keep zero values (default is True)
         :param precision: an optional precision, used to filter small non-zero values.
-        The default is 1e-6.
+             The default is 1e-6.
 
         :return: A dictionary from variable keys to solution values (floats).
         """
@@ -721,7 +721,7 @@ class SolveSolution(object):
 
         :param tolerance: a float number used to check satisfaction; default is 1e-6.
         :param silent: optional flag. If False, prints which variable (or constraint)
-          causes the solution to be invalid. default is False(prints nothing.
+          causes the solution to be invalid. default is True.
 
         :return: True if the solution is valid, within the tolerance value.
 

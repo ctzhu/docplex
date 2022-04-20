@@ -11,6 +11,11 @@ import tempfile
 import sys
 from itertools import chain, repeat
 
+try:
+    from collections.abc import Callable
+except ImportError:
+    from collections import Callable  # @UnresolvedImport
+
 __int_types = {int}
 __float_types = {float}
 __numpy_ndslot_type = None
@@ -213,11 +218,6 @@ def is_iterator(e):
 
 
 def is_function(e):
-    import platform
-    if platform.python_version() >= '3.7':
-        from collections.abc import Callable
-    else:  # pragma: no cover
-        from collections import Callable  # @UnresolvedImport
     return isinstance(e, Callable)
 
 

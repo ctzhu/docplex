@@ -421,24 +421,6 @@ class ConflictRefiner(PublishResultAsDf, object):
                 mdl.context.solver.log_output = saved_context_log_output
 
     # noinspection PyMethodMayBeStatic
-    def _refine_conflict_cloud(self, mdl, context, preferences=None, groups=None):
-        # INTERNAL
-        docloud_context = context.solver.docloud
-        parameters = context.cplex_parameters
-        # see if we can reuse the local docloud engine if any?
-        docloud_engine = mdl._engine_factory.new_docloud_engine(model=mdl,
-                                                                docloud_context=docloud_context,
-                                                                log_output=context.solver.log_output_as_stream)
-
-        mdl.notify_start_solve()
-        mdl._fire_start_solve_listeners()
-        conflict = docloud_engine.refine_conflict(mdl, preferences=preferences, groups=groups, parameters=parameters)
-
-        mdl._fire_end_solve_listeners(conflict is not None, None)
-        #
-        return conflict
-
-    # noinspection PyMethodMayBeStatic
     def _refine_conflict_local(self, mdl, context, preferences=None, groups=None):
         parameters = context.cplex_parameters
         self_engine = mdl.get_engine()

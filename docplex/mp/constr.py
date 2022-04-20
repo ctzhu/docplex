@@ -301,6 +301,12 @@ class BinaryConstraint(AbstractConstraint):
         left_cst = self._left_expr.get_constant()
         return float(right_cst - left_cst)
 
+    @property
+    def cplex_net_rhs(self):
+        # returns the net constant (rhs.constant - lhs.constant)
+        # converted to float (no numpy floats)
+        return self.cplex_num_rhs()
+
     def __repr__(self):
         classname = self.__class__.__name__
         user_name = self.safe_name
@@ -444,6 +450,10 @@ class BinaryConstraint(AbstractConstraint):
     def is_discrete(self):
         return self.get_left_expr().is_discrete() and self.get_right_expr().is_discrete()
 
+    @property
+    def sense_string(self):
+        return self._ctsense.name
+
 
 class LinearConstraint(BinaryConstraint, LinearOperand):
     """ The class that models all constraints of the form `<expr1> <OP> <expr2>`,
@@ -534,10 +544,6 @@ class LinearConstraint(BinaryConstraint, LinearOperand):
 
     def set_sense(self, new_sense):
         self.get_linear_factory().set_linear_constraint_sense(self, new_sense)
-
-    @property
-    def sense_string(self):
-        return self.sense.name
 
     # compatibility
     @property

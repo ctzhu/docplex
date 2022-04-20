@@ -225,7 +225,7 @@ class ProgressListener(_AbstractProgressListener):
 
         Note:
             if you need to access runtime information (time, gap, number of nodes), use
-            :function:`SolutionListener.current_progress_data`, which contains the latest
+            :func:`SolutionListener.current_progress_data`, which contains the latest
             priogress information as a tuple.
         """
         pass  # pragma: no cover

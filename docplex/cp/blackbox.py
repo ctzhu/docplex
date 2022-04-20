@@ -10,6 +10,8 @@ A blackbox expression is a numerical expression for which the analytical form is
 formulated using CP Optimizer's classical expressions.
 A blackbox expression is specified by giving a function that evaluates the expression at given points.
 
+This feature is accessible from Python only for CPLEX Studio versions 22.1 and later.
+
 
 Defining a blackbox function
 ----------------------------
@@ -52,30 +54,57 @@ Evaluating a blackbox function
 
 The implementation of the function is a function or a lambda expression that takes as many parameters as declared
 in the list of argument types.
-Each argument value is fixed and is implemented, for each argument type, as described below:
+If the blackbox definition parameter *args_with_vars* is not set to True (default value is False), the
+arguments are limited to their values.
+If it is set to True, then the argument is an object of class CpoXxxVarSolution every time the argument type explicitly
+refers to a variable. This allows to access to the model variable, that constitute the argument, if available.
+In such case:
 
- * 'Int': integer constant
- * 'IntVar': integer constant
- * 'IntExpr': integer constant
- * 'Float': float constant
- * 'FloatExpr': float constant
- * 'IntervalVar': interval variable solution value, named tuple containing start, end and size of the variable,
- * 'SequenceVar': sequence variable solution value, ordered list of interval variables in the sequence,
- * 'IntArray': list of integer constants
- * 'IntVarArray': list of integer constants
- * 'IntExprArray': list of integer constants
- * 'FloatArray': list of float constants
- * 'FloatExprArray': list of float constants
- * 'IntervalVarArray': list of interval variable solution value
- * 'SequenceVarArray': list of sequence variable solution value
+ * argument variable can be accessed with method *get_var()*,
+ * argument value can be accessed with method *get_value()*.
+
+Here is what is given as argument value for each argument type if *args_with_vars* is set to False (default):
+
+ * 'Int': integer constant.
+ * 'IntVar': integer constant.
+ * 'IntExpr': integer constant.
+ * 'Float': float constant.
+ * 'FloatExpr': float constant.
+ * 'IntervalVar': interval variable solution value, named tuple containing start, end and size of the variable.
+ * 'SequenceVar': sequence variable solution value, ordered list of model interval variables in the sequence.
+ * 'IntArray': list of integer constants.
+ * 'IntVarArray': list of integer constants.
+ * 'IntExprArray': list of integer constants.
+ * 'FloatArray': list of float constants.
+ * 'FloatExprArray': list of float constants.
+ * 'IntervalVarArray': list of interval variable solution value (see 'IntervalVar').
+ * 'SequenceVarArray': list of sequence variable solution value (see 'SequenceVar').
+
+Here is what is given as argument value for each argument type if *args_with_vars* is explicitly set to True:
+
+ * 'Int': integer constant.
+ * 'IntVar': object of :class:`~docplex.cp.solution.CpoIntVarSolution`.
+ * 'IntExpr': integer constant.
+ * 'Float': float constant.
+ * 'FloatExpr': float constant.
+ * 'IntervalVar': object of :class:`~docplex.cp.solution.CpoIntervalVarSolution`.
+ * 'SequenceVar': object of :class:`~docplex.cp.solution.CpoSequenceVarSolution`.
+ * 'IntArray': list of integer constants.
+ * 'IntVarArray': list of objects of :class:`~docplex.cp.solution.CpoIntVarSolution`.
+ * 'IntExprArray': list of integer constants.
+ * 'FloatArray': list of float constants.
+ * 'FloatExprArray': list of float constants.
+ * 'IntervalVarArray': list of objects of class :class:`~docplex.cp.solution.CpoIntervalVarSolution`.
+ * 'SequenceVarArray': list of objects of class :class:`~docplex.cp.solution.CpoSequenceVarSolution`, with value as list of objects of class :class:`~docplex.cp.expression.CpoSequenceVar`.
 
 The function may return:
 
  * one or several float results in a list,
  * a single number value, automatically converted in a list with this single value,
  * a boolean value, converted as an integer 0 or 1 put in a single value list,
- * *None*, if the function has no solution for these arguments,
- * an exception, if an error occured during the evaluation.
+ * *None*, if the function has no solution for these arguments.
+
+If an error occurs during the function evaluation, the exception is forwarded to the solver that will fail with this error.
 
 If an exception is thrown, it is propagated to the solver that rethrow an exception to exit from the solve.
 
@@ -189,21 +218,23 @@ class CpoBlackboxFunction(object):
      * 'IntervalVarArray' or :const:`~docplex.cp.catalog.Type_IntervalVarArray`
      * 'SequenceVarArray' or :const:`~docplex.cp.catalog.Type_SequenceVarArray`
     """
-    __slots__ = ('name',         # Name of the blackbox function, None for auto-allocation
-                 'dimension',    # Number of result values
-                 'argtypes',     # List of argument types
-                 'atypes_given', # Indicates that argument types where given at function declaration
-                 'impl',         # Implementation of the function
-                 'bounds_param', # Name of the bounds parameter
-                 'cachesize',    # Size of the function call cache
-                 'globalcache',  # Global cache indicator
-                 'operation',    # Corresponding operation descriptor
-                 'eval_count',   # Number of evaluation resuests
-                 'auto',         # Auto-created blackbox (for smart parsing)
-                 'eval_mutex',   # Lock to ensure mutual exclusion of function evaluation
+    __slots__ = ('name',           # Name of the blackbox function, None for auto-allocation
+                 'dimension',      # Number of result values
+                 'argtypes',       # List of argument types
+                 'atypes_given',   # Indicates that argument types where given at function declaration
+                 'impl',           # Implementation of the function
+                 'bounds_param',   # Name of the bounds parameter
+                 'args_with_vars', # Indicates to include variables in arguments
+                 'cachesize',      # Size of the function call cache
+                 'globalcache',    # Global cache indicator
+                 'operation',      # Corresponding operation descriptor
+                 'eval_count',     # Number of evaluation resuests
+                 'auto',           # Auto-created blackbox (for smart parsing)
+                 'eval_mutex',     # Lock to ensure mutual exclusion of function evaluation
                 )
 
-    def __init__(self, impl=None, dimension=1, argtypes=None, name=None, parallel=False, bounds_parameter=None, cachesize=-1, globalcache=False):
+    def __init__(self, impl=None, dimension=1, argtypes=None, name=None, parallel=False, bounds_parameter=None,
+                 args_with_vars=False, cachesize=-1, globalcache=False):
         """ **Constructor**
 
         The list of function argument types is optional.
@@ -215,6 +246,11 @@ class CpoBlackboxFunction(object):
         to register them in the model prior to parse it.
         However, the model will not be able to be solved.
 
+        The name of the function is optional.
+        If not given, a name is automatically allocated when solving the model.
+        If given, the name of the function must be a symbol (only letters and digits, starting by a letter)
+        that is not already used as the name of an existing modeling function.
+
         Bound parameter is optional.
         If defined, the known bounds of the function result is passed to the function implementation using this named
         parameter.
@@ -222,18 +258,17 @@ class CpoBlackboxFunction(object):
         Otherwise, the bounds is a list of tuples, one for each returned value.
         If unknown, bounds are set to -inf or inf (float("inf") in Python).
 
-        The name of the function is optional.
-        If not given, a name is automatically allocated when solving the model.
-        If given, the name of the function must be a symbol (only letters and digits, starting by a letter)
-        that is not already used as the name of an existing modeling function.
+        By default, arguments passed when evaluating the function are only values.
+        If the parameter *include_vars* is set to True, when arguments are variables, an object of type
+        CpoXxxVarSolution, that include reference to the model variable, is used instead.
 
         A cache can be used by the solver to avoid calling the blackbox function multiple times with the same values.
         By default (cachesize=-1), the size of the cache is automatically determined by the solver, but it can be
         forced to a given value, or zero for no cache at all.
 
-        By default, this cache local to each call instance of the blackbox function in the model, in case the evaluation
-        of the function depends on the calling context and may return different results with the same parameters
-        depending where the call is placed in the model.
+        By default, this cache is local to each call instance of the blackbox function in the model, in case the
+        evaluation of the function depends on the calling context and may return different results with the same
+        parameters depending where the call is placed in the model.
         The parameter *globalcache* can be set to *True* if the same cache can be used for all call instances.
 
         Args:
@@ -245,6 +280,8 @@ class CpoBlackboxFunction(object):
                               Default is False.
             bounds_parameter: (Optional) Name of the parameter in which known return values bounds can be set.
                               Default is None.
+            args_with_vars:   (Optional) Enable passing an object of type CpoXxxVarSolution instead of value only.
+                              Default is False.
             cachesize:        (Optional) Indicates that the blackbox function evaluation is allowed concurrently.
                               Default value is -1, indicating that the cache is managed by the solver with default settings.
             globalcache:      (Optional) Indicates that the same cache can be used for all blackbox function call instances
@@ -256,6 +293,7 @@ class CpoBlackboxFunction(object):
             assert is_int(dimension) and dimension >= 1, "Blackbox function dimension should be greater than zero"
         self.dimension = dimension
         self.bounds_param = bounds_parameter
+        self.args_with_vars = args_with_vars
 
         # Check argument types
         if argtypes is None:

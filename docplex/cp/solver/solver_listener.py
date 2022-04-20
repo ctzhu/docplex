@@ -229,38 +229,36 @@ class LogSolverListener(CpoSolverListener):
         print(str(self.prefix) + "Solver created")
 
 
-    def start_solve(self, solver):
-        """ Notify that the solve is started.
+    def start_operation(self, solver, op):
+        """ Notify that an operation is started.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            op:     Operation that is started, in constants OPERATION_*
         """
-        print(str(self.prefix) + "Solve started")
+        print(str(self.prefix) + "Operation '{}' started".format(op))
 
 
-    def end_solve(self, solver):
-        """ Notify that the solve is ended.
+    def end_operation(self, solver, op):
+        """ Notify that an operation is terminated.
 
         Args:
             solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            op:     Operation that is terminated, in constants OPERATION_*
         """
-        print(str(self.prefix) + "Solve ended")
+        print(str(self.prefix) + "Operation '{}' terminated".format(op))
 
 
-    def result_found(self, solver, sres):
-        """ Signal that a result has been found.
-
-        This method is called every time a result is provided by the solver. The result, in particular the last one,
-        may not contain any solution. This should be checked calling method sres.is_solution().
-
-        This method replaces deprecated method solution_found() that is confusing as result may possibly
-        not contain a solution to the model.
+    def new_result(self, solver, result):
+        """ Signal that a new result has been found.
 
         Args:
-            solver: Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
-            sres:   Solve result, object of class :class:`~docplex.cp.solution.CpoSolveResult`
+            solver:  Originator CPO solver (object of class :class:`~docplex.cp.solver.solver.CpoSolver`)
+            result:  New result that has been found
         """
-        print(str(self.prefix) + "Result found")
+        print(str(self.prefix) + "New '{}' found".format(type(result).__name__))
+
+
 
 
 ###############################################################################
@@ -276,7 +274,9 @@ class AutoStopListener(CpoSolverListener):
     *New in version 2.8.*
     """
     def __init__(self, qsc_time=None, qsc_sols=None, min_sols=0, max_sols=None):
-        """ Create a new solver listener that aborts the solve if defined criteria are reached.
+        """ **Constructor**
+
+        Create a new solver listener that aborts the solve if defined criteria are reached.
 
         Args:
             min_sols: Minimun number of solutions to be found before stopping the solve
@@ -385,7 +385,9 @@ class DelayListener(CpoSolverListener):
     *New in version 2.8.*
     """
     def __init__(self, delay):
-        """ Create a new solver listener that waits a given delay after each solution.
+        """ **Constructor**
+
+        Create a new solver listener that waits a given delay after each solution.
 
         Args:
             delay: Wait delay in seconds
@@ -434,7 +436,8 @@ else:
         *New in version 2.8.*
         """
         def __init__(self, master, model, stopfun):
-            """
+            """**Constructor**
+
             Create a new solver info panel.
 
             Args:

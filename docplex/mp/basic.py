@@ -20,7 +20,7 @@ class _AbstractModelObject(metaclass=ABCMeta):
     @property
     @abstractmethod
     def model(self):  # pragma: no cover
-        raise NotImplemented
+        raise NotImplementedError
 
     def is_in_model(self, mdl):
         return self.model is mdl
@@ -343,10 +343,6 @@ class IndexableObject(ModelingObjectBase):
         raw = self._index
         return raw if raw == self._invalid_index else raw + 1
 
-    # @index.setter
-    # def index(self, idx):
-    #     self._index = idx
-
     def _set_index(self, idx):
         self._index = idx
 
@@ -369,6 +365,11 @@ class IndexableObject(ModelingObjectBase):
     @container.setter
     def container(self, ctn):
         self._model.set_var_container(self, ctn)
+
+    @property
+    @abstractmethod
+    def cplex_scope(self) -> int:
+        return -1  # crash
 
     def get_scope(self):
         try:
@@ -515,5 +516,3 @@ class Expr(ModelObject, Operand, _AbstractValuable):
         self.model.unsupported_relational_operator_error(self, "<", e)
 
 # ---
-
-

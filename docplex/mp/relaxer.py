@@ -257,7 +257,7 @@ class Relaxer(PublishResultAsDf, object):
             then HIGH will be used.
 
         See Also:
-           :class:`docplex.mp.basic.Priority`
+           :class:`docplex.mp.priority.Priority`
 
     '''
     default_precision = 1e-5
@@ -444,19 +444,8 @@ class Relaxer(PublishResultAsDf, object):
         # take into account local argument overrides
         relax_context = mdl.prepare_actual_context(**kwargs)
 
-        # forced_docloud = context_must_use_docloud(relax_context, **kwargs)
-        # have_credentials = context_has_docloud_credentials(relax_context)
         transient_engine = False
         relax_engine = mdl.get_engine()
-
-        # if forced_docloud:  # pragma: no cover
-        #     if have_credentials:
-        #         # create new docloud engine on the fly
-        #         relax_engine = mdl._new_docloud_engine(relax_context)
-        #         transient_engine = True
-        #     else:
-        #         mdl.fatal("DOcplexcloud context has no valid credentials: {0!s}",
-        #                   relax_context.solver.docloud)
 
         if temp_relax_verbose:
             print("-- starting relaxation. mode: {0!s}, precision={1}".format(used_relax_mode.name, self._precision))

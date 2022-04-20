@@ -20,7 +20,7 @@ def read(*parts):
 
 readme = read('README.rst')
 if readme is None:
-    readme = 'DOcplex 2.22'
+    readme = 'DOcplex 2.23'
 
 changelog = str(read('CHANGELOG.rst'))
 if changelog is None:
@@ -51,14 +51,14 @@ if os.path.isdir(os.path.join("docplex", "worker")):
 setup(
     name='docplex',
     packages=packages,
-    version = '2.22.213',  # replaced at build time
+    version = '2.23.222',  # replaced at build time
     description = 'The IBM Decision Optimization CPLEX Modeling for Python',
     author = 'The IBM Decision Optimization on Cloud team',
     author_email = 'dofeedback@wwpdl.vnet.ibm.com',
     long_description='%s\n' % ss,
     long_description_content_type='text/x-rst',
-    url = 'https://onboarding-oaas.docloud.ibmcloud.com/software/analytics/docloud/',
-    keywords = ['docloud', 'optimization', 'cplex', 'cpo'],
+    url = 'https://www.ibm.com/cloud/decision-optimization-for-watson-studio',
+    keywords = ['optimization', 'cplex', 'cpo'],
     license = 'Apache 2.0',
     install_requires=required,
     classifiers = ["Development Status :: 5 - Production/Stable",
@@ -78,7 +78,9 @@ setup(
                    "Programming Language :: Python",
                    "Programming Language :: Python :: 3.6",
                    "Programming Language :: Python :: 3.7",
-                   "Programming Language :: Python :: 3.8"
+                   "Programming Language :: Python :: 3.8",
+                   "Programming Language :: Python :: 3.9",
+                   "Programming Language :: Python :: 3.10"
                    ],
 )
 

@@ -419,11 +419,6 @@ class Model(object):
 
         self._engine_factory = EngineFactory(env=self_env)
 
-        if 'docloud_context' in kwargs:
-            warnings.warn(
-                "Model construction with DOcloudContext is deprecated, use initializer with docplex.mp.context.Context instead.",
-                DeprecationWarning, stacklevel=2)
-
         # maximum length for expression in str strings
         self._max_str_len = 1e+10
         self._readable_str_len = 48
@@ -983,8 +978,7 @@ class Model(object):
         :param error: A string describing how errors are handled. Accepts "raise", "warn", or "ignore"
 
         :return: A solution object, instance of :class:`SolveSolution`, built on the target model,
-        from values and variables mapped from the source model to the target model.
-
+            from values and variables mapped from the source model to the target model.
 
         *New in version 2.21*
         """
@@ -3663,11 +3657,11 @@ class Model(object):
                             pass
 
             actual_touched_scopes = set()
-            removed_ids = set()
+            #removed_ids = set()
             from collections import defaultdict
             idxs_by_scope = defaultdict(set)
             for d in cts_to_remove:
-                removed_ids.add(id(d))
+                #removed_ids.add(id(d))
                 idxs_by_scope[d.cplex_scope].add(d.index)
                 actual_touched_scopes.add(d._get_index_scope())
 
@@ -4746,10 +4740,7 @@ class Model(object):
 
         # update the context with provided kwargs
         for argname, argval in kwargs.items():
-            # skip context argname if any
-            if argname == "url":
-                pass
-            elif argname == 'clean_before_solve':
+            if argname == 'clean_before_solve':
                 pass
             elif argname != "context" and argval is not None:
                 if not cloned:
@@ -4758,6 +4749,22 @@ class Model(object):
                 context.update_key_value(argname, argval)
 
         return context
+
+    def build_multiobj_paramsets(self, timelimits = None, mipgaps = None):
+        """ Creates a sequence containing pre-filled `ParameterSet` objects to be used with multi objective optimization
+            only.
+
+        Args:
+            lex_timelimits (optional): a sequence of time limits
+            lex_mipgaps (optional): a sequence of mip gaps
+        """
+        return self.__engine._build_multiobj_paramsets(self, timelimits, mipgaps)
+
+    def create_parameter_sets(self):
+        """ Creates a sequence containing empty `ParameterSet` objects to be used with multi objective optimization
+            only.
+        """
+        return self.__engine._create_parameter_sets(self)
 
     def solve(self, **kwargs):
         """ Starts a solve operation on the model.
@@ -4786,6 +4793,8 @@ class Model(object):
             clean_before_solve (optional): a boolean (default is False).
                 Solve normally picks up where the previous solve left, but if this flag is set to ``True``,
                 a fresh solve is started, forgetting all about previous solves..
+            parameter_sets (optional) an iterable of parameterset to be used with multi objective optimization.
+                See :func:`create_parameter_sets`
 
         Returns:
             A :class:`docplex.mp.solution.SolveSolution` object if the solve operation managed to create
@@ -4805,18 +4814,8 @@ class Model(object):
         if not self.is_optimized():
             self.info("No objective to optimize - searching for a feasible solution")
 
-        lex_mipstart = kwargs.pop('_lex_mipstart', None)
-        lex_timelimits = kwargs.pop('lex_timelimits', None)
-        lex_mipgaps = kwargs.pop('lex_mipgaps', None)
+        parameter_sets = kwargs.pop('parameter_sets', None)
         context = self.prepare_actual_context(**kwargs)
-
-        if lex_timelimits is not None and len(lex_timelimits) == 1:
-            # This will be handled as a single-objective ==> set timelimit parameter
-            context.cplex_parameters.timelimit = lex_timelimits[0]
-        if lex_mipgaps is not None and len(lex_mipgaps) == 1:
-            # This will be handled as a single-objective ==> set mipgap parameter
-            context.cplex_parameters.mip.tolerances.mipgap = lex_mipgaps[0]
-
 
         # log stuff
         a_stream = context.solver.log_output_as_stream
@@ -4824,7 +4823,7 @@ class Model(object):
             if self.environment.has_cplex:
                 # take arg clean flag or this model's
                 used_clean_before_solve = kwargs.get('clean_before_solve', self.clean_before_solve)
-                return self._solve_local(context, used_clean_before_solve, lex_timelimits, lex_mipgaps)
+                return self._solve_local(context, used_clean_before_solve, parameter_sets)# lex_timelimits, lex_mipgaps)
             else:
                 return self.fatal("Cannot solve model: no CPLEX runtime found.")
 
@@ -4839,7 +4838,7 @@ class Model(object):
         if solve_details and solve_details.has_hit_limit():
             self.info("solve: {0}".format(solve_details.status))
 
-    def _solve_local(self, context, clean_before_solve=None, lex_timelimits=None, lex_mipgaps=None):
+    def _solve_local(self, context, clean_before_solve=None, parameter_sets = None):# lex_timelimits=None, lex_mipgaps=None):
         """ Starts a solve operation on the local machine.
 
         Note: If CPLEX is not available, an error is raised.
@@ -4864,8 +4863,7 @@ class Model(object):
             new_solution = self_engine.solve(self,
                                              parameters=used_parameters,
                                              clean_before_solve=clean_before_solve,
-                                             lex_timelimits=lex_timelimits,
-                                             lex_mipgaps=lex_mipgaps)
+                                             parameter_sets = parameter_sets)
 
             # store solve status as returned by the engine.
             engine_status = self_engine.get_solve_status()
@@ -4921,57 +4919,6 @@ class Model(object):
     def job_solve_status(self):
         # INTERNAL WML
         return self._last_solve_status
-
-
-    def _solve_cloud_internal(self, context, **kwargs):
-        from docplex.mp.solve_env import DocloudSolveEnv
-        warnings.warn("Model solving on Docplexcloud is deprecated", DeprecationWarning)
-
-        def _new_docloud_engine(mdl, ctx):
-            return mdl._engine_factory.new_docloud_engine(model=mdl,
-                                                           docloud_context=ctx.solver.docloud,
-                                                           log_output=ctx.solver.log_output_as_stream)
-
-        lex_mipstart = kwargs.get('lex_mipstart')
-
-        cloud_solve_env = DocloudSolveEnv(self)
-        parameters_to_use = cloud_solve_env.before_solve(context)
-
-        # see if we can reuse the local docloud engine if any?
-        docloud_engine = _new_docloud_engine(self, context)
-        new_solution = docloud_engine.solve(self, parameters=parameters_to_use, lex_mipstart=lex_mipstart)
-        self._set_solution(new_solution)
-        cloud_solve_env.after_solve(context, new_solution, docloud_engine)
-        return new_solution
-
-    def _solve_cloud(self, context=None):
-        from docplex.mp.context import has_credentials
-        # Starts execution of the model on the cloud.
-        #
-        # This method accepts a context (an instance of Context) to be used when
-        # solving on the cloud. If the context argument is None or invalid, then it will
-        # use the model's own instance of Context, set at model creation time.
-        #
-        # Note:
-        #    This method will always solve the model on the cloud, whether or not CPLEX
-        #    is available on the local machine.
-        #
-        # Args:
-        #    context: An optional context to use on the cloud. If None, uses the model's Context instance, if any.
-        #
-        # :returns: A :class:`docplex.mp.solution.SolveSolution` object if the solve operation succeeded, else None.
-        if not context:
-            if self.context.solver.docloud:
-                if self.__engine.name == 'docloud':
-                    return self.solve()
-                else:
-                    return self._solve_cloud_internal(self.context)
-            else:
-                self.fatal("context is None: cannot solve on the cloud")
-        elif has_credentials(context.solver.docloud):
-            return self._solve_cloud_internal(context)
-        else:
-            self.fatal("DOcplexcloud context has no valid credentials: {0!s}", context.solver.docloud)
 
     def notify_start_solve(self):
         # INTERNAL
@@ -5165,7 +5112,7 @@ class Model(object):
                     m.context.cplex_parameters.print_information()
                 # ---
                 if current_sol and pass_count > 1:
-                    solve_kwargs['_lex_mipstart'] = current_sol
+                    solve_kwargs['lex_mipstart'] = current_sol
 
                 current_sol = m.solve(**solve_kwargs)
                 # restore params if need be

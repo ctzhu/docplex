@@ -284,9 +284,10 @@ class CpoIntVarSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoIntVar`.
+                   None if unknown.
             value: Variable value, or domain if not completely instantiated
         """
-        assert isinstance(expr, CpoIntVar), "Expression 'expr' should be a CpoIntVar expression"
+        assert (expr is None)  or isinstance(expr, CpoIntVar), "Expression 'expr' should be a CpoIntVar expression"
         super(CpoIntVarSolution, self).__init__(expr)
         self.value = _check_arg_domain(value, 'value')
 
@@ -359,9 +360,10 @@ class CpoFloatVarSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoFloatVar`.
+                   None if unknown.
             value: Variable value, or domain if not completely instantiated
         """
-        assert isinstance(expr, CpoFloatVar), "Expression 'expr' should be a CpoIntVar expression"
+        assert (expr is None)  or isinstance(expr, CpoFloatVar), "Expression 'expr' should be a CpoIntVar expression"
         super(CpoFloatVarSolution, self).__init__(expr)
         self.value = value
 
@@ -423,6 +425,7 @@ class CpoIntervalVarSolution(CpoVarSolution):
 
         Args:
             expr:     Variable expression, object of class :class:`~docplex.cp.expression.CpoIntervalVar`.
+                      None if unknown.
             presence: Presence indicator (True for present, False for absent, None for undetermined). Default is None.
             start:    Value of start, or tuple representing the start range. Default is None.
             end:      Value of end, or tuple representing the end range. Default is None.
@@ -608,11 +611,12 @@ class CpoSequenceVarSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoSequenceVar`.
+                   None if unknown.
             lvars: Ordered list of interval variable solutions that are in this sequence
                    (objects of class :class:`CpoIntervalVarSolution`),
                    or list of interval variables (object of class :class:`~docplex.cp.expression.CpoIntervalVar`).
         """
-        assert isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
+        assert (expr is None) or isinstance(expr, CpoSequenceVar), "Expression 'expr' should be a CpoSequenceVar expression"
         assert all(isinstance(v, (CpoIntervalVar, CpoIntervalVarSolution)) for v in lvars), \
             "All variables should be instance of class CpoIntervalVar or CpoIntervalVarSolution"
         super(CpoSequenceVarSolution, self).__init__(expr)
@@ -656,9 +660,10 @@ class CpoStateFunctionSolution(CpoVarSolution):
 
         Args:
             expr:  Variable expression, object of class :class:`~docplex.cp.expression.CpoStateFunction`.
+                   None in unknown.
             steps: List of function steps represented as tuples (start, end, value).
         """
-        assert isinstance(expr, CpoStateFunction), "Expression 'expr' should be a CpoStateFunction expression"
+        assert (expr is None) or isinstance(expr, CpoStateFunction), "Expression 'expr' should be a CpoStateFunction expression"
         super(CpoStateFunctionSolution, self).__init__(expr)
         self.steps = steps
 
@@ -2347,6 +2352,9 @@ class CpoSolverInfos(InfoDict):
     It is implemented as an extension of the class :class:`docplex.cp.utils.InfoDict` and takes profit of
     the methods such as :meth:`~docplex.cp.utils.InfoDict.write` that allows to easily print
     the full content of the information structure.
+
+    The keys of this disctioanr are those defined by the CP solver itsefs.
+    This class implements accessors for the most important of them.
     """
 
     # Total number of constraints
@@ -2360,6 +2368,9 @@ class CpoSolverInfos(InfoDict):
 
     # Total number of sequence variables
     NUMBER_OF_SEQUENCE_VARIABLES = 'NumberOfSequenceVariables'
+
+    # Total number of solutions
+    NUMBER_OF_SOLUTIONS = 'NumberOfSolutions'
 
     # Total solve time
     TOTAL_TIME = 'TotalTime'
@@ -2413,6 +2424,15 @@ class CpoSolverInfos(InfoDict):
             Number of constraints.
         """
         return self.get(CpoSolverInfos.NUMBER_OF_CONSTRAINTS, 0)
+
+
+    def get_number_of_solutions(self):
+        """ Gets the number of solutions found in the solve.
+
+        Returns:
+            Number of solutions.
+        """
+        return self.get(CpoSolverInfos.NUMBER_OF_SOLUTIONS, 0)
 
 
     def get_total_time(self):

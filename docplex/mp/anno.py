@@ -60,7 +60,7 @@ class ModelAnnotationPrinter(object):
                 for obj, benders_value in annotated:                   # FIXME: what if no name??
                     obj_index = obj.index  # not checked
                     anno_name = cls._anno_name(cplex_scope, obj.name, obj_index)
-                    if obj_index >= 0 :
+                    if obj_index >= 0:
                         # ignore objects not added to the model
                         osa.write("   <anno name='{0}' index='{1:d}' value='{2:d}'/>\n".format(anno_name, obj_index, benders_value))
                 osa.write('  </object>\n')

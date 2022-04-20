@@ -33,7 +33,8 @@ import threading
 #-----------------------------------------------------------------------------
 
 # Version of this client
-CLIENT_VERSION = 6
+#CLIENT_VERSION = 6 # last OO's version
+CLIENT_VERSION = 7
 
 # Events received from library
 _EVENT_SOLVER_INFO     = 1  # Information on solver as JSON document
@@ -469,12 +470,13 @@ class CpoSolverLib(CpoSolverAgent):
         self.process_infos.incr(CpoProcessInfos.TOTAL_UTF8_DECODE_TIME, time.time() - stime)
         self.context.log(5, "JSON blackbox evaluation request: ", jeval)
 
-        # Retrieve evaluation elements
-        bbf, args, bnds = self.solver._get_blackbox_function_eval_context(jeval)
-
         # Process blackbox function evaluation request
-        lck = bbf.eval_mutex
         try:
+            # Retrieve evaluation elements
+            bbf, args, bnds = self.solver._get_blackbox_function_eval_context(jeval)
+
+            # Evaluate function
+            lck = bbf.eval_mutex
             if lck is not None:
                 with bbf.eval_mutex:
                     res = bbf._eval_function(bnds, *args)
@@ -636,7 +638,7 @@ class CpoSolverLib(CpoSolverAgent):
         out.write("# {}\n".format(msg))
         out.write("# Please check that:\n")
         out.write("#  - you have installed IBM ILOG CPLEX Optimization Studio on your computer,\n")
-        out.write("#    (see https://rawgit.com/IBMDecisionOptimization/docplex-doc/master/docs/getting_started.html for details),\n")
+        out.write("#    (see https://ibmdecisionoptimization.github.io/docplex-doc/getting_started.html for details),\n")
         out.write("#  - your system path includes a reference to the directory where the library file 'lib_cpo_solver_*(.lib or .so)' is located,\n")
         out.write("#  - the context attribute 'context.solver.lib.libfile' is properly set to 'lib_cpo_solver_*(.lib or .so)',\n")
         out.write("#  - or that it is set to an absolute path to this file.\n")

@@ -763,7 +763,7 @@ def read_model(filename, model_name=None, verbose=False, **kwargs):
         This function requires CPLEX runtime, otherwise an exceotion is raised.
 
     Example:
-        `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="docloud", output_level=100)`
+        `m = read_model("c:/temp/foo.mps", model_name="docplex_foo", solver_agent="local", output_level=100)`
 
     Returns:
         An instance of Model, or None if an exception is raised.

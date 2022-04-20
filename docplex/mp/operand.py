@@ -59,6 +59,19 @@ class Operand(object):
     def __ge__(self, rhs):
         return self._model._new_xconstraint(lhs=self, rhs=rhs, comparaison_type=ComparisonType.GE)
 
+    def is_normalized(self):
+        return True
+
+    def normalize(self):
+        pass
+
+    def normalized(self):
+        if self.is_normalized():
+            return self
+        else:
+            cloned = self.clone()
+            cloned.normalize()
+            return cloned
 
     le = __le__
     eq = __eq__

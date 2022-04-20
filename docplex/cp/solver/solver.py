@@ -4,6 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
+# Author: Christiane BRACCHI, IBM Decision Optimization, France Lab, Saclay
 
 """
 This module implements appropriate software to solve a CPO model represented by a
@@ -127,7 +128,7 @@ class CpoSolverAgent(object):
                 )
 
     def __init__(self, solver, context):
-        """ Constructor
+        """ **Constructor**
 
         Args:
             solver:   Parent solver, object of type CpoSolver
@@ -504,14 +505,14 @@ class CpoSolver(object):
                  )
 
     def __init__(self, model, **kwargs):
-        """ Constructor
+        """ **Constructor**
 
         All necessary solving parameters are taken from the solving context that is constructed from the following list
         of sources, each one overwriting the previous:
 
-           - the parameters that are set in the model itself,
            - the default solving context that is defined in the module :mod:`~docplex.cp.config`
            - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the parameters that are set in the model itself,
            - the optional arguments of this method.
 
         If an optional argument other than `context` or `params` is given to this method, it is searched in the
@@ -553,21 +554,27 @@ class CpoSolver(object):
         self.callbacks_registered = False
 
         # Build effective context from args
-        context = config._get_effective_context(**kwargs)
-        context.params = model.merge_with_parameters(context.params)
+        # OO's version
+        # context = config._get_effective_context(**kwargs)
+        # context.params = model.merge_with_parameters(context.params)
+        ## trying to fix CP#303
+        ctx = config._get_effective_context()
+        if model.parameters:
+            ctx.params.set_other(model.parameters)
+        ctx = config._get_effective_context(context=ctx, **kwargs)
 
         # If defined, limit the number of threads
-        mxt = context.solver.max_threads
+        mxt = ctx.solver.max_threads
         if isinstance(mxt, int):
             # Maximize number of workers
-            nbw = context.params.Workers
+            nbw = ctx.params.Workers
             if (nbw is None) or (nbw > mxt):
-                context.params.Workers = mxt
+                ctx.params.Workers = mxt
                 print("WARNING: Number of workers has been reduced to " + str(mxt) + " to comply with platform limitations.")
 
         # Save attributes
         self.model = model
-        self.context = context
+        self.context = ctx
 
         # Determine appropriate solver agent
         self.agent = self._get_solver_agent()
@@ -575,7 +582,7 @@ class CpoSolver(object):
 
         # Add configured default listeners if any
         # Note: calling solver_created() is not required as it is done by add_listener().
-        lstnrs = context.solver.listeners
+        lstnrs = ctx.solver.listeners
         if lstnrs is not None:
             if is_array(lstnrs):
                 for lstnr in lstnrs:
@@ -747,7 +754,7 @@ class CpoSolver(object):
             last_res = sres
             last_res.new_solution = True
         elif sres.get_stop_cause() == STOP_CAUSE_ABORT:
-            # Force last solution to be last one to get the abor status
+            # Force last solution to be last one to get the abort status
             last_res = sres
         elif last_res is None:
             last_res = sres
@@ -837,12 +844,21 @@ class CpoSolver(object):
         Raises:
             CpoNotSupportedException: if method not available in the solver agent.
         """
+        # Check solve aborted
         if self.status in (STATUS_RELEASED, STATUS_ABORTED):
+            self._notify_listeners_end_operation()
+            self._set_status(STATUS_IDLE)
             return self.last_result
+
+        # Check old fashion abort
         if not self.abort_supported:
             if self.status == STATUS_IDLE:
+                self._notify_listeners_end_operation()
+                self._set_status(STATUS_IDLE)
                 return self.last_result
             self._check_status(STATUS_SEARCH_WAITING)
+
+        # Normal case
         msol = self.agent.end_search()
         self._set_status(STATUS_IDLE)
         self.last_result = msol
@@ -1445,7 +1461,7 @@ class CpoSolver(object):
         # Retrieve blackbox descriptor from its name
         name = fcall.get('name')
         bbf = self.blackbox_map.get(name)
-        #bbf = self.model._get_blackbox_function(name)
+        #bbf = self.model.get_blackbox_function(name)
         if bbf is None:
             raise CpoException("Try to evaluate a blackbox function {} that does not exists".format(name))
         if not isinstance(bbf, CpoBlackboxFunction):
@@ -1456,7 +1472,8 @@ class CpoSolver(object):
         ptypes = bbf.get_arg_types()
         if len(ptypes) != len(params):
            raise CpoException("Blackbox function call to '{}' contains a wrong number of parameters.".format(name))
-        argvalues = [self._build_arg_value(t, v) for t, v in zip(ptypes, params)]
+        incvars = bbf.args_with_vars
+        argvalues = [self._build_arg_value(t, v, incvars) for t, v in zip(ptypes, params)]
 
         # Build bound values
         bnds = fcall.get('returnValuesBounds', ())
@@ -1467,11 +1484,12 @@ class CpoSolver(object):
         return bbf, argvalues, bndsvalues
 
 
-    def _build_arg_value(self, tp, vl):
+    def _build_arg_value(self, tp, vl, adv):
         """ Build blackbox function call argument value
         Args:
-            tp: Parameter type
-            vl: Parameter JSON value
+            tp:  Parameter type
+            vl:  Parameter JSON value
+            adv: Include vars indicator
         Returns:
             Parameter value to be passed to evaluation
         """
@@ -1479,20 +1497,35 @@ class CpoSolver(object):
         t = vl.get('type')
         v = vl.get('value')
 
-        if tp in (Type_Int, Type_IntVar, Type_IntExpr,):
+        if tp in (Type_Int, Type_IntExpr,):
             return solution._get_num_value(v)
 
         if tp in (Type_Float, Type_FloatExpr,):
             return float(v)
 
+        if tp is Type_IntVar:
+            if adv:
+                iv = self.expr_map.get(n)
+                return CpoIntVarSolution._create_from_json(iv, v)
+            else:
+                return solution._get_num_value(v)
+
         if tp is Type_IntervalVar:
-            return CpoIntervalVarSolution._create_from_json(None, v)
+            iv = self.expr_map.get(n)
+            r = CpoIntervalVarSolution._create_from_json(iv, v)
+            return r if adv else r.get_value()
 
         if tp is Type_IntArray:
             return [solution._get_num_value(e) for e in v]
 
-        if tp in (Type_IntVarArray, Type_IntExprArray,):
+        if tp is Type_IntExprArray:
             return [solution._get_num_value(e.get('value')) for e in v]
+
+        if tp is Type_IntVarArray:
+            if adv:
+                return [CpoIntVarSolution._create_from_json(self.expr_map.get(e.get('name')), e.get('value')) for e in v]
+            else:
+                return [solution._get_num_value(e.get('value')) for e in v]
 
         if tp is Type_FloatArray:
             return v
@@ -1501,14 +1534,17 @@ class CpoSolver(object):
             return [float(e.get('value')) for e in v]
 
         if tp is Type_IntervalVarArray:
-            return [CpoIntervalVarSolution._create_from_json(None, e.get('value')) for e in v]
+            res = [CpoIntervalVarSolution._create_from_json(self.expr_map.get(e.get('name')), e.get('value')) for e in v]
+            return res if adv else [e.get_value() for e in res]
 
         if tp is Type_SequenceVar:
             # Retrieve original variable
             sv = self.expr_map.get(n)
             assert sv is not None, "Sequence variable '{}' not found in the model".format(n)
             vars = sv.get_interval_variables()
-            return [vars[i] for i in v]
+            # Build actual list of variables from list of indexes
+            lv = [vars[i] for i in v]
+            return CpoSequenceVarSolution(self.expr_map.get(n), lv) if adv else lv
 
         if tp is Type_SequenceVarArray:
             res = []
@@ -1517,7 +1553,11 @@ class CpoSolver(object):
                 sv = self.expr_map.get(svn)
                 assert sv is not None, "Sequence variable '{}' not found in the model".format(svn)
                 vars = sv.get_interval_variables()
-                res.append([vars[i] for i in jsv.get('value')])
+                lv = [vars[i] for i in jsv.get('value')]
+                if adv:
+                    res.append(CpoSequenceVarSolution(sv, lv))
+                else:
+                    res.append(lv)
             return res
 
         raise CpoException("INTERNAL ERROR: Unknown blackbox argument type {}".format(tp))

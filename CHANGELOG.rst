@@ -1,8 +1,26 @@
 Changelog
 ---------
 
-Changed in 2.22.213:
+Changed in 2.23.222:
 ````````````````````
+* Support for CPLEX Optimization Studio 22.1 runtimes.
+* In ``docplex.mp``:
+    * Support of parameter sets for multi objective optimization.
+    * Bug fix for multi objective optimization.
+    * Correct documentation urls to current CPLEX offering.
+    * Removal of the deprecated ``docloud_context``.
+    * Performance improvements for model building with 22.1
+* In ``docplex.cp``:
+    * Added a new module blackbox to allow the new blackbox function feature
+    * Wrote full documentation on blackbox functions
+    * Added a new SearchType 'Neighborhood'
+    * Fixed a bug in modeler.same_common_subsequence
+    * Fixed problem of order of computation of actual solving parameters.
+
+
+Changed in 2.22.213 (2021.09):
+``````````````````````````````
+
 * Removed zeppelin examples
 * In ``docplex.mp``:
     * Added a variant of Model.sum() with variable number of arguments: Model.sums()

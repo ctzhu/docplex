@@ -54,7 +54,7 @@ The most important of these parameters are:
       or **ConflictRefinerTimeLimit** that does the same for conflict refiner,
     * **LogVerbosity**, with values in ['Quiet', 'Terse', 'Normal', 'Verbose'],
     * **Workers** specifies the number of threads assigned to solve the model (default value is the number of cores),
-    * **SearchType**, with value in ['DepthFirst', 'Restart', 'MultiPoint', 'Auto'], to select a particular solving algorithm,
+    * **SearchType**, with value in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Neighborhood', 'Auto'], to select a particular solving algorithm,
     * **RandomSeed** changes the seed of the random generator,
     * and so on.
 
@@ -397,8 +397,6 @@ class CpoModel(object):
         Args:
             expr: CPO expressions (constraint, boolean, objective, etc) to add to the model,
                   or iterable of expressions to add to the model.
-        Raises:
-            CpoException in case of error.
         """
         # Determine calling location
         loc = self._get_calling_location() if self.source_loc else None
@@ -423,13 +421,11 @@ class CpoModel(object):
     def add_constraint(self, expr):
         """ Adds a constraint to the model.
 
-        This method has been added for compatibility with docplex.mp.
+        This method has been added for compatibility with *docplex.mp*.
         It is equivalent to method :meth:`~CpoModel.add`
 
         Args:
             expr: Constraint expression to add to the model,
-        Raises:
-            CpoException in case of error.
         """
         self.add(expr)
 
@@ -440,8 +436,6 @@ class CpoModel(object):
         Args:
             expr: CPO expression (constraint, boolean, objective, etc) to add to the model
             loc:  Expression location
-        Raises:
-            CpoException in case of error.
         """
         #print("Add expression {} at loc {}".format(expr, loc))
         # Update last add time
@@ -474,31 +468,6 @@ class CpoModel(object):
             raise CpoException("Expression added to the model should be a boolean, constraint, objective or search_phase, not an object of type {}.".format(type(expr)))
 
 
-    # def remove(self, expr):
-    #     """ Remove a single expression from the model.
-    #
-    #     This method removes from the model the first occurrence of the expression given as parameter.
-    #     It removes only expressions at the top-level, those added in the model using the method :meth:`~CpoModel.add`,
-    #     it does not remove the expression if it used as sub-expression of another expression.
-    #
-    #     If you have multiple expressions to remove, use method :meth:`~CpoModel.remove_expressions` instead.
-    #
-    #     Args:
-    #         expr: Expression to remove.
-    #     Returns:
-    #         True if expression has been removed, False if not found
-    #     """
-    #     # Check if it is current objective expression
-    #     if expr is self.objective:
-    #         self.objective = None
-    #     # Remove from list of expressions
-    #     for ix, (x, l) in enumerate(self.expr_list):
-    #         if x is expr:
-    #             del self.expr_list[ix]
-    #             return True
-    #     return False
-
-
     def remove(self, *expr):
         """ Remove one or several expressions from the model.
 
@@ -519,8 +488,6 @@ class CpoModel(object):
                   or iterable of expressions to remove from the model.
         Returns:
             Number of expressions actually removed from the model.
-        Raises:
-            CpoException in case of error.
         """
         # Build a set of ids of expressions to remove
         idset = set()
@@ -579,7 +546,7 @@ class CpoModel(object):
     def minimize(self, expr):
         """ Add an objective expression to minimize.
 
-        DEPRECATED: use add(minimize()) instead.
+        DEPRECATED: use *add(minimize())* instead.
 
         Args:
             expr: Expression to minimize.
@@ -595,7 +562,7 @@ class CpoModel(object):
     def maximize(self, expr):
         """ Add an objective expression to maximize.
 
-        DEPRECATED: use add(maximize()) instead.
+        DEPRECATED: use *add(maximize())* instead.
 
         Args:
             expr: Expression to maximize.
@@ -686,7 +653,7 @@ class CpoModel(object):
         If no parameters are defined, the parameters given as argument are returned as they are.
 
         Returns:
-            Merged dolving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`.
+            Merged solving parameters, object of class :class:`~docplex.cp.parameters.CpoParameters`.
         """
         if self.parameters is None:
             return params
@@ -894,7 +861,7 @@ class CpoModel(object):
         return [xl for xl in self.kpis.values() if isinstance(xl[0], CpoExpr)]
 
 
-    def _add_blackbox_function(self, bbf):
+    def add_blackbox_function(self, bbf):
         """ Add a new blackbox function descriptor to this model.
 
         Calling this function is mandatory before importing a CPO model that contains references to a blackbox function,
@@ -919,7 +886,7 @@ class CpoModel(object):
         self.blackbox_funs[name] = bbf
 
 
-    def _get_blackbox_functions(self):
+    def get_blackbox_functions(self):
         """ Gets the list of all blackbox functions registered in this model.
 
         Returns:
@@ -928,7 +895,7 @@ class CpoModel(object):
         return list(self.blackbox_funs.values())
 
 
-    def _get_blackbox_function(self, name):
+    def get_blackbox_function(self, name):
         """ Gets a particular blackbox function from its name.
 
         Args:
@@ -944,7 +911,7 @@ class CpoModel(object):
 
         Returns:
             List of model expressions including there location (if any).
-            Each expression is a tuple (expr, loc) where loc is a tuple (source_file, line), or None if not set.
+            Each expression is a tuple *(expr, loc)* where loc is a tuple *(source_file, line)*, or None if not set.
         """
         return self.expr_list
 
@@ -1217,9 +1184,9 @@ class CpoModel(object):
         All necessary solving parameters are taken from the solving context that is constructed from the following list
         of sources, each one overwriting the previous:
 
-           - the parameters that are set in the model itself,
            - the default solving context that is defined in the module :mod:`~docplex.cp.config`
            - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the parameters that are set in the model itself,
            - the optional arguments of this method.
 
         Args:
@@ -1259,9 +1226,9 @@ class CpoModel(object):
         All necessary solving parameters are taken from the solving context that is constructed from the following list
         of sources, each one overwriting the previous:
 
-           - the parameters that are set in the model itself,
            - the default solving context that is defined in the module :mod:`~docplex.cp.config`
            - the user-specific customizations of the context that may be defined (see :mod:`~docplex.cp.config` for details),
+           - the parameters that are set in the model itself,
            - the optional arguments of this method.
 
         If an optional argument other than `context` or `params` is given to this method, it is searched in the
@@ -1541,7 +1508,8 @@ class CpoModel(object):
         """ Add a CPO solver callback.
 
         A solver callback is an object extending the class :class:`~docplex.cp.solver.cpo_callback.CpoCallback`
-        which provides multiple functions that are called to notify about the different solving steps.
+        which provides multiple functions that are called by the solver engine to notify about the different
+        solving steps.
 
         Args:
             cback:  Solver callback, object extending :class:`~docplex.cp.solver.cpo_callback.CpoCallback`
@@ -1693,7 +1661,7 @@ class CpoModel(object):
         Args:
             other:  Other model to compare with.
         Raises:
-            Exception if models are not equivalent
+            CpoException: if models are not equivalent
         """
 
         # Check object types

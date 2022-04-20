@@ -36,12 +36,12 @@ def lazy(f):
     '''
     Sometimes, we want to use some `f(x)` where `f` can be anything from a function that
     does nothing to a function that prints things. However, `x` can be a time consuming
-    operation, so we don't always want x to be evaluated. Typicallly, loggers:
+    operation, so we don't always want x to be evaluated. Typically, loggers:
 
        logger.info(f"Doing something to n: {json.dumps(n)}")
 
     In the example above, it would be nice that the expression is not evaluated if
-    the logger is a dymmy logger.
+    the logger is a dummy logger.
 
     `lazy()` allows this to be rewritten as:
 

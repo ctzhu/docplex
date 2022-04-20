@@ -46,12 +46,14 @@ import functools
 
 # Map of CPO names for each array type
 _ARRAY_TYPES = {Type_IntArray: 'intArray', Type_FloatArray: 'floatArray',
-                Type_IntExprArray: 'intExprArray', Type_FloatExprArray: 'floatExprArray',
+                Type_BoolExprArray: 'boolExprArray', Type_IntExprArray: 'intExprArray', Type_FloatExprArray: 'floatExprArray',
                 Type_CumulExprArray: 'cumulExprArray',
                 Type_IntervalVarArray: 'intervalVarArray', Type_SequenceVarArray: 'sequenceVarArray',
                 Type_IntValueSelectorArray: 'intValueSelectorArray' , Type_IntVarSelectorArray: 'intVarSelectorArray',
                 Type_CumulAtomArray: '_cumulAtomArray'}
 
+# Type of expressions related to search phases
+_SEARCH_PHASE_EXPR_TYPES = frozenset((Type_SearchPhase, Type_IntVarSelector, Type_IntValueSelector, Type_IntVarEval, Type_IntValueEval,))
 
 # Set of CPO types representing an integer
 _INTEGER_TYPES = frozenset((Type_Int, Type_PositiveInt, Type_TimeInt))
@@ -405,9 +407,9 @@ class CpoCompiler(object):
                     if self.is_format_at_least_12_8:
                         out.write(name + u": " + self._compile_expression(expr, True) + u";\n")
                     else:
-                        out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n" + name + u";\n")
+                        out.write(name + u" = " + self._compile_expression(expr, True) + u";\n" + name + u";\n")
                 else:
-                    out.write(name + u" = " + self._compile_expression(expr, True)+ u";\n")
+                    out.write(name + u" = " + self._compile_expression(expr, True) + u";\n")
             else:
                 out.write(self._compile_expression(expr, True) + u";\n")
             # Mark as compiled
@@ -744,7 +746,7 @@ class CpoCompiler(object):
                 if expr not in vars_set:
                     vars_set.add(expr)
                     list_vars.append(xinfo)
-            elif typ is Type_SearchPhase:
+            elif (xinfo[4] or xinfo[3]) and typ in _SEARCH_PHASE_EXPR_TYPES:
                 list_phases.append(xinfo)
             elif typ is Type_Blackbox:
                 # Check or allocate blackbox name

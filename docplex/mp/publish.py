@@ -119,6 +119,8 @@ class _KpiRecorder(SolutionListener):
 def get_auto_publish_names(context, prop_name, default_name):
     # comparing auto_publish to boolean values because it can be a non-boolean
     autopubs = context.solver.auto_publish
+    if autopubs == None:
+        return None
     if autopubs is True:
         return [default_name]
     elif autopubs is False:
@@ -194,14 +196,14 @@ class PublishResultAsDf(object):
         The `context` is used to control the output name:
 
             - If context.solver.auto_publish is true, the `df` is written using
-            output_name.
+              output_name.
             - If context.solver.auto_publish is false, This method does nothing.
             - If context.solver.auto_publish.output_property_name is true,
-               then `df` is written using output_name.
+              then `df` is written using output_name.
             - If context.solver.auto_publish.output_propert_name is None or
-            False, this method does nothing.
+              False, this method does nothing.
             - If context.solver.auto_publish.output_propert_name is a string,
-            it is used as a name to publish the df
+              it is used as a name to publish the df
 
         Example:
 

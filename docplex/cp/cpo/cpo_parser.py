@@ -300,15 +300,12 @@ class CpoParser(object):
             self._raise_exception("Line number should be an integer")
         lnum = int(tok.value)
         # Get optional source file name, string on the same line
-        cline = self.tokenizer.line_number
-        tok = self._next_token()
-        if cline != self.tokenizer.line_number:
-            self._push_token(tok)
-            fname = None if self.current_loc is None else self.current_loc[0]
-        else:
-            if tok.type != TOKEN_TYPE_STRING:
-               self._raise_exception("File name should be a string")
-            fname = tok.get_string()
+        # String is read not as a token, because file pathes may contain backslashes on windows.
+        fname = self.tokenizer._get_line_reminder().strip()
+        if fname.startswith('"'):
+            fname = fname[1:-1]
+        if not fname:
+            fname = None
         self.current_loc = (fname, lnum)
 
 
@@ -496,7 +493,7 @@ class CpoParser(object):
                 # Function call, build argument expressions
                 argexprs = tuple(map(build_cpo_expr, args))
                 # Search in blackbox functions
-                bbf = self.model._get_blackbox_function(tokval)
+                bbf = self.model.get_blackbox_function(tokval)
                 if bbf is not None:
                     # if auto-created, update argument types
                     if bbf.auto:
@@ -505,10 +502,10 @@ class CpoParser(object):
                 # Check if auto blackbox creation is enabled
                 if auto_blackbox:
                     bbf = CpoBlackboxFunction(name=tokval, dimension=None)
-                    obbf = self.model._get_blackbox_function(tokval)
+                    obbf = self.model.get_blackbox_function(tokval)
                     if obbf is None:
                         bbf._update_check_arg_types(argexprs)
-                        self.model._add_blackbox_function(bbf)
+                        self.model.add_blackbox_function(bbf)
                     else:
                         obbf._update_check_arg_types(argexprs)
                     return CpoBlackboxFunctionCall(bbf, argexprs)
@@ -1118,7 +1115,7 @@ class CpoParser(object):
         """ Proceed to final model checkings
         """
         # Check automatic blackboxes never used (no eval)
-        for bbf in self.model._get_blackbox_functions():
+        for bbf in self.model.get_blackbox_functions():
             if bbf.auto and bbf.dimension is None:
                 raise CpoParserException("Function '{}' does not exists as modeling function is is not used as blackbox.".format(bbf.get_name()))
 
@@ -1127,6 +1124,6 @@ class CpoParser(object):
             return
 
         # Check if all BBF functions have an implementation
-        for bbf in self.model._get_blackbox_functions():
+        for bbf in self.model.get_blackbox_functions():
             if bbf.get_implementation() is None:
                 print("WARNING: Blackbox function '{}' does not have an implementation.".format(bbf))

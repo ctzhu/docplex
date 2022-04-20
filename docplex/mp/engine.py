@@ -68,7 +68,7 @@ class IEngine(object):
     def get_solve_status(self):
         """  Return a DOcplexcloud-style solve status.
 
-        Possible enums are in docloud/status.py
+        Possible enums are in JobSolveStatus
         Default is UNKNOWN at this stage. Redefined for CPLEX and DOcplexcloud engines.
         """
         return JobSolveStatus.UNKNOWN  # pragma: no cover
@@ -658,6 +658,7 @@ class ZeroSolveEngine(IndexerEngine):
     def __init__(self, mdl, **kwargs):
         IndexerEngine.__init__(self)  # pragma: no cover
         self._last_solved_parameters = None
+        self._mdl = mdl
 
     def show_parameters(self, params):
         if params is None:
@@ -680,6 +681,12 @@ class ZeroSolveEngine(IndexerEngine):
     @staticmethod
     def get_var_zero_solution(dvar):
         return max(0, dvar.lb)
+
+    def _create_parameter_sets(self, mdl):
+        self._mdl.fatal("Missing CPLEX engine to create parameterset")
+
+    def _build_multiobj_paramsets(self, mdl, lex_timelimits, lex_mipgaps):
+        self._mdl.fatal("Missing CPLEX engine to create parameterset")
 
     def solve(self, mdl, parameters, **kwargs):
         # remember last solved params

@@ -722,6 +722,17 @@ Oper_var_success_rate            = CpoOperation("varSuccessRate", "var_success_r
 Oper_eval                        = CpoOperation("eval", "eval", None, -1, ( CpoSignature(Type_FloatExpr, (Type_Blackbox, Type_Int)),) )
 
 
+# Mutable expressions
+Oper_mutable_bool_expr           = CpoOperation("mutableBoolExpr", "mutable_bool_expr ", None, -1, ( CpoSignature(Type_BoolExpr, ()),
+                                                                                                     CpoSignature(Type_BoolExpr, (Type_BoolExpr,))) )
+Oper_mutable_int_expr            = CpoOperation("mutableIntExpr", "mutable_int_expr ", None, -1, ( CpoSignature(Type_IntExpr, ()),
+                                                                                                   CpoSignature(Type_IntExpr, (Type_IntExpr,))) )
+Oper_mutable_float_expr          = CpoOperation("mutableFloatExpr", "mutable_float_expr ", None, -1, ( CpoSignature(Type_FloatExpr, ()),
+                                                                                                       CpoSignature(Type_FloatExpr, (Type_FloatExpr,))) )
+Oper_mutable_cumul_expr          = CpoOperation("mutableCumulExpr", "mutable_cumul_expr ", None, -1, ( CpoSignature(Type_CumulExpr, ()),
+                                                                                                       CpoSignature(Type_CumulExpr, (Type_CumulExpr,))) )
+
+
 # Duplicatas because of typos, not same char case
 Oper_all_diff_2                  = CpoOperation("allDiff", "all_diff", None, -1, ( CpoSignature(Type_Constraint, (Type_IntExprArray,)),) )
 Oper_value_2                     = CpoOperation("Value", "value", None, -1, ( CpoSignature(Type_IntValueEval, ()),) )

@@ -45,28 +45,6 @@ in that file. The result is saved as a JSON fragment in file ``solution.json``::
     $ more solution.json
     {"result": 38}
 
-To submit the program to the DOcplexcloud service, we write a ``submit.py`` program that uses
-the `DOcplexcloud Python API <https://developer.ibm.com/docloud/documentation/docloud/python-api/>`_
-to create and submit a job. That job has two attachments:
-
-- ``sum.py``, the program to execute and
-- ``data.txt``, the data expected by ``sum.py``.
-
-After the solve is completed, the result of the program is downloaded and saved as ``solution.json``::
-
-    from docloud.job import JobClient
-
-    url = "ENTER_YOUR_URL_HERE"
-    key = "ENTER_YOUR_KEY_HERE"
-    client = JobClient(url, key)
-    client.execute(input=["sum.py", "data.txt"], output="solution.json")
-
-Then you run ``submit.py``::
-
-    $ python submit.py
-    $ more solution.json
-    {"result": 38}
-
 Environment representation can be accessed with different ways:
 
     * direct object method calls, after retrieving an instance using
@@ -334,7 +312,7 @@ class Environment(object):
         Returns:
             A file object to read the input from.
         '''
-        self.logger.info(lazy(lambda: f"set input stream: name={name}"))
+        self.logger.debug(lazy(lambda: f"set input stream: name={name}"))
         return None
 
     def read_df(self, name, reader=None, **kwargs):
@@ -429,7 +407,7 @@ class Environment(object):
             name: Name of the output object.
             filename: The name of the file to attach.
         '''
-        self.logger.info(lazy(lambda: f"set output attachment: name={name}, filename={filename}"))
+        self.logger.debug(lazy(lambda: f"set output attachment: name={name}, filename={filename}"))
 
     def get_output_stream(self, name):
         ''' Get a file-like object to write the output of the program.
@@ -449,7 +427,7 @@ class Environment(object):
         Returns:
             A file object to write the output to.
         '''
-        self.logger.info(lazy(lambda: f"set output stream: name={name}"))
+        self.logger.debug(lazy(lambda: f"set output stream: name={name}"))
         return None
 
     def get_available_core_count(self):
@@ -514,7 +492,7 @@ class Environment(object):
         #             :attr:`.Context.solver.auto_publish.solve_details`
         #         '''
         # ===============================================================================
-        self.logger.info(lazy(lambda: f"Notify start solve: engine_type={engine_type}, solve_details={json.dumps(solve_details, indent=3)}"))
+        self.logger.debug(lazy(lambda: f"Notify start solve: engine_type={engine_type}, solve_details={json.dumps(solve_details, indent=3)}"))
         self._reset_record_history()
 
     def update_solve_details(self, details):
@@ -531,7 +509,7 @@ class Environment(object):
         Args:
             details: A ``dict`` with solve details as key/value pairs.
         '''
-        self.logger.info(lazy(lambda: f"Update solve details: {json.dumps(details, indent=3)}"))
+        self.logger.debug(lazy(lambda: f"Update solve details: {json.dumps(details, indent=3)}"))
         # publish details
         to_publish = None
         if self.update_solve_details_dict:
@@ -602,13 +580,13 @@ class Environment(object):
         Returns:
             The published details
         '''
-        self.logger.info(lazy(lambda: f"Publish solve details: {json.dumps(details, indent=3)}"))
+        self.logger.debug(lazy(lambda: f"Publish solve details: {json.dumps(details, indent=3)}"))
 
     def notify_end_solve(self, status, solve_time=None):
         # ===============================================================================
         #         '''Notify the solving environment that the solve as ended.
         #
-        #         The ``status`` can be a docloud.status.JobSolveStatus enum or an integer.
+        #         The ``status`` can be a JobSolveStatus enum or an integer.
         #
         #         When ``status`` is an integer, it is converted with the following conversion table:
         #
@@ -624,7 +602,7 @@ class Environment(object):
         #             solve_time: The solve time
         #         '''
         # ===============================================================================
-        self.logger.info(f"Notify end solve, status={status}, solve_time={solve_time}")
+        self.logger.debug(f"Notify end solve, status={status}, solve_time={solve_time}")
         if self.unpublished_details:
             self.logger.debug("Notify end solve: has unpublished details, so publish them")
             self.publish_solve_details(self.unpublished_details)

@@ -4,6 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
+# Author: Christiane BRACCHI, IBM Decision Optimization, France Lab, Saclay
 
 """
 This module handles the public parameters that can be assigned to CP Optimizer
@@ -80,7 +81,7 @@ The following list gives the summary of all public parameters.
  * :attr:`~CpoParameters.Workers`: Number of workers to run in parallel to solve the model.
    The value is a positive integer. Default value is Auto.
  * :attr:`~CpoParameters.SearchType`: Type of search that is applied when solving a problem.
-   The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Auto']. Default value is 'Auto'.
+   The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Neighborhood', 'Auto']. Default value is 'Auto'.
  * :attr:`~CpoParameters.RandomSeed`: Seed of the random generator used by search strategies.
    The value is a non-negative integer. Default value is 0.
  * :attr:`~CpoParameters.RestartFailLimit`: Controls the number of failures that must occur before restarting search.
@@ -173,27 +174,28 @@ import warnings
 ###############################################################################
 
 # Symbolic parameter values
-VALUE_AUTO             = 'Auto'
-VALUE_OFF              = 'Off'
-VALUE_ON               = 'On'
-VALUE_DEFAULT          = 'Default'
-VALUE_LOW              = 'Low'
-VALUE_BASIC            = 'Basic'
-VALUE_MEDIUM           = 'Medium'
-VALUE_EXTENDED         = 'Extended'
-VALUE_QUIET            = 'Quiet'
-VALUE_TERSE            = 'Terse'
-VALUE_NORMAL           = 'Normal'
-VALUE_VERBOSE          = 'Verbose'
-VALUE_DEPTH_FIRST      = 'DepthFirst'
-VALUE_RESTART          = 'Restart'
-VALUE_MULTI_POINT      = 'MultiPoint'
-VALUE_ITERATIVE_DIVING = 'IterativeDiving'
-VALUE_DIVERSE          = 'Diverse'
-VALUE_CPU_TIME         = 'CPUTime'
-VALUE_ELAPSED_TIME     = 'ElapsedTime'
-VALUE_SINGLE_LINE      = 'SingleLine'
-VALUE_MULTIPLE_LINES   = 'MultipleLines'
+VALUE_AUTO                = 'Auto'
+VALUE_OFF                 = 'Off'
+VALUE_ON                  = 'On'
+VALUE_DEFAULT             = 'Default'
+VALUE_LOW                 = 'Low'
+VALUE_BASIC               = 'Basic'
+VALUE_MEDIUM              = 'Medium'
+VALUE_EXTENDED            = 'Extended'
+VALUE_QUIET               = 'Quiet'
+VALUE_TERSE               = 'Terse'
+VALUE_NORMAL              = 'Normal'
+VALUE_VERBOSE             = 'Verbose'
+VALUE_DEPTH_FIRST         = 'DepthFirst'
+VALUE_RESTART             = 'Restart'
+VALUE_MULTI_POINT         = 'MultiPoint'
+VALUE_ITERATIVE_DIVING    = 'IterativeDiving'
+VALUE_NEIGHBORHOOD        = 'Neighborhood'
+VALUE_DIVERSE             = 'Diverse'
+VALUE_CPU_TIME            = 'CPUTime'
+VALUE_ELAPSED_TIME        = 'ElapsedTime'
+VALUE_SINGLE_LINE         = 'SingleLine'
+VALUE_MULTIPLE_LINES      = 'MultipleLines'
 
 # Authorized value types
 _POSITIVE_INTEGER = (0, None)
@@ -204,7 +206,8 @@ _ON_OFF = (VALUE_ON, VALUE_OFF)
 _KPI_DISPLAY = (VALUE_SINGLE_LINE, VALUE_MULTIPLE_LINES)
 _LOG_VERBOSITY = (VALUE_QUIET, VALUE_TERSE, VALUE_NORMAL, VALUE_VERBOSE)
 _TIME_MODE = (VALUE_CPU_TIME, VALUE_ELAPSED_TIME)
-_SEARCH_TYPES = (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_ITERATIVE_DIVING, VALUE_AUTO)
+_SEARCH_TYPES = (VALUE_DEPTH_FIRST, VALUE_RESTART, VALUE_MULTI_POINT, VALUE_ITERATIVE_DIVING, VALUE_NEIGHBORHOOD,
+                 VALUE_AUTO)
 
 # Parameter descriptor
 class ParameterDescriptor(object):
@@ -1051,9 +1054,10 @@ class CpoParameters(Context):
 
          * When set to *DepthFirst*, a regular depth-first search is applied.
          * When set to *Restart*, a depth-first search that restarts from time to time is applied.
+         * When set to *MultiPoint*, a method that combines a set of - possibly partial - solutions is applied.
          * When set to *IterativeDiving* on scheduling problems (ones with at least one interval variable),
            a more aggressive diving technique is applied in order to find solutions to large problems more quickly.
-         * When set to *MultiPoint*, a method that combines a set of - possibly partial - solutions is applied.
+         * When set to *Neighborhood*, a search based on a solution neighborhood exploration should be used (feature in beta).
          * When set to *Auto* in sequential mode, this value chooses the appropriate search method to be used.
            In general Auto will be the Restart search. The default value is Auto.
 
@@ -1064,7 +1068,7 @@ class CpoParameters(Context):
         workers will not do the same exploration due to some randomness introduced to break ties in decision
         making.
 
-        The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Auto']. Default value is 'Auto'.
+        The value is a symbol in ['DepthFirst', 'Restart', 'MultiPoint', 'IterativeDiving', 'Neighborhood', 'Auto']. Default value is 'Auto'.
         """
         return self.get_attribute('SearchType')
 

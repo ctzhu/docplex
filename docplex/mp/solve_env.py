@@ -49,18 +49,6 @@ class SolveEnv(object):
         mdl._fire_end_solve_listeners(has_solution, obj)
 
 
-class DocloudSolveEnv(SolveEnv):
-
-    def __init__(self, m):
-        super().__init__(m)
-
-    def before_solve(self, context):
-        mdl = self._model
-        mdl.notify_start_solve()
-        mdl._fire_start_solve_listeners()
-        return mdl.parameters
-
-
 class CplexLocalSolveEnv(SolveEnv):
 
     def __init__(self, m):
@@ -123,19 +111,6 @@ class CplexLocalSolveEnv(SolveEnv):
             self._saved_params = {p: p.get() for p in self_params}
         else:
             self._saved_params = {}
-        # ctx_params = context.cplex_parameters
-        # mdl_params = mdl.parameters
-        # corrected_threads = compute_overwrite_nb_threads(ctx_params, context.solver)
-        # params_to_use = ctx_params or mdl_params
-        # if corrected_threads is not None:
-        #     params_to_use = params_to_use.copy()
-        #     params_to_use.threads = corrected_threads
-
-        # if parameters are overridden, save original values for restoration at solve end
-        # if params_to_use is not mdl_params:
-        #     self._saved_params = {p: p.get() for p in mdl_params}
-        # else:
-        #     self._saved_params = {}
 
         # returns the parameters group to use.
         return parameters
@@ -198,7 +173,7 @@ class CplexLocalSolveEnv(SolveEnv):
             for p, v in saved_params.items():
                 self_engine.set_parameter(p, v)
                 # clear saved
-                self._saved_params = {}
+            self._saved_params = {}
 
         kpi_rec_attr_name = 'kpi_recorder'
         try:

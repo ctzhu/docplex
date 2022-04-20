@@ -51,6 +51,9 @@ class LoggerToDocloud(DocplexLogger):
         self.docloudlogger = docloudlogger
 
     def log(self, level, msg):
+        # fix for https://github.ibm.com/IBMDecisionOptimization/docplex/issues/312
+        # => force msg to be a `str` before it goes on code that can potentially JSONify it
+        msg = msg if isinstance(msg, str) else str(msg)
         if level == logging.DEBUG:
             self.docloudlogger.fine(msg)
         elif level == logging.INFO:

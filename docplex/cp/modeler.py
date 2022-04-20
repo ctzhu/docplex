@@ -4,6 +4,7 @@
 # (c) Copyright IBM Corp. 2015, 2016, 2017, 2018
 # --------------------------------------------------------------------------
 # Author: Olivier OUDOT, IBM Analytics, France Lab, Sophia-Antipolis
+# Author: Christiane BRACCHI, IBM Decision Optimization, France Lab, Saclay
 
 """
 This module contains the functions that allows to construct all operations
@@ -2870,7 +2871,9 @@ def same_common_subsequence(seq1, seq2, array1=None, array2=None):
     in the definition of the sequences.
 
     If interval variable arrays *array1* and *array2* are used, these arrays define the mapping
-    between interval variables of the two sequences.
+    between interval variables of the two sequences. Those two arrays should be of the same size.
+    Array *array1* must onlycontain interval variables of sequence *seq1* without any duplicate and
+    array *array2* must only contain interval variables of sequence *seq2* without any duplicate.
 
     The constraint states that the sub-sequences defined by *seq1* and *seq2* by only considering
     the pairs of present intervals (*array1[i]*, *array2[i]*) are identical modulo the mapping between
@@ -2886,14 +2889,15 @@ def same_common_subsequence(seq1, seq2, array1=None, array2=None):
     """
     seq1 = _convert_arg(seq1, "seq1", Type_SequenceVar)
     seq2 = _convert_arg(seq2, "seq2", Type_SequenceVar)
-    assert len(seq1) == len(seq2), "'seq1' and 'seq2' should have the same length"
     if array1 is None:
         assert array2 is None, "Mapping arrays 'array1' and 'array2' should be both given or ignored"
+        assert len(seq1) == len(seq2), "'seq1' and 'seq2' should have the same length"
         return CpoFunctionCall(Oper_same_common_subsequence, Type_Constraint, (seq1, seq2))
 
-    return CpoFunctionCall(Oper_same_common_subsequence, Type_Constraint, (seq1, seq2,
-                                                                           _convert_arg(array1, "array1", Type_IntervalVarArray),
-                                                                           _convert_arg(array2, "array2", Type_IntervalVarArray)))
+    ar1 = _convert_arg(array1, "array1", Type_IntervalVarArray)
+    ar2 = _convert_arg(array2, "array2", Type_IntervalVarArray)
+    _check_same_size_arrays(ar1, ar2)
+    return CpoFunctionCall(Oper_same_common_subsequence, Type_Constraint, (seq1, seq2, ar1, ar2))
 
 
 #==============================================================================

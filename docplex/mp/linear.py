@@ -234,6 +234,8 @@ class MonomialExpr(_SubscriptionMixin, AbstractLinearExpr):
         if dvar is self._dvar:
             self._coef = coef
             self.notify_modified(event=UpdateEvent.LinExprCoef)
+            if not coef:
+                self.notify_replaced(new_expr=self.lfactory.new_zero_expr())
         elif coef:
             # monomail is extended to a linear expr
             new_self = self.to_linear_expr()
@@ -539,25 +541,13 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
 
     def is_normalized(self):
         # INTERNAL
-        for _, k in self.iter_terms():
-            if not k:
-                return False  # pragma: no cover
-        return True
+        return all(k for _, k in self.iter_terms() )
 
     def normalize(self):
-        # modifies self
         doomed = [dv for dv, k in self.iter_terms() if not k]
         lterms = self._terms
         for d in doomed:
             del lterms[d]
-
-    def normalized(self):
-        if self.is_normalized():
-            return self
-        else:
-            cloned = self.clone()
-            cloned.normalize()
-            return cloned
 
     def number_of_variables(self):
         return len(self._terms)
@@ -587,7 +577,14 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _add_term(self, dvar, coef=1):
         # INTERNAL
         self_terms = self._terms
-        self_terms[dvar] = self_terms.get(dvar, 0) + coef
+        new_coef = self_terms.get(dvar, 0) + coef
+        if new_coef:
+            self_terms[dvar] = new_coef
+        else:
+            try:
+                del self_terms[dvar]
+            except KeyError:
+                pass
 
     def set_coefficient(self, dvar, coeff):
         self._model._typecheck_var(dvar)
@@ -608,6 +605,8 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
         self.check_discrete_lock_frozen(coeff)
         if self._set_coefficient_internal(dvar, coeff):
             self.notify_modified(event=UpdateEvent.LinExprCoef)
+            if not coeff:
+                self.normalize()
 
     def set_coefficients(self, var_coef_seq):
         # TODO: typecheck
@@ -618,11 +617,17 @@ class LinearExpr(_SubscriptionMixin, AbstractLinearExpr):
     def _set_coefficients(self, var_coef_seq):
         self.check_discrete_lock_frozen()
         nb_changes = 0
+        nb_nulls = 0
         for dv, k in var_coef_seq:
             if self._set_coefficient_internal(dv, k):
                 nb_changes += 1
+                if not k:
+                    nb_nulls += 1
         if nb_changes:
             self.notify_modified(event=UpdateEvent.LinExprCoef)
+            if nb_nulls:
+                self.normalize()
+
 
     def remove_term(self, dvar):
         """ Removes a term associated with a variable from the expression.

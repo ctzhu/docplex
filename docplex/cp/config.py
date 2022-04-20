@@ -464,6 +464,9 @@ context.interactive.window_confirm_exit = True
 # Abort solve when closing window
 context.interactive.solver_abort_on_exit = True
 
+# Daemon display thread (avoid tk exception if listener)
+context.interactive.daemon_thread = True
+
 
 #-----------------------------------------------------------------------------
 # Apply special changes if running in a worker
@@ -725,6 +728,7 @@ def _eval_file(file):
     for dir in _CONFIG_SEARCH_PATH:
         f = dir + "/" + file if dir else file
         if os.path.isfile(f):
+            # print("Loading configuration file '{}'".format(f))
             try:
                 with open(f) as fin:
                     fcont = fin.read()

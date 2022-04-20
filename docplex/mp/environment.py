@@ -84,7 +84,8 @@ class Environment(object):
             self.auto_configure(logger=logger)
 
     # class variable
-    env_is_python36 = platform.python_version() >= '3.6'
+    # Must be true if python versin is > 3.6
+    env_is_python36 = (sys.version_info.major >= 3) and (sys.version_info.minor >= 6)
 
     def _get_numpy_hook(self):
         return self._numpy_hook

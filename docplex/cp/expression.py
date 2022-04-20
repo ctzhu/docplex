@@ -120,7 +120,6 @@ class CpoExpr(object):
             type:   Expression type, object of class CpoType.
             name:   Expression name.
         """
-        super(CpoExpr, self).__init__()
         self.type = type
         self.name = name
         self.children = ()
